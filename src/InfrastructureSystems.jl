@@ -8,6 +8,12 @@ export PiecewisePointCurve, PiecewiseIncrementalCurve, PiecewiseAverageCurve
 export TimeSeriesLinearCurve, TimeSeriesQuadraticCurve, TimeSeriesPiecewisePointCurve
 export TimeSeriesPiecewiseIncrementalCurve, TimeSeriesPiecewiseAverageCurve
 
+# Unit types for explicit units in getters/setters
+export MW, Mvar, MVA, kV, OHMS, SIEMENS
+export DU, SU, DeviceBaseUnit, SystemBaseUnit
+export AbstractRelativeUnit, RelativeQuantity
+export ustrip
+
 import Base: @kwdef
 import CSV
 import DataFrames
@@ -208,4 +214,11 @@ include("function_data/make_convex.jl")
 include("deprecated.jl")
 include("Optimization/Optimization.jl")
 include("Simulation/Simulation.jl")
+
+# Register custom Unitful units (Mvar, MVA) so conversions work properly
+# TODO: cleaner way? seems like overkill to register the whole module.
+function __init__()
+    Unitful.register(@__MODULE__)
+end
+
 end # module
