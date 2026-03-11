@@ -84,8 +84,8 @@ end
 {{/has_null_values}}
 {{#accessors}}
 {{#needs_conversion}}
-{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`. Returns natural units ({{natural_unit}}) by default.\"\"\"{{/create_docstring}}
-{{accessor}}(value::{{struct_name}}) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), {{natural_unit}})
+{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`. Returns value in the system's unit setting (natural units by default).\"\"\"{{/create_docstring}}
+{{accessor}}(value::{{struct_name}}) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), _get_system_units(value, Val({{conversion_unit}})))
 {{accessor}}(value::{{struct_name}}, units) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units)
 {{/needs_conversion}}
 {{^needs_conversion}}
