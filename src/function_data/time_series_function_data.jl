@@ -18,7 +18,7 @@ to retrieve the key.
 - `TimeSeriesPiecewiseLinearData` = `TimeSeriesFunctionData{PiecewiseLinearData}`
 - `TimeSeriesPiecewiseStepData` = `TimeSeriesFunctionData{PiecewiseStepData}`
 """
-@kwdef struct TimeSeriesFunctionData{T <: FunctionData} <: FunctionData
+@kwdef struct TimeSeriesFunctionData{T <: StaticFunctionData} <: FunctionData
     time_series_key::TimeSeriesKey
 end
 

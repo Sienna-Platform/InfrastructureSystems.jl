@@ -9,7 +9,7 @@ const _STRICT_SLOPE_COMPARISON_ATOL = 1e-10
 # ============================================================================
 
 # Configurable thresholds for data quality checks
-const _MAX_REASONABLE_SLOPE = 1e8      # Maximum reasonable slope ($/MWh or similar units)
+const _MAX_REASONABLE_SLOPE = 1e8      # Maximum reasonable slope
 const _MAX_REASONABLE_COST = 1e10      # Maximum reasonable cost value
 const _MIN_REASONABLE_COST = -1e6      # Allow small negative costs for edge cases, but flag large negatives
 
@@ -17,22 +17,12 @@ const _MIN_REASONABLE_COST = -1e6      # Allow small negative costs for edge cas
     is_valid_data(data::FunctionData) -> Bool
     is_valid_data(curve::ValueCurve) -> Bool
 
-Check if the function data or curve is valid and suitable for convexification.
-Returns `true` if data is valid, `false` otherwise.
+Check whether the data contains reasonable values. Returns `false` and logs an error
+when issues are detected (e.g., non-ascending x-coordinates, unreasonably large slopes
+or values, large negative values).
 
-This validation should be called before attempting to convexify curves, as some data
-is not just non-convex but fundamentally wrong (e.g., unrealistic or inconsistent values).
-
-When validation fails, an error is logged with details about the specific issue.
-
-# Quality Checks
-- **X-coordinates ordering**: Must be strictly ascending
-- **Excessive slopes**: Unreasonably large slopes (in absolute value) may indicate unit conversion errors
-- **Negative costs**: Production costs should generally be non-negative
-- **Excessive magnitudes**: Very large values may indicate wrong units or data errors
-
-Note: Slope sign is NOT checked here. Use `is_strictly_increasing` or `is_strictly_decreasing`
-to validate slope direction when needed.
+Does not check slope direction — use [`is_strictly_increasing`](@ref) /
+[`is_strictly_decreasing`](@ref) for that.
 """
 function is_valid_data end
 
@@ -172,11 +162,8 @@ end
 """
     is_valid_data(curve::ValueCurve) -> Bool
 
-Check if a ValueCurve has valid data suitable for convexification.
-
-For `InputOutputCurve` and `IncrementalCurve`, delegates to the underlying FunctionData check.
-For `AverageRateCurve`, converts to `InputOutputCurve` first since average rates are NOT
-the same as slopes - the actual slopes must be validated.
+Delegates to the underlying `FunctionData`. For `AverageRateCurve`, converts to
+`InputOutputCurve` first since average rates are not the same as slopes.
 """
 is_valid_data(curve::InputOutputCurve) = is_valid_data(get_function_data(curve))
 is_valid_data(curve::IncrementalCurve) = is_valid_data(get_function_data(curve))
@@ -195,30 +182,14 @@ end
 # ============================================================================
 
 """
-    is_strictly_increasing(data::FunctionData, atol=_STRICT_SLOPE_COMPARISON_ATOL) -> Bool
-    is_strictly_increasing(curve::ValueCurve, atol=_STRICT_SLOPE_COMPARISON_ATOL) -> Bool
+    is_strictly_increasing(data::FunctionData, atol=$(_STRICT_SLOPE_COMPARISON_ATOL)) -> Bool
+    is_strictly_increasing(curve::ValueCurve, atol=$(_STRICT_SLOPE_COMPARISON_ATOL)) -> Bool
 
-Returns `true` if all slopes are non-negative (>= -atol), `false` otherwise.
+Returns `true` if all slopes are non-negative (>= -atol).
 
-# Arguments
-- `atol::Float64`: Absolute tolerance for negative slope detection. Slopes greater than
-  or equal to `-atol` are considered non-negative. Default is `_STRICT_SLOPE_COMPARISON_ATOL` (1e-10).
-  - For `LinearFunctionData`: uses fixed `_STRICT_SLOPE_COMPARISON_ATOL` (1e-10), `atol` parameter is ignored
-  - For `PiecewiseLinearData` and `PiecewiseStepData`: uses provided `atol`
-
-# FunctionData types
-Defined for:
-- `LinearFunctionData`: true iff proportional term >= 0 (within small tolerance)
-- `PiecewiseLinearData`: true iff all segment slopes >= -atol
-- `PiecewiseStepData`: true iff all marginal rates >= -atol
-
-Not defined for `QuadraticFunctionData` (slope varies with x).
-
-# ValueCurve types
-Defined for:
-- `InputOutputCurve`: delegates to underlying `FunctionData`
-- `IncrementalCurve`: delegates to underlying `FunctionData` (y-coords are slopes)
-- `AverageRateCurve`: converts to `InputOutputCurve` first (average rates ≠ slopes)
+Defined for `LinearFunctionData`, `PiecewiseLinearData`, `PiecewiseStepData`, and
+their `ValueCurve` wrappers. Not defined for `QuadraticFunctionData` (slope varies
+with x). `AverageRateCurve` converts to `InputOutputCurve` first.
 """
 function is_strictly_increasing end
 
@@ -266,21 +237,9 @@ is_strictly_increasing(
     is_strictly_decreasing(data::FunctionData) -> Bool
     is_strictly_decreasing(curve::ValueCurve) -> Bool
 
-Returns `true` if all slopes are non-positive (<= 0 within tolerance), `false` otherwise.
+Returns `true` if all slopes are non-positive (<= atol).
 
-# FunctionData types
-Defined for:
-- `LinearFunctionData`: true iff proportional term <= 0
-- `PiecewiseLinearData`: true iff all segment slopes <= 0
-- `PiecewiseStepData`: true iff all marginal rates <= 0
-
-Not defined for `QuadraticFunctionData` (slope varies with x).
-
-# ValueCurve types
-Defined for:
-- `InputOutputCurve`: delegates to underlying `FunctionData`
-- `IncrementalCurve`: delegates to underlying `FunctionData` (y-coords are slopes)
-- `AverageRateCurve`: converts to `InputOutputCurve` first (average rates ≠ slopes)
+Same type coverage as [`is_strictly_increasing`](@ref).
 """
 function is_strictly_decreasing end
 
@@ -373,17 +332,8 @@ is_concave(pwl::PiecewiseStepData) =
 """
     is_convex(curve::ValueCurve) -> Bool
 
-Check if a `ValueCurve` is convex.
-
-- `InputOutputCurve` (including `LinearCurve`, `QuadraticCurve`, `PiecewisePointCurve`):
-  Delegates to convexity check of the underlying `FunctionData`.
-- `IncrementalCurve` (including `PiecewiseIncrementalCurve`): Delegates to convexity check
-  of the underlying `FunctionData`. This works because for `IncrementalCurve`, the
-  `FunctionData` y-coordinates represent marginal rates (slopes), so checking if they are
-  non-decreasing is equivalent to checking convexity of the original curve.
-- `AverageRateCurve` (including `PiecewiseAverageCurve`): Converts to `InputOutputCurve`
-  first, then checks. This is necessary because average rates are NOT the same as slopes;
-  non-decreasing average rates do not imply convexity.
+Check if a `ValueCurve` is convex. Delegates to the underlying `FunctionData`.
+`AverageRateCurve` converts to `InputOutputCurve` first (average rates ≠ slopes).
 """
 is_convex(curve::InputOutputCurve) = is_convex(get_function_data(curve))
 is_convex(curve::IncrementalCurve) = is_convex(get_function_data(curve))
@@ -392,18 +342,53 @@ is_convex(curve::AverageRateCurve) = is_convex(InputOutputCurve(curve))
 """
     is_concave(curve::ValueCurve) -> Bool
 
-Check if a `ValueCurve` is concave.
-
-- `InputOutputCurve` (including `LinearCurve`, `QuadraticCurve`, `PiecewisePointCurve`):
-  Delegates to concavity check of the underlying `FunctionData`.
-- `IncrementalCurve` (including `PiecewiseIncrementalCurve`): Delegates to concavity check
-  of the underlying `FunctionData`. This works because for `IncrementalCurve`, the
-  `FunctionData` y-coordinates represent marginal rates (slopes), so checking if they are
-  non-increasing is equivalent to checking concavity of the original curve.
-- `AverageRateCurve` (including `PiecewiseAverageCurve`): Converts to `InputOutputCurve`
-  first, then checks. This is necessary because average rates are NOT the same as slopes;
-  non-increasing average rates do not imply concavity.
+Check if a `ValueCurve` is concave. Delegates to the underlying `FunctionData`.
+`AverageRateCurve` converts to `InputOutputCurve` first (average rates ≠ slopes).
 """
 is_concave(curve::InputOutputCurve) = is_concave(get_function_data(curve))
 is_concave(curve::IncrementalCurve) = is_concave(get_function_data(curve))
 is_concave(curve::AverageRateCurve) = is_concave(InputOutputCurve(curve))
+
+# ============================================================================
+# TIME-SERIES-BACKED CURVE CONVEXITY CHECKS
+# ============================================================================
+
+"""
+    is_convex(::TimeSeriesInputOutputCurve, data_at_t::StaticFunctionData) -> Bool
+    is_convex(::TimeSeriesIncrementalCurve, data_at_t::StaticFunctionData) -> Bool
+    is_convex(::TimeSeriesAverageRateCurve, data_at_t::StaticFunctionData, initial_input::Float64) -> Bool
+
+Check convexity of a time-series-backed curve given the resolved data at a specific
+timestep. `TimeSeriesAverageRateCurve` requires `initial_input` to reconstruct the
+`AverageRateCurve` for conversion to `InputOutputCurve`.
+"""
+is_convex(
+    ::Union{TimeSeriesInputOutputCurve, TimeSeriesIncrementalCurve},
+    data_at_t::StaticFunctionData,
+) = is_convex(data_at_t)
+function is_convex(
+    ::TimeSeriesAverageRateCurve,
+    data_at_t::StaticFunctionData,
+    initial_input::Float64,
+)
+    return is_convex(InputOutputCurve(AverageRateCurve(data_at_t, initial_input)))
+end
+
+"""
+    is_concave(::TimeSeriesInputOutputCurve, data_at_t::StaticFunctionData) -> Bool
+    is_concave(::TimeSeriesIncrementalCurve, data_at_t::StaticFunctionData) -> Bool
+    is_concave(::TimeSeriesAverageRateCurve, data_at_t::StaticFunctionData, initial_input::Float64) -> Bool
+
+Check concavity of a time-series-backed curve. See [`is_convex`](@ref) for details.
+"""
+is_concave(
+    ::Union{TimeSeriesInputOutputCurve, TimeSeriesIncrementalCurve},
+    data_at_t::StaticFunctionData,
+) = is_concave(data_at_t)
+function is_concave(
+    ::TimeSeriesAverageRateCurve,
+    data_at_t::StaticFunctionData,
+    initial_input::Float64,
+)
+    return is_concave(InputOutputCurve(AverageRateCurve(data_at_t, initial_input)))
+end
