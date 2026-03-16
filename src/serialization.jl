@@ -129,7 +129,7 @@ end
 function add_serialization_metadata!(
     data::Dict,
     ::Type{TimeSeriesFunctionData{T}},
-) where {T <: FunctionData}
+) where {T <: StaticFunctionData}
     data[METADATA_KEY] = Dict{String, Any}(
         TYPE_KEY => string(nameof(TimeSeriesFunctionData)),
         MODULE_KEY => string(parentmodule(TimeSeriesFunctionData)),
