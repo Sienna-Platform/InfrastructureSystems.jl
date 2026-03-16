@@ -258,15 +258,16 @@ _ts_key_repr(::Nothing) = "nothing"
     TimeSeriesLinearCurve
 
 A time-series-backed linear input-output curve. Alias for
-`TimeSeriesInputOutputCurve{TimeSeriesLinearFunctionData}`.
+`TimeSeriesInputOutputCurve{TimeSeriesFunctionData{LinearFunctionData}}`.
 """
 const TimeSeriesLinearCurve =
-    TimeSeriesInputOutputCurve{TimeSeriesLinearFunctionData}
+    TimeSeriesInputOutputCurve{TimeSeriesFunctionData{LinearFunctionData}}
 
 is_cost_alias(::Union{TimeSeriesLinearCurve, Type{TimeSeriesLinearCurve}}) = true
 
-TimeSeriesInputOutputCurve{TimeSeriesLinearFunctionData}(key::TimeSeriesKey) =
-    TimeSeriesInputOutputCurve(TimeSeriesLinearFunctionData(key))
+TimeSeriesInputOutputCurve{TimeSeriesFunctionData{LinearFunctionData}}(
+    key::TimeSeriesKey,
+) = TimeSeriesInputOutputCurve(TimeSeriesFunctionData{LinearFunctionData}(key))
 
 Base.show(io::IO, vc::TimeSeriesLinearCurve) =
     if isnothing(get_input_at_zero(vc))
@@ -279,15 +280,16 @@ Base.show(io::IO, vc::TimeSeriesLinearCurve) =
     TimeSeriesQuadraticCurve
 
 A time-series-backed quadratic input-output curve. Alias for
-`TimeSeriesInputOutputCurve{TimeSeriesQuadraticFunctionData}`.
+`TimeSeriesInputOutputCurve{TimeSeriesFunctionData{QuadraticFunctionData}}`.
 """
 const TimeSeriesQuadraticCurve =
-    TimeSeriesInputOutputCurve{TimeSeriesQuadraticFunctionData}
+    TimeSeriesInputOutputCurve{TimeSeriesFunctionData{QuadraticFunctionData}}
 
 is_cost_alias(::Union{TimeSeriesQuadraticCurve, Type{TimeSeriesQuadraticCurve}}) = true
 
-TimeSeriesInputOutputCurve{TimeSeriesQuadraticFunctionData}(key::TimeSeriesKey) =
-    TimeSeriesInputOutputCurve(TimeSeriesQuadraticFunctionData(key))
+TimeSeriesInputOutputCurve{TimeSeriesFunctionData{QuadraticFunctionData}}(
+    key::TimeSeriesKey,
+) = TimeSeriesInputOutputCurve(TimeSeriesFunctionData{QuadraticFunctionData}(key))
 
 Base.show(io::IO, vc::TimeSeriesQuadraticCurve) =
     if isnothing(get_input_at_zero(vc))
@@ -300,17 +302,18 @@ Base.show(io::IO, vc::TimeSeriesQuadraticCurve) =
     TimeSeriesPiecewisePointCurve
 
 A time-series-backed piecewise linear input-output curve. Alias for
-`TimeSeriesInputOutputCurve{TimeSeriesPiecewiseLinearData}`.
+`TimeSeriesInputOutputCurve{TimeSeriesFunctionData{PiecewiseLinearData}}`.
 """
 const TimeSeriesPiecewisePointCurve =
-    TimeSeriesInputOutputCurve{TimeSeriesPiecewiseLinearData}
+    TimeSeriesInputOutputCurve{TimeSeriesFunctionData{PiecewiseLinearData}}
 
 is_cost_alias(
     ::Union{TimeSeriesPiecewisePointCurve, Type{TimeSeriesPiecewisePointCurve}},
 ) = true
 
-TimeSeriesInputOutputCurve{TimeSeriesPiecewiseLinearData}(key::TimeSeriesKey) =
-    TimeSeriesInputOutputCurve(TimeSeriesPiecewiseLinearData(key))
+TimeSeriesInputOutputCurve{TimeSeriesFunctionData{PiecewiseLinearData}}(
+    key::TimeSeriesKey,
+) = TimeSeriesInputOutputCurve(TimeSeriesFunctionData{PiecewiseLinearData}(key))
 
 Base.show(io::IO, vc::TimeSeriesPiecewisePointCurve) =
     if isnothing(get_input_at_zero(vc))
@@ -323,10 +326,10 @@ Base.show(io::IO, vc::TimeSeriesPiecewisePointCurve) =
     TimeSeriesPiecewiseIncrementalCurve
 
 A time-series-backed piecewise incremental curve. Alias for
-`TimeSeriesIncrementalCurve{TimeSeriesPiecewiseStepData}`.
+`TimeSeriesIncrementalCurve{TimeSeriesFunctionData{PiecewiseStepData}}`.
 """
 const TimeSeriesPiecewiseIncrementalCurve =
-    TimeSeriesIncrementalCurve{TimeSeriesPiecewiseStepData}
+    TimeSeriesIncrementalCurve{TimeSeriesFunctionData{PiecewiseStepData}}
 
 is_cost_alias(
     ::Union{
@@ -335,17 +338,19 @@ is_cost_alias(
     },
 ) = true
 
-TimeSeriesIncrementalCurve{TimeSeriesPiecewiseStepData}(
+TimeSeriesIncrementalCurve{TimeSeriesFunctionData{PiecewiseStepData}}(
     key::TimeSeriesKey,
     initial_input::Union{Nothing, TimeSeriesKey},
-) = TimeSeriesIncrementalCurve(TimeSeriesPiecewiseStepData(key), initial_input)
+) = TimeSeriesIncrementalCurve(
+    TimeSeriesFunctionData{PiecewiseStepData}(key), initial_input,
+)
 
-TimeSeriesIncrementalCurve{TimeSeriesPiecewiseStepData}(
+TimeSeriesIncrementalCurve{TimeSeriesFunctionData{PiecewiseStepData}}(
     key::TimeSeriesKey,
     initial_input::Union{Nothing, TimeSeriesKey},
     input_at_zero::Union{Nothing, TimeSeriesKey},
 ) = TimeSeriesIncrementalCurve(
-    TimeSeriesPiecewiseStepData(key), initial_input, input_at_zero,
+    TimeSeriesFunctionData{PiecewiseStepData}(key), initial_input, input_at_zero,
 )
 
 Base.show(io::IO, vc::TimeSeriesPiecewiseIncrementalCurve) =
@@ -362,10 +367,10 @@ Base.show(io::IO, vc::TimeSeriesPiecewiseIncrementalCurve) =
     TimeSeriesPiecewiseAverageCurve
 
 A time-series-backed piecewise average rate curve. Alias for
-`TimeSeriesAverageRateCurve{TimeSeriesPiecewiseStepData}`.
+`TimeSeriesAverageRateCurve{TimeSeriesFunctionData{PiecewiseStepData}}`.
 """
 const TimeSeriesPiecewiseAverageCurve =
-    TimeSeriesAverageRateCurve{TimeSeriesPiecewiseStepData}
+    TimeSeriesAverageRateCurve{TimeSeriesFunctionData{PiecewiseStepData}}
 
 is_cost_alias(
     ::Union{
@@ -374,17 +379,19 @@ is_cost_alias(
     },
 ) = true
 
-TimeSeriesAverageRateCurve{TimeSeriesPiecewiseStepData}(
+TimeSeriesAverageRateCurve{TimeSeriesFunctionData{PiecewiseStepData}}(
     key::TimeSeriesKey,
     initial_input::Union{Nothing, TimeSeriesKey},
-) = TimeSeriesAverageRateCurve(TimeSeriesPiecewiseStepData(key), initial_input)
+) = TimeSeriesAverageRateCurve(
+    TimeSeriesFunctionData{PiecewiseStepData}(key), initial_input,
+)
 
-TimeSeriesAverageRateCurve{TimeSeriesPiecewiseStepData}(
+TimeSeriesAverageRateCurve{TimeSeriesFunctionData{PiecewiseStepData}}(
     key::TimeSeriesKey,
     initial_input::Union{Nothing, TimeSeriesKey},
     input_at_zero::Union{Nothing, TimeSeriesKey},
 ) = TimeSeriesAverageRateCurve(
-    TimeSeriesPiecewiseStepData(key), initial_input, input_at_zero,
+    TimeSeriesFunctionData{PiecewiseStepData}(key), initial_input, input_at_zero,
 )
 
 Base.show(io::IO, vc::TimeSeriesPiecewiseAverageCurve) =

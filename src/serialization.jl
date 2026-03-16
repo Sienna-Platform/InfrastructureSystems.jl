@@ -124,6 +124,21 @@ function add_serialization_metadata!(data::Dict, ::Type{T}) where {T}
     return
 end
 
+# TimeSeriesFunctionData{T} is parametric — ensure the type parameter is reconstructed
+# during deserialization by setting CONSTRUCT_WITH_PARAMETERS_KEY.
+function add_serialization_metadata!(
+    data::Dict,
+    ::Type{TimeSeriesFunctionData{T}},
+) where {T <: FunctionData}
+    data[METADATA_KEY] = Dict{String, Any}(
+        TYPE_KEY => string(nameof(TimeSeriesFunctionData)),
+        MODULE_KEY => string(parentmodule(TimeSeriesFunctionData)),
+        PARAMETERS_KEY => [string(nameof(T))],
+        CONSTRUCT_WITH_PARAMETERS_KEY => true,
+    )
+    return
+end
+
 """
 Return the type information for the serialized struct.
 """
