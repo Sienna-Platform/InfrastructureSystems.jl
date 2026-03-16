@@ -20,16 +20,21 @@ The [`TimeSeriesFunctionData`](@ref) subtypes mirror these but hold a
 abstract type FunctionData end
 
 """
+    StaticFunctionData <: FunctionData
+
+Abstract supertype for `FunctionData` variants that hold their numerical data inline
+(as opposed to [`TimeSeriesFunctionData`](@ref), which holds a time series reference).
+"""
+abstract type StaticFunctionData <: FunctionData end
+
+"""
 Data for a linear function: `f(x) = proportional_term * x + constant_term`.
 
-Use this when the output changes at a constant rate with the input — e.g., constant
-marginal cost regardless of production level.
-
 # Arguments
-- `proportional_term::Float64`: slope of the function (e.g., \$/MWh)
-- `constant_term::Float64`: intercept (e.g., no-load cost in \$/h). Defaults to `0.0`.
+- `proportional_term::Float64`: slope of the function
+- `constant_term::Float64`: intercept. Defaults to `0.0`.
 """
-@kwdef struct LinearFunctionData <: FunctionData
+@kwdef struct LinearFunctionData <: StaticFunctionData
     proportional_term::Float64
     constant_term::Float64
 end
@@ -70,15 +75,12 @@ end
 """
 Data for a quadratic function: `f(x) = quadratic_term * x^2 + proportional_term * x + constant_term`.
 
-Use this when you have a smooth, continuously increasing marginal cost curve — commonly
-fitted from heat rate tables. Marginal cost increases linearly with output.
-
 # Arguments
-- `quadratic_term::Float64`: quadratic coefficient (≥ 0 for a convex cost curve)
-- `proportional_term::Float64`: linear coefficient (e.g., \$/MWh)
-- `constant_term::Float64`: constant term (e.g., no-load cost in \$/h)
+- `quadratic_term::Float64`: quadratic coefficient (≥ 0 for a convex function)
+- `proportional_term::Float64`: linear coefficient
+- `constant_term::Float64`: constant term
 """
-@kwdef struct QuadraticFunctionData <: FunctionData
+@kwdef struct QuadraticFunctionData <: StaticFunctionData
     quadratic_term::Float64
     proportional_term::Float64
     constant_term::Float64
@@ -132,30 +134,17 @@ end
 """
 Data for a piecewise linear function defined by (x, y) **value** points.
 
-Each point stores an absolute output: e.g., `(100.0 MW, 500.0 \$/h)`. The function
-linearly interpolates between consecutive points. **The y-values are totals, not slopes.**
-Two points define one segment, three define two, etc. The curve starts at the first
-point, not the origin.
+The function linearly interpolates between consecutive points. **The y-values are
+absolute values, not slopes.** Two points define one segment, three define two, etc.
 
-If your data gives marginal rates (slopes) between breakpoints rather than total values
-at each point, use [`PiecewiseStepData`](@ref) instead.
-
-**Optimization formulation:** this data shape maps to the **lambda (convex combination)**
-formulation. One λ variable is created per breakpoint (n points → n variables):
-
-    P = Σᵢ λᵢ · Pᵢ,   C = Σᵢ λᵢ · Cᵢ,   Σᵢ λᵢ = on_status,   λᵢ ∈ [0, 1]
-
-For convex cost curves this LP relaxation is tight with no extra constraints. For
-non-convex curves, an SOS2 constraint is added to enforce that at most two neighboring
-λ values are nonzero — which introduces binary variables and a MILP. If your curve is
-non-convex and you want to avoid that, consider supplying the data as [`PiecewiseStepData`](@ref)
-(delta formulation) instead, which handles non-convexity through per-segment bounds.
+If your data gives per-segment rates between breakpoints rather than values at each
+point, use [`PiecewiseStepData`](@ref) instead.
 
 # Arguments
 - `points::Vector{@NamedTuple{x::Float64, y::Float64}}`: (input, output) pairs in ascending
-  x order (e.g., (MW, \$/h) for a cost curve)
+  x order
 """
-@kwdef struct PiecewiseLinearData <: FunctionData
+@kwdef struct PiecewiseLinearData <: StaticFunctionData
     points::Vector{XY_COORDS}
 
     function PiecewiseLinearData(points::Vector{<:NamedTuple{(:x, :y)}})
@@ -259,32 +248,19 @@ end
 Data for a step function (piecewise constant) defined by endpoint x-coordinates and
 per-segment y-values.
 
-Each y-value is constant over a segment: e.g., a marginal rate (\$/MWh) between two MW
-breakpoints. **The y-values are slopes, not absolute costs.** Two x-coordinates and one
-y-coordinate define one segment; three x-coordinates and two y-coordinates define two, etc.
+Each y-value is constant over a segment. **The y-values are per-segment rates, not
+absolute values.** Two x-coordinates and one y-coordinate define one segment; three
+x-coordinates and two y-coordinates define two, etc.
 
-This is the natural format for **generator bid stacks** and incremental heat rate data,
-where the source already provides (MW range, \$/MWh rate) pairs.
-
-If your data gives total cost at each output level, use [`PiecewiseLinearData`](@ref) instead.
-
-**Optimization formulation:** this data shape maps to the **delta (block-offer)**
-formulation. One δ variable is created per segment (n-1 segments → n-1 variables):
-
-    P = Σₖ δₖ + offset,   C = Σₖ δₖ · slopeₖ,   0 ≤ δₖ ≤ Pₖ₊₁ - Pₖ
-
-The per-segment upper bounds enforce ordering without SOS2, so non-convex (decreasing
-slope) curves do **not** require binary variables — the LP relaxation is always valid
-for pricing. This is the standard formulation for market offers in unit commitment
-models.
+If your data gives absolute values at each point, use [`PiecewiseLinearData`](@ref) instead.
 
 # Arguments
-- `x_coords::Vector{Float64}`: x-coordinates of the segment endpoints (e.g., MW breakpoints),
-  must be ascending with at least 2 elements
-- `y_coords::Vector{Float64}`: y-value for each segment (e.g., marginal rate in \$/MWh).
-  Must have exactly `length(x_coords) - 1` elements.
+- `x_coords::Vector{Float64}`: x-coordinates of the segment endpoints, must be ascending
+  with at least 2 elements
+- `y_coords::Vector{Float64}`: y-value for each segment. Must have exactly
+  `length(x_coords) - 1` elements.
 """
-@kwdef struct PiecewiseStepData <: FunctionData
+@kwdef struct PiecewiseStepData <: StaticFunctionData
     x_coords::Vector{Float64}
     y_coords::Vector{Float64}
 
