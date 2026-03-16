@@ -7,9 +7,9 @@ time series referenced by a [`TimeSeriesKey`](@ref).
 """
 @kwdef struct TimeSeriesInputOutputCurve{
     T <: Union{
-        TimeSeriesLinearFunctionData,
-        TimeSeriesQuadraticFunctionData,
-        TimeSeriesPiecewiseLinearData,
+        TimeSeriesFunctionData{LinearFunctionData},
+        TimeSeriesFunctionData{QuadraticFunctionData},
+        TimeSeriesFunctionData{PiecewiseLinearData},
     },
 } <: ValueCurve{T}
     "The underlying `TimeSeriesFunctionData` representation of this `ValueCurve`"
@@ -24,9 +24,9 @@ TimeSeriesInputOutputCurve{T}(
     function_data,
 ) where {
     T <: Union{
-        TimeSeriesLinearFunctionData,
-        TimeSeriesQuadraticFunctionData,
-        TimeSeriesPiecewiseLinearData,
+        TimeSeriesFunctionData{LinearFunctionData},
+        TimeSeriesFunctionData{QuadraticFunctionData},
+        TimeSeriesFunctionData{PiecewiseLinearData},
     },
 } = TimeSeriesInputOutputCurve{T}(function_data, nothing)
 
@@ -42,7 +42,10 @@ downstream packages can dispatch on incremental vs average-rate semantics when i
 retrieved time series data.
 """
 @kwdef struct TimeSeriesIncrementalCurve{
-    T <: Union{TimeSeriesLinearFunctionData, TimeSeriesPiecewiseStepData},
+    T <: Union{
+        TimeSeriesFunctionData{LinearFunctionData},
+        TimeSeriesFunctionData{PiecewiseStepData},
+    },
 } <: ValueCurve{T}
     "The underlying `TimeSeriesFunctionData` representation of this `ValueCurve`"
     function_data::T
@@ -57,8 +60,12 @@ TimeSeriesIncrementalCurve(function_data, initial_input) =
 TimeSeriesIncrementalCurve{T}(
     function_data,
     initial_input,
-) where {T <: Union{TimeSeriesLinearFunctionData, TimeSeriesPiecewiseStepData}} =
-    TimeSeriesIncrementalCurve{T}(function_data, initial_input, nothing)
+) where {
+    T <: Union{
+        TimeSeriesFunctionData{LinearFunctionData},
+        TimeSeriesFunctionData{PiecewiseStepData},
+    },
+} = TimeSeriesIncrementalCurve{T}(function_data, initial_input, nothing)
 
 """
     TimeSeriesAverageRateCurve{T <: TimeSeriesFunctionData} <: ValueCurve{T}
@@ -72,7 +79,10 @@ downstream packages can dispatch on incremental vs average-rate semantics when i
 retrieved time series data.
 """
 @kwdef struct TimeSeriesAverageRateCurve{
-    T <: Union{TimeSeriesLinearFunctionData, TimeSeriesPiecewiseStepData},
+    T <: Union{
+        TimeSeriesFunctionData{LinearFunctionData},
+        TimeSeriesFunctionData{PiecewiseStepData},
+    },
 } <: ValueCurve{T}
     "The underlying `TimeSeriesFunctionData` representation of this `ValueCurve`"
     function_data::T
@@ -87,8 +97,12 @@ TimeSeriesAverageRateCurve(function_data, initial_input) =
 TimeSeriesAverageRateCurve{T}(
     function_data,
     initial_input,
-) where {T <: Union{TimeSeriesLinearFunctionData, TimeSeriesPiecewiseStepData}} =
-    TimeSeriesAverageRateCurve{T}(function_data, initial_input, nothing)
+) where {
+    T <: Union{
+        TimeSeriesFunctionData{LinearFunctionData},
+        TimeSeriesFunctionData{PiecewiseStepData},
+    },
+} = TimeSeriesAverageRateCurve{T}(function_data, initial_input, nothing)
 
 # ACCESSOR EXTENSIONS
 "Get the `initial_input` field of a time-series-backed `ValueCurve` (returns a `TimeSeriesKey` or `nothing`, unlike the static variant which returns `Float64`)"
@@ -112,9 +126,9 @@ TimeSeriesInputOutputCurve(
     input_at_zero,
 ) where {
     T <: Union{
-        TimeSeriesLinearFunctionData,
-        TimeSeriesQuadraticFunctionData,
-        TimeSeriesPiecewiseLinearData,
+        TimeSeriesFunctionData{LinearFunctionData},
+        TimeSeriesFunctionData{QuadraticFunctionData},
+        TimeSeriesFunctionData{PiecewiseLinearData},
     },
 } = TimeSeriesInputOutputCurve{T}(function_data, input_at_zero)
 
@@ -122,12 +136,20 @@ TimeSeriesIncrementalCurve(
     function_data::T,
     initial_input,
     input_at_zero,
-) where {T <: Union{TimeSeriesLinearFunctionData, TimeSeriesPiecewiseStepData}} =
-    TimeSeriesIncrementalCurve{T}(function_data, initial_input, input_at_zero)
+) where {
+    T <: Union{
+        TimeSeriesFunctionData{LinearFunctionData},
+        TimeSeriesFunctionData{PiecewiseStepData},
+    },
+} = TimeSeriesIncrementalCurve{T}(function_data, initial_input, input_at_zero)
 
 TimeSeriesAverageRateCurve(
     function_data::T,
     initial_input,
     input_at_zero,
-) where {T <: Union{TimeSeriesLinearFunctionData, TimeSeriesPiecewiseStepData}} =
-    TimeSeriesAverageRateCurve{T}(function_data, initial_input, input_at_zero)
+) where {
+    T <: Union{
+        TimeSeriesFunctionData{LinearFunctionData},
+        TimeSeriesFunctionData{PiecewiseStepData},
+    },
+} = TimeSeriesAverageRateCurve{T}(function_data, initial_input, input_at_zero)

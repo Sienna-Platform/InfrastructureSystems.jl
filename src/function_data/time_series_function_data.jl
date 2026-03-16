@@ -1,58 +1,38 @@
 """
-    TimeSeriesFunctionData <: FunctionData
+    TimeSeriesFunctionData{T <: FunctionData} <: FunctionData
 
-Abstract supertype for `FunctionData` variants whose numerical data lives in a time series
-rather than inline.
+A parametric `FunctionData` variant whose numerical data lives in a time series rather than
+inline. The type parameter `T` specifies the static [`FunctionData`](@ref) subtype that the
+time series elements correspond to — same shape, but instead of holding numbers directly, it
+holds a [`TimeSeriesKey`](@ref) that points to a time series of `T` values.
 
-Each concrete subtype mirrors a static [`FunctionData`](@ref) subtype — same shape, but
-instead of holding numbers directly, it holds a [`TimeSeriesKey`](@ref) that points to a
-time series of the corresponding static type. Use these when cost function parameters change
-at each simulation timestep (e.g., time-varying market offers).
+Use these when cost function parameters change at each simulation timestep (e.g.,
+time-varying market offers).
 
 Use [`is_time_series_backed`](@ref) to check at runtime, and [`get_time_series_key`](@ref)
 to retrieve the key.
-"""
-abstract type TimeSeriesFunctionData <: FunctionData end
 
+# Convenience aliases
+- `TimeSeriesLinearFunctionData` = `TimeSeriesFunctionData{LinearFunctionData}`
+- `TimeSeriesQuadraticFunctionData` = `TimeSeriesFunctionData{QuadraticFunctionData}`
+- `TimeSeriesPiecewiseLinearData` = `TimeSeriesFunctionData{PiecewiseLinearData}`
+- `TimeSeriesPiecewiseStepData` = `TimeSeriesFunctionData{PiecewiseStepData}`
 """
-    TimeSeriesLinearFunctionData <: TimeSeriesFunctionData
-
-Time-series-backed variant of [`LinearFunctionData`](@ref). The `time_series_key`
-references a time series whose elements are `LinearFunctionData`.
-"""
-@kwdef struct TimeSeriesLinearFunctionData <: TimeSeriesFunctionData
+@kwdef struct TimeSeriesFunctionData{T <: FunctionData} <: FunctionData
     time_series_key::TimeSeriesKey
 end
 
-"""
-    TimeSeriesQuadraticFunctionData <: TimeSeriesFunctionData
+"Time-series-backed variant of [`LinearFunctionData`](@ref)."
+const TimeSeriesLinearFunctionData = TimeSeriesFunctionData{LinearFunctionData}
 
-Time-series-backed variant of [`QuadraticFunctionData`](@ref). The `time_series_key`
-references a time series whose elements are `QuadraticFunctionData`.
-"""
-@kwdef struct TimeSeriesQuadraticFunctionData <: TimeSeriesFunctionData
-    time_series_key::TimeSeriesKey
-end
+"Time-series-backed variant of [`QuadraticFunctionData`](@ref)."
+const TimeSeriesQuadraticFunctionData = TimeSeriesFunctionData{QuadraticFunctionData}
 
-"""
-    TimeSeriesPiecewiseLinearData <: TimeSeriesFunctionData
+"Time-series-backed variant of [`PiecewiseLinearData`](@ref)."
+const TimeSeriesPiecewiseLinearData = TimeSeriesFunctionData{PiecewiseLinearData}
 
-Time-series-backed variant of [`PiecewiseLinearData`](@ref). The `time_series_key`
-references a time series whose elements are `PiecewiseLinearData`.
-"""
-@kwdef struct TimeSeriesPiecewiseLinearData <: TimeSeriesFunctionData
-    time_series_key::TimeSeriesKey
-end
-
-"""
-    TimeSeriesPiecewiseStepData <: TimeSeriesFunctionData
-
-Time-series-backed variant of [`PiecewiseStepData`](@ref). The `time_series_key`
-references a time series whose elements are `PiecewiseStepData`.
-"""
-@kwdef struct TimeSeriesPiecewiseStepData <: TimeSeriesFunctionData
-    time_series_key::TimeSeriesKey
-end
+"Time-series-backed variant of [`PiecewiseStepData`](@ref)."
+const TimeSeriesPiecewiseStepData = TimeSeriesFunctionData{PiecewiseStepData}
 
 """
     get_time_series_key(fd::TimeSeriesFunctionData) -> TimeSeriesKey
@@ -71,20 +51,11 @@ is_time_series_backed(::FunctionData) = false
 is_time_series_backed(::TimeSeriesFunctionData) = true
 
 """
-    get_underlying_function_data_type(::Type{<:TimeSeriesFunctionData}) -> Type{<:FunctionData}
+    get_underlying_function_data_type(::Type{TimeSeriesFunctionData{T}}) -> Type{T}
 
 Return the concrete `FunctionData` type that the time series elements correspond to.
 """
-function get_underlying_function_data_type end
-
-get_underlying_function_data_type(::Type{TimeSeriesLinearFunctionData}) =
-    LinearFunctionData
-get_underlying_function_data_type(::Type{TimeSeriesQuadraticFunctionData}) =
-    QuadraticFunctionData
-get_underlying_function_data_type(::Type{TimeSeriesPiecewiseLinearData}) =
-    PiecewiseLinearData
-get_underlying_function_data_type(::Type{TimeSeriesPiecewiseStepData}) =
-    PiecewiseStepData
+get_underlying_function_data_type(::Type{TimeSeriesFunctionData{T}}) where {T} = T
 
 # Instance convenience
 get_underlying_function_data_type(fd::TimeSeriesFunctionData) =
@@ -96,7 +67,7 @@ function Base.show(io::IO, ::MIME"text/plain", fd::TimeSeriesFunctionData)
     underlying = get_underlying_function_data_type(fd)
     print(
         io,
-        "$(typeof(fd)) backed by time series \"$(get_name(ts_key))\" ",
+        "TimeSeriesFunctionData{$underlying} backed by time series \"$(get_name(ts_key))\" ",
         "of $underlying",
     )
 end
