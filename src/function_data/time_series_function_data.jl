@@ -1,5 +1,5 @@
 """
-    TimeSeriesFunctionData{T <: FunctionData} <: FunctionData
+    TimeSeriesFunctionData{T <: StaticFunctionData} <: FunctionData
 
 A parametric `FunctionData` variant whose numerical data lives in a time series rather than
 inline. The type parameter `T` specifies the static [`FunctionData`](@ref) subtype that the
