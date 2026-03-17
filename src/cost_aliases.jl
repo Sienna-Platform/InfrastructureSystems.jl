@@ -15,19 +15,15 @@
     LinearCurve(proportional_term::Float64)
     LinearCurve(proportional_term::Float64, constant_term::Float64)
 
-A constant-marginal-rate cost curve: `cost(x) = m·x + b`.
-
-The simplest cost representation. Use when marginal cost doesn't change with output level.
-If cost increases with output, use [`QuadraticCurve`](@ref) or
-[`PiecewiseIncrementalCurve`](@ref) instead.
+A linear curve: `f(x) = m·x + b`.
 
 # Arguments
-- `proportional_term::Float64`: marginal rate (e.g., \$/MWh)
-- `constant_term::Float64`: no-load cost (e.g., \$/h), defaults to `0.0`
+- `proportional_term::Float64`: slope
+- `constant_term::Float64`: intercept, defaults to `0.0`
 
 # Example
 ```julia
-curve = LinearCurve(50.0, 100.0)  # \$50/MWh marginal rate, \$100/h no-load cost
+curve = LinearCurve(50.0, 100.0)
 ```
 """
 const LinearCurve = InputOutputCurve{LinearFunctionData}
@@ -56,20 +52,16 @@ Base.show(io::IO, vc::LinearCurve) =
 """
     QuadraticCurve(quadratic_term::Float64, proportional_term::Float64, constant_term::Float64)
 
-A smooth quadratic cost curve: `cost(x) = q·x² + m·x + b`.
-
-Use when you have a polynomial fit to heat rate data with a smooth, increasing marginal
-cost. For non-smooth piecewise costs (e.g., market bid stacks), use
-[`PiecewiseIncrementalCurve`](@ref) instead.
+A quadratic curve: `f(x) = q·x² + m·x + b`.
 
 # Arguments
-- `quadratic_term::Float64`: quadratic coefficient (≥ 0 for a convex, physical cost curve)
+- `quadratic_term::Float64`: quadratic coefficient (≥ 0 for a convex function)
 - `proportional_term::Float64`: linear coefficient
-- `constant_term::Float64`: constant (no-load) term
+- `constant_term::Float64`: constant term
 
 # Example
 ```julia
-curve = QuadraticCurve(0.002, 25.0, 150.0)  # slightly increasing marginal cost, \$150/h no-load
+curve = QuadraticCurve(0.002, 25.0, 150.0)
 ```
 """
 const QuadraticCurve = InputOutputCurve{QuadraticFunctionData}
@@ -103,24 +95,17 @@ Base.show(io::IO, vc::QuadraticCurve) =
 """
     PiecewisePointCurve(points::Vector{Tuple{Float64, Float64}})
 
-A piecewise linear cost curve defined by **absolute (production, total-cost) points**.
+A piecewise linear curve defined by **(x, y) value points**.
 
-Each point is `(MW, \$/h)`. The curve linearly interpolates between them. The y-values are
-**total costs**, not marginal rates. If your data instead gives marginal rates between
-breakpoints (e.g., a bid stack), use [`PiecewiseIncrementalCurve`](@ref).
-
-**Optimization formulation:** uses the **lambda (convex combination)** formulation — one
-λ variable per breakpoint, `P = Σ λᵢ·Pᵢ`, `C = Σ λᵢ·Cᵢ`. For non-convex cost curves
-(marginal rate decreases at some breakpoint) an SOS2 binary constraint is automatically
-added, making the problem a MILP. Use [`PiecewiseIncrementalCurve`](@ref) if you want
-the delta formulation, which avoids SOS2 entirely.
+The curve linearly interpolates between them. The y-values are **absolute values**, not
+per-segment rates. If your data instead gives per-segment rates between breakpoints, use
+[`PiecewiseIncrementalCurve`](@ref).
 
 # Arguments
-- `points`: vector of `(production, total_cost)` pairs in ascending production order
+- `points`: vector of `(x, y)` pairs in ascending x order
 
 # Example
 ```julia
-# 100 MW → \$400/h, 200 MW → \$900/h, 300 MW → \$1500/h
 curve = PiecewisePointCurve([(100.0, 400.0), (200.0, 900.0), (300.0, 1500.0)])
 ```
 """
@@ -155,29 +140,19 @@ Base.show(io::IO, vc::PiecewisePointCurve) =
     PiecewiseIncrementalCurve(initial_input, x_coords, slopes)
     PiecewiseIncrementalCurve(input_at_zero, initial_input, x_coords, slopes)
 
-A piecewise marginal-rate curve: each segment has a constant \$/MWh rate.
-
-**This is the standard format for generator bid stacks and market offers.** The y-values
-are marginal rates (slopes), not total costs. If your data gives total cost at each output
-level, use [`PiecewisePointCurve`](@ref) instead.
-
-**Optimization formulation:** uses the **delta (block-offer)** formulation — one δ variable
-per segment, `P = Σ δₖ + offset`, `C = Σ δₖ · slopeₖ`, with per-segment width bounds
-`δₖ ≤ Pₖ₊₁ - Pₖ`. The segment bounds enforce ordering without SOS2, so **non-convex
-curves (decreasing slopes) do not require binary variables**. This is why market offer
-stacks always use this format rather than [`PiecewisePointCurve`](@ref).
+A piecewise step curve where each segment has a constant rate. Commonly used to represent
+incremental or marginal rates. The y-values are **per-segment rates**, not absolute values.
+If your data gives absolute values at each point, use [`PiecewisePointCurve`](@ref) instead.
 
 # Arguments
-- `input_at_zero`: (optional) cost at zero production — separate from the curve, use when
-  the generator has a cost even at zero output (e.g., spinning reserve)
-- `initial_input`: **total cost at `x_coords[1]`** (the minimum production point), anchors
-  the curve. Set to `nothing` if only the shape matters (e.g., dispatch without costing).
-- `x_coords`: `n` production breakpoints in ascending order (e.g., MW)
-- `slopes`: `n-1` marginal rates between consecutive breakpoints (e.g., \$/MWh)
+- `input_at_zero`: (optional) value at zero input, stored separately from the curve.
+- `initial_input`: **value at `x_coords[1]`**, anchors the curve. Set to `nothing` if
+  only the shape matters.
+- `x_coords`: `n` breakpoints in ascending order
+- `slopes`: `n-1` rates between consecutive breakpoints
 
 # Example
 ```julia
-# \$30/MWh from 100→150 MW, \$35/MWh from 150→200 MW; total cost at 100 MW = \$500/h
 curve = PiecewiseIncrementalCurve(500.0, [100.0, 150.0, 200.0], [30.0, 35.0])
 ```
 """
@@ -215,16 +190,14 @@ Base.show(io::IO, vc::PiecewiseIncrementalCurve) =
 """
     PiecewiseAverageCurve(initial_input, x_coords, y_coords)
 
-A piecewise average-rate curve: each segment gives average cost per unit output.
-
-Use when your data source gives **average** heat rates or costs (total fuel / total output)
-at each production level, not incremental/marginal rates. Less common than
-[`PiecewiseIncrementalCurve`](@ref) for market bids; more common for fuel efficiency tables.
+A piecewise average-rate curve: each segment gives an average rate (total output / total
+input). If your data gives incremental/marginal rates instead, use
+[`PiecewiseIncrementalCurve`](@ref).
 
 # Arguments
-- `initial_input`: **total cost at `x_coords[1]`** (the minimum production point)
-- `x_coords`: `n` production breakpoints in ascending order (e.g., MW)
-- `y_coords`: `n-1` average rates per segment (e.g., MBTU/MWh — total fuel / total output)
+- `initial_input`: value at `x_coords[1]`, anchors the curve
+- `x_coords`: `n` breakpoints in ascending order
+- `y_coords`: `n-1` average rates per segment
 """
 const PiecewiseAverageCurve = AverageRateCurve{PiecewiseStepData}
 
