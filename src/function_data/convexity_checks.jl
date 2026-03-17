@@ -365,14 +365,17 @@ timestep. `TimeSeriesAverageRateCurve` requires `initial_input` to reconstruct t
 function is_convex(
     ::T,
     data_at_t::U,
-) where {U<:StaticFunctionData, T<:Union{TimeSeriesInputOutputCurve{U}, TimeSeriesIncrementalCurve{U}}}
+) where {
+    U <: StaticFunctionData,
+    T <: Union{TimeSeriesInputOutputCurve{U}, TimeSeriesIncrementalCurve{U}},
+}
     return is_convex(data_at_t)
 end
 function is_convex(
     ::TimeSeriesAverageRateCurve{U},
     data_at_t::U,
     initial_input::Float64,
-) where {U<:StaticFunctionData}
+) where {U <: StaticFunctionData}
     return is_convex(InputOutputCurve(AverageRateCurve(data_at_t, initial_input)))
 end
 
@@ -386,13 +389,16 @@ Check concavity of a time-series-backed curve. See [`is_convex`](@ref) for detai
 function is_concave(
     ::T,
     data_at_t::U,
-) where {U<:StaticFunctionData, T<:Union{TimeSeriesInputOutputCurve{U}, TimeSeriesIncrementalCurve{U}}}
+) where {
+    U <: StaticFunctionData,
+    T <: Union{TimeSeriesInputOutputCurve{U}, TimeSeriesIncrementalCurve{U}},
+}
     return is_concave(data_at_t)
 end
 function is_concave(
     ::TimeSeriesAverageRateCurve{U},
     data_at_t::U,
     initial_input::Float64,
-) where {U<:StaticFunctionData}
+) where {U <: StaticFunctionData}
     return is_concave(InputOutputCurve(AverageRateCurve(data_at_t, initial_input)))
 end
