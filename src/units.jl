@@ -68,12 +68,12 @@ Base.:-(a::RelativeQuantity{T, U}, b::RelativeQuantity{S, U}) where {T, S, U} =
 Base.:-(a::RelativeQuantity{T, U}) where {T, U} =
     RelativeQuantity(-a.value, a.unit)
 
-# Scalar multiplication/division
-Base.:*(a::Number, b::RelativeQuantity{T, U}) where {T, U} =
+# Scalar multiplication/division (use Real to avoid ambiguity with Unitful types)
+Base.:*(a::Real, b::RelativeQuantity{T, U}) where {T, U} =
     RelativeQuantity(a * b.value, b.unit)
-Base.:*(a::RelativeQuantity{T, U}, b::Number) where {T, U} =
+Base.:*(a::RelativeQuantity{T, U}, b::Real) where {T, U} =
     RelativeQuantity(a.value * b, a.unit)
-Base.:/(a::RelativeQuantity{T, U}, b::Number) where {T, U} =
+Base.:/(a::RelativeQuantity{T, U}, b::Real) where {T, U} =
     RelativeQuantity(a.value / b, a.unit)
 
 # Comparisons

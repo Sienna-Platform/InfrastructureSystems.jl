@@ -29,6 +29,7 @@ curve = LinearCurve(50.0, 100.0)
 const LinearCurve = InputOutputCurve{LinearFunctionData}
 
 is_cost_alias(::Union{LinearCurve, Type{LinearCurve}}) = true
+simple_type_name(::LinearCurve) = "LinearCurve"
 
 InputOutputCurve{LinearFunctionData}(proportional_term::Real) =
     InputOutputCurve(LinearFunctionData(proportional_term))
@@ -44,7 +45,7 @@ get_constant_term(vc::LinearCurve) = get_constant_term(get_function_data(vc))
 
 Base.show(io::IO, vc::LinearCurve) =
     if isnothing(get_input_at_zero(vc))
-        print(io, "$(typeof(vc))($(get_proportional_term(vc)), $(get_constant_term(vc)))")
+        print(io, "LinearCurve($(get_proportional_term(vc)), $(get_constant_term(vc)))")
     else
         Base.show_default(io, vc)
     end
@@ -67,6 +68,7 @@ curve = QuadraticCurve(0.002, 25.0, 150.0)
 const QuadraticCurve = InputOutputCurve{QuadraticFunctionData}
 
 is_cost_alias(::Union{QuadraticCurve, Type{QuadraticCurve}}) = true
+simple_type_name(::QuadraticCurve) = "QuadraticCurve"
 
 InputOutputCurve{QuadraticFunctionData}(quadratic_term, proportional_term, constant_term) =
     InputOutputCurve(
@@ -86,7 +88,7 @@ Base.show(io::IO, vc::QuadraticCurve) =
     if isnothing(get_input_at_zero(vc))
         print(
             io,
-            "$(typeof(vc))($(get_quadratic_term(vc)), $(get_proportional_term(vc)), $(get_constant_term(vc)))",
+            "QuadraticCurve($(get_quadratic_term(vc)), $(get_proportional_term(vc)), $(get_constant_term(vc)))",
         )
     else
         Base.show_default(io, vc)
@@ -112,6 +114,7 @@ curve = PiecewisePointCurve([(100.0, 400.0), (200.0, 900.0), (300.0, 1500.0)])
 const PiecewisePointCurve = InputOutputCurve{PiecewiseLinearData}
 
 is_cost_alias(::Union{PiecewisePointCurve, Type{PiecewisePointCurve}}) = true
+simple_type_name(::PiecewisePointCurve) = "PiecewisePointCurve"
 
 InputOutputCurve{PiecewiseLinearData}(points::Vector) =
     InputOutputCurve(PiecewiseLinearData(points))
@@ -131,7 +134,7 @@ get_slopes(vc::PiecewisePointCurve) = get_slopes(get_function_data(vc))
 # Here we manually circumvent the @NamedTuple{x::Float64, y::Float64} type annotation, but we keep things looking like named tuples
 Base.show(io::IO, vc::PiecewisePointCurve) =
     if isnothing(get_input_at_zero(vc))
-        print(io, "$(typeof(vc))([$(join(get_points(vc), ", "))])")
+        print(io, "PiecewisePointCurve([$(join(get_points(vc), ", "))])")
     else
         Base.show_default(io, vc)
     end
@@ -159,6 +162,7 @@ curve = PiecewiseIncrementalCurve(500.0, [100.0, 150.0, 200.0], [30.0, 35.0])
 const PiecewiseIncrementalCurve = IncrementalCurve{PiecewiseStepData}
 
 is_cost_alias(::Union{PiecewiseIncrementalCurve, Type{PiecewiseIncrementalCurve}}) = true
+simple_type_name(::PiecewiseIncrementalCurve) = "PiecewiseIncrementalCurve"
 
 IncrementalCurve{PiecewiseStepData}(initial_input, x_coords::Vector, slopes::Vector) =
     IncrementalCurve(PiecewiseStepData(x_coords, slopes), initial_input)
@@ -181,9 +185,9 @@ Base.show(io::IO, vc::PiecewiseIncrementalCurve) =
     print(
         io,
         if isnothing(get_input_at_zero(vc))
-            "$(typeof(vc))($(get_initial_input(vc)), $(get_x_coords(vc)), $(get_slopes(vc)))"
+            "PiecewiseIncrementalCurve($(get_initial_input(vc)), $(get_x_coords(vc)), $(get_slopes(vc)))"
         else
-            "$(typeof(vc))($(get_input_at_zero(vc)), $(get_initial_input(vc)), $(get_x_coords(vc)), $(get_slopes(vc)))"
+            "PiecewiseIncrementalCurve($(get_input_at_zero(vc)), $(get_initial_input(vc)), $(get_x_coords(vc)), $(get_slopes(vc)))"
         end,
     )
 
@@ -202,6 +206,7 @@ input). If your data gives incremental/marginal rates instead, use
 const PiecewiseAverageCurve = AverageRateCurve{PiecewiseStepData}
 
 is_cost_alias(::Union{PiecewiseAverageCurve, Type{PiecewiseAverageCurve}}) = true
+simple_type_name(::PiecewiseAverageCurve) = "PiecewiseAverageCurve"
 
 AverageRateCurve{PiecewiseStepData}(initial_input, x_coords::Vector, y_coords::Vector) =
     AverageRateCurve(PiecewiseStepData(x_coords, y_coords), initial_input)
@@ -216,7 +221,7 @@ Base.show(io::IO, vc::PiecewiseAverageCurve) =
     if isnothing(get_input_at_zero(vc))
         print(
             io,
-            "$(typeof(vc))($(get_initial_input(vc)), $(get_x_coords(vc)), $(get_average_rates(vc)))",
+            "PiecewiseAverageCurve($(get_initial_input(vc)), $(get_x_coords(vc)), $(get_average_rates(vc)))",
         )
     else
         Base.show_default(io, vc)
