@@ -153,3 +153,98 @@ TimeSeriesAverageRateCurve(
         TimeSeriesFunctionData{PiecewiseStepData},
     },
 } = TimeSeriesAverageRateCurve{T}(function_data, initial_input, input_at_zero)
+
+# ============================================================================
+# RESOLVE TO STATIC CURVE
+# Resolves a time-series-backed ValueCurve at a single timestep. Could be
+# extended to return a Vector of static curves over a time interval (e.g. for
+# forecast windows) by accepting a `len` parameter.
+# ============================================================================
+
+"""
+Resolve a scalar `TimeSeriesKey` to the `Float64` value at the given timestep,
+or pass through `nothing`.
+"""
+function _resolve_scalar_key(
+    owner::TimeSeriesOwners,
+    key::Nothing,
+    start_time::Dates.DateTime,
+)
+    return nothing
+end
+
+function _resolve_scalar_key(
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey,
+    start_time::Dates.DateTime,
+)
+    vals = get_time_series_values(owner, key; start_time = start_time, len = 1)
+    return vals[1]::Float64
+end
+
+"""
+    build_static_curve(
+        curve::TimeSeriesInputOutputCurve,
+        owner::TimeSeriesOwners,
+        start_time::Dates.DateTime,
+    ) -> InputOutputCurve
+
+Resolve a time-series-backed `ValueCurve` at a specific timestep, returning the
+corresponding static `ValueCurve` with all time series references replaced by their
+values at `start_time`.
+"""
+function build_static_curve(
+    curve::TimeSeriesInputOutputCurve{TimeSeriesFunctionData{T}},
+    owner::TimeSeriesOwners,
+    start_time::Dates.DateTime,
+) where {T <: StaticFunctionData}
+    fd_key = get_time_series_key(curve)
+    fd_vals = get_time_series_values(owner, fd_key; start_time = start_time, len = 1)
+    return InputOutputCurve(fd_vals[1]::T, get_input_at_zero(curve))
+end
+
+"""
+    build_static_curve(
+        curve::TimeSeriesIncrementalCurve,
+        owner::TimeSeriesOwners,
+        start_time::Dates.DateTime,
+    ) -> IncrementalCurve
+
+Resolve a time-series-backed `IncrementalCurve` at a specific timestep.
+"""
+function build_static_curve(
+    curve::TimeSeriesIncrementalCurve{TimeSeriesFunctionData{T}},
+    owner::TimeSeriesOwners,
+    start_time::Dates.DateTime,
+) where {T <: StaticFunctionData}
+    fd_key = get_time_series_key(curve)
+    fd_vals = get_time_series_values(owner, fd_key; start_time = start_time, len = 1)
+    initial_input =
+        _resolve_scalar_key(owner, get_initial_input(curve), start_time)
+    input_at_zero =
+        _resolve_scalar_key(owner, get_input_at_zero(curve), start_time)
+    return IncrementalCurve(fd_vals[1]::T, initial_input, input_at_zero)
+end
+
+"""
+    build_static_curve(
+        curve::TimeSeriesAverageRateCurve,
+        owner::TimeSeriesOwners,
+        start_time::Dates.DateTime,
+    ) -> AverageRateCurve
+
+Resolve a time-series-backed `AverageRateCurve` at a specific timestep.
+"""
+function build_static_curve(
+    curve::TimeSeriesAverageRateCurve{TimeSeriesFunctionData{T}},
+    owner::TimeSeriesOwners,
+    start_time::Dates.DateTime,
+) where {T <: StaticFunctionData}
+    fd_key = get_time_series_key(curve)
+    fd_vals = get_time_series_values(owner, fd_key; start_time = start_time, len = 1)
+    initial_input =
+        _resolve_scalar_key(owner, get_initial_input(curve), start_time)
+    input_at_zero =
+        _resolve_scalar_key(owner, get_input_at_zero(curve), start_time)
+    return AverageRateCurve(fd_vals[1]::T, initial_input, input_at_zero)
+end

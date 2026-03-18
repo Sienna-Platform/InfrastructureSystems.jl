@@ -395,3 +395,87 @@ end
         @test IS.get_fuel_cost(fc) == 5.0
     end
 end
+
+@testset "build_static_curve" begin
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+    horizon_count = 3
+
+    fd_data = [
+        IS.PiecewiseStepData([1.0, 3.0, 5.0], [2.0, 4.0]),
+        IS.PiecewiseStepData([2.0, 4.0, 6.0], [3.0, 5.0]),
+        IS.PiecewiseStepData([3.0, 5.0, 7.0], [4.0, 6.0]),
+    ]
+    ii_data = [10.0, 20.0, 30.0]
+    iaz_data = [100.0, 200.0, 300.0]
+
+    sys = IS.SystemData(; time_series_in_memory = true)
+    component = IS.TestComponent("gen1", 5)
+    IS.add_component!(sys, component)
+
+    fd_forecast = IS.Deterministic(;
+        data = SortedDict(initial_time => fd_data),
+        name = "cost_fd",
+        resolution = resolution,
+    )
+    fd_key = IS.add_time_series!(sys, component, fd_forecast)
+
+    ii_forecast = IS.Deterministic(;
+        data = SortedDict(initial_time => ii_data),
+        name = "initial_input",
+        resolution = resolution,
+    )
+    ii_key = IS.add_time_series!(sys, component, ii_forecast)
+
+    iaz_forecast = IS.Deterministic(;
+        data = SortedDict(initial_time => iaz_data),
+        name = "input_at_zero",
+        resolution = resolution,
+    )
+    iaz_key = IS.add_time_series!(sys, component, iaz_forecast)
+
+    @testset "TimeSeriesInputOutputCurve" begin
+        # InputOutputCurve uses PiecewiseLinearData, not PiecewiseStepData
+        linear_fd = [
+            IS.LinearFunctionData(1.0, 2.0),
+            IS.LinearFunctionData(3.0, 4.0),
+            IS.LinearFunctionData(5.0, 6.0),
+        ]
+        lin_forecast = IS.Deterministic(;
+            data = SortedDict(initial_time => linear_fd),
+            name = "cost_io",
+            resolution = resolution,
+        )
+        lin_key = IS.add_time_series!(sys, component, lin_forecast)
+
+        curve = IS.TimeSeriesInputOutputCurve(
+            IS.TimeSeriesLinearFunctionData(lin_key), 42.0,
+        )
+        static = IS.build_static_curve(curve, component, initial_time)
+        @test static isa IS.InputOutputCurve{IS.LinearFunctionData}
+        @test IS.get_function_data(static) == linear_fd[1]
+        @test IS.get_input_at_zero(static) == 42.0
+    end
+
+    @testset "TimeSeriesIncrementalCurve" begin
+        curve = IS.TimeSeriesIncrementalCurve(
+            IS.TimeSeriesPiecewiseStepData(fd_key), ii_key, iaz_key,
+        )
+        static = IS.build_static_curve(curve, component, initial_time)
+        @test static isa IS.IncrementalCurve{IS.PiecewiseStepData}
+        @test IS.get_function_data(static) == fd_data[1]
+        @test IS.get_initial_input(static) == 10.0
+        @test IS.get_input_at_zero(static) == 100.0
+    end
+
+    @testset "TimeSeriesAverageRateCurve" begin
+        curve = IS.TimeSeriesAverageRateCurve(
+            IS.TimeSeriesPiecewiseStepData(fd_key), ii_key, nothing,
+        )
+        static = IS.build_static_curve(curve, component, initial_time)
+        @test static isa IS.AverageRateCurve{IS.PiecewiseStepData}
+        @test IS.get_function_data(static) == fd_data[1]
+        @test IS.get_initial_input(static) == 10.0
+        @test IS.get_input_at_zero(static) === nothing
+    end
+end
