@@ -17,9 +17,30 @@ get_function_data(cost::ProductionVariableCostCurve) =
 get_initial_input(cost::ProductionVariableCostCurve) =
     get_initial_input(get_value_curve(cost))
 "Calculate the convexity of the underlying data"
+function is_convex(curve::ValueCurve{T}) where {T <: TimeSeriesFunctionData}
+    throw(
+        ArgumentError(
+            "Convexity is not defined for time-series-backed ValueCurve; use time-series specific analysis instead.",
+        ),
+    )
+end
 is_convex(cost::ProductionVariableCostCurve) = is_convex(get_value_curve(cost))
 "Calculate the concavity of the underlying data"
+function is_concave(curve::ValueCurve{T}) where {T <: TimeSeriesFunctionData}
+    throw(
+        ArgumentError(
+            "Concavity is not defined for time-series-backed ValueCurve; use time-series specific analysis instead.",
+        ),
+    )
+end
 is_concave(cost::ProductionVariableCostCurve) = is_concave(get_value_curve(cost))
+"Check if the cost curve is backed by time series data"
+is_time_series_backed(cost::ProductionVariableCostCurve) =
+    is_time_series_backed(get_value_curve(cost))
+"Get the `TimeSeriesKey` from the underlying `ValueCurve` of a time-series-backed `ProductionVariableCostCurve`."
+get_time_series_key(
+    cost::ProductionVariableCostCurve{<:ValueCurve{<:TimeSeriesFunctionData}},
+) = get_time_series_key(get_value_curve(cost))
 
 Base.:(==)(a::T, b::T) where {T <: ProductionVariableCostCurve} =
     double_equals_from_fields(a, b)

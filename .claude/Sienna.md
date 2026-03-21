@@ -50,6 +50,21 @@ Avoid splatting (`...`) in performance-critical code.
 
 Avoid returning `Union` types or abstract types.
 
+#### Runtime type checking (`isa` and `<:`)
+
+**ABSOLUTELY FORBIDDEN unless the user explicitly asks for it.** Never write code that uses `isa` checks or `<:` (subtype) checks for type-based branching in function bodies. Both are wrong — use multiple dispatch instead.
+
+Using `<:` inside a function body to branch on types is just `isa` with extra steps. Do not use it as a workaround.
+
+- Bad: `if x isa Float64 ... elseif x isa Int ... end`
+- Bad: `if typeof(x) <: AbstractVector ... end`
+- Bad: `if T <: SomeAbstractType ... else ... end` (where `T` is a type parameter used for branching)
+- Good: Use multiple dispatch with specific type signatures
+- Bad: `function f(x); if x isa AbstractVector return sum(x) else return x end; end`
+- Good: `f(x::AbstractVector) = sum(x); f(x::Number) = x`
+
+**Why this matters:** `isa` and `<:` checks force the compiler to handle multiple code paths at runtime, losing type information and preventing specialization. This causes runtime compilation and defeats Julia's core performance model. Multiple dispatch allows the compiler to generate optimized, specialized code for each type at compile time. Any form of runtime type checking in function bodies — whether via `isa`, `typeof(x) <: T`, or passing type parameters to branch on — is an anti-pattern.
+
 ### Best Practices
 
 - Use `@inbounds` when bounds are verified
@@ -143,6 +158,7 @@ Instead test:
 
 **Critical rules:**
 - Always use `julia --project=<env>` (never bare `julia`)
+- **NEVER use `isa` or `<:` for runtime type checking in function logic** — use multiple dispatch instead. This includes `typeof(x) <: T` and branching on type parameters. Absolutely forbidden unless the user explicitly asks for it.
 - Never edit auto-generated files directly
 - Verify type stability with `@code_warntype` for performance-critical code
 - Consider downstream package impact

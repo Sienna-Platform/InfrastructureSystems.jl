@@ -5,6 +5,8 @@ module InfrastructureSystems
 # Cost aliases don't display properly unless they are exported from IS
 export LinearCurve, QuadraticCurve
 export PiecewisePointCurve, PiecewiseIncrementalCurve, PiecewiseAverageCurve
+export TimeSeriesLinearCurve, TimeSeriesQuadraticCurve, TimeSeriesPiecewisePointCurve
+export TimeSeriesPiecewiseIncrementalCurve, TimeSeriesPiecewiseAverageCurve
 
 import Base: @kwdef
 import CSV
@@ -167,6 +169,7 @@ include("deterministic_metadata.jl")
 include("hdf5_time_series_storage.jl")
 include("in_memory_time_series_storage.jl")
 include("time_series_structs.jl")
+include("function_data/time_series_function_data.jl")
 include("time_series_formats.jl")
 include("time_series_metadata_store.jl")
 include("time_series_manager.jl")
@@ -196,6 +199,7 @@ end
 include("utils/test.jl")
 include("units.jl")
 include("value_curve.jl")
+include("time_series_value_curve.jl")
 include("cost_aliases.jl")
 include("function_data/convexity_checks.jl")
 include("production_variable_cost_curve.jl")

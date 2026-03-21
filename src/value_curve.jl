@@ -1,12 +1,24 @@
 """
-Supertype that represents a unitless cost curve
+A cost (or fuel) curve that wraps a [`FunctionData`](@ref) and declares how to interpret it.
 
-Concrete subtypes are:
-- [`LinearCurve`](@ref)
-- [`QuadraticCurve`](@ref)
-- [`PiecewisePointCurve`](@ref)
-- [`PiecewiseIncrementalCurve`](@ref)
-- [`PiecewiseAverageCurve`](@ref)
+`ValueCurve` adds meaning to raw function data. The three concrete families differ in what
+the y-axis represents for a given production quantity x:
+
+| Subtype | Interpretation | Typical y units |
+|---|---|---|
+| [`InputOutputCurve`](@ref) | `y = f(x)` — total output at x | \$/h or MBTU/h |
+| [`IncrementalCurve`](@ref) | `y = f'(x)` — marginal rate at x | \$/MWh or MBTU/MWh |
+| [`AverageRateCurve`](@ref) | `y = f(x)/x` — average rate at x | \$/MWh or MBTU/MWh |
+
+All three can represent the same physical cost function and are inter-convertible (given
+`initial_input`). Your data source determines which to start with: market bid stacks →
+[`IncrementalCurve`](@ref); total cost tables → [`InputOutputCurve`](@ref); efficiency
+tables → [`AverageRateCurve`](@ref).
+
+The type parameter `T <: FunctionData` specifies the function shape. For ergonomic
+construction, use the cost aliases: [`LinearCurve`](@ref), [`QuadraticCurve`](@ref),
+[`PiecewisePointCurve`](@ref), [`PiecewiseIncrementalCurve`](@ref),
+[`PiecewiseAverageCurve`](@ref).
 """
 abstract type ValueCurve{T <: FunctionData} end
 
@@ -21,10 +33,15 @@ get_function_data(curve::ValueCurve) = curve.function_data
 get_input_at_zero(curve::ValueCurve) = curve.input_at_zero
 
 """
-An input-output curve, directly relating the production quantity to the cost: `y = f(x)`.
-Can be used, for instance, in the representation of a [`CostCurve`](@ref) where `x` is MW
-and `y` is currency/hr, or in the representation of a [`FuelCurve`](@ref) where `x` is MW
-and `y` is fuel/hr.
+A curve where `y = f(x)` — the **total** cost or fuel at production level `x`.
+
+Use when your data directly gives total output vs. input: e.g., total \$/h at each MW level,
+or total MBTU/h from a heat rate curve fit. The y-axis is an absolute quantity, not a rate.
+
+- In a [`CostCurve`](@ref): x = MW, y = \$/h
+- In a [`FuelCurve`](@ref): x = MW, y = MBTU/h (or other fuel units)
+
+Use [`IncrementalCurve`](@ref) if your data is in marginal-rate form (e.g., a bid stack).
 """
 @kwdef struct InputOutputCurve{
     T <: Union{QuadraticFunctionData, LinearFunctionData, PiecewiseLinearData},
@@ -47,16 +64,26 @@ Evaluate the `InputOutputCurve` at a given input value `x`.
 (ioc::InputOutputCurve)(x::Real) = get_function_data(ioc)(x)
 
 """
-An incremental (or 'marginal') curve, relating the production quantity to the derivative of
-cost: `y = f'(x)`. Can be used, for instance, in the representation of a [`CostCurve`](@ref)
-where `x` is MW and `y` is currency/MWh, or in the representation of a [`FuelCurve`](@ref)
-where `x` is MW and `y` is fuel/MWh.
+A curve where `y = f'(x)` — the **marginal rate** (derivative of cost) at production level `x`.
+
+Use when your data is in incremental form: e.g., a generator bid stack where each segment
+has a constant \$/MWh price. This is the native format for market offers and incremental
+heat rate data.
+
+- In a [`CostCurve`](@ref): x = MW, y = \$/MWh (marginal cost)
+- In a [`FuelCurve`](@ref): x = MW, y = MBTU/MWh (incremental heat rate)
+
+`initial_input` stores the **total cost at the minimum production point** `x_coords[1]`.
+It is not part of the curve itself — it anchors the absolute cost level and is required to
+convert this curve to an [`InputOutputCurve`](@ref).
+
+Use [`InputOutputCurve`](@ref) if your data gives total cost at each output level directly.
 """
 @kwdef struct IncrementalCurve{T <: Union{LinearFunctionData, PiecewiseStepData}} <:
               ValueCurve{T}
     "The underlying `FunctionData` representation of this `ValueCurve`"
     function_data::T
-    "The value of f(x) at the least x for which the function is defined, or the origin for functions with no left endpoint, used for conversion to `InputOutputCurve`"
+    "Total cost at the minimum production point `x_coords[1]`, used to anchor the curve and enable conversion to `InputOutputCurve`. Set to `nothing` if unknown or not needed."
     initial_input::Union{Float64, Nothing}
     "Optional, an explicit representation of the input value at zero output."
     input_at_zero::Union{Nothing, Float64} = nothing
@@ -71,17 +98,25 @@ IncrementalCurve{T}(
     IncrementalCurve{T}(function_data, initial_input, nothing)
 
 """
-An average rate curve, relating the production quantity to the average cost rate from the
-origin: `y = f(x)/x`. Can be used, for instance, in the representation of a
-[`CostCurve`](@ref) where `x` is MW and `y` is currency/MWh, or in the representation of a
-[`FuelCurve`](@ref) where `x` is MW and `y` is fuel/MWh. Typically calculated by dividing
-absolute values of cost rate or fuel input rate by absolute values of electric power.
+A curve where `y = f(x)/x` — the **average rate** (total cost divided by production) at `x`.
+
+Use when your data source gives average efficiency: total fuel consumed per unit output,
+which is common in generator heat rate tables that report MBTU/MWh as a function of MW
+(not the incremental/marginal rate, but the average over the whole output).
+
+- In a [`CostCurve`](@ref): x = MW, y = \$/MWh (average, not marginal)
+- In a [`FuelCurve`](@ref): x = MW, y = MBTU/MWh (average heat rate)
+
+`initial_input` stores the **total cost at the minimum production point** `x_coords[1]`,
+required to convert this curve to an [`InputOutputCurve`](@ref).
+
+Use [`IncrementalCurve`](@ref) if your data gives marginal rates, not averages.
 """
 @kwdef struct AverageRateCurve{T <: Union{LinearFunctionData, PiecewiseStepData}} <:
               ValueCurve{T}
-    "The underlying `FunctionData` representation of this `ValueCurve`, in the case of `AverageRateCurve{LinearFunctionData}` representing only the oblique asymptote"
+    "The underlying `FunctionData` representation of this `ValueCurve`. For `AverageRateCurve{LinearFunctionData}`, this represents only the oblique asymptote of the implied total cost curve."
     function_data::T
-    "The value of f(x) at the least x for which the function is defined, or the origin for functions with no left endpoint, used for conversion to `InputOutputCurve`"
+    "Total cost at the minimum production point `x_coords[1]`, used to anchor the curve and enable conversion to `InputOutputCurve`. Set to `nothing` if unknown or not needed."
     initial_input::Union{Float64, Nothing}
     "Optional, an explicit representation of the input value at zero output."
     input_at_zero::Union{Nothing, Float64} = nothing
@@ -237,6 +272,9 @@ end
 IncrementalCurve(data::AverageRateCurve) = IncrementalCurve(InputOutputCurve(data))
 
 # PRINTING
+"Whether there is a cost alias for the instance or type under consideration"
+is_cost_alias(::Union{ValueCurve, Type{<:ValueCurve}}) = false
+
 # For cost aliases, return the alias name; otherwise, return the type name without the parameter
 simple_type_name(curve::ValueCurve) =
     string(is_cost_alias(curve) ? typeof(curve) : nameof(typeof(curve)))

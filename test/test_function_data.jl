@@ -643,7 +643,7 @@ end
     # Value-equal function data should be == except when containing NaN since NaN != NaN;
     # value-equal function data should be isequal even when containing NaN; hash equality
     # should correspond with isequal
-    for my_type in IS.get_all_concrete_subtypes(IS.FunctionData)
+    for my_type in IS.get_all_concrete_subtypes(IS.StaticFunctionData)
         @test examples_1[(my_type, false)] == examples_2[(my_type, false)]
         @test examples_1[(my_type, true)] != examples_2[(my_type, true)]
         @test examples_1[(my_type, false)] != examples_2[(my_type, true)]

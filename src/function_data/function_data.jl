@@ -1,14 +1,40 @@
+"""
+Raw mathematical function data — numbers with no units or interpretation attached.
+
+`FunctionData` stores the coefficients or point tables that define a mathematical function
+`f(x)`. It carries no information about *what* `x` and `y` represent (cost? fuel? marginal
+rate?). That semantic layer lives in the [`ValueCurve`](@ref) that wraps this.
+
+Pick the subtype that matches how your source data is shaped:
+
+| Type | Function shape | y stores |
+|---|---|---|
+| [`LinearFunctionData`](@ref) | `f(x) = m·x + b` | values |
+| [`QuadraticFunctionData`](@ref) | `f(x) = q·x² + m·x + b` | values |
+| [`PiecewiseLinearData`](@ref) | piecewise linear through (x, y) points | **absolute values** at each x |
+| [`PiecewiseStepData`](@ref) | piecewise constant between x endpoints | **slopes** over each segment |
+
+The [`TimeSeriesFunctionData`](@ref) subtypes mirror these but hold a
+[`TimeSeriesKey`](@ref) reference instead of the numbers directly.
+"""
 abstract type FunctionData end
 
 """
-Structure to represent the underlying data of linear functions. Principally used for
-the representation of cost functions `f(x) = proportional_term*x + constant_term`.
+    StaticFunctionData <: FunctionData
+
+Abstract supertype for `FunctionData` variants that hold their numerical data inline
+(as opposed to [`TimeSeriesFunctionData`](@ref), which holds a time series reference).
+"""
+abstract type StaticFunctionData <: FunctionData end
+
+"""
+Data for a linear function: `f(x) = proportional_term * x + constant_term`.
 
 # Arguments
- - `proportional_term::Float64`: the proportional term in the represented function
- - `constant_term::Float64`: the constant term in the represented function
+- `proportional_term::Float64`: slope of the function
+- `constant_term::Float64`: intercept. Defaults to `0.0`.
 """
-@kwdef struct LinearFunctionData <: FunctionData
+@kwdef struct LinearFunctionData <: StaticFunctionData
     proportional_term::Float64
     constant_term::Float64
 end
@@ -47,16 +73,14 @@ function Base.show(io::IO, ::MIME"text/plain", fd::LinearFunctionData)
 end
 
 """
-Structure to represent the underlying data of quadratic functions. Principally used for the
-representation of cost functions
-`f(x) = quadratic_term*x^2 + proportional_term*x + constant_term`.
+Data for a quadratic function: `f(x) = quadratic_term * x^2 + proportional_term * x + constant_term`.
 
 # Arguments
- - `quadratic_term::Float64`: the quadratic term in the represented function
- - `proportional_term::Float64`: the proportional term in the represented function
- - `constant_term::Float64`: the constant term in the represented function
+- `quadratic_term::Float64`: quadratic coefficient (≥ 0 for a convex function)
+- `proportional_term::Float64`: linear coefficient
+- `constant_term::Float64`: constant term
 """
-@kwdef struct QuadraticFunctionData <: FunctionData
+@kwdef struct QuadraticFunctionData <: StaticFunctionData
     quadratic_term::Float64
     proportional_term::Float64
     constant_term::Float64
@@ -108,15 +132,19 @@ function Base.show(io::IO, ::MIME"text/plain", fd::QuadraticFunctionData)
 end
 
 """
-Structure to represent piecewise linear data as a series of points: two points define one
-segment, three points define two segments, etc. The curve starts at the first point given,
-not the origin. Principally used for the representation of cost functions where the points
-store quantities (x, y), such as (MW, \$/h).
+Data for a piecewise linear function defined by (x, y) **value** points.
+
+The function linearly interpolates between consecutive points. **The y-values are
+absolute values, not slopes.** Two points define one segment, three define two, etc.
+
+If your data gives per-segment rates between breakpoints rather than values at each
+point, use [`PiecewiseStepData`](@ref) instead.
 
 # Arguments
- - `points::Vector{@NamedTuple{x::Float64, y::Float64}}`: the points that define the function
+- `points::Vector{@NamedTuple{x::Float64, y::Float64}}`: (input, output) pairs in ascending
+  x order
 """
-@kwdef struct PiecewiseLinearData <: FunctionData
+@kwdef struct PiecewiseLinearData <: StaticFunctionData
     points::Vector{XY_COORDS}
 
     function PiecewiseLinearData(points::Vector{<:NamedTuple{(:x, :y)}})
@@ -217,22 +245,22 @@ function Base.show(io::IO, ::MIME"text/plain", fd::PiecewiseLinearData)
 end
 
 """
-Structure to represent a step function as a series of endpoint x-coordinates and segment
-y-coordinates: two x-coordinates and one y-coordinate defines a single segment, three
-x-coordinates and two y-coordinates define two segments, etc. This can be useful to
-represent the derivative of a [PiecewiseLinearData](@ref), where the y-coordinates of this
-step function represent the slopes of that piecewise linear function, so there is also an
-optional field `c` that can be used to store the initial y-value of that piecewise linear
-function. Principally used for the representation of cost functions where the points store
-quantities (x, dy/dx), such as (MW, \$/MWh).
+Data for a step function (piecewise constant) defined by endpoint x-coordinates and
+per-segment y-values.
+
+Each y-value is constant over a segment. **The y-values are per-segment rates, not
+absolute values.** Two x-coordinates and one y-coordinate define one segment; three
+x-coordinates and two y-coordinates define two, etc.
+
+If your data gives absolute values at each point, use [`PiecewiseLinearData`](@ref) instead.
 
 # Arguments
- - `x_coords::Vector{Float64}`: the x-coordinates of the endpoints of the segments
- - `y_coords::Vector{Float64}`: the y-coordinates of the segments: `y_coords[1]` is the y-value between
- `x_coords[1]` and `x_coords[2]`, etc. Must have one fewer elements than `x_coords`.
- - `c::Union{Nothing, Float64}`: optional, the value to use for the integral from 0 to `x_coords[1]` of this function
+- `x_coords::Vector{Float64}`: x-coordinates of the segment endpoints, must be ascending
+  with at least 2 elements
+- `y_coords::Vector{Float64}`: y-value for each segment. Must have exactly
+  `length(x_coords) - 1` elements.
 """
-@kwdef struct PiecewiseStepData <: FunctionData
+@kwdef struct PiecewiseStepData <: StaticFunctionData
     x_coords::Vector{Float64}
     y_coords::Vector{Float64}
 
