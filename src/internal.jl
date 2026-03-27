@@ -33,7 +33,7 @@ Internal storage common to InfrastructureSystems types.
 mutable struct InfrastructureSystemsInternal <: InfrastructureSystemsType
     uuid::Base.UUID
     shared_system_references::Union{Nothing, SharedSystemReferences}
-    units_info::Union{Nothing, UnitsData}
+    units_info::Union{Nothing, SystemUnitsSettings}
     ext::Union{Nothing, Dict{String, Any}}
 end
 
