@@ -175,17 +175,36 @@ function generate_structs(directory, data::Vector; print_results = true)
             setter_name = accessor_module * "set_" * param["name"] * "!"
             conversion_unit = get(param, "conversion_unit", "nothing")
             natural_unit = get_natural_unit(conversion_unit, param["name"])
-            push!(
-                accessors,
-                Dict(
-                    "name" => param["name"],
-                    "accessor" => accessor_name,
-                    "create_docstring" => create_docstring,
-                    "needs_conversion" => get(param, "needs_conversion", false),
-                    "conversion_unit" => conversion_unit,
-                    "natural_unit" => natural_unit,
-                ),
-            )
+            include_getter = !get(param, "exclude_getter", false)
+            if include_getter
+                push!(
+                    accessors,
+                    Dict(
+                        "name" => param["name"],
+                        "accessor" => accessor_name,
+                        "create_docstring" => create_docstring,
+                        "needs_conversion" => get(param, "needs_conversion", false),
+                        "conversion_unit" => conversion_unit,
+                        "natural_unit" => natural_unit,
+                    ),
+                )
+            else
+                # When public getter is excluded, generate an internal _get_ accessor
+                # that returns the raw field value (Float64). Used for fields like
+                # base_power where the public getter is hand-written with units.
+                internal_name = "_get_" * param["name"]
+                push!(
+                    accessors,
+                    Dict(
+                        "name" => param["name"],
+                        "accessor" => internal_name,
+                        "create_docstring" => false,
+                        "needs_conversion" => false,
+                        "conversion_unit" => "nothing",
+                        "natural_unit" => "",
+                    ),
+                )
+            end
             include_setter = !get(param, "exclude_setter", false)
             if include_setter
                 push!(
@@ -201,7 +220,13 @@ function generate_structs(directory, data::Vector; print_results = true)
                 )
             end
             if field["name"] != "internal" && accessor_module == ""
-                push!(unique_accessor_functions, accessor_name)
+                if include_getter
+                    push!(unique_accessor_functions, accessor_name)
+                end
+                # Always export setter name even if exclude_setter is true,
+                # because exclude_setter means "hand-written elsewhere" not "nonexistent".
+                # Only suppress getter export when exclude_getter is true (meaning
+                # the public getter is hand-written with a different signature, e.g. unitful).
                 push!(unique_setter_functions, setter_name)
             end
 
