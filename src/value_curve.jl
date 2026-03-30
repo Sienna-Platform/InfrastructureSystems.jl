@@ -237,9 +237,9 @@ end
 IncrementalCurve(data::AverageRateCurve) = IncrementalCurve(InputOutputCurve(data))
 
 # PRINTING
-# For cost aliases, return the alias name; otherwise, return the type name without the parameter
-simple_type_name(curve::ValueCurve) =
-    string(is_cost_alias(curve) ? typeof(curve) : nameof(typeof(curve)))
+# typeof() can't recover const alias names, so we use nameof for non-aliases
+# and override in cost_aliases.jl for each alias.
+simple_type_name(curve::ValueCurve) = string(nameof(typeof(curve)))
 
 function Base.show(io::IO, ::MIME"text/plain", curve::InputOutputCurve)
     print(io, simple_type_name(curve))
