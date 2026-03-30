@@ -6,11 +6,18 @@ module InfrastructureSystems
 export LinearCurve, QuadraticCurve
 export PiecewisePointCurve, PiecewiseIncrementalCurve, PiecewiseAverageCurve
 
-# Unit types for explicit units in getters/setters
+# Re-export unit types from PowerSystemsUnits
+using PowerSystemsUnits
 export MW, Mvar, MVA, kV, OHMS, SIEMENS
-export DU, SU, DeviceBaseUnit, SystemBaseUnit
+export DU, SU, NU, DeviceBaseUnit, SystemBaseUnit, NaturalUnit
 export AbstractRelativeUnit, RelativeQuantity
 export ustrip
+export UnitCategory,
+    PowerCategory, ImpedanceCategory, AdmittanceCategory,
+    VoltageCategory, CurrentCategory
+export POWER, IMPEDANCE, ADMITTANCE, VOLTAGE, CURRENT
+export convert_units, base_value, system_base_value, natural_unit, DEFAULT_UNITS
+export get_device_base_power, get_system_base_power, get_base_voltage
 
 import Base: @kwdef
 import CSV
@@ -210,10 +217,6 @@ include("deprecated.jl")
 include("Optimization/Optimization.jl")
 include("Simulation/Simulation.jl")
 
-# Register custom Unitful units (Mvar, MVA) so conversions work properly
-# TODO: cleaner way? seems like overkill to register the whole module.
-function __init__()
-    Unitful.register(@__MODULE__)
-end
+# Custom Unitful units (Mvar, MVA) are registered by PowerSystemsUnits.__init__
 
 end # module
