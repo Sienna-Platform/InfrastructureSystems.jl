@@ -1250,6 +1250,186 @@ end
     @test !IS.has_time_series(attr, IS.DeterministicSingleTimeSeries)
 end
 
+@testset "Test multiple transform_single_time_series! calls with different resolutions" begin
+    sys = IS.SystemData(; time_series_in_memory = true)
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    # Add two SingleTimeSeries with different resolutions.
+    resolution1 = Dates.Minute(5)
+    dates1 = create_dates("2020-01-01T00:00:00", resolution1, "2020-01-01T23:00:00")
+    ta1 = TimeSeries.TimeArray(dates1, rand(length(dates1)), [IS.get_name(component)])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("val1", ta1))
+
+    resolution2 = Dates.Minute(10)
+    dates2 = create_dates("2020-01-01T00:00:00", resolution2, "2020-01-01T23:00:00")
+    ta2 = TimeSeries.TimeArray(dates2, rand(length(dates2)), [IS.get_name(component)])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("val2", ta2))
+
+    horizon = Dates.Hour(1)
+    interval = Dates.Minute(30)
+
+    # Transform only the 5-minute resolution series.
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        horizon,
+        interval;
+        resolution = resolution1,
+        delete_existing = false,
+    )
+
+    # Second call for the 10-minute resolution series should succeed.
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        horizon,
+        interval;
+        resolution = resolution2,
+        delete_existing = false,
+    )
+
+    # Both sets should coexist.
+    all_metadata = collect(
+        IS.get_time_series_metadata(
+            component;
+            time_series_type = IS.DeterministicSingleTimeSeries,
+        ),
+    )
+    @test length(all_metadata) == 2
+end
+
+@testset "Test transform_single_time_series! idempotent with same parameters" begin
+    sys = IS.SystemData(; time_series_in_memory = true)
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    resolution = Dates.Minute(5)
+    dates = create_dates("2020-01-01T00:00:00", resolution, "2020-01-01T23:00:00")
+    data = rand(length(dates))
+    ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
+    ts = IS.SingleTimeSeries("val1", ta)
+    IS.add_time_series!(sys, component, ts)
+
+    horizon = Dates.Hour(1)
+    interval = Dates.Minute(30)
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        horizon,
+        interval;
+        delete_existing = false,
+    )
+
+    # Same call again should be idempotent (skip existing).
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        horizon,
+        interval;
+        delete_existing = false,
+    )
+
+    all_metadata = collect(
+        IS.get_time_series_metadata(
+            component;
+            time_series_type = IS.DeterministicSingleTimeSeries,
+        ),
+    )
+    @test length(all_metadata) == 1
+end
+
+@testset "Test transform_single_time_series! delete_existing removes old transforms" begin
+    sys = IS.SystemData(; time_series_in_memory = true)
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    # Add two SingleTimeSeries with different resolutions.
+    resolution1 = Dates.Minute(5)
+    dates1 = create_dates("2020-01-01T00:00:00", resolution1, "2020-01-01T23:00:00")
+    ta1 = TimeSeries.TimeArray(dates1, rand(length(dates1)), [IS.get_name(component)])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("val1", ta1))
+
+    resolution2 = Dates.Minute(10)
+    dates2 = create_dates("2020-01-01T00:00:00", resolution2, "2020-01-01T23:00:00")
+    ta2 = TimeSeries.TimeArray(dates2, rand(length(dates2)), [IS.get_name(component)])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("val2", ta2))
+
+    horizon = Dates.Hour(1)
+    interval = Dates.Minute(30)
+
+    # Transform both resolutions without deleting.
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        horizon,
+        interval;
+        delete_existing = false,
+    )
+
+    all_metadata = collect(
+        IS.get_time_series_metadata(
+            component;
+            time_series_type = IS.DeterministicSingleTimeSeries,
+        ),
+    )
+    @test length(all_metadata) == 2
+
+    # Call with delete_existing=true (the default) should remove old transforms and recreate.
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        horizon,
+        interval;
+        delete_existing = true,
+    )
+
+    all_metadata = collect(
+        IS.get_time_series_metadata(
+            component;
+            time_series_type = IS.DeterministicSingleTimeSeries,
+        ),
+    )
+    @test length(all_metadata) == 2
+end
+
+@testset "Test check_transform_single_time_series" begin
+    sys = IS.SystemData(; time_series_in_memory = true)
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    resolution = Dates.Minute(5)
+    dates = create_dates("2020-01-01T00:00:00", resolution, "2020-01-01T23:00:00")
+    data = rand(length(dates))
+    ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
+    ts = IS.SingleTimeSeries("val1", ta)
+    IS.add_time_series!(sys, component, ts)
+
+    # Valid parameters should return true.
+    @test IS.check_transform_single_time_series(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Hour(1),
+        Dates.Minute(30),
+    )
+
+    # Horizon too large should return false.
+    @test !IS.check_transform_single_time_series(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Hour(100),
+        Dates.Hour(1),
+    )
+
+    # Irregular period should return false.
+    @test !IS.check_transform_single_time_series(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Month(1),
+        Dates.Hour(1),
+    )
+end
+
 @testset "Test Deterministic with a wrapped SingleTimeSeries different offsets" begin
     for in_memory in (true, false)
         sys = IS.SystemData(; time_series_in_memory = in_memory)
