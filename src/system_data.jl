@@ -727,8 +727,8 @@ function _check_transform_single_time_series(
         # this check will fail.
         # transform_single_time_series! cannot be called at the component level.
         # Note: has_metadata with Deterministic matches both Deterministic and
-        # DeterministicSingleTimeSeries due to abstract type dispatch. Use list_metadata
-        # and filter to check only for actual Deterministic forecasts.
+        # DeterministicSingleTimeSeries. Use list_metadata and filter to check only for
+        # actual Deterministic forecasts.
         ts_name = get_name(item.metadata)
         ts_resolution = get_resolution(item.metadata)
         ts_features = get_features(item.metadata)
