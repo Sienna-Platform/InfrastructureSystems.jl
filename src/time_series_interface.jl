@@ -35,6 +35,8 @@ Does not apply a scaling factor multiplier.
   - `name::AbstractString`: name of time series
   - `resolution::Union{Nothing, Dates.Period} = nothing`: Required if resolution is needed
      to uniquely identify the time series.
+  - `interval::Union{Nothing, Dates.Period} = nothing`: Required if multiple forecasts share
+     the same resolution but differ by interval. Throws an error if omitted and ambiguous.
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: If nothing, use the
     `initial_timestamp` of the time series. If T is a subtype of Forecast then `start_time`
     must be the first timestamp of a window.
@@ -62,11 +64,19 @@ function get_time_series(
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) where {T <: TimeSeriesData}
     TimerOutputs.@timeit_debug SYSTEM_TIMERS "get_time_series" begin
         ts_metadata =
-            get_time_series_metadata(T, owner, name; resolution = resolution, features...)
+            get_time_series_metadata(
+                T,
+                owner,
+                name;
+                resolution = resolution,
+                interval = interval,
+                features...,
+            )
         start_time = _check_start_time(start_time, ts_metadata)
         rows = _get_rows(start_time, len, ts_metadata)
         columns = _get_columns(start_time, count, ts_metadata)
@@ -157,6 +167,7 @@ function get_time_series_multiple(
     type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
     name::Union{Nothing, AbstractString} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
 )
     throw_if_does_not_support_time_series(owner)
     mgr = get_time_series_manager(owner)
@@ -171,6 +182,7 @@ function get_time_series_multiple(
             time_series_type = type,
             name = name,
             resolution = resolution,
+            interval = interval,
         )
             ts = deserialize_time_series(
                 isnothing(type) ? time_series_metadata_to_data(metadata) : type,
@@ -201,10 +213,19 @@ function get_time_series_metadata(
     owner::TimeSeriesOwners,
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(owner)
-    return get_metadata(mgr, owner, T, name; resolution = resolution, features...)
+    return get_metadata(
+        mgr,
+        owner,
+        T,
+        name;
+        resolution = resolution,
+        interval = interval,
+        features...,
+    )
 end
 
 """
@@ -224,6 +245,8 @@ Specify `start_time` and `len` if you only need a subset of data.
   - `name::AbstractString`: name of time series
   - `resolution::Union{Nothing, Dates.Period} = nothing`: Required if resolution is needed
      to uniquely identify the time series.
+  - `interval::Union{Nothing, Dates.Period} = nothing`: Required if multiple forecasts share
+     the same resolution but differ by interval. Throws an error if omitted and ambiguous.
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: If nothing, use the
     `initial_timestamp` of the time series. If T is a subtype of [`Forecast`](@ref) then
     `start_time` must be the first timestamp of a window.
@@ -270,6 +293,7 @@ function get_time_series_array(
     owner::TimeSeriesOwners,
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
@@ -280,6 +304,7 @@ function get_time_series_array(
         owner,
         name;
         resolution = resolution,
+        interval = interval,
         start_time = start_time,
         len = len,
         count = 1,
@@ -467,6 +492,8 @@ Return a vector of timestamps from storage for the given time series parameters.
   - `name::AbstractString`: name of time series
   - `resolution::Union{Nothing, Dates.Period} = nothing`: Required if resolution is needed
      to uniquely identify the time series.
+  - `interval::Union{Nothing, Dates.Period} = nothing`: Required if multiple forecasts share
+     the same resolution but differ by interval. Throws an error if omitted and ambiguous.
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: If nothing, use the
     `initial_timestamp` of the time series. If T is a subtype of [`Forecast`](@ref) then
     `start_time` must be the first timestamp of a window.
@@ -510,6 +537,7 @@ function get_time_series_timestamps(
     owner::TimeSeriesOwners,
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     features...,
@@ -520,6 +548,7 @@ function get_time_series_timestamps(
             owner,
             name;
             resolution = resolution,
+            interval = interval,
             start_time = start_time,
             len = len,
             features...,
@@ -675,6 +704,8 @@ that accepts a cached `TimeSeriesData` instance.
   - `name::AbstractString`: name of time series
   - `resolution::Union{Nothing, Dates.Period} = nothing`: Required if resolution is needed
      to uniquely identify the time series.
+  - `interval::Union{Nothing, Dates.Period} = nothing`: Required if multiple forecasts share
+     the same resolution but differ by interval. Throws an error if omitted and ambiguous.
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: If nothing, use the
     `initial_timestamp` of the time series. If T is a subtype of [`Forecast`](@ref) then
     `start_time` must be the first timestamp of a window.
@@ -723,6 +754,7 @@ function get_time_series_values(
     owner::TimeSeriesOwners,
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
@@ -734,6 +766,7 @@ function get_time_series_values(
             owner,
             name;
             resolution = resolution,
+            interval = interval,
             start_time = start_time,
             len = len,
             ignore_scaling_factors = ignore_scaling_factors,
@@ -945,6 +978,7 @@ function has_time_series(
     ::Type{T},
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(val)
@@ -955,6 +989,7 @@ function has_time_series(
         time_series_type = T,
         name = name,
         resolution = resolution,
+        interval = interval,
         features...,
     )
 end
@@ -969,8 +1004,16 @@ has_time_series(
     owner::TimeSeriesOwners,
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = has_time_series(owner, T, name; resolution = resolution, features...)
+) = has_time_series(
+    owner,
+    T,
+    name;
+    resolution = resolution,
+    interval = interval,
+    features...,
+)
 
 """
 Efficiently add all time_series in one component to another by copying the underlying
@@ -1070,6 +1113,7 @@ function get_time_series_metadata(
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
     name::Union{String, Nothing} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 )
     mgr = get_time_series_manager(owner)
@@ -1080,6 +1124,7 @@ function get_time_series_metadata(
         time_series_type = time_series_type,
         name = name,
         resolution = resolution,
+        interval = interval,
         features...,
     )
 end

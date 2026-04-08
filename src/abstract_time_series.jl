@@ -30,6 +30,7 @@ abstract type ForecastMetadata <: TimeSeriesMetadata end
 
 abstract type StaticTimeSeriesMetadata <: TimeSeriesMetadata end
 
+get_interval(::StaticTimeSeriesMetadata) = nothing
 get_count(ts::StaticTimeSeriesMetadata) = 1
 get_initial_timestamp(ts::StaticTimeSeriesMetadata) = get_initial_timestamp(ts)
 Base.length(ts::StaticTimeSeriesMetadata) = get_length(ts)
