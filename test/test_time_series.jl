@@ -4361,6 +4361,225 @@ end
     ) == 1
 end
 
+function setup_for_multi_interval_tests()
+    sys = IS.SystemData()
+    name = "Component1"
+    f_name = "test_det"
+    component = IS.TestComponent(name, 1)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Minute(5)
+    horizon_count = 24
+
+    # Forecast with hourly interval (windows every hour)
+    interval1 = Dates.Hour(1)
+    other_time1 = initial_time + interval1
+    data1 =
+        SortedDict(
+            initial_time => rand(horizon_count),
+            other_time1 => rand(horizon_count),
+        )
+    forecast1 = IS.Deterministic(;
+        data = data1,
+        name = f_name,
+        resolution = resolution,
+        interval = interval1,
+    )
+
+    # Forecast with daily interval (windows every day)
+    interval2 = Dates.Day(1)
+    other_time2 = initial_time + interval2
+    data2 =
+        SortedDict(
+            initial_time => rand(horizon_count),
+            other_time2 => rand(horizon_count),
+        )
+    forecast2 = IS.Deterministic(;
+        data = data2,
+        name = f_name,
+        resolution = resolution,
+        interval = interval2,
+    )
+
+    IS.add_time_series!(sys, component, forecast1)
+    IS.add_time_series!(sys, component, forecast2)
+
+    return (
+        system = sys,
+        component = component,
+        initial_time = initial_time,
+        f_name = f_name,
+        resolution = resolution,
+        interval1 = interval1,
+        interval2 = interval2,
+        forecast1 = forecast1,
+        forecast2 = forecast2,
+    )
+end
+
+@testset "Test Deterministic with multiple intervals" begin
+    params = setup_for_multi_interval_tests()
+    component = params.component
+    f_name = params.f_name
+    initial_time = params.initial_time
+    resolution = params.resolution
+    interval1 = params.interval1
+    interval2 = params.interval2
+    f1 = params.forecast1
+    f2 = params.forecast2
+
+    # Retrieving by interval returns correct data
+    @test IS.get_data(
+        IS.get_time_series(
+            IS.Deterministic,
+            component,
+            f_name;
+            resolution = resolution,
+            interval = interval1,
+        ),
+    ) == IS.get_data(f1)
+    @test IS.get_data(
+        IS.get_time_series(
+            IS.Deterministic,
+            component,
+            f_name;
+            resolution = resolution,
+            interval = interval2,
+        ),
+    ) == IS.get_data(f2)
+
+    # Without interval, ambiguous query throws
+    @test_throws ArgumentError IS.get_time_series(
+        IS.Deterministic,
+        component,
+        f_name;
+        resolution = resolution,
+    )
+
+    # Non-existent interval throws
+    @test_throws ArgumentError IS.get_time_series(
+        IS.Deterministic,
+        component,
+        f_name;
+        resolution = resolution,
+        interval = Dates.Minute(1),
+    )
+
+    # has_time_series with interval
+    @test IS.has_time_series(
+        component,
+        IS.Deterministic,
+        f_name;
+        resolution = resolution,
+        interval = interval1,
+    )
+    @test IS.has_time_series(
+        component,
+        IS.Deterministic,
+        f_name;
+        resolution = resolution,
+        interval = interval2,
+    )
+    @test !IS.has_time_series(
+        component,
+        IS.Deterministic,
+        f_name;
+        resolution = resolution,
+        interval = Dates.Minute(1),
+    )
+
+    # get_time_series_array with interval
+    @test IS.get_time_series_array(
+        IS.Deterministic,
+        component,
+        f_name;
+        resolution = resolution,
+        interval = interval1,
+    ) == IS.get_time_series_array(component, f1; start_time = initial_time)
+    @test IS.get_time_series_array(
+        IS.Deterministic,
+        component,
+        f_name;
+        resolution = resolution,
+        interval = interval2,
+    ) == IS.get_time_series_array(component, f2; start_time = initial_time)
+
+    # get_time_series_values with interval
+    @test IS.get_time_series_values(
+        IS.Deterministic,
+        component,
+        f_name;
+        resolution = resolution,
+        interval = interval1,
+    ) == TimeSeries.values(
+        IS.get_time_series_array(component, f1; start_time = initial_time),
+    )
+
+    # get_time_series_timestamps with interval
+    @test IS.get_time_series_timestamps(
+        IS.Deterministic,
+        component,
+        f_name;
+        resolution = resolution,
+        interval = interval1,
+    ) == TimeSeries.timestamp(
+        IS.get_time_series_array(component, f1; start_time = initial_time),
+    )
+
+    # get_time_series_multiple with interval
+    ts_multiple = collect(
+        IS.get_time_series_multiple(
+            component;
+            type = IS.Deterministic,
+            name = f_name,
+            interval = interval1,
+        ),
+    )
+    @test length(ts_multiple) == 1
+    @test IS.get_data(ts_multiple[1]) == IS.get_data(f1)
+
+    ts_multiple_all = collect(
+        IS.get_time_series_multiple(
+            component;
+            type = IS.Deterministic,
+            name = f_name,
+        ),
+    )
+    @test length(ts_multiple_all) == 2
+
+    @test isempty(
+        collect(
+            IS.get_time_series_multiple(
+                component;
+                type = IS.Deterministic,
+                name = f_name,
+                interval = Dates.Minute(1),
+            ),
+        ),
+    )
+
+    # get_time_series_metadata with interval
+    @test length(
+        IS.get_time_series_metadata(component; time_series_type = IS.Deterministic),
+    ) == 2
+    @test length(
+        IS.get_time_series_metadata(
+            component;
+            time_series_type = IS.Deterministic,
+            interval = interval1,
+        ),
+    ) == 1
+    @test length(
+        IS.get_time_series_metadata(
+            component;
+            time_series_type = IS.Deterministic,
+            name = f_name,
+            interval = interval2,
+        ),
+    ) == 1
+end
+
 @testset "Test DeterministicSingleTimeSeries with multiple resolutions" begin
     params = setup_for_multi_resolution_tests()
     for _ in 1:2
