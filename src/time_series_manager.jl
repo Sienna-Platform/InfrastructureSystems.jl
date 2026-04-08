@@ -142,6 +142,7 @@ function add_time_series!(
         time_series_type = typeof(time_series),
         name = get_name(metadata),
         resolution = get_resolution(metadata),
+        interval = get_interval(metadata),
         features...,
     )
         throw(
@@ -182,6 +183,7 @@ get_metadata(
     time_series_type::Type{<:TimeSeriesData},
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) = get_metadata(
     mgr.metadata_store,
@@ -189,6 +191,7 @@ get_metadata(
     time_series_type,
     name;
     resolution = resolution,
+    interval = interval,
     features...,
 )
 
@@ -198,6 +201,7 @@ list_metadata(
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
     name::Union{String, Nothing} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) = list_metadata(
     mgr.metadata_store,
@@ -205,6 +209,7 @@ list_metadata(
     time_series_type = time_series_type,
     name = name,
     resolution = resolution,
+    interval = interval,
     features...,
 )
 
