@@ -659,19 +659,34 @@ function get_forecast_initial_times(store::TimeSeriesMetadataStore)
     return get_initial_times(params.initial_timestamp, params.count, params.interval)
 end
 
-const _QUERY_GET_FORECAST_PARAMS = """
-    SELECT
-        horizon
-        ,initial_timestamp
-        ,interval
-        ,resolution
-        ,window_count
-    FROM $ASSOCIATIONS_TABLE_NAME
-    WHERE horizon IS NOT NULL
-    LIMIT 1
-"""
-function get_forecast_parameters(store::TimeSeriesMetadataStore)
-    table = Tables.rowtable(_execute_cached(store, _QUERY_GET_FORECAST_PARAMS))
+function get_forecast_parameters(
+    store::TimeSeriesMetadataStore;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+)
+    vals = ["horizon IS NOT NULL"]
+    params = []
+    if !isnothing(resolution)
+        push!(vals, "resolution = ?")
+        push!(params, _serialize_period(resolution))
+    end
+    if !isnothing(interval)
+        push!(vals, "interval = ?")
+        push!(params, _serialize_period(interval))
+    end
+    where_clause = join(vals, " AND ")
+    query = """
+        SELECT
+            horizon
+            ,initial_timestamp
+            ,interval
+            ,resolution
+            ,window_count
+        FROM $ASSOCIATIONS_TABLE_NAME
+        WHERE $where_clause
+        LIMIT 1
+    """
+    table = Tables.rowtable(_execute(store, query, params))
     isempty(table) && return nothing
     row = table[1]
     return ForecastParameters(;
