@@ -212,6 +212,7 @@ struct ForecastCache{T <: TimeSeriesData, U <: InfrastructureSystemsComponent} <
     common::TimeSeriesCacheCommon{T, U}
     in_memory_count::Int
     horizon_count::Int
+    interval::Union{Nothing, Dates.Period}
 end
 
 """
@@ -240,8 +241,9 @@ function ForecastCache(
     horizon_count::Union{Nothing, Int} = nothing,
     cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES,
     ignore_scaling_factors = false,
+    interval::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: Forecast}
-    ts_metadata = get_time_series_metadata(T, component, name)
+    ts_metadata = get_time_series_metadata(T, component, name; interval = interval)
     initial_timestamp = get_initial_timestamp(ts_metadata)
     if start_time === nothing
         start_time = initial_timestamp
@@ -257,6 +259,7 @@ function ForecastCache(
         name;
         start_time = start_time,
         len = get_horizon_count(ts_metadata),
+        interval = interval,
     )
     vals = get_time_series_values(
         component,
@@ -289,6 +292,7 @@ function ForecastCache(
         ),
         in_memory_count,
         horizon_count,
+        interval,
     )
 end
 
@@ -313,6 +317,7 @@ function _update!(cache::ForecastCache)
         start_time = next_time,
         len = len,
         count = count,
+        interval = cache.interval,
     )
     _set_length_available!(cache, len)
     _set_time_series!(cache, ts)
@@ -472,6 +477,7 @@ function make_time_series_cache(
     initial_time,
     horizon_count::Int;
     ignore_scaling_factors = true,
+    interval::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: AbstractDeterministic}
     return ForecastCache(
         T,
@@ -480,6 +486,7 @@ function make_time_series_cache(
         start_time = initial_time,
         horizon_count = horizon_count,
         ignore_scaling_factors = ignore_scaling_factors,
+        interval = interval,
     )
 end
 
@@ -490,6 +497,7 @@ function make_time_series_cache(
     initial_time,
     horizon_count::Int;
     ignore_scaling_factors = true,
+    interval::Union{Nothing, Dates.Period} = nothing,
 )
     return ForecastCache(
         Probabilistic,
@@ -498,5 +506,6 @@ function make_time_series_cache(
         start_time = initial_time,
         horizon_count = horizon_count,
         ignore_scaling_factors = ignore_scaling_factors,
+        interval = interval,
     )
 end
