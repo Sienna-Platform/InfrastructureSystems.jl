@@ -21,7 +21,7 @@ tts = TupleTimeSeries{StartUpStages}(ts_key)
 stages = build_static_tuple(tts, component, start_time)  # returns a StartUpStages
 ```
 """
-struct TupleTimeSeries{T <: NamedTuple}
+struct TupleTimeSeries{T <: NamedTuple} <: InfrastructureSystemsType
     time_series_key::TimeSeriesKey
 
     function TupleTimeSeries{T}(
@@ -114,4 +114,30 @@ function build_static_tuple(
     vals = get_time_series_values(owner, key; start_time = start_time, len = 1)
     raw = vals[1]
     return T(raw)::T
+end
+
+# ── Serialization ────────────────────────────────────────────────────────────
+
+function add_serialization_metadata!(
+    data::Dict,
+    ::Type{TupleTimeSeries{T}},
+) where {T <: NamedTuple}
+    data[METADATA_KEY] = Dict{String, Any}(
+        TYPE_KEY => "TupleTimeSeries",
+        MODULE_KEY => string(parentmodule(TupleTimeSeries)),
+        "namedtuple_fields" => [string(n) for n in fieldnames(T)],
+    )
+    return
+end
+
+function deserialize(::Type{TupleTimeSeries}, data::Dict)
+    metadata = get_serialization_metadata(data)
+    field_names = Tuple(Symbol.(metadata["namedtuple_fields"]))
+    N = length(field_names)
+    T = NamedTuple{field_names, NTuple{N, Float64}}
+    key_data = data["time_series_key"]
+    key_metadata = get_serialization_metadata(key_data)
+    key_type = get_type_from_serialization_metadata(key_metadata)
+    key = deserialize(key_type, key_data)
+    return TupleTimeSeries{T}(key)
 end
