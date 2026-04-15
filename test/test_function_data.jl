@@ -613,7 +613,11 @@ end
     for fd in get_test_function_data()
         for do_jsonify in (false, true)
             serialized = IS.serialize(fd)
-            do_jsonify && (serialized = JSON3.read(JSON3.write(serialized), Dict))
+            do_jsonify &&
+                (
+                    serialized =
+                        JSON.parse(JSON.json(serialized); dicttype = Dict{String, Any})
+                )
             @test typeof(serialized) <: AbstractDict
             deserialized = IS.deserialize(typeof(fd), serialized)
             @test deserialized == fd

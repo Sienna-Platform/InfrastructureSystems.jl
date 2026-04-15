@@ -3950,7 +3950,7 @@ function _setup_for_migration_tests_from_IS_v2_3()
                         string(nameof(typeof(component))),
                         owner_category,
                         features,
-                        JSON3.write(IS.serialize(metadata)),
+                        JSON.json(IS.serialize(metadata)),
                     )
                 SQLite.DBInterface.execute(stmt, params)
             end
@@ -3976,7 +3976,7 @@ function _setup_for_migration_tests_from_IS_v2_4()
                     (
                         missing,
                         string(IS.get_uuid(metadata)),
-                        JSON3.write(IS.serialize(metadata)),
+                        JSON.json(IS.serialize(metadata)),
                     )
                 SQLite.DBInterface.execute(stmt, params)
             end
