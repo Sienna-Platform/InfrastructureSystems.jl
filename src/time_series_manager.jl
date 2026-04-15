@@ -3,7 +3,7 @@
 const ADD_TIME_SERIES_BATCH_SIZE = 100
 
 mutable struct BulkUpdateTSCache
-    forecast_params::Union{Nothing, ForecastParameters}
+    forecast_params::Dict{Tuple{Dates.Period, Dates.Period}, ForecastParameters}
 end
 
 mutable struct TimeSeriesManager <: InfrastructureSystemsType
@@ -44,21 +44,32 @@ _get_forecast_params(::StaticTimeSeries) = nothing
 _get_forecast_params!(::TimeSeriesManager, ::StaticTimeSeries) = nothing
 
 function _get_forecast_params!(mgr::TimeSeriesManager, forecast::Forecast)
-    # The time to read forecast parameters from the database can be slow, particularly when
-    # large numbers of StaticTimeSeries are stored.
-    # During a bulk update, cache it.
+    resolution = get_resolution(forecast)
+    interval = get_interval(forecast)
     if isnothing(mgr.bulk_update_cache)
-        return get_forecast_parameters(mgr.metadata_store)
+        return get_forecast_parameters(
+            mgr.metadata_store;
+            resolution = resolution,
+            interval = interval,
+        )
     end
 
-    if isnothing(mgr.bulk_update_cache.forecast_params)
-        mgr.bulk_update_cache.forecast_params = get_forecast_parameters(mgr.metadata_store)
-        if isnothing(mgr.bulk_update_cache.forecast_params)
-            mgr.bulk_update_cache.forecast_params = _get_forecast_params(forecast)
-        end
+    key = (resolution, interval)
+    cached = get(mgr.bulk_update_cache.forecast_params, key, nothing)
+    if !isnothing(cached)
+        return cached
     end
 
-    return mgr.bulk_update_cache.forecast_params
+    params = get_forecast_parameters(
+        mgr.metadata_store;
+        resolution = resolution,
+        interval = interval,
+    )
+    if isnothing(params)
+        params = _get_forecast_params(forecast)
+    end
+    mgr.bulk_update_cache.forecast_params[key] = params
+    return params
 end
 
 """
@@ -75,7 +86,8 @@ function begin_time_series_update(
 )
     open_store!(mgr.data_store, "r+") do
         original_ts_uuids = Set(list_existing_time_series_uuids(mgr.metadata_store))
-        mgr.bulk_update_cache = BulkUpdateTSCache(nothing)
+        mgr.bulk_update_cache =
+            BulkUpdateTSCache(Dict{Tuple{Dates.Period, Dates.Period}, ForecastParameters}())
         try
             SQLite.transaction(mgr.metadata_store.db) do
                 func()
@@ -142,6 +154,7 @@ function add_time_series!(
         time_series_type = typeof(time_series),
         name = get_name(metadata),
         resolution = get_resolution(metadata),
+        interval = get_interval(metadata),
         features...,
     )
         throw(
@@ -182,6 +195,7 @@ get_metadata(
     time_series_type::Type{<:TimeSeriesData},
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) = get_metadata(
     mgr.metadata_store,
@@ -189,6 +203,7 @@ get_metadata(
     time_series_type,
     name;
     resolution = resolution,
+    interval = interval,
     features...,
 )
 
@@ -198,6 +213,7 @@ list_metadata(
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
     name::Union{String, Nothing} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) = list_metadata(
     mgr.metadata_store,
@@ -205,6 +221,7 @@ list_metadata(
     time_series_type = time_series_type,
     name = name,
     resolution = resolution,
+    interval = interval,
     features...,
 )
 
@@ -217,6 +234,7 @@ function remove_time_series!(
     owner::TimeSeriesOwners,
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 )
     _throw_if_read_only(mgr)
@@ -225,6 +243,7 @@ function remove_time_series!(
         time_series_type = time_series_type,
         name = name,
         resolution = resolution,
+        interval = interval,
         features...,
     )
     remove_metadata!(
@@ -233,6 +252,7 @@ function remove_time_series!(
         time_series_type = time_series_type,
         name = name,
         resolution = resolution,
+        interval = interval,
         features...,
     )
 

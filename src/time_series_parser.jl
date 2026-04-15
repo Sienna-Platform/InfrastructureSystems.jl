@@ -154,6 +154,13 @@ end
 
 @scoped_enum NormalizationTypes MAX = 1
 
+@doc """
+Types of normalization that can be applied to time series data.
+
+# Values
+- `MAX`: Normalize by the maximum value in the time series
+""" NormalizationTypes
+
 const NormalizationFactor = Union{Float64, NormalizationTypes}
 
 function handle_normalization_factor(

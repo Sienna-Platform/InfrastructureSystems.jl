@@ -5,6 +5,15 @@ abstract type UnitsData end
 
 @scoped_enum(UnitSystem, SYSTEM_BASE = 0, DEVICE_BASE = 1, NATURAL_UNITS = 2,)
 
+@doc """
+Unit system for component data values.
+
+# Values
+- `SYSTEM_BASE`: Per-unit values on the system base power
+- `DEVICE_BASE`: Per-unit values on the device base power
+- `NATURAL_UNITS`: Values in natural units (e.g., MW, MVAR)
+""" UnitSystem
+
 @kwdef mutable struct SystemUnitsSettings <: UnitsData
     base_value::Float64
     unit_system::UnitSystem
@@ -24,7 +33,7 @@ Internal storage common to InfrastructureSystems types.
 mutable struct InfrastructureSystemsInternal <: InfrastructureSystemsType
     uuid::Base.UUID
     shared_system_references::Union{Nothing, SharedSystemReferences}
-    units_info::Union{Nothing, UnitsData}
+    units_info::Union{Nothing, SystemUnitsSettings}
     ext::Union{Nothing, Dict{String, Any}}
 end
 

@@ -145,6 +145,11 @@ function LoggingConfiguration(config_filename)
     return LoggingConfiguration(; Dict(Symbol(k) => v for (k, v) in config)...)
 end
 
+"""
+Create a logging configuration file from the default template.
+
+Pass `force = true` to overwrite an existing file.
+"""
 function make_logging_config_file(filename = "logging_config.toml"; force = false)
     cp(SIENNA_LOGGING_CONFIG_FILENAME, filename; force = force)
     println("Created $filename")

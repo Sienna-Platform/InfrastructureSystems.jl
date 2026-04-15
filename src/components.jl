@@ -347,6 +347,9 @@ function iterate_components(components::Components)
     return iterate_container(components)
 end
 
+"""
+Return the total number of components stored.
+"""
 function get_num_components(components::Components)
     return get_num_members(components)
 end

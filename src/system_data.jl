@@ -270,6 +270,7 @@ function remove_time_series!(
     owner::TimeSeriesOwners,
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) where {T <: TimeSeriesData}
     return remove_time_series!(
@@ -278,6 +279,7 @@ function remove_time_series!(
         owner,
         name;
         resolution = resolution,
+        interval = interval,
         features...,
     )
 end
@@ -299,11 +301,14 @@ Removes all time series of a particular type from a System.
   - `type::Type{<:TimeSeriesData}`: Type of time series objects to remove.
   - `resolution::Union{Nothing, Dates.Period} = nothing`: Only remove time series with this
     resolution.
+  - `interval::Union{Nothing, Dates.Period} = nothing`: Only remove time series with this
+    interval.
 """
 function remove_time_series!(
     data::SystemData,
     ::Type{T};
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: TimeSeriesData}
     _throw_if_read_only(data.time_series_manager)
     for component in iterate_components_with_time_series(
@@ -316,6 +321,10 @@ function remove_time_series!(
             time_series_type = T,
             resolution = resolution,
         )
+            ts_interval = get_interval(ts_metadata)
+            if !isnothing(interval) && ts_interval != interval
+                continue
+            end
             remove_time_series!(data, component, ts_metadata)
         end
     end
@@ -528,8 +537,10 @@ check_time_series_consistency(data::SystemData, ts_type) =
 Transform all instances of SingleTimeSeries to DeterministicSingleTimeSeries.
 If all SingleTimeSeries instances cannot be transformed then none will be.
 
-Any existing DeterministicSingleTimeSeries forecasts will be deleted even if the inputs are
-invalid.
+By default, any existing DeterministicSingleTimeSeries forecasts will be deleted before the
+transform (`delete_existing = true`). Set `delete_existing = false` to preserve existing
+DeterministicSingleTimeSeries; entries with matching name, resolution, features, horizon, and
+interval are skipped, allowing multiple calls with different resolutions to coexist.
 """
 function transform_single_time_series!(
     data::SystemData,
@@ -537,6 +548,7 @@ function transform_single_time_series!(
     horizon::Dates.Period,
     interval::Dates.Period;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    delete_existing::Bool = true,
 )
     if is_irregular_period(horizon) || is_irregular_period(interval) ||
        (!isnothing(resolution) && is_irregular_period(resolution))
@@ -554,8 +566,42 @@ function transform_single_time_series!(
             horizon,
             interval;
             resolution = resolution,
+            delete_existing = delete_existing,
         )
     end
+end
+
+"""
+Check whether a call to `transform_single_time_series!` with the given parameters would
+complete successfully.
+
+Return `true` if the transform is valid, `false` otherwise.
+"""
+function check_transform_single_time_series(
+    data::SystemData,
+    ::Type{<:DeterministicSingleTimeSeries},
+    horizon::Dates.Period,
+    interval::Dates.Period;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+)
+    if is_irregular_period(horizon) || is_irregular_period(interval) ||
+       (!isnothing(resolution) && is_irregular_period(resolution))
+        return false
+    end
+    try
+        _check_transform_single_time_series(
+            data,
+            DeterministicSingleTimeSeries,
+            horizon,
+            interval,
+            resolution;
+            skip_existing = true,
+        )
+    catch e
+        e isa ConflictingInputsError && return false
+        rethrow()
+    end
+    return true
 end
 
 function _transform_single_time_series!(
@@ -564,14 +610,18 @@ function _transform_single_time_series!(
     horizon::Dates.Period,
     interval::Dates.Period;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    delete_existing::Bool = true,
 )
-    remove_time_series!(data, DeterministicSingleTimeSeries; resolution = resolution)
+    if delete_existing
+        remove_time_series!(data, DeterministicSingleTimeSeries; resolution = resolution)
+    end
     items = _check_transform_single_time_series(
         data,
         DeterministicSingleTimeSeries,
         horizon,
         interval,
-        resolution,
+        resolution;
+        skip_existing = !delete_existing,
     )
 
     if isempty(items)
@@ -625,9 +675,20 @@ function _transform_single_time_series!(
             end
         end
     catch
-        # This shouldn't be needed, but just in case there is a bug, remove all
-        # DeterministicSingleTimeSeries to keep our guarantee.
-        remove_time_series!(data, DeterministicSingleTimeSeries; resolution = resolution)
+        # Only remove the metadata entries that were added in this batch so that
+        # pre-existing DeterministicSingleTimeSeries from prior calls are preserved.
+        for (component, metadata) in zip(components, all_metadata)
+            try
+                remove_metadata!(
+                    data.time_series_manager.metadata_store,
+                    component,
+                    metadata,
+                )
+            catch ex
+                # The entry may not have been added yet; ignore.
+                ex isa ErrorException || rethrow()
+            end
+        end
         rethrow()
     end
     return
@@ -647,7 +708,8 @@ function _check_transform_single_time_series(
     ::Type{DeterministicSingleTimeSeries},
     horizon::Dates.Period,
     interval::Dates.Period,
-    resolution::Union{Nothing, Dates.Period},
+    resolution::Union{Nothing, Dates.Period};
+    skip_existing::Bool = false,
 )
     items = list_metadata_with_owner_uuid(
         data.time_series_manager.metadata_store,
@@ -655,14 +717,18 @@ function _check_transform_single_time_series(
         time_series_type = SingleTimeSeries,
         resolution = resolution,
     )
-    system_params = get_forecast_parameters(data.time_series_manager.metadata_store)
-    components_with_params_and_metadata = Vector(undef, length(items))
-    for (i, item) in enumerate(items)
+    components_with_params_and_metadata = NamedTuple[]
+    for item in items
         params = _check_single_time_series_transformed_parameters(
             item.metadata,
             DeterministicSingleTimeSeries,
             horizon,
             interval,
+        )
+        system_params = get_forecast_parameters(
+            data.time_series_manager.metadata_store;
+            resolution = params.resolution,
+            interval = params.interval,
         )
         check_params_compatibility(system_params, params)
         component = get_component(data, item.owner_uuid)
@@ -673,11 +739,14 @@ function _check_transform_single_time_series(
         # Deterministic forecasts. If other components already have Deterministic forecasts,
         # this check will fail.
         # transform_single_time_series! cannot be called at the component level.
+        # Note: has_metadata with Deterministic matches both Deterministic and
+        # DeterministicSingleTimeSeries. Use list_metadata and filter to check only for
+        # actual Deterministic forecasts.
         ts_name = get_name(item.metadata)
         ts_resolution = get_resolution(item.metadata)
         ts_features = get_features(item.metadata)
         ts_features_symbols = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in ts_features)
-        if has_metadata(
+        existing_det = list_metadata(
             data.time_series_manager.metadata_store,
             component;
             time_series_type = Deterministic,
@@ -685,6 +754,7 @@ function _check_transform_single_time_series(
             resolution = ts_resolution,
             ts_features_symbols...,
         )
+        if any(m -> get_time_series_type(m) === Deterministic, existing_det)
             throw(
                 ConflictingInputsError(
                     "Cannot transform SingleTimeSeries to DeterministicSingleTimeSeries: " *
@@ -694,8 +764,32 @@ function _check_transform_single_time_series(
             )
         end
 
-        components_with_params_and_metadata[i] =
-            (component = component, params = params, metadata = item.metadata)
+        # If skip_existing is true, skip SingleTimeSeries entries that already have a
+        # DeterministicSingleTimeSeries with the same name, resolution, features,
+        # horizon, and interval.
+        if skip_existing
+            existing = list_metadata(
+                data.time_series_manager.metadata_store,
+                component;
+                time_series_type = DeterministicSingleTimeSeries,
+                name = ts_name,
+                resolution = ts_resolution,
+                ts_features_symbols...,
+            )
+            if any(
+                m ->
+                    get_horizon(m) == params.horizon &&
+                        get_interval(m) == params.interval,
+                existing,
+            )
+                continue
+            end
+        end
+
+        push!(
+            components_with_params_and_metadata,
+            (component = component, params = params, metadata = item.metadata),
+        )
     end
 
     return components_with_params_and_metadata
@@ -1234,16 +1328,16 @@ function get_masked_component(data::SystemData, uuid::Base.UUID)
     return nothing
 end
 
-get_forecast_initial_times(data::SystemData) =
-    get_forecast_initial_times(data.time_series_manager.metadata_store)
-get_forecast_window_count(data::SystemData) =
-    get_forecast_window_count(data.time_series_manager.metadata_store)
-get_forecast_horizon(data::SystemData) =
-    get_forecast_horizon(data.time_series_manager.metadata_store)
-get_forecast_initial_timestamp(data::SystemData) =
-    get_forecast_initial_timestamp(data.time_series_manager.metadata_store)
-get_forecast_interval(data::SystemData) =
-    get_forecast_interval(data.time_series_manager.metadata_store)
+get_forecast_initial_times(data::SystemData; kwargs...) =
+    get_forecast_initial_times(data.time_series_manager.metadata_store; kwargs...)
+get_forecast_window_count(data::SystemData; kwargs...) =
+    get_forecast_window_count(data.time_series_manager.metadata_store; kwargs...)
+get_forecast_horizon(data::SystemData; kwargs...) =
+    get_forecast_horizon(data.time_series_manager.metadata_store; kwargs...)
+get_forecast_initial_timestamp(data::SystemData; kwargs...) =
+    get_forecast_initial_timestamp(data.time_series_manager.metadata_store; kwargs...)
+get_forecast_interval(data::SystemData; kwargs...) =
+    get_forecast_interval(data.time_series_manager.metadata_store; kwargs...)
 
 get_time_series_resolutions(
     data::SystemData;
@@ -1253,8 +1347,16 @@ get_time_series_resolutions(
     time_series_type = time_series_type,
 )
 
-function get_forecast_total_period(data::SystemData)
-    params = get_forecast_parameters(data.time_series_manager.metadata_store)
+function get_forecast_total_period(
+    data::SystemData;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+)
+    params = get_forecast_parameters(
+        data.time_series_manager.metadata_store;
+        resolution = resolution,
+        interval = interval,
+    )
     isnothing(params) && return Dates.Second(0)
     return get_total_period(
         params.initial_timestamp,

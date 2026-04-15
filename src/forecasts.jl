@@ -19,6 +19,12 @@ abstract type Forecast <: TimeSeriesData end
 
 Base.length(ts::Forecast) = get_count(ts)
 
+"""
+Supertype for all deterministic forecast time series.
+
+Concrete subtypes include [`Deterministic`](@ref) and
+[`DeterministicSingleTimeSeries`](@ref).
+"""
 abstract type AbstractDeterministic <: Forecast end
 
 function check_time_series_data(forecast::Forecast)

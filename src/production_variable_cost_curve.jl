@@ -1,3 +1,9 @@
+"""
+Supertype for production variable cost curve representations, parameterized by
+a [`ValueCurve`](@ref) type.
+
+Concrete subtypes include [`CostCurve`](@ref) and [`FuelCurve`](@ref).
+"""
 abstract type ProductionVariableCostCurve{T <: ValueCurve} end
 
 serialize(val::ProductionVariableCostCurve) = serialize_struct(val)

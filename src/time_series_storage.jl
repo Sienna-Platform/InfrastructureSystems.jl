@@ -18,6 +18,14 @@ const DEFAULT_COMPRESSION = false
 
 @scoped_enum(CompressionTypes, BLOSC = 0, DEFLATE = 1,)
 
+@doc """
+HDF5 compression algorithm types for time series storage.
+
+# Values
+- `BLOSC`: Blosc compression (fast, general-purpose)
+- `DEFLATE`: Deflate/zlib compression
+""" CompressionTypes
+
 """
     CompressionSettings(enabled, type, level, shuffle)
 
