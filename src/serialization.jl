@@ -302,20 +302,39 @@ Perform a test to see if JSON can convert this value so that the code can give t
 a comprehensible corrective action.
 """
 function is_ext_valid_for_serialization(value)
-    isnothing(value) && return true
-    is_valid = true
-    try
-        JSON.json(value)
-    catch
-        is_valid = false
-    end
-
+    is_valid = _is_ext_value_basic(value)
     if !is_valid
         @error "Failed to serialize an 'ext' value. Please ensure that the " *
                "contents follow the rules provided in the documentation. Generally, only " *
                "basic types are allowed - strings and numbers and arrays, dictionaries, and " *
                "structs of those." value
+        return false
     end
+    try
+        JSON.json(value)
+    catch
+        @error "Failed to serialize an 'ext' value. Please ensure that the " *
+               "contents follow the rules provided in the documentation. Generally, only " *
+               "basic types are allowed - strings and numbers and arrays, dictionaries, and " *
+               "structs of those." value
+        return false
+    end
+    return true
+end
 
-    return is_valid
+# JSON.jl will happily serialize Functions, Modules, Tasks, IO handles, etc. by
+# introspecting their fields, but those values are not meaningful JSON content and
+# cannot be reliably deserialized. Restrict 'ext' values to genuine data types.
+_is_ext_value_basic(::Union{Nothing, Missing, Number, AbstractString, Symbol, Bool}) = true
+_is_ext_value_basic(x::AbstractArray) = all(_is_ext_value_basic, x)
+_is_ext_value_basic(x::Tuple) = all(_is_ext_value_basic, x)
+_is_ext_value_basic(x::AbstractDict) =
+    all(_is_ext_value_basic, keys(x)) && all(_is_ext_value_basic, values(x))
+_is_ext_value_basic(::Union{Function, Module, Task, IO, Ptr, Base.RefValue}) = false
+function _is_ext_value_basic(x::T) where {T}
+    isstructtype(T) || return false
+    for name in fieldnames(T)
+        _is_ext_value_basic(getfield(x, name)) || return false
+    end
+    return true
 end
