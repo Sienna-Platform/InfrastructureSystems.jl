@@ -13,7 +13,7 @@ import CSV
 import DataFrames
 import DataFrames: DataFrame
 import Dates
-import JSON3
+import JSON
 import Logging
 import Random
 import Pkg
@@ -21,7 +21,6 @@ import PrettyTables
 import Printf: @sprintf
 import SHA
 import StringTemplates
-import StructTypes
 import TerminalLoggers: TerminalLogger, ProgressLevel
 import TimeSeries
 import TimerOutputs
