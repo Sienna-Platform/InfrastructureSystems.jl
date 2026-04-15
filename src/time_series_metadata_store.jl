@@ -123,7 +123,7 @@ function _load_metadata_into_memory!(store::TimeSeriesMetadataStore)
             elseif field == :time_series_uuid
                 data[field] = Base.UUID(val)
             elseif field == :features
-                features_array = JSON3.read(val, Array)
+                features_array = JSON.parse(val; dicttype = Dict{String, Any})
                 features_dict = Dict{String, Union{Bool, Int, String}}()
                 for obj in features_array
                     length(obj) != 1 && error("Invalid features: $obj")
@@ -134,7 +134,7 @@ function _load_metadata_into_memory!(store::TimeSeriesMetadataStore)
                 data[field] = features_dict
             elseif field == :scaling_factor_multiplier
                 if !ismissing(val)
-                    val2 = JSON3.read(val, Dict{String, Any})
+                    val2 = JSON.parse(val; dicttype = Dict{String, Any})
                     data[field] = deserialize(Function, val2)
                 end
             else
@@ -294,7 +294,7 @@ function _create_migrated_row(metadata::SingleTimeSeriesMetadata, row)
         row.owner_type,
         row.owner_category,
         row.features,
-        isnothing(sfm) ? missing : JSON3.write(serialize(sfm)),
+        isnothing(sfm) ? missing : JSON.json(serialize(sfm)),
         get_uuid(metadata),
         missing,
     )
@@ -317,7 +317,7 @@ function _create_migrated_row(metadata::ForecastMetadata, row)
         row.owner_type,
         row.owner_category,
         row.features,
-        isnothing(sfm) ? missing : JSON3.write(serialize(sfm)),
+        isnothing(sfm) ? missing : JSON.json(serialize(sfm)),
         get_uuid(metadata),
         missing,
     )
@@ -503,7 +503,7 @@ function add_metadata!(
         owner_category,
         _convert_ts_type_to_string(time_series_type),
         features,
-        isnothing(sfm) ? missing : JSON3.write(serialize(sfm)),
+        isnothing(sfm) ? missing : JSON.json(serialize(sfm)),
     )
     params = chop(repeat("?,", length(vals)))
     _execute_cached(
@@ -1612,7 +1612,7 @@ _convert_ts_type_to_string(::Type{<:Probabilistic}) = _PROBABILISTIC_AS_STRING
 _convert_ts_type_to_string(::Type{<:Scenarios}) = _SCENARIOS_AS_STRING
 
 function _deserialize_metadata(text::String)
-    val = JSON3.read(text, Dict)
+    val = JSON.parse(text; dicttype = Dict{String, Any})
     return deserialize(get_type_from_serialization_data(val), val)
 end
 

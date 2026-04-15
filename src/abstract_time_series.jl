@@ -17,13 +17,13 @@ end
 function make_features_string(features::Dict{String, Union{Bool, Int, String}})
     key_names = sort!(collect(keys(features)))
     data = [Dict(k => features[k]) for k in key_names]
-    return JSON3.write(data)
+    return JSON.json(data)
 end
 
 function make_features_string(; features...)
     key_names = sort!(collect(string.(keys(features))))
     data = [Dict(k => features[Symbol(k)]) for (k) in key_names]
-    return JSON3.write(data)
+    return JSON.json(data)
 end
 
 abstract type ForecastMetadata <: TimeSeriesMetadata end
