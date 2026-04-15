@@ -35,17 +35,26 @@ end
 TupleTimeSeries{T}(; time_series_key::TimeSeriesKey) where {T <: NamedTuple} =
     TupleTimeSeries{T}(time_series_key)
 
-# Arity-specialized validators. These are no-ops for the two arities IS commits to
-# supporting as first-class shapes; PSY precompiles against these to keep the hot
-# construction path branchless. The generic fallback below handles any other arity
-# by validating at runtime.
+@inline _assert_concrete_namedtuple(::Type{T}) where {T} =
+    isconcretetype(T) || throw(
+        ArgumentError(
+            "TupleTimeSeries type parameter must be a concrete NamedTuple type, got $T",
+        ),
+    )
+
+# Arity-specialized validators for the two arities IS commits to supporting as
+# first-class shapes. They only enforce `isconcretetype(T)` so non-concrete
+# UnionAll shapes (e.g. `NamedTuple{Names, NTuple{2, Float64}} where Names`)
+# cannot slip past the specialization. The generic fallback handles other arities.
 _validate_tuple_time_series_type(
     ::Type{T},
-) where {Names, T <: NamedTuple{Names, NTuple{2, Float64}}} = nothing
+) where {Names, T <: NamedTuple{Names, NTuple{2, Float64}}} =
+    _assert_concrete_namedtuple(T)
 
 _validate_tuple_time_series_type(
     ::Type{T},
-) where {Names, T <: NamedTuple{Names, NTuple{3, Float64}}} = nothing
+) where {Names, T <: NamedTuple{Names, NTuple{3, Float64}}} =
+    _assert_concrete_namedtuple(T)
 
 function _validate_tuple_time_series_type(::Type{T}) where {T}
     T <: NamedTuple || throw(
@@ -53,17 +62,12 @@ function _validate_tuple_time_series_type(::Type{T}) where {T}
             "TupleTimeSeries type parameter must be a NamedTuple, got $T",
         ),
     )
-    isconcretetype(T) || throw(
-        ArgumentError(
-            "TupleTimeSeries type parameter must be a concrete NamedTuple type, got $T",
-        ),
-    )
+    _assert_concrete_namedtuple(T)
     all(ft === Float64 for ft in fieldtypes(T)) || throw(
         ArgumentError(
             "TupleTimeSeries NamedTuple field types must all be Float64, got $(fieldtypes(T))",
         ),
     )
-    return nothing
 end
 
 """
@@ -111,8 +115,7 @@ function build_static_tuple(
     start_time::Dates.DateTime,
 ) where {T <: NamedTuple}
     key = get_time_series_key(tts)
-    vals = get_time_series_values(owner, key; start_time = start_time, len = 1)
-    raw = vals[1]
+    raw = only(get_time_series_values(owner, key; start_time = start_time, len = 1))
     return T(raw)::T
 end
 
@@ -125,9 +128,8 @@ function add_serialization_metadata!(
     data[METADATA_KEY] = Dict{String, Any}(
         TYPE_KEY => "TupleTimeSeries",
         MODULE_KEY => string(parentmodule(TupleTimeSeries)),
-        "namedtuple_fields" => [string(n) for n in fieldnames(T)],
+        "namedtuple_fields" => Tuple(string(n) for n in fieldnames(T)),
     )
-    return
 end
 
 function deserialize(::Type{TupleTimeSeries}, data::Dict)
