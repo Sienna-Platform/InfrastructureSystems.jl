@@ -8,8 +8,8 @@
 # methods being defined for all the `ValueCurve{FunctionData}` types, not just the ones we
 # have here nicely packaged and presented to the user.
 
-# Default `is_cost_alias` is defined in value_curve.jl so it's available to
-# time_series_value_curve.jl show methods (included before this file).
+"Whether there is a cost alias for the instance or type under consideration"
+is_cost_alias(::Union{ValueCurve, Type{<:ValueCurve}}) = false
 
 """
     LinearCurve(proportional_term::Float64)
