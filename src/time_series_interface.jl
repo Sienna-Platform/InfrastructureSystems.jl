@@ -202,9 +202,10 @@ end
 function get_time_series_uuid(
     ::Type{T},
     component::InfrastructureSystemsComponent,
-    name::AbstractString,
+    name::AbstractString;
+    interval::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: TimeSeriesData}
-    metadata = get_time_series_metadata(T, component, name)
+    metadata = get_time_series_metadata(T, component, name; interval = interval)
     return get_time_series_uuid(metadata)
 end
 
