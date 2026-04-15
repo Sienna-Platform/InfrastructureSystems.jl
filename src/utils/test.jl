@@ -51,7 +51,7 @@ supports_time_series(::AdditionalTestComponent) = true
 supports_time_series(::SimpleTestComponent) = false
 
 function from_json(io::IO, ::Type{TestComponent})
-    data = JSON3.read(io, Dict)
+    data = JSON.parse(io; dicttype = Dict{String, Any})
     return deserialize(TestComponent, data)
 end
 

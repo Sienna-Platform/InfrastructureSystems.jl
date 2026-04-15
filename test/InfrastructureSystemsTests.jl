@@ -6,7 +6,7 @@ using Dates
 import TerminalLoggers: TerminalLogger
 import TimeSeries
 import UUIDs
-import JSON3
+import JSON
 import HDF5
 using DataStructures: SortedDict
 using DataFrames
