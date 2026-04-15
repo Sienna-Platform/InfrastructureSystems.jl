@@ -40,6 +40,10 @@
 
         # Non-concrete NamedTuple rejected
         @test_throws ArgumentError IS.TupleTimeSeries{NamedTuple}(static_key)
+
+        # Non-concrete UnionAll matching an arity-specialized validator is rejected
+        NonConcrete = NamedTuple{Names, NTuple{2, Float64}} where {Names}
+        @test_throws ArgumentError IS.TupleTimeSeries{NonConcrete}(static_key)
     end
 
     @testset "Show" begin
@@ -58,7 +62,7 @@
 
         # N=3
         vals3 = [(Float64(i), Float64(i) + 10.0, Float64(i) + 20.0)
-                 for i in 1:horizon_count]
+         for i in 1:horizon_count]
         ta3 = TimeSeries.TimeArray(collect(timestamps), vals3)
         sts3 = IS.SingleTimeSeries(; name = "su_stages", data = ta3)
 
@@ -130,9 +134,23 @@
         comp = IS.TestComponent("c", 5)
         IS.add_component!(sys, comp)
 
-        @test_throws Exception IS.build_static_tuple(
+        @test_throws ArgumentError("No matching metadata is stored.") IS.build_static_tuple(
             tts, comp, Dates.DateTime("2024-01-01"),
         )
+    end
+
+    @testset "Serialization round-trip" begin
+        tts = IS.TupleTimeSeries{StartUpStages}(static_key)
+        tts_rt = IS.deserialize(IS.TupleTimeSeries, IS.serialize_struct(tts))
+        @test tts_rt isa IS.TupleTimeSeries{StartUpStages}
+        rt_key = IS.get_time_series_key(tts_rt)
+        @test IS.get_name(rt_key) == IS.get_name(static_key)
+        @test IS.get_time_series_type(rt_key) === IS.get_time_series_type(static_key)
+
+        # Arity-2 round-trip
+        tts2 = IS.TupleTimeSeries{MinMax}(static_key)
+        tts2_rt = IS.deserialize(IS.TupleTimeSeries, IS.serialize_struct(tts2))
+        @test tts2_rt isa IS.TupleTimeSeries{MinMax}
     end
 
     @testset "build_static_tuple round-trip (HDF5)" begin
@@ -143,8 +161,10 @@
 
         for (T, arity_vals) in (
             (StartUpStages,
-                [(Float64(i), Float64(i) + 10.0, Float64(i) + 20.0)
-                 for i in 1:horizon_count]),
+                [
+                    (Float64(i), Float64(i) + 10.0, Float64(i) + 20.0)
+                    for i in 1:horizon_count
+                ]),
             (MinMax,
                 [(Float64(i), Float64(i) + 100.0) for i in 1:horizon_count]),
         )
