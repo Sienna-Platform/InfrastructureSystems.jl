@@ -3325,7 +3325,35 @@ end
     ts = IS.SingleTimeSeries(; data = data, name = ts_name)
     uuid = IS.get_uuid(ts)
     IS.add_time_series!(sys, component, ts)
-    ts2 = IS.get_time_series_uuid(IS.SingleTimeSeries, component, ts_name)
+    @test IS.get_time_series_uuid(IS.SingleTimeSeries, component, ts_name) == uuid
+end
+
+@testset "Test get_time_series_uuid with multiple resolutions" begin
+    params = setup_for_multi_resolution_tests()
+    component = params.component
+    sts_name = params.sts_name
+    resolution1 = params.resolution1
+    resolution2 = params.resolution2
+    uuid1 = IS.get_uuid(params.sts1)
+    uuid2 = IS.get_uuid(params.sts2)
+
+    @test IS.get_time_series_uuid(
+        IS.SingleTimeSeries,
+        component,
+        sts_name;
+        resolution = resolution1,
+    ) == uuid1
+    @test IS.get_time_series_uuid(
+        IS.SingleTimeSeries,
+        component,
+        sts_name;
+        resolution = resolution2,
+    ) == uuid2
+    @test_throws ArgumentError IS.get_time_series_uuid(
+        IS.SingleTimeSeries,
+        component,
+        sts_name,
+    )
 end
 
 @testset "Test serialization of time series keys" begin
@@ -4893,6 +4921,128 @@ end
         initial_time,
         horizon_count;
         interval = interval1,
+    )
+    ta3 = IS.get_time_series_array!(cache3, initial_time)
+    @test TimeSeries.values(ta3) == expected_vals1
+end
+
+@testset "Test ForecastCache with multiple resolutions" begin
+    params = setup_for_multi_resolution_tests()
+    component = params.component
+    f_name = params.f_name
+    initial_time = params.initial_time
+    resolution1 = params.resolution1
+    resolution2 = params.resolution2
+    f1 = params.forecast1
+    f2 = params.forecast2
+
+    horizon_count1 = length(first(values(IS.get_data(f1))))
+    horizon_count2 = length(first(values(IS.get_data(f2))))
+
+    # Cache with resolution1 returns resolution1 data
+    cache1 = IS.ForecastCache(
+        IS.Deterministic,
+        component,
+        f_name;
+        start_time = initial_time,
+        horizon_count = horizon_count1,
+        resolution = resolution1,
+    )
+    ta1 = IS.get_time_series_array!(cache1, initial_time)
+    expected_vals1 = IS.get_data(f1)[initial_time]
+    @test TimeSeries.values(ta1) == expected_vals1
+
+    # Cache with resolution2 returns resolution2 data
+    cache2 = IS.ForecastCache(
+        IS.Deterministic,
+        component,
+        f_name;
+        start_time = initial_time,
+        horizon_count = horizon_count2,
+        resolution = resolution2,
+    )
+    ta2 = IS.get_time_series_array!(cache2, initial_time)
+    expected_vals2 = IS.get_data(f2)[initial_time]
+    @test TimeSeries.values(ta2) == expected_vals2
+
+    # Values from different resolutions are different
+    @test expected_vals1 != expected_vals2
+
+    # Cache without resolution throws on ambiguous data
+    @test_throws ArgumentError IS.ForecastCache(
+        IS.Deterministic,
+        component,
+        f_name;
+        start_time = initial_time,
+        horizon_count = horizon_count1,
+    )
+
+    # make_time_series_cache with resolution works
+    cache3 = IS.make_time_series_cache(
+        IS.Deterministic,
+        component,
+        f_name,
+        initial_time,
+        horizon_count1;
+        resolution = resolution1,
+    )
+    ta3 = IS.get_time_series_array!(cache3, initial_time)
+    @test TimeSeries.values(ta3) == expected_vals1
+end
+
+@testset "Test StaticTimeSeriesCache with multiple resolutions" begin
+    params = setup_for_multi_resolution_tests()
+    component = params.component
+    sts_name = params.sts_name
+    initial_time = params.initial_time
+    resolution1 = params.resolution1
+    resolution2 = params.resolution2
+    sts1 = params.sts1
+    sts2 = params.sts2
+
+    # Cache with resolution1 returns resolution1 data
+    cache1 = IS.StaticTimeSeriesCache(
+        IS.SingleTimeSeries,
+        component,
+        sts_name;
+        start_time = initial_time,
+        resolution = resolution1,
+    )
+    ta1 = IS.get_time_series_array!(cache1, initial_time)
+    expected_vals1 = TimeSeries.values(IS.get_data(sts1))[1:1]
+    @test TimeSeries.values(ta1) == expected_vals1
+
+    # Cache with resolution2 returns resolution2 data
+    cache2 = IS.StaticTimeSeriesCache(
+        IS.SingleTimeSeries,
+        component,
+        sts_name;
+        start_time = initial_time,
+        resolution = resolution2,
+    )
+    ta2 = IS.get_time_series_array!(cache2, initial_time)
+    expected_vals2 = TimeSeries.values(IS.get_data(sts2))[1:1]
+    @test TimeSeries.values(ta2) == expected_vals2
+
+    # Values from different resolutions are different
+    @test expected_vals1 != expected_vals2
+
+    # Cache without resolution throws on ambiguous data
+    @test_throws ArgumentError IS.StaticTimeSeriesCache(
+        IS.SingleTimeSeries,
+        component,
+        sts_name;
+        start_time = initial_time,
+    )
+
+    # make_time_series_cache with resolution works
+    cache3 = IS.make_time_series_cache(
+        IS.SingleTimeSeries,
+        component,
+        sts_name,
+        initial_time,
+        1;
+        resolution = resolution1,
     )
     ta3 = IS.get_time_series_array!(cache3, initial_time)
     @test TimeSeries.values(ta3) == expected_vals1
