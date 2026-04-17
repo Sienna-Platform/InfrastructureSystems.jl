@@ -950,7 +950,10 @@ function _make_time_array(owner, time_series, start_time, len, ignore_scaling_fa
         return ta
     end
 
-    return ta .* multiplier(owner)
+    # Scaling-factor multipliers (e.g. `get_max_active_power`) are unit-aware
+    # accessors from downstream packages; pass `SU` so the result is in the
+    # system base that consumers of the time series expect.
+    return ta .* multiplier(owner, SU)
 end
 
 """

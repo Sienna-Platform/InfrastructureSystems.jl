@@ -64,9 +64,9 @@ end
 {{/has_null_values}}
 {{#accessors}}
 {{#needs_conversion}}
-{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
-{{accessor}}(value::{{struct_name}}) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}))
+{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`. The `units` argument is required (e.g. `SU`, `DU`, `MW`, or `Float64`).\"\"\"{{/create_docstring}}
 {{accessor}}(value::{{struct_name}}, units) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units)
+InfrastructureSystems.display_units_arg(::typeof({{accessor}}), ::Type{ {{struct_name}} }) = InfrastructureSystems.SU
 {{/needs_conversion}}
 {{^needs_conversion}}
 {{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
