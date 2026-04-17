@@ -142,6 +142,7 @@ end
 get_internal(value::InfrastructureSystemsComponent) = value.internal
 
 include("common.jl")
+include("relative_units.jl")
 include("random_seed.jl")
 include("utils/timers.jl")
 include("utils/assert_op.jl")

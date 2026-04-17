@@ -148,7 +148,12 @@ function show_components(
                     val = summary(val)
                 elseif hasproperty(parent, getter_name)
                     getter_func = Base.getproperty(parent, getter_name)
-                    val = getter_func(component)
+                    arg = display_units_arg(getter_func, typeof(component))
+                    val = if ismissing(arg)
+                        getter_func(component)
+                    else
+                        getter_func(component, arg)
+                    end
                 end
                 data[i, j] = val
                 j += 1
