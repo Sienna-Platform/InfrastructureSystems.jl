@@ -8,18 +8,13 @@ export PiecewisePointCurve, PiecewiseIncrementalCurve, PiecewiseAverageCurve
 export TimeSeriesLinearCurve, TimeSeriesQuadraticCurve, TimeSeriesPiecewisePointCurve
 export TimeSeriesPiecewiseIncrementalCurve, TimeSeriesPiecewiseAverageCurve
 
-# Re-export unit types from PowerSystemsUnits
-using PowerSystemsUnits
-export MW, Mvar, MVA, kV, OHMS, SIEMENS
-export DU, SU, NU, DeviceBaseUnit, SystemBaseUnit, NaturalUnit
-export AbstractRelativeUnit, RelativeQuantity
-export ustrip
-export UnitCategory,
-    PowerCategory, ImpedanceCategory, AdmittanceCategory,
-    VoltageCategory, CurrentCategory
-export POWER, IMPEDANCE, ADMITTANCE, VOLTAGE, CURRENT
-export convert_units, base_value, system_base_value, natural_unit, DEFAULT_UNITS
-export get_device_base_power, get_system_base_power, get_base_voltage
+# Units interface: declared here, methods implemented by domain packages
+# (e.g., PowerSystems.jl provides power-domain `get_value`/`set_value` methods).
+"Get a field value with optional unit conversion. Methods are provided by domain packages."
+function get_value end
+"Set a field value with optional unit conversion. Methods are provided by domain packages."
+function set_value end
+export get_value, set_value
 
 import Base: @kwdef
 import CSV
@@ -221,7 +216,5 @@ include("function_data/make_convex.jl")
 include("deprecated.jl")
 include("Optimization/Optimization.jl")
 include("Simulation/Simulation.jl")
-
-# Custom Unitful units (Mvar, MVA) are registered by PowerSystemsUnits.__init__
 
 end # module
