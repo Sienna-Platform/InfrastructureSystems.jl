@@ -7,7 +7,7 @@ public or internal API. There may be multiple issues to iterate through:
 
  1. Verify there is an Internal API .md file to catch doctrings for structs/functions that are
     not exported.
-    [Example here](https://github.com/NREL-Sienna/SiennaTemplate.jl/blob/main/docs/src/reference/internal.md)
+    [Example here](https://github.com/Sienna-Platform/SiennaTemplate.jl/blob/main/docs/src/reference/internal.md)
 
  2. Identify the `*.jl` file for one of your missing docstrings. Are other docstrings in that file
     visible in the compiled API .html?

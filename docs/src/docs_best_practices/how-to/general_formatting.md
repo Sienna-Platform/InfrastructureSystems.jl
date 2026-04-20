@@ -81,7 +81,7 @@ All other Sienna package names should have documentation (not Git repo) hyperlin
 
 !!! tip "Do"
     
-    ```[`PowerSystems.jl`](https://nrel-sienna.github.io/PowerSystems.jl/stable/)```
+    ```[`PowerSystems.jl`](https://sienna-platform.github.io/PowerSystems.jl/stable/)```
 
 !!! warning "Don't"
     
@@ -98,5 +98,5 @@ All other Sienna package names should have documentation (not Git repo) hyperlin
     Or
     
     ```
-    [`PowerSystems.jl`](https://github.com/NREL-Sienna/PowerSystems.jl)
+    [`PowerSystems.jl`](https://github.com/Sienna-Platform/PowerSystems.jl)
     ```

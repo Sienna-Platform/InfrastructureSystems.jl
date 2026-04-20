@@ -41,9 +41,9 @@ Depth = 3:3
     
     Include a Public API markdown file for exported structs, functions, and methods, and an
     Internals API for private functions. See
-    [`PowerSystems.jl`](https://nrel-sienna.github.io/PowerSystems.jl/stable/)
+    [`PowerSystems.jl`](https://sienna-platform.github.io/PowerSystems.jl/stable/)
     for an example with a Public API organized with `@autodocs` ([see next](@ref use_autodocs))
-    or [`SiennaTemplate.jl`](https://github.com/NREL-Sienna/SiennaTemplate.jl) for a basic
+    or [`SiennaTemplate.jl`](https://github.com/Sienna-Platform/SiennaTemplate.jl) for a basic
     template when starting a new package.
 
 !!! tip "Do"

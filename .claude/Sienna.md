@@ -61,7 +61,7 @@ Avoid returning `Union` types or abstract types.
 
 ## Code Conventions
 
-Style guide: <https://nrel-sienna.github.io/InfrastructureSystems.jl/stable/style/>
+Style guide: <https://sienna-platform.github.io/InfrastructureSystems.jl/stable/style/>
 
 Formatter (JuliaFormatter): Use the formatter script provided in each package.
 
@@ -77,12 +77,12 @@ Key rules:
 
 Framework: [Diataxis](https://diataxis.fr/)
 
-Sienna guide: <https://nrel-sienna.github.io/InfrastructureSystems.jl/stable/docs_best_practices/explanation/>
+Sienna guide: <https://sienna-platform.github.io/InfrastructureSystems.jl/stable/docs_best_practices/explanation/>
 
-Sienna guide for Diataxis-style tutorials: <https://nrel-sienna.github.io/InfrastructureSystems.jl/stable/docs_best_practices/how-to/write_a_tutorial/>
+Sienna guide for Diataxis-style tutorials: <https://sienna-platform.github.io/InfrastructureSystems.jl/stable/docs_best_practices/how-to/write_a_tutorial/>
 Format for tutorial scripts: <https://fredrikekre.github.io/Literate.jl/v2/>
-Sienna guide for Diataxis-style how-to's: <https://nrel-sienna.github.io/InfrastructureSystems.jl/stable/docs_best_practices/how-to/write_a_how-to/>
-Sienna guide for APIs: <https://nrel-sienna.github.io/InfrastructureSystems.jl/stable/docs_best_practices/how-to/write_docstrings_org_api/>
+Sienna guide for Diataxis-style how-to's: <https://sienna-platform.github.io/InfrastructureSystems.jl/stable/docs_best_practices/how-to/write_a_how-to/>
+Sienna guide for APIs: <https://sienna-platform.github.io/InfrastructureSystems.jl/stable/docs_best_practices/how-to/write_docstrings_org_api/>
 
 Docstring requirements:
 

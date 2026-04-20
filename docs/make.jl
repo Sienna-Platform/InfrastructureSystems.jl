@@ -7,8 +7,8 @@ links = InterLinks(
     "Documenter" => "https://documenter.juliadocs.org/stable/",
     "Julia" => "https://docs.julialang.org/en/v1/",
     "JuliaFormatter" => "https://domluna.github.io/JuliaFormatter.jl/stable/",
-    "PowerSystems" => "https://nrel-sienna.github.io/PowerSystems.jl/stable/",
-    "PowerSystemCaseBuilder" => "https://nrel-sienna.github.io/PowerSystemCaseBuilder.jl/stable/",
+    "PowerSystems" => "https://sienna-platform.github.io/PowerSystems.jl/stable/",
+    "PowerSystemCaseBuilder" => "https://sienna-platform.github.io/PowerSystemCaseBuilder.jl/stable/",
     "DocumenterInterLinks" => "http://juliadocs.org/DocumenterInterLinks.jl/stable/",
 )
 
@@ -82,7 +82,7 @@ makedocs(
 
 
 deploydocs(
-    repo = "github.com/NREL-Sienna/InfrastructureSystems.jl.git",
+    repo = "github.com/Sienna-Platform/InfrastructureSystems.jl.git",
     target = "build",
     branch = "gh-pages",
     devbranch = "main",
