@@ -31,7 +31,7 @@
 ## Module
 
   - When writing a module locate all the exports in the main module file.
-  - Please include a copy of [this .gitignore file](https://github.com/NREL-Sienna/InfrastructureSystems.jl/blob/main/.gitignore)
+  - Please include a copy of [this .gitignore file](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/.gitignore)
 
 ## Module Aliases
 

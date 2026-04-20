@@ -15,5 +15,5 @@
         syntax, without hardcoded urls that can get out of date
       + [`DocStringExtensions.jl`](https://docstringextensions.juliadocs.org/stable/): Another helper
         package to automate docstrings formatting, including signatures and arguments lists
-  - [`SiennaTemplate.jl` Git repository](https://github.com/NREL-Sienna/SiennaTemplate.jl): A
+  - [`SiennaTemplate.jl` Git repository](https://github.com/Sienna-Platform/SiennaTemplate.jl): A
     template for new Sienna packages that includes the required documentation framework.

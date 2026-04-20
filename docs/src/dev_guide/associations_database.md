@@ -258,9 +258,9 @@ During deserialization:
 
 ## Implementation Files
 
-  - **Time Series Metadata Store**: [`src/time_series_metadata_store.jl`](https://github.com/NREL-Sienna/InfrastructureSystems.jl/blob/main/src/time_series_metadata_store.jl)
-  - **Supplemental Attribute Associations**: [`src/supplemental_attribute_associations.jl`](https://github.com/NREL-Sienna/InfrastructureSystems.jl/blob/main/src/supplemental_attribute_associations.jl)
-  - **SQLite Utilities**: [`src/utils/sqlite.jl`](https://github.com/NREL-Sienna/InfrastructureSystems.jl/blob/main/src/utils/sqlite.jl)
+  - **Time Series Metadata Store**: [`src/time_series_metadata_store.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/time_series_metadata_store.jl)
+  - **Supplemental Attribute Associations**: [`src/supplemental_attribute_associations.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/supplemental_attribute_associations.jl)
+  - **SQLite Utilities**: [`src/utils/sqlite.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/utils/sqlite.jl)
 
 ## Debugging and Inspection
 

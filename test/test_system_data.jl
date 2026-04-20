@@ -206,7 +206,7 @@ end
     ))
     @test IS.compare_values(==, special1, special1)
 
-    # https://github.com/NREL-Sienna/InfrastructureSystems.jl/issues/407
+    # https://github.com/Sienna-Platform/InfrastructureSystems.jl/issues/407
     @test InfrastructureSystems.compare_values([0 0], [0 0])
 
     # Test that for arrays and dicts we are actually comparing the values
