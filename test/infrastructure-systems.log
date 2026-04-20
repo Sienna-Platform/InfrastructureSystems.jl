@@ -1,0 +1,107 @@
+┌ Warning: 2026-01-21T13:41:09.085 [45048:1]: duplicate description for @testset, overwriting: "Test get_components" at /Users/jlara/.julia/dev/InfrastructureSystems/test/test_subsystems.jl:51
+└ @ ReTest /Users/jlara/.julia/packages/ReTest/3Ikse/src/ReTest.jl:557
+┌ Info: 2026-01-21T13:41:38.321 [45048:1]: Added InfrastructureSystemsInternal to component struct MyComponent.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/utils/generate_struct_files.jl:134
+┌ Info: 2026-01-21T13:41:39.697 [45048:1]: Added 1 structs to /var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_zJPBcE/structs.json
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/utils/generate_struct_files.jl:230
+┌ Info: 2026-01-21T13:41:39.776 [45048:1]: Added InfrastructureSystemsInternal to component struct MyStruct.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/utils/generate_struct_files.jl:134
+┌ Warning: 2026-01-21T13:42:13.881 [45048:1]: `TimeArray(d::AbstractVector{D}, v::AbstractArray{T, N}, c::Vector{S}, m::Any = nothing; args...) where {T, N, D <: TimeType, S <: AbstractString}` is deprecated, use `TimeArray(d, v, Symbol.(c), m; args...)` instead.
+│   caller = ip:0x0
+└ @ Core :-1
+┌ Info: 2026-01-21T13:42:15.008 [45048:1]: Serialized time series data to /var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_aqUFAD/test_system_serialization_time_series_storage.h5.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_storage.jl:104
+┌ Info: 2026-01-21T13:42:16.478 [45048:1]: Deserializing with InMemoryTimeSeriesStorage is currently not supported. Using HDF
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/system_data.jl:910
+┌ Info: 2026-01-21T13:42:17.272 [45048:1]: Loaded time series from storage file existing=test_system_serialization_time_series_storage.h5 new=/var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_Ilgg9F compression=InfrastructureSystems.CompressionSettings(false, InfrastructureSystems.CompressionTypesModule.CompressionTypes.DEFLATE = 1, 3, true)
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:110
+┌ Warning: 2026-01-21T13:42:18.922 [45048:1]: Cannot compare InfrastructureSystems.InMemoryTimeSeriesStorage and InfrastructureSystems.Hdf5TimeSeriesStorage
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_manager.jl:288
+┌ Info: 2026-01-21T13:42:19.224 [45048:1]: Serialized time series data to /var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_SuOLHE/test_system_serialization_time_series_storage.h5.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_storage.jl:104
+┌ Info: 2026-01-21T13:42:19.228 [45048:1]: Loaded time series from storage file existing=test_system_serialization_time_series_storage.h5 new=/var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_ygugcr compression=InfrastructureSystems.CompressionSettings(false, InfrastructureSystems.CompressionTypesModule.CompressionTypes.DEFLATE = 1, 3, true)
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:110
+┌ Info: 2026-01-21T13:42:19.836 [45048:1]: Serialized time series data to /var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_I48iZH/test_system_serialization_time_series_storage.h5.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_storage.jl:104
+┌ Info: 2026-01-21T13:42:19.839 [45048:1]: Loaded time series from storage file existing=test_system_serialization_time_series_storage.h5 new=/private/var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_I48iZH/jl_xFm58T/test_system_serialization_time_series_storage.h5 compression=InfrastructureSystems.CompressionSettings(false, InfrastructureSystems.CompressionTypesModule.CompressionTypes.DEFLATE = 1, 3, true)
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:110
+┌ Info: 2026-01-21T13:42:19.901 [45048:1]: Serialized time series data to /var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_rG3rws/test_system_serialization_time_series_storage.h5.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_storage.jl:104
+┌ Info: 2026-01-21T13:42:19.905 [45048:1]: Loaded time series from storage file existing=test_system_serialization_time_series_storage.h5 new=/var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_OzfSKL compression=InfrastructureSystems.CompressionSettings(false, InfrastructureSystems.CompressionTypesModule.CompressionTypes.DEFLATE = 1, 3, true)
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:110
+┌ Info: 2026-01-21T13:42:20.850 [45048:1]: Serialized time series data to /var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_NrgTsR/test_system_serialization_time_series_storage.h5.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_storage.jl:104
+┌ Info: 2026-01-21T13:42:20.950 [45048:1]: Loaded time series from storage file existing=test_system_serialization_time_series_storage.h5 new=/var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_vopuy0 compression=InfrastructureSystems.CompressionSettings(false, InfrastructureSystems.CompressionTypesModule.CompressionTypes.DEFLATE = 1, 3, true)
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:110
+┌ Warning: 2026-01-21T13:42:22.937 [45048:1]: Cannot compare InfrastructureSystems.InMemoryTimeSeriesStorage and InfrastructureSystems.Hdf5TimeSeriesStorage
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_manager.jl:288
+┌ Info: 2026-01-21T13:42:23.654 [45048:1]: Serialized time series data to /var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_CYoHMb/test_system_serialization_time_series_storage.h5.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_storage.jl:104
+┌ Info: 2026-01-21T13:42:23.658 [45048:1]: Loaded time series from storage file existing=test_system_serialization_time_series_storage.h5 new=/var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_Shd35n compression=InfrastructureSystems.CompressionSettings(false, InfrastructureSystems.CompressionTypesModule.CompressionTypes.DEFLATE = 1, 3, true)
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:110
+┌ Info: 2026-01-21T13:42:24.095 [45048:1]: Serialized time series data to /var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_ZiYjWg/test_system_serialization_time_series_storage.h5.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_storage.jl:104
+┌ Info: 2026-01-21T13:42:24.099 [45048:1]: Loaded time series from storage file existing=test_system_serialization_time_series_storage.h5 new=/var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_NNXdv1 compression=InfrastructureSystems.CompressionSettings(false, InfrastructureSystems.CompressionTypesModule.CompressionTypes.DEFLATE = 1, 3, true)
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:110
+┌ Warning: 2026-01-21T13:42:47.295 [45048:1]: There are no SingleTimeSeries arrays to transform
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/system_data.jl:578
+┌ Warning: 2026-01-21T13:42:48.639 [45048:1]: There is only one forecast window. Setting interval = empty period
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/system_data.jl:733
+┌ Info: 2026-01-21T13:42:52.119 [45048:1]: Cleared all time series.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:734
+┌ Info: 2026-01-21T13:42:57.092 [45048:1]: Cleared all time series.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:734
+┌ Warning: 2026-01-21T13:42:58.039 [45048:1]: `shuffle=()` option is deprecated, use `shuffle=true`
+│   caller = class_setproperty!(::Type{HDF5.DatasetCreateProperties}, p::HDF5.DatasetCreateProperties, name::Symbol, val::Tuple{}) at properties.jl:552
+└ @ Core /Users/jlara/.julia/packages/HDF5/Z859u/src/properties.jl:552
+┌ Info: 2026-01-21T13:43:01.953 [45048:1]: Start migration of one-table time series metadata to v1.0.0.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_metadata_store.jl:202
+┌ Info: 2026-01-21T13:43:09.257 [45048:1]: Cleared all time series.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/in_memory_time_series_storage.jl:143
+┌ Info: 2026-01-21T13:43:09.267 [45048:1]: Cleared all time series.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:734
+┌ Info: 2026-01-21T13:43:09.275 [45048:1]: Cleared all time series.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:734
+┌ Info: 2026-01-21T13:43:09.414 [45048:1]: Cleared all time series.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:734
+┌ Info: 2026-01-21T13:43:09.423 [45048:1]: Cleared all time series.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:734
+┌ Info: 2026-01-21T13:43:09.472 [45048:1]: Cleared all time series.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:734
+┌ Info: 2026-01-21T13:43:09.521 [45048:1]: Cleared all time series.
+└ @ InfrastructureSystems /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:734
+┌ Info: 2026-01-21T13:43:16.273 [45048:1]: 
+│ Log message summary:
+│ 
+│ 0 Error events:
+│ 
+│ 5 Warn events:
+│   count=92 at :-1
+│     example message="`TimeArray(d::AbstractVector{D}, v::AbstractArray{T, N}, c::Vector{S}, m::Any = nothing; args...) where {T, N, D <: TimeType, S <: AbstractString}` is deprecated, use `TimeArray(d, v, Symbol.(c), m; args...)` instead."
+│   count=2 at /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_manager.jl:288
+│     example message="Cannot compare InfrastructureSystems.InMemoryTimeSeriesStorage and InfrastructureSystems.Hdf5TimeSeriesStorage"
+│   count=1 at /Users/jlara/.julia/dev/InfrastructureSystems/src/system_data.jl:578
+│     example message="There are no SingleTimeSeries arrays to transform"
+│   count=1 at /Users/jlara/.julia/dev/InfrastructureSystems/src/system_data.jl:733
+│     example message="There is only one forecast window. Setting interval = empty period"
+│   count=1 at /Users/jlara/.julia/packages/ReTest/3Ikse/src/ReTest.jl:557
+│     example message="duplicate description for @testset, overwriting: "Test get_components" at /Users/jlara/.julia/dev/InfrastructureSystems/test/test_subsystems.jl:51"
+│ 
+│ 8 Info events:
+│   count=8 at /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:734
+│     example message="Cleared all time series."
+│   count=7 at /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_storage.jl:104
+│     example message="Serialized time series data to /var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_aqUFAD/test_system_serialization_time_series_storage.h5."
+│   count=7 at /Users/jlara/.julia/dev/InfrastructureSystems/src/hdf5_time_series_storage.jl:110
+│     example message="Loaded time series from storage file existing=test_system_serialization_time_series_storage.h5 new=/var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_Ilgg9F compression=InfrastructureSystems.CompressionSettings(false, InfrastructureSystems.CompressionTypesModule.CompressionTypes.DEFLATE = 1, 3, true)"
+│   count=2 at /Users/jlara/.julia/dev/InfrastructureSystems/src/utils/generate_struct_files.jl:134
+│     example message="Added InfrastructureSystemsInternal to component struct MyComponent."
+│   count=1 at /Users/jlara/.julia/dev/InfrastructureSystems/src/in_memory_time_series_storage.jl:143
+│     example message="Cleared all time series."
+│   count=1 at /Users/jlara/.julia/dev/InfrastructureSystems/src/system_data.jl:910
+│     example message="Deserializing with InMemoryTimeSeriesStorage is currently not supported. Using HDF"
+│   count=1 at /Users/jlara/.julia/dev/InfrastructureSystems/src/utils/generate_struct_files.jl:230
+│     example message="Added 1 structs to /var/folders/nd/4vhdb5z57w765zrsdzy5knx0nmlf1n/T/jl_zJPBcE/structs.json"
+│   count=1 at /Users/jlara/.julia/dev/InfrastructureSystems/src/time_series_metadata_store.jl:202
+│     example message="Start migration of one-table time series metadata to v1.0.0."
+└ @ Main.InfrastructureSystemsTests /Users/jlara/.julia/dev/InfrastructureSystems/test/InfrastructureSystemsTests.jl:81
