@@ -177,9 +177,10 @@ get_fuel_cost(cost::FuelCurve) = cost.fuel_cost
 get_startup_fuel_offtake(cost::FuelCurve) = cost.startup_fuel_offtake
 
 is_time_series_backed(::TimeSeriesKey) = true
-is_time_series_backed(::Nothing) = false
+is_time_series_backed(::Union{Nothing, Float64}) = false
 "Check if the cost curve is backed by time series data"
-is_time_series_backed(cost::CostCurve) = is_time_series_backed(get_value_curve(cost))
+is_time_series_backed(cost::ProductionVariableCostCurve) =
+    is_time_series_backed(get_value_curve(cost))
 # FuelCurve's fuel_cost is Union{Float64, TimeSeriesKey} — check both the value curve and fuel_cost.
 is_time_series_backed(cost::FuelCurve) =
     is_time_series_backed(get_value_curve(cost)) ||
