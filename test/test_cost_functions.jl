@@ -355,7 +355,7 @@ end
     @test IS.is_time_series_backed(nothing) == false
 
     static_vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3))
-    ts_vc = IS.InputOutputCurve(IS.TimeSeriesQuadraticFunctionData(forecast_key))
+    ts_vc = IS.TimeSeriesInputOutputCurve(IS.TimeSeriesQuadraticFunctionData(forecast_key))
 
     # CostCurve: only time-series-backed when its value curve is
     @test IS.is_time_series_backed(IS.CostCurve(static_vc)) == false
