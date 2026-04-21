@@ -194,13 +194,10 @@ function generate_structs(directory, data::Vector; print_results = true)
                 )
             end
             if field["name"] != "internal" && accessor_module == ""
-                if include_getter
-                    push!(unique_accessor_functions, accessor_name)
-                end
-                # Always export setter name even if exclude_setter is true,
-                # because exclude_setter means "hand-written elsewhere" not "nonexistent".
-                # Only suppress getter export when exclude_getter is true (meaning
-                # the public getter is hand-written with a different signature, e.g. unitful).
+                # exclude_getter/exclude_setter mean "hand-written elsewhere" (e.g.
+                # unit-aware accessors with different signatures), not "nonexistent" —
+                # always export the public name.
+                push!(unique_accessor_functions, accessor_name)
                 push!(unique_setter_functions, setter_name)
             end
 
