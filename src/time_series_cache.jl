@@ -147,6 +147,8 @@ struct TimeSeriesCacheKey
     component_uuid::Base.UUID
     time_series_type::Type{<:TimeSeriesData}
     name::String
+    resolution::Dates.Period
+    interval::Union{Nothing, Dates.Period}
 end
 
 struct TimeSeriesCacheCommon{T <: TimeSeriesData, U <: InfrastructureSystemsComponent}
@@ -212,7 +214,6 @@ struct ForecastCache{T <: TimeSeriesData, U <: InfrastructureSystemsComponent} <
     common::TimeSeriesCacheCommon{T, U}
     in_memory_count::Int
     horizon_count::Int
-    interval::Union{Nothing, Dates.Period}
 end
 
 """
@@ -232,6 +233,10 @@ will return a TimeSeries.TimeArray covering one forecast window of length `horiz
   - `cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES`: maximum size of data to keep in memory
   - `ignore_scaling_factors = false`: controls whether to ignore `scaling_factor_multiplier`
     in the time series instance
+  - `interval::Union{Nothing, Dates.Period} = nothing`: select among multiple forecasts
+    that share `(type, name)` but differ in interval.
+  - `resolution::Union{Nothing, Dates.Period} = nothing`: select among multiple forecasts
+    that share `(type, name)` but differ in resolution.
 """
 function ForecastCache(
     ::Type{T},
@@ -242,8 +247,15 @@ function ForecastCache(
     cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES,
     ignore_scaling_factors = false,
     interval::Union{Nothing, Dates.Period} = nothing,
+    resolution::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: Forecast}
-    ts_metadata = get_time_series_metadata(T, component, name; interval = interval)
+    ts_metadata = get_time_series_metadata(
+        T,
+        component,
+        name;
+        resolution = resolution,
+        interval = interval,
+    )
     initial_timestamp = get_initial_timestamp(ts_metadata)
     if start_time === nothing
         start_time = initial_timestamp
@@ -259,6 +271,7 @@ function ForecastCache(
         name;
         start_time = start_time,
         len = get_horizon_count(ts_metadata),
+        resolution = resolution,
         interval = interval,
     )
     vals = get_time_series_values(
@@ -292,7 +305,6 @@ function ForecastCache(
         ),
         in_memory_count,
         horizon_count,
-        interval,
     )
 end
 
@@ -310,6 +322,7 @@ function _update!(cache::ForecastCache)
     count = _get_count(cache)
     next_time = get_next_time(cache)
     len = _get_length(cache)
+    current_ts = _get_time_series(cache)
     ts = get_time_series(
         _get_type(cache),
         _get_component(cache),
@@ -317,7 +330,8 @@ function _update!(cache::ForecastCache)
         start_time = next_time,
         len = len,
         count = count,
-        interval = cache.interval,
+        resolution = get_resolution(current_ts),
+        interval = get_interval(current_ts),
     )
     _set_length_available!(cache, len)
     _set_time_series!(cache, ts)
@@ -358,6 +372,8 @@ return a TimeSeries.TimeArray of size 1.
   - `cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES`: maximum size of data to keep in memory
   - `ignore_scaling_factors = false`: controls whether to ignore `scaling_factor_multiplier`
     in the time series instance
+  - `resolution::Union{Nothing, Dates.Period} = nothing`: select among multiple
+    SingleTimeSeries that share `(type, name)` but differ in resolution.
 """
 function StaticTimeSeriesCache(
     ::Type{T},
@@ -366,8 +382,9 @@ function StaticTimeSeriesCache(
     cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     ignore_scaling_factors = false,
+    resolution::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: StaticTimeSeries}
-    ts_metadata = get_time_series_metadata(T, component, name)
+    ts_metadata = get_time_series_metadata(T, component, name; resolution = resolution)
     initial_timestamp = get_initial_timestamp(ts_metadata)
     if start_time === nothing
         start_time = initial_timestamp
@@ -379,7 +396,14 @@ function StaticTimeSeriesCache(
     end
 
     # Get an instance to assess data size.
-    ts = get_time_series(T, component, name; start_time = start_time, len = 1)
+    ts = get_time_series(
+        T,
+        component,
+        name;
+        start_time = start_time,
+        len = 1,
+        resolution = resolution,
+    )
     vals = get_time_series_values(component, ts; start_time = start_time, len = 1)
     row_size = _get_row_size(vals)
 
@@ -420,6 +444,7 @@ function _update!(cache::StaticTimeSeriesCache)
         _get_name(cache);
         start_time = next_time,
         len = len,
+        resolution = get_resolution(_get_time_series(cache)),
     )
     _set_length_available!(cache, len)
     _set_time_series!(cache, ts)
@@ -460,6 +485,7 @@ function make_time_series_cache(
     initial_time,
     len::Int;
     ignore_scaling_factors = true,
+    resolution::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: StaticTimeSeries}
     return StaticTimeSeriesCache(
         T,
@@ -467,6 +493,7 @@ function make_time_series_cache(
         name;
         start_time = initial_time,
         ignore_scaling_factors = ignore_scaling_factors,
+        resolution = resolution,
     )
 end
 
@@ -478,6 +505,7 @@ function make_time_series_cache(
     horizon_count::Int;
     ignore_scaling_factors = true,
     interval::Union{Nothing, Dates.Period} = nothing,
+    resolution::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: AbstractDeterministic}
     return ForecastCache(
         T,
@@ -487,6 +515,7 @@ function make_time_series_cache(
         horizon_count = horizon_count,
         ignore_scaling_factors = ignore_scaling_factors,
         interval = interval,
+        resolution = resolution,
     )
 end
 
@@ -498,6 +527,7 @@ function make_time_series_cache(
     horizon_count::Int;
     ignore_scaling_factors = true,
     interval::Union{Nothing, Dates.Period} = nothing,
+    resolution::Union{Nothing, Dates.Period} = nothing,
 )
     return ForecastCache(
         Probabilistic,
@@ -507,5 +537,6 @@ function make_time_series_cache(
         horizon_count = horizon_count,
         ignore_scaling_factors = ignore_scaling_factors,
         interval = interval,
+        resolution = resolution,
     )
 end

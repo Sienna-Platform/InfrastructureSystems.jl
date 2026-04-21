@@ -7,7 +7,7 @@ v1.0 or greater, and be automatically formatted with
 
 ## For New Packages
 
-The [`SiennaTemplate.jl`](https://github.com/NREL-Sienna/SiennaTemplate.jl) Git repo has the
+The [`SiennaTemplate.jl`](https://github.com/Sienna-Platform/SiennaTemplate.jl) Git repo has the
 required environments and formatting and documentation code. Start from this template.
 
 ## For Existing Packages
@@ -27,12 +27,12 @@ only need to be addressed once:
  3. Update the `docs/make.jl` file to call
     [`Documenter.makedocs`](https://documenter.juliadocs.org/stable/lib/public/#Documenter.makedocs)
     *without* the `warnonly` `kwarg` (i.e., all errors caught by `makedocs` must be resolved before
-    merging). [See an example here](https://github.com/NREL-Sienna/InfrastructureSystems.jl/blob/768438a40c46767560891ec493cf87ed232a2b2b/docs/make.jl#L47).
+    merging). [See an example here](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/768438a40c46767560891ec493cf87ed232a2b2b/docs/make.jl#L47).
     
       + See How-to [Troubleshoot Common Errors](@ref) if this results in a host of errors.
  4. Update the `scripts/formatter/formatter_code.jl` to format the markdown .md files in the
     `docs/` folder, calling `format`() with the `kwarg` `format_markdown = true`. See
-    [these](https://github.com/NREL-Sienna/InfrastructureSystems.jl/blob/768438a40c46767560891ec493cf87ed232a2b2b/scripts/formatter/formatter_code.jl#L13)
-    [three](https://github.com/NREL-Sienna/InfrastructureSystems.jl/blob/768438a40c46767560891ec493cf87ed232a2b2b/scripts/formatter/formatter_code.jl#L8)
-    [links](https://github.com/NREL-Sienna/InfrastructureSystems.jl/blob/768438a40c46767560891ec493cf87ed232a2b2b/scripts/formatter/formatter_code.jl#L23)
+    [these](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/768438a40c46767560891ec493cf87ed232a2b2b/scripts/formatter/formatter_code.jl#L13)
+    [three](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/768438a40c46767560891ec493cf87ed232a2b2b/scripts/formatter/formatter_code.jl#L8)
+    [links](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/768438a40c46767560891ec493cf87ed232a2b2b/scripts/formatter/formatter_code.jl#L23)
     for examples of the updated lines.
