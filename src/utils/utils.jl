@@ -394,7 +394,11 @@ macro scoped_enum(T, args...)
             Base.propertynames(::Type{$T}) = _ALL_NAMES
 
             InfrastructureSystems.serialize(val::$T) = Base.string(val)
+            InfrastructureSystems.serialize(vals::Vector{$T}) =
+                InfrastructureSystems.serialize.(vals)
             InfrastructureSystems.deserialize(::Type{$T}, val) = $T(val)
+            InfrastructureSystems.deserialize(::Type{Vector{$T}}, vals::Vector) =
+                [InfrastructureSystems.deserialize($T, v) for v in vals]
 
             Base.convert(::Type{$T}, val::Integer) = $T(val)
             Base.isless(val::$T, other::$T) = isless(val.value, other.value)
