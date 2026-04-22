@@ -2,7 +2,7 @@
 
 ## 1.0.1 Announcement
 
-After 1.0.0 release, the manual Changelog will no longer be maintained. Please refer to the [releases page](https://github.com/NREL-Sienna/InfrastructureSystems.jl/releases) to follow up with the changes.
+After 1.0.0 release, the manual Changelog will no longer be maintained. Please refer to the [releases page](https://github.com/Sienna-Platform/InfrastructureSystems.jl/releases) to follow up with the changes.
 
 ## 1.0.0
 

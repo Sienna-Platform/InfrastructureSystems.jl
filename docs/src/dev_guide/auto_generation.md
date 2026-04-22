@@ -20,7 +20,7 @@ Refer to the docstrings for `generate_struct` and `generate_structs` and generat
 Or
 
  1. Create or modify the JSON descriptor file. Follow the
-    [PowerSystems.jl](https://github.com/NREL-Sienna/PowerSystems.jl/blob/main/src/descriptors/power_system_structs.json)
+    [PowerSystems.jl](https://github.com/Sienna-Platform/PowerSystems.jl/blob/main/src/descriptors/power_system_structs.json)
     example.
  2. Run the generation script, passing your descriptor file and an output
     directory.

@@ -19,7 +19,7 @@ New `ComponentContainer`-like types MUST ensure that `get_available_components` 
 =#
 
 # NOTE we cannot do all the @ref links we want to here because `IS.get_components !== PSY.get_components`, etc.
-# See https://github.com/NREL-Sienna/InfrastructureSystems.jl/issues/388#issuecomment-2660019861
+# See https://github.com/Sienna-Platform/InfrastructureSystems.jl/issues/388#issuecomment-2660019861
 """
 Given some [`ComponentContainer`](@ref)-like source of components to draw from, such as a
 [`PowerSystems.System`](@extref), a `ComponentSelector` picks out a certain subset of them
@@ -28,7 +28,7 @@ name that subset of components or to split it up into groups. The same `Componen
 can be used to apply the same set of selection criteria to multiple sources of components.
 The primary use case for `ComponentSelector` is to support repeatable multi-scenario
 post-processing analytics (see e.g.
-[`PowerAnalytics.jl`](https://nrel-sienna.github.io/PowerAnalytics.jl/stable/)).
+[`PowerAnalytics.jl`](https://sienna-platform.github.io/PowerAnalytics.jl/stable/)).
 
 Formally, instances of `ComponentSelector` represent lazy, partitioned, named,
 source-independent collections of [`InfrastructureSystemsComponent`](@ref)s.
