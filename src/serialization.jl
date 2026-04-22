@@ -34,7 +34,7 @@ function to_json(obj::T; pretty = false, indent = 2) where {T <: InfrastructureS
         if pretty
             io = IOBuffer()
             JSON.json(io, serialize(obj); pretty = indent)
-            return take!(io)
+            return String(take!(io))
         else
             return JSON.json(serialize(obj))
         end
