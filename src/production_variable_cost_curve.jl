@@ -40,9 +40,6 @@ function is_concave(curve::ValueCurve{T}) where {T <: TimeSeriesFunctionData}
     )
 end
 is_concave(cost::ProductionVariableCostCurve) = is_concave(get_value_curve(cost))
-"Check if the cost curve is backed by time series data"
-is_time_series_backed(cost::ProductionVariableCostCurve) =
-    is_time_series_backed(get_value_curve(cost))
 "Get the `TimeSeriesKey` from the underlying `ValueCurve` of a time-series-backed `ProductionVariableCostCurve`."
 get_time_series_key(
     cost::ProductionVariableCostCurve{<:ValueCurve{<:TimeSeriesFunctionData}},
@@ -178,6 +175,16 @@ Base.zero(::Union{FuelCurve, Type{FuelCurve}}) = FuelCurve(zero(ValueCurve), 0.0
 get_fuel_cost(cost::FuelCurve) = cost.fuel_cost
 "Get the function for the fuel consumption at startup"
 get_startup_fuel_offtake(cost::FuelCurve) = cost.startup_fuel_offtake
+
+is_time_series_backed(::TimeSeriesKey) = true
+is_time_series_backed(::Union{Nothing, Float64}) = false
+"Check if the cost curve is backed by time series data"
+is_time_series_backed(cost::ProductionVariableCostCurve) =
+    is_time_series_backed(get_value_curve(cost))
+# FuelCurve's fuel_cost is Union{Float64, TimeSeriesKey} — check both the value curve and fuel_cost.
+is_time_series_backed(cost::FuelCurve) =
+    is_time_series_backed(get_value_curve(cost)) ||
+    is_time_series_backed(get_fuel_cost(cost))
 
 Base.show(io::IO, m::MIME"text/plain", curve::ProductionVariableCostCurve) =
     (get(io, :compact, false)::Bool ? _show_compact : _show_expanded)(io, m, curve)

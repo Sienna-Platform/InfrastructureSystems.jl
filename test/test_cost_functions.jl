@@ -338,6 +338,36 @@ end
           IS.LinearCurve(10.0, 7.0)
 end
 
+@testset "is_time_series_backed for CostCurve and FuelCurve" begin
+    forecast_key = IS.ForecastKey(;
+        time_series_type = IS.Deterministic,
+        name = "fuel_price",
+        initial_timestamp = Dates.DateTime("2020-01-01"),
+        resolution = Dates.Hour(1),
+        horizon = Dates.Hour(24),
+        interval = Dates.Hour(24),
+        count = 1,
+        features = Dict{String, Any}(),
+    )
+
+    # Scalar dispatches
+    @test IS.is_time_series_backed(forecast_key) == true
+    @test IS.is_time_series_backed(nothing) == false
+
+    static_vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3))
+    ts_vc = IS.TimeSeriesInputOutputCurve(IS.TimeSeriesQuadraticFunctionData(forecast_key))
+
+    # CostCurve: only time-series-backed when its value curve is
+    @test IS.is_time_series_backed(IS.CostCurve(static_vc)) == false
+    @test IS.is_time_series_backed(IS.CostCurve(ts_vc)) == true
+
+    # FuelCurve 2x2: fuel_cost ∈ {Float64, TimeSeriesKey} × value_curve ∈ {static, time-varying}
+    @test IS.is_time_series_backed(IS.FuelCurve(static_vc, 4.0)) == false
+    @test IS.is_time_series_backed(IS.FuelCurve(ts_vc, 4.0)) == true
+    @test IS.is_time_series_backed(IS.FuelCurve(static_vc, forecast_key)) == true
+    @test IS.is_time_series_backed(IS.FuelCurve(ts_vc, forecast_key)) == true
+end
+
 @testset "Test prohibited FunctionData types" begin
     # Incremental and Average Rate curves only support
     # linear and piecewise step function data.
