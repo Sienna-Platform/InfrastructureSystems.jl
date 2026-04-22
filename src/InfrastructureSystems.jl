@@ -8,6 +8,14 @@ export PiecewisePointCurve, PiecewiseIncrementalCurve, PiecewiseAverageCurve
 export TimeSeriesLinearCurve, TimeSeriesQuadraticCurve, TimeSeriesPiecewisePointCurve
 export TimeSeriesPiecewiseIncrementalCurve, TimeSeriesPiecewiseAverageCurve
 
+# Units interface: declared here, methods implemented by domain packages
+# (e.g., PowerSystems.jl provides power-domain `get_value`/`set_value` methods).
+"Get a field value with optional unit conversion. Methods are provided by domain packages."
+function get_value end
+"Set a field value with optional unit conversion. Methods are provided by domain packages."
+function set_value end
+export get_value, set_value
+
 import Base: @kwdef
 import CSV
 import DataFrames
@@ -134,6 +142,7 @@ end
 get_internal(value::InfrastructureSystemsComponent) = value.internal
 
 include("common.jl")
+include("relative_units.jl")
 include("random_seed.jl")
 include("utils/timers.jl")
 include("utils/assert_op.jl")
@@ -208,4 +217,5 @@ include("function_data/make_convex.jl")
 include("deprecated.jl")
 include("Optimization/Optimization.jl")
 include("Simulation/Simulation.jl")
+
 end # module
