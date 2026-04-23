@@ -229,7 +229,7 @@ Specify `start_time` and `len` if you only need a subset of data.
     `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will be multiplied by the
+  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
   - `features...`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
@@ -312,7 +312,7 @@ factor multiplier by default.
     then `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will be multiplied by the
+  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
 
 See also: [`get_time_series_array` by name](@ref get_time_series_array(
@@ -361,7 +361,7 @@ factor multiplier by default.
     the forecast windows
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will be multiplied by the
+  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
 
 See also [`get_time_series_values`](@ref get_time_series_values(
@@ -417,7 +417,7 @@ factor multiplier by default.
     If nothing, use the `initial_timestamp` of the time series.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number
     of timestamps). If nothing, use the entire length
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will be multiplied by the
+  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
 
 See also: [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing, ignore_scaling_factors = false)),
@@ -680,7 +680,7 @@ that accepts a cached `TimeSeriesData` instance.
     `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will be multiplied by the
+  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
   - `features...`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
@@ -753,7 +753,7 @@ Return a vector of time series data without timestamps from storage, using a tim
     then `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will be multiplied by the
+  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
 
 See also: [`get_time_series_values` by name](@ref get_time_series_values(
@@ -799,7 +799,7 @@ cached `Forecast` instance.
     the forecast windows
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will be multiplied by the
+  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
@@ -859,7 +859,7 @@ Return an vector of timeseries data without timestamps from a cached `StaticTime
     If nothing, use the `initial_timestamp` of the time series.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number
     of timestamps). If nothing, use the entire length
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will be multiplied by the
+  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
