@@ -242,6 +242,7 @@ const TimeSeriesLinearCurve =
     TimeSeriesInputOutputCurve{TimeSeriesFunctionData{LinearFunctionData}}
 
 is_cost_alias(::Union{TimeSeriesLinearCurve, Type{TimeSeriesLinearCurve}}) = true
+simple_type_name(::TimeSeriesLinearCurve) = "TimeSeriesLinearCurve"
 
 TimeSeriesInputOutputCurve{TimeSeriesFunctionData{LinearFunctionData}}(
     key::TimeSeriesKey,
@@ -249,7 +250,7 @@ TimeSeriesInputOutputCurve{TimeSeriesFunctionData{LinearFunctionData}}(
 
 Base.show(io::IO, vc::TimeSeriesLinearCurve) =
     if isnothing(get_input_at_zero(vc))
-        print(io, "$(typeof(vc))($(_ts_key_repr(get_time_series_key(vc))))")
+        print(io, "$(simple_type_name(vc))($(_ts_key_repr(get_time_series_key(vc))))")
     else
         Base.show_default(io, vc)
     end
@@ -264,6 +265,7 @@ const TimeSeriesQuadraticCurve =
     TimeSeriesInputOutputCurve{TimeSeriesFunctionData{QuadraticFunctionData}}
 
 is_cost_alias(::Union{TimeSeriesQuadraticCurve, Type{TimeSeriesQuadraticCurve}}) = true
+simple_type_name(::TimeSeriesQuadraticCurve) = "TimeSeriesQuadraticCurve"
 
 TimeSeriesInputOutputCurve{TimeSeriesFunctionData{QuadraticFunctionData}}(
     key::TimeSeriesKey,
@@ -271,7 +273,7 @@ TimeSeriesInputOutputCurve{TimeSeriesFunctionData{QuadraticFunctionData}}(
 
 Base.show(io::IO, vc::TimeSeriesQuadraticCurve) =
     if isnothing(get_input_at_zero(vc))
-        print(io, "$(typeof(vc))($(_ts_key_repr(get_time_series_key(vc))))")
+        print(io, "$(simple_type_name(vc))($(_ts_key_repr(get_time_series_key(vc))))")
     else
         Base.show_default(io, vc)
     end
@@ -288,6 +290,7 @@ const TimeSeriesPiecewisePointCurve =
 is_cost_alias(
     ::Union{TimeSeriesPiecewisePointCurve, Type{TimeSeriesPiecewisePointCurve}},
 ) = true
+simple_type_name(::TimeSeriesPiecewisePointCurve) = "TimeSeriesPiecewisePointCurve"
 
 TimeSeriesInputOutputCurve{TimeSeriesFunctionData{PiecewiseLinearData}}(
     key::TimeSeriesKey,
@@ -295,7 +298,7 @@ TimeSeriesInputOutputCurve{TimeSeriesFunctionData{PiecewiseLinearData}}(
 
 Base.show(io::IO, vc::TimeSeriesPiecewisePointCurve) =
     if isnothing(get_input_at_zero(vc))
-        print(io, "$(typeof(vc))($(_ts_key_repr(get_time_series_key(vc))))")
+        print(io, "$(simple_type_name(vc))($(_ts_key_repr(get_time_series_key(vc))))")
     else
         Base.show_default(io, vc)
     end
@@ -315,6 +318,8 @@ is_cost_alias(
         Type{TimeSeriesPiecewiseIncrementalCurve},
     },
 ) = true
+simple_type_name(::TimeSeriesPiecewiseIncrementalCurve) =
+    "TimeSeriesPiecewiseIncrementalCurve"
 
 TimeSeriesIncrementalCurve{TimeSeriesFunctionData{PiecewiseStepData}}(
     key::TimeSeriesKey,
@@ -335,9 +340,9 @@ Base.show(io::IO, vc::TimeSeriesPiecewiseIncrementalCurve) =
     print(
         io,
         if isnothing(get_input_at_zero(vc))
-            "$(typeof(vc))($(_ts_key_repr(get_time_series_key(vc))), $(_ts_key_repr(get_initial_input(vc))))"
+            "$(simple_type_name(vc))($(_ts_key_repr(get_time_series_key(vc))), $(_ts_key_repr(get_initial_input(vc))))"
         else
-            "$(typeof(vc))($(_ts_key_repr(get_time_series_key(vc))), $(_ts_key_repr(get_initial_input(vc))), $(_ts_key_repr(get_input_at_zero(vc))))"
+            "$(simple_type_name(vc))($(_ts_key_repr(get_time_series_key(vc))), $(_ts_key_repr(get_initial_input(vc))), $(_ts_key_repr(get_input_at_zero(vc))))"
         end,
     )
 
@@ -356,6 +361,7 @@ is_cost_alias(
         Type{TimeSeriesPiecewiseAverageCurve},
     },
 ) = true
+simple_type_name(::TimeSeriesPiecewiseAverageCurve) = "TimeSeriesPiecewiseAverageCurve"
 
 TimeSeriesAverageRateCurve{TimeSeriesFunctionData{PiecewiseStepData}}(
     key::TimeSeriesKey,
@@ -376,7 +382,7 @@ Base.show(io::IO, vc::TimeSeriesPiecewiseAverageCurve) =
     if isnothing(get_input_at_zero(vc))
         print(
             io,
-            "$(typeof(vc))($(_ts_key_repr(get_time_series_key(vc))), $(_ts_key_repr(get_initial_input(vc))))",
+            "$(simple_type_name(vc))($(_ts_key_repr(get_time_series_key(vc))), $(_ts_key_repr(get_initial_input(vc))))",
         )
     else
         Base.show_default(io, vc)
