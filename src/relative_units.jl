@@ -8,9 +8,16 @@
 ###############################
 
 """
+Supertype for all unit-system markers (relative and natural). Used as the
+`U` type parameter on `ProductionVariableCostCurve` and related parametric
+types so that the unit system can be dispatched on at compile time.
+"""
+abstract type AbstractUnitSystem end
+
+"""
 Supertype of per-unit (relative) unit markers.
 """
-abstract type AbstractRelativeUnit end
+abstract type AbstractRelativeUnit <: AbstractUnitSystem end
 
 """
 Device base per-unit. Values are normalized to the component's own base.
@@ -26,9 +33,10 @@ struct SystemBaseUnit <: AbstractRelativeUnit end
 Natural units. When used as a target, returns the value with the
 domain-appropriate unit attached (e.g. MW for power, Ω for impedance).
 Deliberately *not* `<: AbstractRelativeUnit` — "convert to NU" yields a
-`Unitful.Quantity`, not a `RelativeQuantity`.
+`Unitful.Quantity`, not a `RelativeQuantity` — but it is a peer under
+`AbstractUnitSystem`.
 """
-struct NaturalUnit end
+struct NaturalUnit <: AbstractUnitSystem end
 
 const DU = DeviceBaseUnit()
 const SU = SystemBaseUnit()
