@@ -12,6 +12,13 @@ Concrete subtypes include [`CostCurve`](@ref) and [`FuelCurve`](@ref).
 """
 abstract type ProductionVariableCostCurve{T <: ValueCurve, U <: AbstractUnitSystem} end
 
+"""
+`ProductionVariableCostCurve{T}` with any unit system. Use at `isa` sites or in
+docstrings where the curve's unit-system parameter doesn't matter.
+"""
+const AnyProductionVariableCostCurve{T} =
+    ProductionVariableCostCurve{T, U} where {U <: AbstractUnitSystem}
+
 "Get the underlying `ValueCurve` representation of this `ProductionVariableCostCurve`"
 get_value_curve(cost::ProductionVariableCostCurve) = cost.value_curve
 "Get the variable operation and maintenance cost in currency/(power_units h)"
@@ -121,6 +128,12 @@ end
 Base.zero(::Union{CostCurve, Type{CostCurve}}) = CostCurve(zero(ValueCurve))
 
 """
+`CostCurve{T}` with any unit system. Equivalent to `CostCurve{T, U} where U`;
+use at `isa` sites where the unit-system parameter doesn't matter.
+"""
+const AnyCostCurve{T} = CostCurve{T, U} where {U <: AbstractUnitSystem}
+
+"""
 $(TYPEDEF)
 $(TYPEDFIELDS)
 
@@ -226,6 +239,12 @@ end
 "Get a `FuelCurve` representing zero fuel usage and zero fuel cost"
 Base.zero(::Union{FuelCurve, Type{FuelCurve}}) = FuelCurve(zero(ValueCurve), 0.0)
 
+"""
+`FuelCurve{T}` with any unit system. Equivalent to `FuelCurve{T, U} where U`;
+use at `isa` sites where the unit-system parameter doesn't matter.
+"""
+const AnyFuelCurve{T} = FuelCurve{T, U} where {U <: AbstractUnitSystem}
+
 "Get the fuel cost or the name of the fuel cost time series"
 get_fuel_cost(cost::FuelCurve) = cost.fuel_cost
 "Get the function for the fuel consumption at startup"
@@ -246,10 +265,18 @@ is_time_series_backed(cost::FuelCurve) =
 # conventional "power_units" key (preserving the field name from the previous
 # schema) and reconstruct it at deserialize time.
 
-_unit_system_instance(name::AbstractString) =
-    _unit_system_instance(Symbol(name))
-function _unit_system_instance(name::Symbol)
-    T = getproperty(@__MODULE__, name)
+# Accept both new (type-name) and legacy (UnitSystem enum-value-name) encodings so
+# existing serialized fixtures keep deserializing.
+_unit_system_instance(name::AbstractString) = _unit_system_instance(String(name))
+function _unit_system_instance(name::String)
+    if name in ("NATURAL_UNITS", "NaturalUnit")
+        return NaturalUnit()
+    elseif name in ("SYSTEM_BASE", "SystemBaseUnit")
+        return SystemBaseUnit()
+    elseif name in ("DEVICE_BASE", "DeviceBaseUnit")
+        return DeviceBaseUnit()
+    end
+    T = getproperty(@__MODULE__, Symbol(name))
     T <: AbstractUnitSystem ||
         throw(ArgumentError("$name is not a subtype of AbstractUnitSystem"))
     return T()
