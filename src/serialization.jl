@@ -33,10 +33,10 @@ function to_json(obj::T; pretty = false, indent = 2) where {T <: InfrastructureS
     try
         if pretty
             io = IOBuffer()
-            JSON3.pretty(io, serialize(obj), JSON3.AlignmentContext(; indent = indent))
-            return take!(io)
+            JSON.json(io, serialize(obj); pretty = indent)
+            return String(take!(io))
         else
-            return JSON3.write(serialize(obj))
+            return JSON.json(serialize(obj))
         end
     catch e
         @error "Failed to serialize $(summary(obj))"
@@ -52,9 +52,9 @@ function to_json(
 ) where {T <: InfrastructureSystemsType}
     data = serialize(obj)
     if pretty
-        res = JSON3.pretty(io, data, JSON3.AlignmentContext(; indent = indent))
+        res = JSON.json(io, data; pretty = indent)
     else
-        res = JSON3.write(io, data)
+        res = JSON.json(io, data)
     end
 
     return res
@@ -73,7 +73,7 @@ end
 Deserializes a InfrastructureSystemsType from String or IO.
 """
 function from_json(io::Union{IO, String}, ::Type{T}) where {T <: InfrastructureSystemsType}
-    return deserialize(T, JSON3.read(io, Dict))
+    return deserialize(T, JSON.parse(io; dicttype = Dict{String, Any}))
 end
 
 """
@@ -271,7 +271,7 @@ deserialize(::Type{Dates.DateTime}, val::AbstractString) = Dates.DateTime(val)
 # The next methods fix serialization of UUIDs. The underlying type of a UUID is a UInt128.
 # JSON tries to encode this as a number in JSON. Encoding integers greater than can
 # be stored in a signed 64-bit integer sometimes does not work - at least when using
-# JSON3. The number gets converted to a float in scientific notation, and so
+# JSON. The number gets converted to a float in scientific notation, and so
 # the UUID is truncated and essentially lost. These functions cause JSON to encode UUIDs as
 # strings and then convert them back during deserialization.
 
@@ -298,24 +298,43 @@ function serialize_julia_info()
 end
 
 """
-Perform a test to see if JSON3 can convert this value so that the code can give the user a
+Perform a test to see if JSON can convert this value so that the code can give the user a
 a comprehensible corrective action.
 """
 function is_ext_valid_for_serialization(value)
-    isnothing(value) && return true
-    is_valid = true
-    try
-        JSON3.write(value)
-    catch
-        is_valid = false
-    end
-
+    is_valid = _is_ext_value_basic(value)
     if !is_valid
         @error "Failed to serialize an 'ext' value. Please ensure that the " *
                "contents follow the rules provided in the documentation. Generally, only " *
                "basic types are allowed - strings and numbers and arrays, dictionaries, and " *
                "structs of those." value
+        return false
     end
+    try
+        JSON.json(value)
+    catch
+        @error "Failed to serialize an 'ext' value. Please ensure that the " *
+               "contents follow the rules provided in the documentation. Generally, only " *
+               "basic types are allowed - strings and numbers and arrays, dictionaries, and " *
+               "structs of those." value
+        return false
+    end
+    return true
+end
 
-    return is_valid
+# JSON.jl will happily serialize Functions, Modules, Tasks, IO handles, etc. by
+# introspecting their fields, but those values are not meaningful JSON content and
+# cannot be reliably deserialized. Restrict 'ext' values to genuine data types.
+_is_ext_value_basic(::Union{Nothing, Missing, Number, AbstractString, Symbol, Bool}) = true
+_is_ext_value_basic(x::AbstractArray) = all(_is_ext_value_basic, x)
+_is_ext_value_basic(x::Tuple) = all(_is_ext_value_basic, x)
+_is_ext_value_basic(x::AbstractDict) =
+    all(_is_ext_value_basic, keys(x)) && all(_is_ext_value_basic, values(x))
+_is_ext_value_basic(::Union{Function, Module, Task, IO, Ptr, Base.RefValue}) = false
+function _is_ext_value_basic(x::T) where {T}
+    isstructtype(T) || return false
+    for name in fieldnames(T)
+        _is_ext_value_basic(getfield(x, name)) || return false
+    end
+    return true
 end
