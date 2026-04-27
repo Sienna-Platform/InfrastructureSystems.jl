@@ -120,6 +120,37 @@ Base.zero(::Type{RelativeQuantity{T, U}}) where {T, U} = RelativeQuantity(zero(T
 Base.one(::Type{RelativeQuantity{T, U}}) where {T, U} = RelativeQuantity(one(T), U())
 
 """
+    convert_cost_coefficient(value, U_from, U_to,
+                             system_base_power, device_base_power,
+                             exponent::Int = 1) → Float64
+
+Convert a cost coefficient (e.g. \$/MW for `exponent=1`, \$/MW² for
+`exponent=2`) between unit systems. The conversion ratio is the inverse of
+the corresponding power-value ratio raised to `exponent`, since if
+`obj = c · x_from` and `x_from = r · x_to`, then the equivalent coefficient
+under `x_to` is `c · r`.
+"""
+convert_cost_coefficient(
+    value::Float64,
+    U_from::AbstractUnitSystem,
+    U_to::AbstractUnitSystem,
+    system_base_power::Float64,
+    device_base_power::Float64,
+    exponent::Int = 1,
+) =
+    value * _cost_coeff_ratio(U_from, U_to, system_base_power, device_base_power)^exponent
+
+_cost_coeff_ratio(::SystemBaseUnit, ::SystemBaseUnit, _, _) = 1.0
+_cost_coeff_ratio(::DeviceBaseUnit, ::DeviceBaseUnit, _, _) = 1.0
+_cost_coeff_ratio(::NaturalUnit, ::NaturalUnit, _, _) = 1.0
+_cost_coeff_ratio(::DeviceBaseUnit, ::SystemBaseUnit, sb, db) = sb / db
+_cost_coeff_ratio(::SystemBaseUnit, ::DeviceBaseUnit, sb, db) = db / sb
+_cost_coeff_ratio(::NaturalUnit, ::SystemBaseUnit, sb, _) = sb
+_cost_coeff_ratio(::SystemBaseUnit, ::NaturalUnit, sb, _) = 1 / sb
+_cost_coeff_ratio(::NaturalUnit, ::DeviceBaseUnit, _, db) = db
+_cost_coeff_ratio(::DeviceBaseUnit, ::NaturalUnit, _, db) = 1 / db
+
+"""
     display_units_arg(f, ::Type{T}) -> Union{AbstractRelativeUnit, Missing}
 
 Trait returning the units argument a getter `f` expects when called on a
