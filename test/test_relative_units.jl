@@ -35,3 +35,45 @@ end
     @test sprint(show, IS.SU) == "SU"
     @test sprint(show, IS.NU) == "NU"
 end
+
+@testset "convert_cost_coefficient" begin
+    sb, db = 100.0, 50.0
+    @testset "identity (same unit system)" begin
+        for U in (IS.SU, IS.DU, IS.NU)
+            @test IS.convert_cost_coefficient(2.5, U, U, sb, db) == 2.5
+            @test IS.convert_cost_coefficient(2.5, U, U, sb, db, 2) == 2.5
+        end
+    end
+
+    @testset "DU ↔ SU (linear)" begin
+        @test IS.convert_cost_coefficient(2.0, IS.DU, IS.SU, sb, db) ≈ 2.0 * sb / db
+        @test IS.convert_cost_coefficient(2.0, IS.SU, IS.DU, sb, db) ≈ 2.0 * db / sb
+    end
+
+    @testset "NU ↔ {SU, DU} (linear)" begin
+        @test IS.convert_cost_coefficient(2.0, IS.NU, IS.SU, sb, db) ≈ 2.0 * sb
+        @test IS.convert_cost_coefficient(2.0, IS.SU, IS.NU, sb, db) ≈ 2.0 / sb
+        @test IS.convert_cost_coefficient(2.0, IS.NU, IS.DU, sb, db) ≈ 2.0 * db
+        @test IS.convert_cost_coefficient(2.0, IS.DU, IS.NU, sb, db) ≈ 2.0 / db
+    end
+
+    @testset "exponent (quadratic)" begin
+        @test IS.convert_cost_coefficient(2.0, IS.DU, IS.SU, sb, db, 2) ≈ 2.0 * (sb / db)^2
+        @test IS.convert_cost_coefficient(2.0, IS.NU, IS.SU, sb, db, 2) ≈ 2.0 * sb^2
+    end
+
+    @testset "round-trip is identity (linear and quadratic)" begin
+        for (Ua, Ub) in ((IS.DU, IS.SU), (IS.NU, IS.SU), (IS.NU, IS.DU))
+            for k in (1, 2)
+                forward = IS.convert_cost_coefficient(2.0, Ua, Ub, sb, db, k)
+                back = IS.convert_cost_coefficient(forward, Ub, Ua, sb, db, k)
+                @test back ≈ 2.0
+            end
+        end
+    end
+
+    @testset "negative exponent inverts linear ratio (used for piecewise x-coords)" begin
+        @test IS.convert_cost_coefficient(2.0, IS.DU, IS.SU, sb, db, -1) ≈ 2.0 * db / sb
+        @test IS.convert_cost_coefficient(2.0, IS.NU, IS.SU, sb, db, -1) ≈ 2.0 / sb
+    end
+end
