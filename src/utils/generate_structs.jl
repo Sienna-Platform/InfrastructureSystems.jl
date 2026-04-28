@@ -1,6 +1,26 @@
 
 import Mustache
 
+# Map conversion_unit to the default natural Unitful unit for getters
+const NATURAL_UNIT_MAP = Dict{String, String}(
+    ":mva" => "MW",           # Power → MW (default for :mva)
+    ":ohm" => "OHMS",         # Impedance → Ohms
+    ":siemens" => "SIEMENS",  # Admittance → Siemens
+)
+
+# Determine the natural unit based on conversion_unit and field name
+function get_natural_unit(conversion_unit::String, field_name::String)
+    if conversion_unit == ":mva"
+        # Reactive power fields use Mvar instead of MW
+        if occursin("reactive", lowercase(field_name))
+            return "Mvar"
+        else
+            return "MW"
+        end
+    end
+    return get(NATURAL_UNIT_MAP, conversion_unit, "MW")
+end
+
 const STRUCT_TEMPLATE = """
 #=
 This file is auto-generated. Do not edit.
@@ -63,13 +83,26 @@ end
 
 {{/has_null_values}}
 {{#accessors}}
+{{#needs_conversion}}
+{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`. Returns value in DEFAULT_UNITS (system base per-unit).\"\"\"{{/create_docstring}}
+{{accessor}}(value::{{struct_name}}) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), DEFAULT_UNITS)
+{{accessor}}(value::{{struct_name}}, units) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units)
+{{/needs_conversion}}
+{{^needs_conversion}}
 {{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
-{{accessor}}(value::{{struct_name}}) = {{#needs_conversion}}get_value(value, Val(:{{name}}), Val({{conversion_unit}})){{/needs_conversion}}{{^needs_conversion}}value.{{name}}{{/needs_conversion}}
+{{accessor}}(value::{{struct_name}}) = value.{{name}}
+{{/needs_conversion}}
 {{/accessors}}
 
 {{#setters}}
+{{#needs_conversion}}
+{{#create_docstring}}\"\"\"Set [`{{struct_name}}`](@ref) `{{name}}`. Value must have units (e.g., `30.0MW`, `0.5DU`).\"\"\"{{/create_docstring}}
+{{setter}}(value::{{struct_name}}, val) = value.{{name}} = set_value(value, Val(:{{name}}), val, Val({{conversion_unit}}))
+{{/needs_conversion}}
+{{^needs_conversion}}
 {{#create_docstring}}\"\"\"Set [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
-{{setter}}(value::{{struct_name}}, val) = value.{{name}} = {{#needs_conversion}}set_value(value, Val(:{{name}}), val, Val({{conversion_unit}})){{/needs_conversion}}{{^needs_conversion}}val{{/needs_conversion}}
+{{setter}}(value::{{struct_name}}, val) = value.{{name}} = val
+{{/needs_conversion}}
 {{/setters}}
 
 {{#custom_code}}
@@ -140,16 +173,38 @@ function generate_structs(directory, data::Vector; print_results = true)
             end
             accessor_name = accessor_module * "get_" * param["name"]
             setter_name = accessor_module * "set_" * param["name"] * "!"
-            push!(
-                accessors,
-                Dict(
-                    "name" => param["name"],
-                    "accessor" => accessor_name,
-                    "create_docstring" => create_docstring,
-                    "needs_conversion" => get(param, "needs_conversion", false),
-                    "conversion_unit" => get(param, "conversion_unit", "nothing"),
-                ),
-            )
+            conversion_unit = get(param, "conversion_unit", "nothing")
+            natural_unit = get_natural_unit(conversion_unit, param["name"])
+            include_getter = !get(param, "exclude_getter", false)
+            if include_getter
+                push!(
+                    accessors,
+                    Dict(
+                        "name" => param["name"],
+                        "accessor" => accessor_name,
+                        "create_docstring" => create_docstring,
+                        "needs_conversion" => get(param, "needs_conversion", false),
+                        "conversion_unit" => conversion_unit,
+                        "natural_unit" => natural_unit,
+                    ),
+                )
+            else
+                # When public getter is excluded, generate an internal _get_ accessor
+                # that returns the raw field value (Float64). Used for fields like
+                # base_power where the public getter is hand-written with units.
+                internal_name = "_get_" * param["name"]
+                push!(
+                    accessors,
+                    Dict(
+                        "name" => param["name"],
+                        "accessor" => internal_name,
+                        "create_docstring" => false,
+                        "needs_conversion" => false,
+                        "conversion_unit" => "nothing",
+                        "natural_unit" => "",
+                    ),
+                )
+            end
             include_setter = !get(param, "exclude_setter", false)
             if include_setter
                 push!(
@@ -160,12 +215,18 @@ function generate_structs(directory, data::Vector; print_results = true)
                         "data_type" => param["data_type"],
                         "create_docstring" => create_docstring,
                         "needs_conversion" => get(param, "needs_conversion", false),
-                        "conversion_unit" => get(param, "conversion_unit", "nothing"),
+                        "conversion_unit" => conversion_unit,
                     ),
                 )
             end
             if field["name"] != "internal" && accessor_module == ""
-                push!(unique_accessor_functions, accessor_name)
+                if include_getter
+                    push!(unique_accessor_functions, accessor_name)
+                end
+                # Always export setter name even if exclude_setter is true,
+                # because exclude_setter means "hand-written elsewhere" not "nonexistent".
+                # Only suppress getter export when exclude_getter is true (meaning
+                # the public getter is hand-written with a different signature, e.g. unitful).
                 push!(unique_setter_functions, setter_name)
             end
 

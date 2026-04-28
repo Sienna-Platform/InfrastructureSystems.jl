@@ -8,6 +8,19 @@ export PiecewisePointCurve, PiecewiseIncrementalCurve, PiecewiseAverageCurve
 export TimeSeriesLinearCurve, TimeSeriesQuadraticCurve, TimeSeriesPiecewisePointCurve
 export TimeSeriesPiecewiseIncrementalCurve, TimeSeriesPiecewiseAverageCurve
 
+# Re-export unit types from PowerSystemsUnits
+using PowerSystemsUnits
+export MW, Mvar, MVA, kV, OHMS, SIEMENS
+export DU, SU, NU, DeviceBaseUnit, SystemBaseUnit, NaturalUnit
+export AbstractRelativeUnit, RelativeQuantity
+export ustrip
+export UnitCategory,
+    PowerCategory, ImpedanceCategory, AdmittanceCategory,
+    VoltageCategory, CurrentCategory
+export POWER, IMPEDANCE, ADMITTANCE, VOLTAGE, CURRENT
+export convert_units, base_value, system_base_value, natural_unit, DEFAULT_UNITS
+export get_device_base_power, get_system_base_power, get_base_voltage
+
 import Base: @kwdef
 import CSV
 import DataFrames
@@ -200,4 +213,7 @@ include("function_data/make_convex.jl")
 include("deprecated.jl")
 include("Optimization/Optimization.jl")
 include("Simulation/Simulation.jl")
+
+# Custom Unitful units (Mvar, MVA) are registered by PowerSystemsUnits.__init__
+
 end # module
