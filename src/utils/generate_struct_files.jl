@@ -1,3 +1,28 @@
+"""
+    _validate_conversion_unit(s::AbstractString)
+
+`conversion_unit` is interpolated into `Val(...)` in the generated getter, so
+it MUST evaluate to a compile-time constant. Accept either:
+
+  * A symbol literal: `:active_power_unit`
+  * A dotted constant path: `PowerSystems.PowerUnits.MW`
+  * The literal `"nothing"` (no conversion).
+
+Reject anything containing a function call (`(`), an array literal (`[`), or
+whitespace-separated tokens, since those are runtime-evaluated and would
+produce a runtime `Val(...)` — an instability.
+"""
+function _validate_conversion_unit(s::AbstractString)
+    s == "nothing" && return s
+    startswith(s, ":") && return s
+    occursin(r"[\s\(\[\{]", s) &&
+        error(
+            "conversion_unit must be a compile-time constant (symbol or " *
+            "const-bound dotted path); got: $(repr(s))",
+        )
+    return s
+end
+
 struct StructField
     name::String
     data_type::String

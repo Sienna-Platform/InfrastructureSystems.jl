@@ -37,6 +37,16 @@ end
     @test isfile(joinpath(output_directory, "MyComponent.jl"))
 end
 
+@testset "conversion_unit validator rejects non-constant expressions" begin
+    @test IS._validate_conversion_unit(":active_power") == ":active_power"
+    @test IS._validate_conversion_unit("nothing") == "nothing"
+    @test IS._validate_conversion_unit("PowerSystems.PowerUnits.MW") ==
+          "PowerSystems.PowerUnits.MW"
+    @test_throws ErrorException IS._validate_conversion_unit("foo(bar)")
+    @test_throws ErrorException IS._validate_conversion_unit("[1, 2]")
+    @test_throws ErrorException IS._validate_conversion_unit("a + b")
+end
+
 @testset "Test StructField errors" begin
     @test_throws ErrorException IS.StructDefinition(
         struct_name = "MyStruct",

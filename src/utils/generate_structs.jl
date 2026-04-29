@@ -65,6 +65,9 @@ end
 {{#accessors}}
 {{#needs_conversion}}
 {{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`. The `units` argument is required (e.g. `SU`, `DU`, `MW`, or `Float64`).\"\"\"{{/create_docstring}}
+# `Val({{conversion_unit}})` requires `conversion_unit` to be a compile-time
+# constant (symbol literal or const-bound path) — enforced by
+# `_validate_conversion_unit` at descriptor parse time.
 {{accessor}}(value::{{struct_name}}, units) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units)
 InfrastructureSystems.display_units_arg(::typeof({{accessor}}), ::Type{ {{struct_name}} }) = InfrastructureSystems.SU
 {{/needs_conversion}}
@@ -153,7 +156,9 @@ function generate_structs(directory, data::Vector; print_results = true)
             end
             accessor_name = accessor_module * "get_" * param["name"]
             setter_name = accessor_module * "set_" * param["name"] * "!"
-            conversion_unit = get(param, "conversion_unit", "nothing")
+            conversion_unit = _validate_conversion_unit(
+                get(param, "conversion_unit", "nothing"),
+            )
             include_getter = !get(param, "exclude_getter", false)
             if include_getter
                 push!(
