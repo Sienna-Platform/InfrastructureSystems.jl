@@ -1,6 +1,10 @@
 
 import Mustache
 
+# Template note (not rendered into output): the `needs_conversion` getter branch uses
+# `Val({{conversion_unit}})`, which requires `conversion_unit` to be a compile-time
+# constant (symbol literal or const-bound path). This is enforced at descriptor parse time
+# by `_validate_conversion_unit` in generate_struct_files.jl.
 const STRUCT_TEMPLATE = """
 #=
 This file is auto-generated. Do not edit.
@@ -65,9 +69,6 @@ end
 {{#accessors}}
 {{#needs_conversion}}
 {{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`. The `units` argument is required (e.g. `SU`, `DU`, `MW`, or `Float64`).\"\"\"{{/create_docstring}}
-# `Val({{conversion_unit}})` requires `conversion_unit` to be a compile-time
-# constant (symbol literal or const-bound path) — enforced by
-# `_validate_conversion_unit` at descriptor parse time.
 {{accessor}}(value::{{struct_name}}, units) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units)
 InfrastructureSystems.display_units_arg(::typeof({{accessor}}), ::Type{ {{struct_name}} }) = InfrastructureSystems.SU
 {{/needs_conversion}}
