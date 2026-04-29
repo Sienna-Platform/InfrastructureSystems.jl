@@ -45,6 +45,11 @@ end
     @test_throws ErrorException IS._validate_conversion_unit("foo(bar)")
     @test_throws ErrorException IS._validate_conversion_unit("[1, 2]")
     @test_throws ErrorException IS._validate_conversion_unit("a + b")
+    @test_throws ErrorException IS._validate_conversion_unit("a*b")
+    @test_throws ErrorException IS._validate_conversion_unit("a,b")
+    @test_throws ErrorException IS._validate_conversion_unit("\$var")
+    @test_throws ErrorException IS._validate_conversion_unit(".mva")
+    @test_throws ErrorException IS._validate_conversion_unit("trailing.")
 end
 
 @testset "Test StructField errors" begin

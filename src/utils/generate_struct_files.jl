@@ -2,25 +2,23 @@
     _validate_conversion_unit(s::AbstractString)
 
 `conversion_unit` is interpolated into `Val(...)` in the generated getter, so
-it MUST evaluate to a compile-time constant. Accept either:
+it MUST evaluate to a compile-time constant. Accept only:
 
-  * A symbol literal: `:active_power_unit`
-  * A dotted constant path: `PowerSystems.PowerUnits.MW`
   * The literal `"nothing"` (no conversion).
+  * A symbol literal: `:active_power_unit`, `:mva`, `:x_unit`
+  * A dotted constant path: `PowerSystems.PowerUnits.MW`
 
-Reject anything containing a function call (`(`), an array literal (`[`), or
-whitespace-separated tokens, since those are runtime-evaluated and would
-produce a runtime `Val(...)` — an instability.
+Anything else is rejected — including arithmetic operators (`+`, `*`, `-`),
+commas, `\$` interpolation, function calls, array/dict literals, whitespace,
+leading/trailing dots, and other runtime expressions.
 """
 function _validate_conversion_unit(s::AbstractString)
     s == "nothing" && return s
-    startswith(s, ":") && return s
-    occursin(r"[\s\(\[\{]", s) &&
-        error(
-            "conversion_unit must be a compile-time constant (symbol or " *
-            "const-bound dotted path); got: $(repr(s))",
-        )
-    return s
+    occursin(r"^:?\w+(\.\w+)*$", s) && return s
+    error(
+        "conversion_unit must be a compile-time constant (symbol literal " *
+        "or const-bound dotted path); got: $(repr(s))",
+    )
 end
 
 struct StructField
