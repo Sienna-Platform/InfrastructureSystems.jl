@@ -72,6 +72,19 @@ end
     @test IS.serialize(nt_result) == nt_data
 end
 
+@testset "Test Vector{Base.UUID} Serialization/Deserialization" begin
+    uuids = [Base.UUID(rand(UInt128)) for _ in 1:3]
+    serialized = IS.serialize(uuids)
+    @test serialized isa Vector{<:Dict}
+    @test all(d -> haskey(d, "value"), serialized)
+    deserialized = IS.deserialize(Vector{Base.UUID}, serialized)
+    @test deserialized isa Vector{Base.UUID}
+    @test deserialized == uuids
+    # Round-trip through JSON to mimic on-disk format.
+    json_round_trip = JSON3.read(JSON3.write(serialized), Vector{Dict})
+    @test IS.deserialize(Vector{Base.UUID}, json_round_trip) == uuids
+end
+
 @testset "Test JSON serialization of system data" begin
     for in_memory in (true, false)
         sys = create_system_data_shared_time_series(; time_series_in_memory = in_memory)
