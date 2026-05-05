@@ -16,7 +16,7 @@ abstract type ComponentContainer <: InfrastructureSystemsContainer end
 #   - `get_components`: no default, must at least implement the `(type, system)` and `(filter_func, type, system)` signatures.
 #   - `get_component`: no default, must at least implement the `(type, system, name)` signature, may also want `(system, UUID)`, etc.
 #   - `get_base_component_type`: subtypes must reimplement this method if their base type is not `InfrastructureSystemsComponent`.
-#   - `get_available(::ComponentContainer, ::InfrastructureSystemsComponent)`: defaults to true
+#   - `get_available(::ComponentContainer, ::InfrastructureSystemsComponent)`: no default, subtypes must implement
 #   - `get_available_components`: defaults to calling `get_components` with a filter function from `get_available`
 #   - `get_available_component`: defaults to calling `get_component` and checking `get_available`
 # The notion of availability used in `get_available` and `get_available_component(s)` is up
