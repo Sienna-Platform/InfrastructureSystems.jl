@@ -64,9 +64,12 @@ end
 {{/has_null_values}}
 {{#accessors}}
 {{#needs_conversion}}
-{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`. The `units` argument is required (e.g. `SU`, `DU`, `MW`, or `Float64`).\"\"\"{{/create_docstring}}
-{{accessor}}(value::{{struct_name}}, units) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units)
+{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}` as a bare number in the requested `units` (e.g. `SU`, `DU`, `MW`). For the unit-bearing value see [`{{accessor}}_unitful`](@ref).\"\"\"{{/create_docstring}}
+{{accessor}}(value::{{struct_name}}, units) = InfrastructureSystems._strip_units(get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units))
+{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}` as a unit-bearing quantity in the requested `units` (e.g. `SU`, `DU`, `MW`). For a bare number see [`{{accessor}}`](@ref).\"\"\"{{/create_docstring}}
+{{accessor}}_unitful(value::{{struct_name}}, units) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units)
 InfrastructureSystems.display_units_arg(::typeof({{accessor}}), ::Type{ {{struct_name}} }) = InfrastructureSystems.SU
+InfrastructureSystems.display_units_arg(::typeof({{accessor}}_unitful), ::Type{ {{struct_name}} }) = InfrastructureSystems.SU
 {{/needs_conversion}}
 {{^needs_conversion}}
 {{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
@@ -199,6 +202,9 @@ function generate_structs(directory, data::Vector; print_results = true)
                 # always export the public name.
                 push!(unique_accessor_functions, accessor_name)
                 push!(unique_setter_functions, setter_name)
+                if include_getter && get(param, "needs_conversion", false)
+                    push!(unique_accessor_functions, accessor_name * "_unitful")
+                end
             end
 
             param["kwarg_value"] = ""

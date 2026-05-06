@@ -99,6 +99,19 @@ Extract the numeric value from a `RelativeQuantity`.
 """
 ustrip(q::RelativeQuantity) = q.value
 
+# Needed because Unitful.jl isn't a dependency of IS — domain packages (e.g.
+# PSY) extend `_strip_units` with a method for `Unitful.Quantity`.
+"""
+    _strip_units(x)
+
+Drop the unit wrapper and return the bare numeric value. Used by generated
+unit-aware getters so `get_X(c, units)` returns a `Float64` while
+`get_X_unitful(c, units)` keeps the wrapper.
+"""
+_strip_units(x) = x
+_strip_units(q::RelativeQuantity) = q.value
+_strip_units(t::NamedTuple) = map(_strip_units, t)
+
 # Type conversions
 Base.convert(::Type{RelativeQuantity{T, U}}, q::RelativeQuantity{S, U}) where {T, S, U} =
     RelativeQuantity(convert(T, q.value), q.unit)
