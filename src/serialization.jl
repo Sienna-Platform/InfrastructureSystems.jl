@@ -267,10 +267,13 @@ deserialize(::Type{Base.UUID}, data::Dict) = Base.UUID(data["value"])
 
 # IS serializes a Base.UUID as Dict("value" => string). The default
 # deserialize(::Type{T}, ::Any) = deepcopy(data) leaves the dicts unconverted,
-# so structs with Vector{Base.UUID} fields (e.g. Outage.monitored_components)
-# would receive Vector{Dict} at construction time. Convert each element here.
+# so structs with Vector{Base.UUID} or Set{Base.UUID} fields
+# (e.g. Outage.monitored_components) would receive Vector{Dict} at construction
+# time. Convert each element here.
 deserialize(::Type{Vector{Base.UUID}}, data::AbstractVector) =
     Base.UUID[deserialize(Base.UUID, x) for x in data]
+deserialize(::Type{Set{Base.UUID}}, data::AbstractVector) =
+    Set{Base.UUID}(deserialize(Base.UUID, x) for x in data)
 
 serialize(value::Complex) = Dict("real" => real(value), "imag" => imag(value))
 deserialize(::Type{Complex}, data::Dict) = Complex(data["real"], data["imag"])
