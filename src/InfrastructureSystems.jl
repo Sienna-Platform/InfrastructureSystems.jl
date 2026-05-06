@@ -21,7 +21,7 @@ import CSV
 import DataFrames
 import DataFrames: DataFrame
 import Dates
-import JSON3
+import JSON
 import Logging
 import Random
 import Pkg
@@ -29,7 +29,6 @@ import PrettyTables
 import Printf: @sprintf
 import SHA
 import StringTemplates
-import StructTypes
 import TerminalLoggers: TerminalLogger, ProgressLevel
 import TimeSeries
 import TimerOutputs
@@ -198,7 +197,7 @@ include("validation.jl")
 include("component_selector.jl")
 include("outputs.jl")
 include("utils/print.jl")
-include("utils/print_pt_v3.jl")
+include("utils/print_pt.jl")
 include("utils/test.jl")
 include("units.jl")
 include("value_curve.jl")

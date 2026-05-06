@@ -92,7 +92,7 @@ InfrastructureSystems.display_units_arg(::typeof({{accessor}}), ::Type{ {{struct
 
 function read_json_data(filename::String)
     return open(filename) do io
-        data = JSON3.read(io, Dict)
+        data = JSON.parse(io; dicttype = Dict{String, Any})
         if data isa Array
             return data
         elseif data isa Dict && haskey(data, "auto_generated_structs")

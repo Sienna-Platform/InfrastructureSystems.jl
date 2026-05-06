@@ -76,7 +76,7 @@ function read_time_series_file_metadata(file_path::AbstractString)
     if endswith(file_path, ".json")
         metadata = open(file_path) do io
             metadata = Vector{TimeSeriesFileMetadata}()
-            data = JSON3.read(io, Array)
+            data = JSON.parse(io; dicttype = Dict{String, Any})
             for item in data
                 parsed_resolution = Dates.Millisecond(Dates.Second(item["resolution"]))
                 normalization_factor = item["normalization_factor"]

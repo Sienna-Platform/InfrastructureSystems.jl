@@ -1,6 +1,6 @@
 import InteractiveUtils
 import SHA
-import JSON3
+import JSON
 
 const HASH_FILENAME = "check.sha256"
 const COMPARE_VALUES_SENTINEL = :(!NOUPGRADE)  # A Symbol that can't be a field name
@@ -364,7 +364,6 @@ macro scoped_enum(T, args...)
     blk = esc(
         :(
             module $(Symbol("$(T)Module"))
-            using JSON3
             import InfrastructureSystems
             export $T
             struct $T
@@ -393,11 +392,13 @@ macro scoped_enum(T, args...)
             Base.show(io::IO, e::$T) =
                 print(io, string($T, ".", string(e), " = ", e.value))
             Base.propertynames(::Type{$T}) = _ALL_NAMES
-            JSON3.StructType(::Type{$T}) = JSON3.StructTypes.StringType()
 
             InfrastructureSystems.serialize(val::$T) = Base.string(val)
-            InfrastructureSystems.deserialize(::Type{$T}, val) =
-                JSON3.StructTypes.constructfrom($T, val)
+            InfrastructureSystems.serialize(vals::Vector{$T}) =
+                InfrastructureSystems.serialize.(vals)
+            InfrastructureSystems.deserialize(::Type{$T}, val) = $T(val)
+            InfrastructureSystems.deserialize(::Type{Vector{$T}}, vals::Vector) =
+                [InfrastructureSystems.deserialize($T, v) for v in vals]
 
             Base.convert(::Type{$T}, val::Integer) = $T(val)
             Base.isless(val::$T, other::$T) = isless(val.value, other.value)
@@ -726,7 +727,7 @@ function compute_file_hash(path::String, files::Vector{String})
     end
 
     open(joinpath(path, HASH_FILENAME), "w") do io
-        JSON3.write(io, data)
+        JSON.json(io, data)
     end
 end
 
