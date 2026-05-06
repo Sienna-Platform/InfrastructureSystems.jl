@@ -386,9 +386,9 @@ end
             IS.TimeSeriesLinearFunctionData(forecast_key),
         )
         # CostCurve preserves value_curve and accepts power_units
-        cc = IS.CostCurve(ts_io, IS.UnitSystem.SYSTEM_BASE)
+        cc = IS.CostCurve(ts_io, IS.SystemBaseUnit())
         @test IS.get_value_curve(cc) === ts_io
-        @test IS.get_power_units(cc) == IS.UnitSystem.SYSTEM_BASE
+        @test IS.get_power_units(cc) == IS.SystemBaseUnit()
 
         # FuelCurve preserves fuel_cost
         fc = IS.FuelCurve(ts_io, 5.0)
