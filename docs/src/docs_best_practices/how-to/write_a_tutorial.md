@@ -10,7 +10,7 @@ Sienna.
     the [difference between a tutorial and how-to guide](https://diataxis.fr/tutorials-how-to/)
     to refresh your memory and refer back throughout the process.
   - Look at an example: `PowerSystems.jl`'s
-    [Working with Time Series](https://nrel-sienna.github.io/PowerSystems.jl/stable/tutorials/working_with_time_series/)
+    [Working with Time Series](https://sienna-platform.github.io/PowerSystems.jl/stable/tutorials/working_with_time_series/)
 
 !!! warning
     
@@ -50,7 +50,7 @@ code blocks.
     
     Most Sienna repos contain functionality in the `make.jl` and `make_tutorials.jl` files
     to automate Notebook generation from .jl scripts in the docs/src/tutorials/ folder. See
-    [`SiennaTemplate.jl`](https://github.com/NREL-Sienna/SiennaTemplate.jltree/main/docs)
+    [`SiennaTemplate.jl`](https://github.com/Sienna-Platform/SiennaTemplate.jltree/main/docs)
     for the code.
 
 !!! tip "Do"

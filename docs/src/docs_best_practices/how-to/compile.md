@@ -23,7 +23,7 @@ the structs from the .json to have your changes propagated into the markdown fil
 documentation.
 
 **Example**: You updated `PowerSystems.jl`'
-[`power_system_structs.json`](https://github.com/NREL-Sienna/PowerSystems.jl/blob/main/src/descriptors/power_system_structs.json)
+[`power_system_structs.json`](https://github.com/Sienna-Platform/PowerSystems.jl/blob/main/src/descriptors/power_system_structs.json)
 file.
 
 From a terminal at the root of the repository (i.e., `PowerSystems.jl`), run:

@@ -2,7 +2,7 @@
 
 `InfrastructureSystems.jl` implements containers and routines to efficiently manage time
 series data. This document contains content for developers of new time series data. For the
-usage please refer to the documentation in [PowerSystems.jl](https://nrel-sienna.github.io/PowerSystems.jl/stable).
+usage please refer to the documentation in [PowerSystems.jl](https://sienna-platform.github.io/PowerSystems.jl/stable).
 
 `InfrastructureSystems.jl` provides a mechanism to store time series data for
 components. Here are reasons to consider using it:
