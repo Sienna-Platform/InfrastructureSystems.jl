@@ -282,6 +282,21 @@ function _unit_system_instance(name::String)
     return T()
 end
 
+# TODO: remove once downstream packages (PowerSystemCaseBuilder, etc.) migrate
+# off the `IS.UnitSystem.SYSTEM_BASE` enum and pass `SystemBaseUnit()` instances
+# directly. Kept now only so PSB-built fixtures keep constructing FuelCurves.
+function _unit_system_instance(u::UnitSystem)
+    u == UnitSystem.NATURAL_UNITS && return NaturalUnit()
+    u == UnitSystem.SYSTEM_BASE && return SystemBaseUnit()
+    u == UnitSystem.DEVICE_BASE && return DeviceBaseUnit()
+    throw(ArgumentError("Unknown legacy UnitSystem value: $u"))
+end
+
+CostCurve(value_curve::ValueCurve, power_units::UnitSystem, args...; kwargs...) =
+    CostCurve(value_curve, _unit_system_instance(power_units), args...; kwargs...)
+FuelCurve(value_curve::ValueCurve, power_units::UnitSystem, args...; kwargs...) =
+    FuelCurve(value_curve, _unit_system_instance(power_units), args...; kwargs...)
+
 function serialize(val::ProductionVariableCostCurve)
     data = serialize_struct(val)
     data["power_units"] = string(nameof(typeof(get_power_units(val))))
