@@ -5,7 +5,20 @@
 # / "natural unit" without assuming any particular physical domain. Downstream
 # packages (e.g. PowerSystems) attach domain-specific meaning via categories
 # and conversions.
+#
+# Wrapped in a submodule so the unit-system surface area is namespaced
+# separately from the rest of IS. The parent module brings the public names
+# back into its own scope via `using .RelativeUnits: ...` so existing
+# downstream call sites (`IS.SU`, `IS._strip_units`, …) keep working.
 ###############################
+
+module RelativeUnits
+
+export AbstractUnitSystem, AbstractRelativeUnit
+export DeviceBaseUnit, SystemBaseUnit, NaturalUnit
+export RelativeQuantity
+export DU, SU, NU
+export convert_cost_coefficient, display_units_arg
 
 """
 Supertype for all unit-system markers (relative and natural). Used as the
@@ -176,3 +189,5 @@ like `show_components` dispatch on the result to avoid runtime method
 introspection.
 """
 display_units_arg(_, ::Type) = missing
+
+end # module RelativeUnits

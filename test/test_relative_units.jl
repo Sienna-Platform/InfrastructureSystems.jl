@@ -19,8 +19,10 @@ end
 end
 
 @testset "DU and SU cannot be mixed" begin
-    @test_throws Exception 0.6 * IS.DU + 0.4 * IS.SU
-    @test_throws Exception 0.6 * IS.DU == 0.4 * IS.SU
+    # Falls through Base's `+`/`==` Number fallbacks into `promote`, which
+    # has no rule across distinct unit markers and throws `ErrorException`.
+    @test_throws ErrorException 0.6 * IS.DU + 0.4 * IS.SU
+    @test_throws ErrorException 0.6 * IS.DU == 0.4 * IS.SU
 end
 
 @testset "RelativeQuantity zero and one" begin

@@ -276,10 +276,7 @@ function _unit_system_instance(name::String)
     elseif name in ("DEVICE_BASE", "DeviceBaseUnit")
         return DeviceBaseUnit()
     end
-    T = getproperty(@__MODULE__, Symbol(name))
-    T <: AbstractUnitSystem ||
-        throw(ArgumentError("$name is not a subtype of AbstractUnitSystem"))
-    return T()
+    throw(ArgumentError("$name is not a known AbstractUnitSystem"))
 end
 
 # TODO: remove once downstream packages (PowerSystemCaseBuilder, etc.) migrate

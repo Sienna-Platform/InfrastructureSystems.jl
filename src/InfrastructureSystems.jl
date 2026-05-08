@@ -142,6 +142,21 @@ get_internal(value::InfrastructureSystemsComponent) = value.internal
 
 include("common.jl")
 include("relative_units.jl")
+using .RelativeUnits:
+    AbstractUnitSystem,
+    AbstractRelativeUnit,
+    DeviceBaseUnit,
+    SystemBaseUnit,
+    NaturalUnit,
+    RelativeQuantity,
+    DU,
+    SU,
+    NU,
+    convert_cost_coefficient,
+    display_units_arg
+# Underscored names aren't exported from the submodule; pull them in by name
+# so existing `IS._strip_units(...)` / `IS.ustrip(...)` call sites keep working.
+using .RelativeUnits: _strip_units, ustrip
 include("random_seed.jl")
 include("utils/timers.jl")
 include("utils/assert_op.jl")
