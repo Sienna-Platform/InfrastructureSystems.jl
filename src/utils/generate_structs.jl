@@ -63,13 +63,29 @@ end
 
 {{/has_null_values}}
 {{#accessors}}
+{{#needs_conversion}}
+{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}` as a bare number in the requested `units` (e.g. `SU`, `DU`, `MW`). For the unit-bearing value see [`{{accessor}}_unitful`](@ref).\"\"\"{{/create_docstring}}
+{{accessor}}(value::{{struct_name}}, units) = InfrastructureSystems._strip_units(get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units))
+{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}` as a unit-bearing quantity in the requested `units` (e.g. `SU`, `DU`, `MW`). For a bare number see [`{{accessor}}`](@ref).\"\"\"{{/create_docstring}}
+{{accessor}}_unitful(value::{{struct_name}}, units) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units)
+InfrastructureSystems.display_units_arg(::typeof({{accessor}}), ::Type{ {{struct_name}} }) = InfrastructureSystems.SU
+InfrastructureSystems.display_units_arg(::typeof({{accessor}}_unitful), ::Type{ {{struct_name}} }) = InfrastructureSystems.SU
+{{/needs_conversion}}
+{{^needs_conversion}}
 {{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
-{{accessor}}(value::{{struct_name}}) = {{#needs_conversion}}get_value(value, Val(:{{name}}), Val({{conversion_unit}})){{/needs_conversion}}{{^needs_conversion}}value.{{name}}{{/needs_conversion}}
+{{accessor}}(value::{{struct_name}}) = value.{{name}}
+{{/needs_conversion}}
 {{/accessors}}
 
 {{#setters}}
+{{#needs_conversion}}
 {{#create_docstring}}\"\"\"Set [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
-{{setter}}(value::{{struct_name}}, val) = value.{{name}} = {{#needs_conversion}}set_value(value, Val(:{{name}}), val, Val({{conversion_unit}})){{/needs_conversion}}{{^needs_conversion}}val{{/needs_conversion}}
+{{setter}}(value::{{struct_name}}, val) = value.{{name}} = set_value(value, Val(:{{name}}), val, Val({{conversion_unit}}))
+{{/needs_conversion}}
+{{^needs_conversion}}
+{{#create_docstring}}\"\"\"Set [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
+{{setter}}(value::{{struct_name}}, val) = value.{{name}} = val
+{{/needs_conversion}}
 {{/setters}}
 
 {{#custom_code}}
@@ -140,16 +156,32 @@ function generate_structs(directory, data::Vector; print_results = true)
             end
             accessor_name = accessor_module * "get_" * param["name"]
             setter_name = accessor_module * "set_" * param["name"] * "!"
-            push!(
-                accessors,
-                Dict(
-                    "name" => param["name"],
-                    "accessor" => accessor_name,
-                    "create_docstring" => create_docstring,
-                    "needs_conversion" => get(param, "needs_conversion", false),
-                    "conversion_unit" => get(param, "conversion_unit", "nothing"),
-                ),
-            )
+            conversion_unit = get(param, "conversion_unit", "nothing")
+            include_getter = !get(param, "exclude_getter", false)
+            if include_getter
+                push!(
+                    accessors,
+                    Dict(
+                        "name" => param["name"],
+                        "accessor" => accessor_name,
+                        "create_docstring" => create_docstring,
+                        "needs_conversion" => get(param, "needs_conversion", false),
+                        "conversion_unit" => conversion_unit,
+                    ),
+                )
+            else
+                internal_name = "_get_" * param["name"]
+                push!(
+                    accessors,
+                    Dict(
+                        "name" => param["name"],
+                        "accessor" => internal_name,
+                        "create_docstring" => false,
+                        "needs_conversion" => false,
+                        "conversion_unit" => "nothing",
+                    ),
+                )
+            end
             include_setter = !get(param, "exclude_setter", false)
             if include_setter
                 push!(
@@ -160,13 +192,19 @@ function generate_structs(directory, data::Vector; print_results = true)
                         "data_type" => param["data_type"],
                         "create_docstring" => create_docstring,
                         "needs_conversion" => get(param, "needs_conversion", false),
-                        "conversion_unit" => get(param, "conversion_unit", "nothing"),
+                        "conversion_unit" => conversion_unit,
                     ),
                 )
             end
             if field["name"] != "internal" && accessor_module == ""
+                # exclude_getter/exclude_setter mean "hand-written elsewhere" (e.g.
+                # unit-aware accessors with different signatures), not "nonexistent" —
+                # always export the public name.
                 push!(unique_accessor_functions, accessor_name)
                 push!(unique_setter_functions, setter_name)
+                if include_getter && get(param, "needs_conversion", false)
+                    push!(unique_accessor_functions, accessor_name * "_unitful")
+                end
             end
 
             param["kwarg_value"] = ""

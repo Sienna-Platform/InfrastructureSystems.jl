@@ -305,6 +305,7 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
+    units = SU,
     features...,
 ) where {T <: TimeSeriesData}
     ts = get_time_series(
@@ -328,6 +329,7 @@ function get_time_series_array(
         start_time = start_time,
         len = len,
         ignore_scaling_factors = ignore_scaling_factors,
+        units = units,
     )
 end
 
@@ -366,6 +368,7 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
+    units = SU,
 )
     features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
     return get_time_series_array(
@@ -376,6 +379,7 @@ function get_time_series_array(
         start_time = start_time,
         len = len,
         ignore_scaling_factors = ignore_scaling_factors,
+        units = units,
         features...,
     )
 end
@@ -432,9 +436,17 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len = nothing,
     ignore_scaling_factors = false,
+    units = SU,
 )
     initial_time = isnothing(start_time) ? get_initial_timestamp(forecast) : start_time
-    return _make_time_array(owner, forecast, initial_time, len, ignore_scaling_factors)
+    return _make_time_array(
+        owner,
+        forecast,
+        initial_time,
+        len,
+        ignore_scaling_factors,
+        units,
+    )
 end
 
 """
@@ -479,6 +491,7 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
+    units = SU,
 )
     if start_time === nothing
         start_time = get_initial_timestamp(time_series)
@@ -488,7 +501,14 @@ function get_time_series_array(
         len = length(time_series)
     end
 
-    return _make_time_array(owner, time_series, start_time, len, ignore_scaling_factors)
+    return _make_time_array(
+        owner,
+        time_series,
+        start_time,
+        len,
+        ignore_scaling_factors,
+        units,
+    )
 end
 
 """
@@ -766,6 +786,7 @@ function get_time_series_values(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
+    units = SU,
     features...,
 ) where {T <: TimeSeriesData}
     return TimeSeries.values(
@@ -778,6 +799,7 @@ function get_time_series_values(
             start_time = start_time,
             len = len,
             ignore_scaling_factors = ignore_scaling_factors,
+            units = units,
             features...,
         ),
     )
@@ -815,6 +837,7 @@ function get_time_series_values(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
+    units = SU,
 )
     features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
     return get_time_series_values(
@@ -825,6 +848,7 @@ function get_time_series_values(
         start_time = start_time,
         len = len,
         ignore_scaling_factors = ignore_scaling_factors,
+        units = units,
         features...,
     )
 end
@@ -878,6 +902,7 @@ function get_time_series_values(
     start_time::Union{Dates.DateTime, Nothing} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
+    units = SU,
 )
     return TimeSeries.values(
         get_time_series_array(
@@ -886,6 +911,7 @@ function get_time_series_values(
             start_time = start_time,
             len = len,
             ignore_scaling_factors = ignore_scaling_factors,
+            units = units,
         ),
     )
 end
@@ -934,6 +960,7 @@ function get_time_series_values(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
+    units = SU,
 )
     return TimeSeries.values(
         get_time_series_array(
@@ -942,11 +969,19 @@ function get_time_series_values(
             start_time = start_time,
             len = len,
             ignore_scaling_factors = ignore_scaling_factors,
+            units = units,
         ),
     )
 end
 
-function _make_time_array(owner, time_series, start_time, len, ignore_scaling_factors)
+function _make_time_array(
+    owner,
+    time_series,
+    start_time,
+    len,
+    ignore_scaling_factors,
+    units = SU,
+)
     ta = make_time_array(time_series, start_time; len = len)
     if ignore_scaling_factors
         return ta
@@ -957,7 +992,11 @@ function _make_time_array(owner, time_series, start_time, len, ignore_scaling_fa
         return ta
     end
 
-    return ta .* multiplier(owner)
+    # Scaling-factor multipliers (e.g. `get_max_active_power`) are unit-aware
+    # accessors from downstream packages. Default `SU` matches the system base
+    # that simulation/optimization consumers expect; callers (e.g. plotting,
+    # printing) can pass `NU` to get natural units.
+    return ta .* multiplier(owner, units)
 end
 
 """
