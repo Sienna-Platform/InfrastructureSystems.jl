@@ -77,6 +77,24 @@ end
     @test_throws ArgumentError IS.set_name!(data, component2, new_name)
 end
 
+@testset "Test invalid component name characters" begin
+    data = IS.SystemData()
+    component_slash = IS.TestComponent("E/W", 5)
+    @test_throws ArgumentError IS.add_component!(data, component_slash)
+
+    valid_component = IS.TestComponent("valid-name", 5)
+    IS.add_component!(data, valid_component)
+    @test_throws ArgumentError IS.set_name!(data, valid_component, "invalid/name")
+    @test IS.get_name(valid_component) == "valid-name"
+
+    withenv("SIENNA_DISABLE_COMPONENT_NAME_CHECKS" => "true") do
+        data2 = IS.SystemData()
+        slash_component = IS.TestComponent("E/W", 5)
+        IS.add_component!(data2, slash_component)
+        @test IS.get_name(slash_component) == "E/W"
+    end
+end
+
 @testset "Test masked components" begin
     data = IS.SystemData()
     initial_time = Dates.DateTime("2020-09-01")

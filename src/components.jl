@@ -1,5 +1,35 @@
 const ComponentsByType = Dict{DataType, Dict{String, <:InfrastructureSystemsComponent}}
 
+# '/' is the HDF5 path separator and cannot appear in dataset names.
+# Refer to https://github.com/NREL-Sienna/PowerSystems.jl/issues/1647 for the trigger of
+# this rule. The '/' character could also cause problems if we ever wanted to use the
+# component name as a file or directory name.
+const INVALID_COMPONENT_NAME_CHARACTERS = ('/',)
+
+"""
+Throw an `ArgumentError` if `name` contains characters that are invalid for component names.
+
+Set the environment variable `SIENNA_DISABLE_COMPONENT_NAME_CHECKS=true` to bypass this
+validation.
+"""
+function _validate_component_name(name::AbstractString)
+    if get(ENV, "SIENNA_DISABLE_COMPONENT_NAME_CHECKS", "") == "true"
+        return
+    end
+    for ch in INVALID_COMPONENT_NAME_CHARACTERS
+        if occursin(ch, name)
+            throw(
+                ArgumentError(
+                    "Component name '$name' contains invalid character '$ch'. " *
+                    "Characters $(INVALID_COMPONENT_NAME_CHARACTERS) are not allowed " *
+                    "because they are invalid in HDF5 dataset names.",
+                ),
+            )
+        end
+    end
+    return
+end
+
 "A simple container for components and time series data."
 struct Components <: ComponentContainer
     data::ComponentsByType
@@ -32,6 +62,7 @@ function _add_component!(
     allow_existing_time_series = false,
 ) where {T <: InfrastructureSystemsComponent}
     component_name = get_name(component)
+    _validate_component_name(component_name)
     if !isconcretetype(T)
         throw(ArgumentError("add_component! only accepts concrete types"))
     end
@@ -384,6 +415,7 @@ function set_name!(
     name,
 ) where {T <: InfrastructureSystemsComponent}
     throw_if_not_attached(components, component)
+    _validate_component_name(name)
     if haskey(components.data[T], name)
         if components.data[T][name] === component
             return
