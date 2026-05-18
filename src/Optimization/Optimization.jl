@@ -58,7 +58,5 @@ export AbstractPowerModel
 export AbstractActivePowerModel
 export AbstractACPModel
 export AbstractHVDCNetworkModel
-export AbstractPowerFlowEvaluationModel
-export AbstractPowerFlowEvaluationData
 
 end
