@@ -317,7 +317,8 @@ function deserialize(::Type{FuelCurve}, data::Dict)
     vom = deserialize(LinearCurve, data["vom_cost"])
     fuel_cost_raw = data["fuel_cost"]
     fuel_cost = if fuel_cost_raw isa Dict
-        deserialize(TimeSeriesKey, fuel_cost_raw)
+        fc_type = get_type_from_serialization_data(fuel_cost_raw)
+        deserialize(fc_type, fuel_cost_raw)
     else
         Float64(fuel_cost_raw)
     end

@@ -278,6 +278,24 @@ end
     @test IS.deserialize(IS.CostCurve, IS.serialize(cc)) == cc
     @test IS.deserialize(IS.FuelCurve, IS.serialize(fc)) == fc
 
+    # FuelCurve whose fuel_cost is a TimeSeriesKey must round-trip to the
+    # concrete key subtype (regression: previously dispatched on the abstract
+    # `TimeSeriesKey` and crashed in `fieldnames`).
+    fc_ts = IS.FuelCurve(
+        IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3)),
+        IS.ForecastKey(;
+            time_series_type = IS.Deterministic,
+            name = "fuel_price",
+            initial_timestamp = Dates.DateTime("2020-01-01"),
+            resolution = Dates.Hour(1),
+            horizon = Dates.Hour(24),
+            interval = Dates.Hour(24),
+            count = 1,
+            features = Dict{String, Any}(),
+        ),
+    )
+    @test IS.compare_values(IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts)), fc_ts)
+
     @test zero(cc) == IS.CostCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)))
     @test zero(IS.CostCurve) ==
           IS.CostCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)))
