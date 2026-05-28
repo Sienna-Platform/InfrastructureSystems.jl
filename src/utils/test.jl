@@ -51,7 +51,11 @@ set_available!(::TestComponent, val) = nothing
 set_available!(::AdditionalTestComponent, val) = nothing
 set_available!(::SimpleTestComponent, val) = nothing
 get_val(component::TestComponent) = component.val
+# 2-arg form so this getter can be used as a `scaling_factor_multiplier`
+# (which `_make_time_array` invokes with a units marker).
+get_val(component::TestComponent, _) = component.val
 get_val2(component::TestComponent) = component.val2
+get_val2(component::TestComponent, _) = component.val2
 supports_time_series(::TestComponent) = true
 supports_time_series(::AdditionalTestComponent) = true
 supports_time_series(::SimpleTestComponent) = false

@@ -81,7 +81,7 @@ end
     @test deserialized isa Vector{Base.UUID}
     @test deserialized == uuids
     # Round-trip through JSON to mimic on-disk format.
-    json_round_trip = JSON3.read(JSON3.write(serialized), Vector{Dict})
+    json_round_trip = JSON.parse(JSON.json(serialized); dicttype = Dict{String, Any})
     @test IS.deserialize(Vector{Base.UUID}, json_round_trip) == uuids
 end
 
@@ -94,7 +94,7 @@ end
     @test deserialized isa Set{Base.UUID}
     @test deserialized == uuids
     # Round-trip through JSON to mimic on-disk format.
-    json_round_trip = JSON3.read(JSON3.write(serialized), Vector{Dict})
+    json_round_trip = JSON.parse(JSON.json(serialized); dicttype = Dict{String, Any})
     @test IS.deserialize(Set{Base.UUID}, json_round_trip) == uuids
 end
 
