@@ -6,7 +6,7 @@ using DocumenterInterLinks
 links = InterLinks(
     "Documenter" => "https://documenter.juliadocs.org/stable/",
     "Julia" => "https://docs.julialang.org/en/v1/",
-    "JuliaFormatter" => "https://domluna.github.io/JuliaFormatter.jl/stable/",
+    "JuliaFormatter" => "https://juliaeditorsupport.github.io/JuliaFormatter.jl/stable/",
     "PowerSystems" => "https://sienna-platform.github.io/PowerSystems.jl/stable/",
     "PowerSystemCaseBuilder" => "https://sienna-platform.github.io/PowerSystemCaseBuilder.jl/stable/",
     "DocumenterInterLinks" => "http://juliadocs.org/DocumenterInterLinks.jl/stable/",

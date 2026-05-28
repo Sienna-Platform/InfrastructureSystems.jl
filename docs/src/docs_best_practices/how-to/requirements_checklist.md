@@ -3,7 +3,7 @@
 Sienna packages should follow the [Diataxis](https://diataxis.fr/)
 framework, be strictly compiled with [`Documenter.jl`](https://documenter.juliadocs.org/stable/)
 v1.0 or greater, and be automatically formatted with
-[`JuliaFormatter.jl`](https://domluna.github.io/JuliaFormatter.jl/stable/).
+[`JuliaFormatter.jl`](https://juliaeditorsupport.github.io/JuliaFormatter.jl/stable/).
 
 ## For New Packages
 

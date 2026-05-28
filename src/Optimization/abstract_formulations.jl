@@ -76,16 +76,3 @@ Abstract type for HVDC Network Model Formulations.
 Subtypes define how HVDC networks are modeled (e.g., transport, voltage dispatch).
 """
 abstract type AbstractHVDCNetworkModel end
-
-"""
-Abstract type for Power Flow Evaluation Models.
-Concrete implementations (e.g., PowerFlowEvaluationModel) are defined in downstream packages.
-This allows NetworkModel to hold power flow evaluation data without depending on PowerFlows.jl.
-"""
-abstract type AbstractPowerFlowEvaluationModel end
-
-"""
-Abstract type for Power Flow Evaluation Data.
-Concrete implementations wrap power flow data containers for use in the OptimizationContainer.
-"""
-abstract type AbstractPowerFlowEvaluationData end

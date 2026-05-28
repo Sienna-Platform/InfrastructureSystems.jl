@@ -44,6 +44,12 @@ end
 
 get_internal(component::TestComponent) = component.internal
 get_internal(component::AdditionalTestComponent) = component.internal
+get_available(::TestComponent) = true
+get_available(::AdditionalTestComponent) = true
+get_available(::SimpleTestComponent) = true
+set_available!(::TestComponent, val) = nothing
+set_available!(::AdditionalTestComponent, val) = nothing
+set_available!(::SimpleTestComponent, val) = nothing
 get_val(component::TestComponent) = component.val
 # 2-arg form so this getter can be used as a `scaling_factor_multiplier`
 # (which `_make_time_array` invokes with a units marker).
