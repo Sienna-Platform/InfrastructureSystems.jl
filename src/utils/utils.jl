@@ -187,11 +187,18 @@ julia> strip_module_name(VariableReserve{PowerSystems.ReserveUp})
         # Fall back to string method for Union types
         return :(strip_module_name(string(T)))
     end
-    name = string(nameof(T))
-    if isempty(T.parameters)
+    # A partially-applied parameterized type (e.g. `ReserveDemandCurve{ReserveUp}` when the
+    # type carries a further free parameter such as a unit system) is a `UnionAll` and has
+    # no `.parameters`. Unwrap it and drop the free `TypeVar`s, keeping the bound parameters
+    # so the stripped name stays unique on those (e.g. "ReserveDemandCurve{ReserveUp}").
+    base = T isa UnionAll ? Base.unwrap_unionall(T) : T
+    name = string(nameof(base))
+    params = filter(p -> !(p isa TypeVar), collect(base.parameters))
+    if isempty(params)
         return name
     else # I believe there's only 2 parameters, so slightly overkill.
-        param_names = join([string(nameof(p)) for p in T.parameters], ", ")
+        param_names =
+            join([p isa Type ? string(nameof(p)) : string(p) for p in params], ", ")
         return name * "{" * param_names * "}"
     end
 end
