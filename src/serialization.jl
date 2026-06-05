@@ -13,8 +13,7 @@ This is a convenience wrapper around [`serialize`](@ref) and JSON encoding. For
 [`SystemData`](@ref), call [`prepare_for_serialization_to_file!`](@ref) first so time series
 sidecar paths are recorded.
 
-See also: [`to_json`](@ref to_json(obj::T; pretty = false, indent = 2) where T <: InfrastructureSystemsType),
-[`from_json`](@ref)
+See also: [`from_json`](@ref), [`serialize`](@ref)
 """
 function to_json(
     obj::T,
@@ -36,8 +35,7 @@ end
 """
 Return a JSON string for an [`InfrastructureSystemsType`](@ref).
 
-See also: [`to_json`](@ref to_json(obj::T, filename::AbstractString; force = false, pretty = false) where T <: InfrastructureSystemsType),
-[`serialize`](@ref), [`from_json`](@ref)
+See also: [`serialize`](@ref), [`from_json`](@ref)
 """
 function to_json(obj::T; pretty = false, indent = 2) where {T <: InfrastructureSystemsType}
     try
@@ -73,8 +71,7 @@ end
 """
 Read an [`InfrastructureSystemsType`](@ref) from a JSON file.
 
-See also: [`from_json`](@ref from_json(io::Union{IO, String}, ::Type{T}) where T <: InfrastructureSystemsType),
-[`deserialize`](@ref), [`to_json`](@ref)
+See also: [`deserialize`](@ref), [`to_json`](@ref)
 """
 function from_json(::Type{T}, filename::String) where {T <: InfrastructureSystemsType}
     return open(filename) do io
@@ -85,8 +82,7 @@ end
 """
 Read an [`InfrastructureSystemsType`](@ref) from a JSON string or IO stream.
 
-See also: [`from_json`](@ref from_json(::Type{T}, filename::String) where T <: InfrastructureSystemsType),
-[`deserialize`](@ref)
+See also: [`deserialize`](@ref)
 """
 function from_json(io::Union{IO, String}, ::Type{T}) where {T <: InfrastructureSystemsType}
     return deserialize(T, JSON3.read(io, Dict))

@@ -189,7 +189,7 @@ Remove all time series metadata and stored arrays managed by a [`TimeSeriesManag
 When called with a [`TimeSeriesOwners`](@ref) argument, only that owner's series are
 removed.
 
-See also: [`clear_time_series!(::TimeSeriesOwners)`](@ref clear_time_series!(owner::TimeSeriesOwners)),
+See also: [`clear_time_series!(::TimeSeriesOwners)`](@ref clear_time_series!(::TimeSeriesOwners)),
 [`prepare_for_removal!`](@ref)
 """
 function clear_time_series!(mgr::TimeSeriesManager)
