@@ -1,9 +1,10 @@
 """
 Parent abstract type for top-level containers stored in a [`SystemData`](@ref) instance.
 
-Concrete subtypes include [`ComponentContainer`](@ref) (for components) and
-[`SupplementalAttributeManager`](@ref) (for supplemental attributes). Containers expose
-their members through package-specific query methods rather than direct field access.
+Notable specializations include [`Components`](@ref), [`SystemData`](@ref), and
+[`SupplementalAttributeManager`](@ref). Component storage uses the [`ComponentContainer`](@ref)
+interface. Containers expose their members through package-specific query methods rather
+than direct field access.
 """
 abstract type InfrastructureSystemsContainer <: InfrastructureSystemsType end
 
