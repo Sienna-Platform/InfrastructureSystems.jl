@@ -73,9 +73,9 @@ Rename attached components through [`SystemData`](@ref) instead.
 
 Optional interface functions:
 
-  Subtypes must implement this method. The default throws a `NotImplementedError`.
+  Required only if callers use [`get_available_components`](@ref) or
+  [`get_available_component`](@ref); otherwise the defaults throw `NotImplementedError`.
   - [`get_available`](@ref)
-  Subtypes must implement this method. The default throws a `NotImplementedError`.
   - [`set_available!`](@ref)
 
 Subtypes may contain time series and be associated with supplemental attributes.
