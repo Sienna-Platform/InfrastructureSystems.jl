@@ -6,6 +6,16 @@ mutable struct BulkUpdateTSCache
     forecast_params::Dict{Tuple{Dates.Period, Dates.Period}, ForecastParameters}
 end
 
+"""
+Owns time series storage and metadata for a [`SystemData`](@ref) instance.
+
+The manager coordinates [`TimeSeriesStorage`](@ref) (array data) and
+[`TimeSeriesMetadataStore`](@ref) (ownership and lookup). Components reach the manager
+through [`SharedSystemReferences`](@ref) after [`add_component!`](@ref).
+
+See also: [`add_time_series!`](@ref), [`clear_time_series!`](@ref),
+[`TimeSeriesOwners`](@ref)
+"""
 mutable struct TimeSeriesManager <: InfrastructureSystemsType
     data_store::TimeSeriesStorage
     metadata_store::TimeSeriesMetadataStore
@@ -173,6 +183,15 @@ function add_time_series!(
     return ts_key
 end
 
+"""
+Remove all time series metadata and stored arrays managed by a [`TimeSeriesManager`](@ref).
+
+When called with a [`TimeSeriesOwners`](@ref) argument, only that owner's series are
+removed.
+
+See also: [`clear_time_series!(::TimeSeriesOwners)`](@ref clear_time_series!(owner::TimeSeriesOwners)),
+[`prepare_for_removal!`](@ref)
+"""
 function clear_time_series!(mgr::TimeSeriesManager)
     _throw_if_read_only(mgr)
     clear_metadata!(mgr.metadata_store)

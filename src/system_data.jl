@@ -5,20 +5,24 @@ const VALIDATION_DESCRIPTOR_FILE = "validation_descriptors.json"
 const SERIALIZATION_METADATA_KEY = "__serialization_metadata__"
 
 """
-    mutable struct SystemData <: ComponentContainer
-        components::Components
-        "Masked components are attached to the system for overall management purposes but
-        are not exposed in the standard library calls like [`get_components`](@ref).
-        Examples are components in a subsystem."
-        masked_components::Components
-        validation_descriptors::Vector
-        internal::InfrastructureSystemsInternal
-    end
+Top-level container for [`InfrastructureSystemsComponent`](@ref)s, time series, and
+supplemental attributes in a Sienna system.
 
-Container for system components and time series data
+Downstream packages typically embed a `SystemData` instance in their own system struct
+and redirect container methods such as [`add_component!`](@ref) and
+[`get_components`](@ref) to it.
+
+Regular components live in [`Components`](@ref) and are returned by default
+[`get_components`](@ref) calls. Masked components remain attached for bookkeeping (for
+example, subsystem membership) but are excluded from those default queries.
+
+See also: [`ComponentContainer`](@ref), [`TimeSeriesManager`](@ref),
+[`SupplementalAttributeManager`](@ref), [`prepare_for_serialization_to_file!`](@ref)
 """
 mutable struct SystemData <: ComponentContainer
+    "Primary component storage."
     components::Components
+    "Masked components are attached to the system for overall management purposes but are not exposed in the standard library calls like [`get_components`](@ref). Examples are components in a subsystem."
     masked_components::Components
     "Contains all attached component UUIDs, regular and masked."
     component_uuids::Dict{Base.UUID, <:InfrastructureSystemsComponent}
@@ -43,6 +47,7 @@ Construct SystemData to store components and time series data.
     in. Default is the environment variable `SIENNA_TIME_SERIES_DIRECTORY` or `tempdir()` if
     that isn't set.
   - `compression = CompressionSettings()`: Controls compression of time series data.
+    See [`CompressionSettings`](@ref).
 """
 function SystemData(;
     validation_descriptor_file = nothing,
@@ -437,7 +442,15 @@ function _handle_component_removal!(data::SystemData, component)
 end
 
 """
-Removes the component from the main container and adds it to the masked container.
+Move a component from the main container to the masked container.
+
+Masked components stay attached to the [`SystemData`](@ref) instance (for example, for
+subsystem bookkeeping) but are excluded from default [`get_components`](@ref) calls.
+
+# Arguments
+
+  - `remove_time_series`: When true, remove time series owned by the component before masking.
+  - `remove_supplemental_attributes`: When true, detach supplemental attributes before masking.
 """
 function mask_component!(
     data::SystemData,
@@ -882,8 +895,16 @@ function set_component!(metadata::TimeSeriesFileMetadata, data::SystemData, mod:
 end
 
 """
-Parent object should call this prior to serialization so that SystemData can store the
-appropriate path information for the time series data.
+Prepare a [`SystemData`](@ref) instance for file serialization.
+
+Records the target directory and basename in the system [`get_ext`](@ref) dictionary so
+[`serialize(::SystemData)`](@ref) can write the time series HDF5 sidecar alongside the JSON
+system file.
+
+Typical workflow: `prepare_for_serialization_to_file!` → [`serialize`](@ref) or
+[`to_json`](@ref) → read back with [`deserialize`](@ref) or [`from_json`](@ref).
+
+See also: [`to_dict`](@ref)
 """
 function prepare_for_serialization_to_file!(
     data::SystemData,
@@ -918,7 +939,13 @@ function prepare_for_serialization_to_file!(
 end
 
 """
-Serialize all system and component data to a dictionary.
+Serialize all [`SystemData`](@ref) fields except time series arrays into a dictionary.
+
+Time series metadata and arrays are written to a sidecar file when
+[`prepare_for_serialization_to_file!`](@ref) has been called. Use [`serialize`](@ref) on
+the full system to obtain the JSON-ready dict including sidecar references.
+
+See also: [`serialize(::SystemData)`](@ref), [`deserialize`](@ref)
 """
 function to_dict(data::SystemData)
     TimerOutputs.@timeit_debug SYSTEM_TIMERS "SystemData to_dict" begin
@@ -985,6 +1012,14 @@ function serialize(data::SystemData)
     return json_data
 end
 
+"""
+Reconstruct a [`SystemData`](@ref) container from serialized dictionary data.
+
+Component instances in `components` and `masked_components` must be deserialized by the
+owning package because their concrete types are defined downstream of InfrastructureSystems.
+
+See also: [`serialize(::SystemData)`](@ref), [`to_dict`](@ref), [`from_json`](@ref)
+"""
 function deserialize(
     ::Type{SystemData},
     raw::Dict;
@@ -1085,6 +1120,15 @@ end
 
 # Redirect functions to Components
 
+"""
+Add a component to a [`SystemData`](@ref) instance.
+
+Registers the component UUID, wires [`SharedSystemReferences`](@ref) for time series and
+supplemental attributes, and delegates storage to the underlying [`Components`](@ref)
+container.
+
+See also: [`add_component!`](@ref) on [`Components`](@ref)
+"""
 function add_component!(data::SystemData, component; kwargs...)
     _check_add_component(data, component)
     add_component!(data.components, component; kwargs...)
@@ -1380,6 +1424,19 @@ check_component(data::SystemData, component) = check_component(data.components, 
 get_compression_settings(data::SystemData) =
     get_compression_settings(data.time_series_manager.data_store)
 
+"""
+Rename a component that is already stored in the system.
+
+This is the safe way to change a component name after [`add_component!`](@ref). Updates
+the name index in the underlying [`Components`](@ref) container.
+
+# Throws
+
+  - `ArgumentError` if the component is not attached, the new name is already in use, or
+    the passed component does not match the stored instance.
+
+See also: [`set_name!`](@ref) on [`Components`](@ref)
+"""
 set_name!(data::SystemData, component, name) = set_name!(data.components, component, name)
 
 function get_component_counts_by_type(data::SystemData)
@@ -1416,6 +1473,16 @@ get_forecast_summary_table(data::SystemData) =
 _get_system_basename(system_file) = splitext(basename(system_file))[1]
 _get_secondary_basename(system_basename, name) = system_basename * "_" * name
 
+"""
+Attach a supplemental attribute to a component in a [`SystemData`](@ref) instance.
+
+The attribute is stored in [`SupplementalAttributeManager`](@ref) and linked to the
+component through [`SupplementalAttributeAssociations`](@ref). Shared system references
+are wired so the attribute can use the system [`TimeSeriesManager`](@ref).
+
+See also: [`add_supplemental_attribute!`](@ref) on
+[`SupplementalAttributeManager`](@ref), [`remove_supplemental_attribute!`](@ref)
+"""
 function add_supplemental_attribute!(data::SystemData, component, attribute; kwargs...)
     # Note that we do not support adding attributes to masked components
     # and this check doesn't look at those.
@@ -1459,6 +1526,15 @@ function iterate_supplemental_attributes(data::SystemData)
     return iterate_supplemental_attributes(data.supplemental_attribute_manager)
 end
 
+"""
+Detach a supplemental attribute from a component in a [`SystemData`](@ref) instance.
+
+Removes the association. The attribute itself is deleted from the manager only when no
+components remain attached.
+
+See also: [`remove_supplemental_attribute!`](@ref) on
+[`SupplementalAttributeManager`](@ref)
+"""
 remove_supplemental_attribute!(
     data::SystemData,
     component::InfrastructureSystemsComponent,

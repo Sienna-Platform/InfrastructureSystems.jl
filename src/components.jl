@@ -1,6 +1,12 @@
 const ComponentsByType = Dict{DataType, Dict{String, <:InfrastructureSystemsComponent}}
 
-"A simple container for components and time series data."
+"""
+Concrete [`ComponentContainer`](@ref) backing regular and masked component storage in
+[`SystemData`](@ref).
+
+Components are indexed by concrete type and name. Name uniqueness is enforced per type
+when adding with [`add_component!`](@ref).
+"""
 struct Components <: ComponentContainer
     data::ComponentsByType
     time_series_manager::TimeSeriesManager
@@ -55,12 +61,18 @@ function _add_component!(
 end
 
 """
-Add a component.
+Add a component to a [`Components`](@ref) container.
 
-Throws ArgumentError if the component's name is already stored for its concrete type.
+Validates field ranges when validation descriptors are configured and rejects components
+that already carry time series unless `allow_existing_time_series` is set.
 
-Throws InvalidRange if any of the component's field values are outside of defined valid
-range.
+# Throws
+
+  - `ArgumentError` if the component name is already stored for its concrete type, if the
+    type is not concrete, or if the component already has time series.
+  - `InvalidValue` if field validation fails.
+
+See also: [`add_component!`](@ref) on [`SystemData`](@ref)
 """
 function add_component!(
     components::Components,
