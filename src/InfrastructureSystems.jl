@@ -40,66 +40,91 @@ using DocStringExtensions
 # Do not add export statements.
 
 """
-Base type for any struct in the Sienna packages.
-All structs must implement a kwarg-only constructor to allow deserializing from a Dict.
+Root abstract type for all structs defined in Sienna packages.
+
+All concrete subtypes must implement a keyword-argument-only constructor so they can be
+deserialized from a `Dict` via [`deserialize`](@ref) and [`serialize`](@ref).
+
+See also: [`InfrastructureSystemsComponent`](@ref), [`DeviceParameter`](@ref),
+[`SupplementalAttribute`](@ref)
 """
 abstract type InfrastructureSystemsType end
 
 """
-Base type for structs that are stored in a system.
+Base type for structs that are stored in a system as top-level members.
+
+Components are added with [`add_component!`](@ref) and retrieved with
+[`get_component`](@ref) and [`get_components`](@ref). Each component carries an
+[`InfrastructureSystemsInternal`](@ref) instance for identity and optional extension data.
 
 Required interface functions for subtypes:
 
   Note: InfrastructureSystems provides default implementations for these methods that
   depend on the struct field names `name` and `internal`.
   If subtypes have different field names, they must implement these methods.
-  - get_name()
-  - set_name_internal!()
-  - get_internal()
+  - [`get_name`](@ref)
+  - [`set_name_internal!`](@ref)
+  - [`get_internal`](@ref)
 
-Warning: Subtypes should not implement the function
-  set_name!(::InfrastructureSystemsComponent, name).
-  InfrastructureSystems uses the component name in internal data structures, so it is not
-  safe to change the name of a component after it has been added to a system.
-  InfrastructureSystems provides set_name!(data::SystemData, component, name) for this
-  purpose.
+Warning: Subtypes should not implement [`set_name!`](@ref) on the component type directly.
+InfrastructureSystems uses the component name in internal data structures, so it is not
+safe to change the name of a component after it has been added to a system.
+Rename attached components through [`SystemData`](@ref) instead.
 
 Optional interface functions:
 
-  Subtypes must implement this method. The default throws a `NotImplementedError`.
-  - get_available()
-  Subtypes must implement this method. The default throws a `NotImplementedError`.
-  - set_available!()
+  Required only if callers use [`get_available_components`](@ref) or
+  [`get_available_component`](@ref); otherwise the defaults throw `NotImplementedError`.
+  - [`get_available`](@ref)
+  - [`set_available!`](@ref)
 
 Subtypes may contain time series and be associated with supplemental attributes.
 Those behaviors can be modified with these methods:
-  - supports_supplemental_attributes()
-  - supports_time_series()
+  - [`supports_supplemental_attributes`](@ref)
+  - [`supports_time_series`](@ref)
+
+See also: [`DeviceParameter`](@ref), [`SupplementalAttribute`](@ref),
+[`ComponentContainer`](@ref)
 """
 abstract type InfrastructureSystemsComponent <: InfrastructureSystemsType end
 
 """
-Base type for auxillary structs. These should not be stored in a system.
+Base type for auxiliary structs that describe the dynamic, economic, or financial
+characteristics of an [`InfrastructureSystemsComponent`](@ref).
+
+Unlike components, `DeviceParameter` subtypes are not added to a system with
+[`add_component!`](@ref). They are stored as nested fields on components or on other
+`DeviceParameter` subtypes. This decoupling lets the same physical component carry
+different parameter sets depending on the modeling context.
+
+Downstream packages define concrete subtypes for domain-specific data, such as
+operational cost representations, dynamic machine sub-models, and inverter control schemes.
+
+See also: [`InfrastructureSystemsType`](@ref), [`InfrastructureSystemsComponent`](@ref)
 """
 abstract type DeviceParameter <: InfrastructureSystemsType end
 
 """
-Base type for structs that store supplemental attributes
+Base type for structs that store supplemental attributes attached to components.
+
+Unlike [`InfrastructureSystemsComponent`](@ref)s, supplemental attributes are not stored in
+[`SystemData`](@ref) component containers. They are owned by
+[`SupplementalAttributeManager`](@ref) and linked to components through
+[`SupplementalAttributeAssociations`](@ref).
 
 Required interface functions for subtypes:
 
-  - get_internal()
+  - [`get_internal`](@ref)
 
 Optional interface functions:
 
-  - get_uuid()
+  - [`get_uuid`](@ref)
+  - [`supports_time_series`](@ref)
 
-Subtypes may contain time series. Which requires
-
-  - `supports_time_series(::SupplementalAttribute)`
-
-All subtypes must include an instance of ComponentUUIDs in order to track
+All subtypes must include an instance of [`ComponentUUIDs`](@ref) in order to track
 components attached to each attribute.
+
+See also: [`SupplementalAttributeManager`](@ref), [`add_supplemental_attribute!`](@ref)
 """
 abstract type SupplementalAttribute <: InfrastructureSystemsType end
 

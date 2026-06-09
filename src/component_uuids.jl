@@ -1,6 +1,12 @@
 # This is an abstraction of a Set in order to enable de-serialization of supplemental
 # attributes.
 
+"""
+Set-like storage of component UUIDs attached to a [`SupplementalAttribute`](@ref).
+
+Supplemental attribute subtypes include a `ComponentUUIDs` field so associations can be
+tracked and serialized without storing full component references.
+"""
 struct ComponentUUIDs <: InfrastructureSystemsType
     uuids::Set{Base.UUID}
 

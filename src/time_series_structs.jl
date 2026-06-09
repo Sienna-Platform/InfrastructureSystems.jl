@@ -1,6 +1,16 @@
 const TimeSeriesOwners = Union{InfrastructureSystemsComponent, SupplementalAttribute}
 
 """
+Union of types that can own time series metadata and data.
+
+Both [`InfrastructureSystemsComponent`](@ref)s and [`SupplementalAttribute`](@ref)s may
+support time series when [`supports_time_series`](@ref) returns true. Read APIs such as
+[`get_time_series`](@ref) and [`has_time_series`](@ref) accept any `TimeSeriesOwners`
+value.
+"""
+TimeSeriesOwners
+
+"""
 Supertype for keys that can be used to access a desired time series dataset
 
 Concrete subtypes:

@@ -1,10 +1,11 @@
 """
-A data structure that acts like a container of components. The `ComponentContainer`
-interface consists of:
-  - `get_components`
-  - `get_component`
-  - `get_available_components`
-  - `get_available_component`
+Abstract type for containers of [`InfrastructureSystemsComponent`](@ref)s.
+
+The `ComponentContainer` interface consists of:
+  - [`get_components`](@ref)
+  - [`get_component`](@ref)
+  - [`get_available_components`](@ref)
+  - [`get_available_component`](@ref)
 
 Notable subtypes include [`Components`](@ref), [`SystemData`](@ref), and
 [`PowerSystems.System`](@extref).

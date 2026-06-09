@@ -1,6 +1,16 @@
 const SupplementalAttributesByType =
     Dict{DataType, Dict{Base.UUID, <:SupplementalAttribute}}
 
+"""
+Owns supplemental attributes and their associations to components in a [`SystemData`](@ref).
+
+Attributes are stored by type and UUID. Component links are tracked in
+[`SupplementalAttributeAssociations`](@ref). User code typically calls
+[`add_supplemental_attribute!`](@ref) on [`SystemData`](@ref) rather than on the manager
+directly.
+
+See also: [`SupplementalAttribute`](@ref), [`iterate_supplemental_attributes`](@ref)
+"""
 mutable struct SupplementalAttributeManager <: InfrastructureSystemsContainer
     data::SupplementalAttributesByType
     associations::SupplementalAttributeAssociations
@@ -204,16 +214,16 @@ function remove_supplemental_attributes!(
 end
 
 """
-Returns an iterator of supplemental_attributes. T can be concrete or abstract.
+Returns an iterator of supplemental attributes. T can be concrete or abstract.
 Call collect on the result if an array is desired.
 
 # Arguments
 
-  - `T`: supplemental_attribute type
-  - `mgr::SupplementalAttributeManager`: SupplementalAttributeManager in the system
-  - `filter_func::Union{Nothing, Function} = nothing`: Optional function that accepts a component
-    of type T and returns a Bool. Apply this function to each component and only return components
-    where the result is true.
+  - `T`: supplemental attribute type
+  - `mgr::SupplementalAttributeManager`: manager in the system
+  - `filter_func::Union{Nothing, Function} = nothing`: Optional function that accepts a
+    supplemental attribute of type `T` and returns a `Bool`. Only attributes for which
+    the function returns true are included.
 """
 function get_supplemental_attributes(
     filter_func::Function,

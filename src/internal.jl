@@ -22,13 +22,26 @@ end
 serialize(val::SystemUnitsSettings) = serialize_struct(val)
 deserialize(T::Type{<:SystemUnitsSettings}, val::Dict) = deserialize_struct(T, val)
 
+"""
+References to system-level managers wired into attached components and attributes.
+
+When a component or [`SupplementalAttribute`](@ref) is attached to a [`SystemData`](@ref)
+instance, [`add_component!`](@ref) and [`add_supplemental_attribute!`](@ref) store a
+`SharedSystemReferences` in its [`InfrastructureSystemsInternal`](@ref) so time series and
+supplemental-attribute operations can reach the owning [`TimeSeriesManager`](@ref) and
+[`SupplementalAttributeManager`](@ref) without passing the system explicitly.
+"""
 @kwdef struct SharedSystemReferences <: InfrastructureSystemsType
     supplemental_attribute_manager::Any = nothing
     time_series_manager::Any = nothing
 end
 
 """
-Internal storage common to InfrastructureSystems types.
+Internal storage common to [`InfrastructureSystemsType`](@ref)s.
+
+Every component and supplemental attribute carries a UUID, optional
+[`SharedSystemReferences`](@ref) when attached to a system, optional unit metadata, and an
+optional user extension dictionary accessed through [`get_ext`](@ref).
 """
 mutable struct InfrastructureSystemsInternal <: InfrastructureSystemsType
     uuid::Base.UUID

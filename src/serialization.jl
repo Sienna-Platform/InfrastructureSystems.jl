@@ -7,7 +7,13 @@ const CONSTRUCT_WITH_PARAMETERS_KEY = "construct_with_parameters"
 const FUNCTION_KEY = "function"
 
 """
-Serializes a InfrastructureSystemsType to a JSON file.
+Write an [`InfrastructureSystemsType`](@ref) to a JSON file.
+
+This is a convenience wrapper around [`serialize`](@ref) and JSON encoding. For
+[`SystemData`](@ref), call [`prepare_for_serialization_to_file!`](@ref) first so time series
+sidecar paths are recorded.
+
+See also: [`from_json`](@ref), [`serialize`](@ref)
 """
 function to_json(
     obj::T,
@@ -27,7 +33,9 @@ function to_json(
 end
 
 """
-Serializes a InfrastructureSystemsType to a JSON string.
+Return a JSON string for an [`InfrastructureSystemsType`](@ref).
+
+See also: [`serialize`](@ref), [`from_json`](@ref)
 """
 function to_json(obj::T; pretty = false, indent = 2) where {T <: InfrastructureSystemsType}
     try
@@ -61,7 +69,9 @@ function to_json(
 end
 
 """
-Deserializes a InfrastructureSystemsType from a JSON filename.
+Read an [`InfrastructureSystemsType`](@ref) from a JSON file.
+
+See also: [`deserialize`](@ref), [`to_json`](@ref)
 """
 function from_json(::Type{T}, filename::String) where {T <: InfrastructureSystemsType}
     return open(filename) do io
@@ -70,16 +80,23 @@ function from_json(::Type{T}, filename::String) where {T <: InfrastructureSystem
 end
 
 """
-Deserializes a InfrastructureSystemsType from String or IO.
+Read an [`InfrastructureSystemsType`](@ref) from a JSON string or IO stream.
+
+See also: [`deserialize`](@ref)
 """
 function from_json(io::Union{IO, String}, ::Type{T}) where {T <: InfrastructureSystemsType}
     return deserialize(T, JSON3.read(io, Dict))
 end
 
 """
-Serialize the Julia value into standard types that can be converted to non-Julia formats,
-such as JSON. In cases where val is an instance of a struct, return a Dict. In cases where
-val is a scalar value, return that value.
+Convert an [`InfrastructureSystemsType`](@ref) into JSON-compatible `Dict`s and scalars.
+
+Generic structs are encoded as `Dict`s with [`add_serialization_metadata!`](@ref) type
+information so [`deserialize`](@ref) can reconstruct them. For [`SystemData`](@ref),
+[`serialize(::SystemData)`](@ref) additionally writes time series sidecar files when
+[`prepare_for_serialization_to_file!`](@ref) has been called.
+
+See also: [`to_dict`](@ref), [`to_json`](@ref)
 """
 function serialize(val::T) where {T <: InfrastructureSystemsType}
     @debug "serialize InfrastructureSystemsType" _group = LOG_GROUP_SERIALIZATION val T
@@ -156,8 +173,13 @@ serialize(val::Base.RefValue{T}) where {T} = serialize(val[])
 serialize(val::T) where {T} = deepcopy(val)
 
 """
-Deserialize an object from standard types stored in non-Julia formats, such as JSON, into
-Julia types.
+Reconstruct an [`InfrastructureSystemsType`](@ref) from serialized `Dict` data.
+
+For [`SystemData`](@ref), downstream packages must deserialize individual components
+separately after the container is loaded because component types are defined outside
+InfrastructureSystems.
+
+See also: [`serialize`](@ref), [`from_json`](@ref)
 """
 function deserialize(::Type{T}, data::Dict) where {T <: InfrastructureSystemsType}
     @debug "deserialize InfrastructureSystemsType" _group = LOG_GROUP_SERIALIZATION T data

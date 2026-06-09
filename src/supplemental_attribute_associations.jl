@@ -29,6 +29,17 @@ mutable struct SupplementalAttributeAssociations
 end
 
 """
+SQLite-backed store linking [`SupplementalAttribute`](@ref)s to
+[`InfrastructureSystemsComponent`](@ref)s.
+
+Owned by [`SupplementalAttributeManager`](@ref). Associations are serialized into the
+system JSON file rather than a separate sidecar database.
+
+See also: [`add_supplemental_attribute!`](@ref), [`list_associated_component_uuids`](@ref)
+"""
+SupplementalAttributeAssociations
+
+"""
 Construct a new SupplementalAttributeAssociations with an in-memory database.
 """
 function SupplementalAttributeAssociations(; create_indexes = true)
