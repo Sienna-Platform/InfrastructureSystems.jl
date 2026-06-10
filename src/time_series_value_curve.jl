@@ -183,6 +183,21 @@ function _resolve_scalar_key(
 end
 
 """
+$(TYPEDSIGNATURES)
+Fetch the function-data values for `key` at `start_time` (len = 1) and extract the
+single static `FunctionData` element.
+"""
+function _resolve_function_data_key(
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey,
+    start_time::Dates.DateTime,
+    ::Type{T},
+) where {T <: StaticFunctionData}
+    vals = get_time_series_values(owner, key; start_time = start_time, len = 1)
+    return vals[1]::T
+end
+
+"""
     build_static_curve(
         curve::TimeSeriesInputOutputCurve,
         owner::TimeSeriesOwners,
@@ -192,15 +207,19 @@ end
 Resolve a time-series-backed `ValueCurve` at a specific timestep, returning the
 corresponding static `ValueCurve` with all time series references replaced by their
 values at `start_time`.
+
+Per-timestep resolution issues one storage read per time-series-backed field (the
+function data plus each of `initial_input`/`input_at_zero` when TS-backed). Hot-loop
+consumers (e.g. simulation inner loops) should resolve through a `TimeSeriesCache` or
+batch reads rather than calling this per component per timestep.
 """
 function build_static_curve(
     curve::TimeSeriesInputOutputCurve{TimeSeriesFunctionData{T}},
     owner::TimeSeriesOwners,
     start_time::Dates.DateTime,
 ) where {T <: StaticFunctionData}
-    fd_key = get_time_series_key(curve)
-    fd_vals = get_time_series_values(owner, fd_key; start_time = start_time, len = 1)
-    return InputOutputCurve(fd_vals[1]::T, get_input_at_zero(curve))
+    fd = _resolve_function_data_key(owner, get_time_series_key(curve), start_time, T)
+    return InputOutputCurve(fd, get_input_at_zero(curve))
 end
 
 """
@@ -211,19 +230,21 @@ end
     ) -> IncrementalCurve
 
 Resolve a time-series-backed `IncrementalCurve` at a specific timestep.
+
+Per-timestep resolution issues one storage read per time-series-backed field (the
+function data plus each of `initial_input`/`input_at_zero` when TS-backed). Hot-loop
+consumers (e.g. simulation inner loops) should resolve through a `TimeSeriesCache` or
+batch reads rather than calling this per component per timestep.
 """
 function build_static_curve(
     curve::TimeSeriesIncrementalCurve{TimeSeriesFunctionData{T}},
     owner::TimeSeriesOwners,
     start_time::Dates.DateTime,
 ) where {T <: StaticFunctionData}
-    fd_key = get_time_series_key(curve)
-    fd_vals = get_time_series_values(owner, fd_key; start_time = start_time, len = 1)
-    initial_input =
-        _resolve_scalar_key(owner, get_initial_input(curve), start_time)
-    input_at_zero =
-        _resolve_scalar_key(owner, get_input_at_zero(curve), start_time)
-    return IncrementalCurve(fd_vals[1]::T, initial_input, input_at_zero)
+    fd = _resolve_function_data_key(owner, get_time_series_key(curve), start_time, T)
+    initial_input = _resolve_scalar_key(owner, get_initial_input(curve), start_time)
+    input_at_zero = _resolve_scalar_key(owner, get_input_at_zero(curve), start_time)
+    return IncrementalCurve(fd, initial_input, input_at_zero)
 end
 
 """
@@ -234,17 +255,19 @@ end
     ) -> AverageRateCurve
 
 Resolve a time-series-backed `AverageRateCurve` at a specific timestep.
+
+Per-timestep resolution issues one storage read per time-series-backed field (the
+function data plus each of `initial_input`/`input_at_zero` when TS-backed). Hot-loop
+consumers (e.g. simulation inner loops) should resolve through a `TimeSeriesCache` or
+batch reads rather than calling this per component per timestep.
 """
 function build_static_curve(
     curve::TimeSeriesAverageRateCurve{TimeSeriesFunctionData{T}},
     owner::TimeSeriesOwners,
     start_time::Dates.DateTime,
 ) where {T <: StaticFunctionData}
-    fd_key = get_time_series_key(curve)
-    fd_vals = get_time_series_values(owner, fd_key; start_time = start_time, len = 1)
-    initial_input =
-        _resolve_scalar_key(owner, get_initial_input(curve), start_time)
-    input_at_zero =
-        _resolve_scalar_key(owner, get_input_at_zero(curve), start_time)
-    return AverageRateCurve(fd_vals[1]::T, initial_input, input_at_zero)
+    fd = _resolve_function_data_key(owner, get_time_series_key(curve), start_time, T)
+    initial_input = _resolve_scalar_key(owner, get_initial_input(curve), start_time)
+    input_at_zero = _resolve_scalar_key(owner, get_input_at_zero(curve), start_time)
+    return AverageRateCurve(fd, initial_input, input_at_zero)
 end
