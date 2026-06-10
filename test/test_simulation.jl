@@ -23,3 +23,8 @@ end
     Sim.set_run_status!(si, Sim.RunStatus.RUNNING)
     @test Sim.get_run_status(si) == Sim.RunStatus.RUNNING
 end
+
+@testset "Simulation status enums convert from String" begin
+    @test convert(Sim.RunStatus, "RUNNING") == Sim.RunStatus.RUNNING
+    @test convert(Sim.SimulationBuildStatus, "BUILT") == Sim.SimulationBuildStatus.BUILT
+end

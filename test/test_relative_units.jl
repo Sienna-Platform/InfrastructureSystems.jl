@@ -118,3 +118,42 @@ end
     d[q2] = "b"
     @test length(d) == 1
 end
+
+@testset "RelativeQuantity Number interface completeness" begin
+    q = 0.6 * IS.DU
+
+    @testset "instance zero/one and predicates" begin
+        @test zero(q) == 0.0 * IS.DU
+        @test one(q) == 1.0 * IS.DU
+        @test !iszero(q)
+        @test iszero(zero(q))
+        @test isfinite(q)
+        @test !isnan(q)
+        @test isnan(IS.RelativeQuantity(NaN, IS.DU))
+        @test !isfinite(IS.RelativeQuantity(Inf, IS.SU))
+        @test isinf(IS.RelativeQuantity(Inf, IS.SU))
+        @test abs(-q) == q
+    end
+
+    @testset "isapprox against an untagged number errors clearly" begin
+        @test_throws ArgumentError isapprox(q, 0.6)
+        @test_throws ArgumentError isapprox(0.6, q)
+    end
+
+    @testset "isequal is total for container semantics" begin
+        @test isequal(0.6 * IS.DU, 0.6 * IS.DU)
+        @test !isequal(0.6 * IS.DU, 0.6 * IS.SU)
+        @test !isequal(q, 0.6)
+        @test !isequal(0.6, q)
+        d = Dict((0.6 * IS.DU) => 1)
+        @test !haskey(d, 0.6 * IS.SU)
+        s = Set([0.6 * IS.DU])
+        @test !(0.6 * IS.SU in s)
+    end
+
+    @testset "products of tagged quantities error clearly" begin
+        @test_throws ArgumentError q * q
+        @test_throws ArgumentError q^2
+        @test_throws ArgumentError q / (0.5 * IS.DU)
+    end
+end
