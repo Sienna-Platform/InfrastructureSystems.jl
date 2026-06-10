@@ -226,5 +226,6 @@ include("production_variable_cost_curve.jl")
 include("function_data/make_convex.jl")
 include("Optimization/Optimization.jl")
 include("Simulation/Simulation.jl")
+include("InfrastructureMatrices/InfrastructureMatrices.jl")
 
 end # module
