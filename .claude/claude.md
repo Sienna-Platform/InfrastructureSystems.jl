@@ -65,18 +65,37 @@ Guard rails (all dispatch-based, erroring `ArgumentError`s):
 
 `CostCurve{T,U}` / `FuelCurve{T,U}` carry `U <: AbstractUnitSystem` as a type parameter
 (replacing the old `power_units::UnitSystem` runtime field). Serialized under the
-`"power_units"` key; legacy enum values and strings (`UnitSystem.SYSTEM_BASE`,
-`"SYSTEM_BASE"`) are accepted via `_unit_system_instance` — **do not remove the legacy
-path**; PowerSystemCaseBuilder still passes enum values. `zero(c)` preserves the unit
-parameter; `zero(CostCurve)` (type form) defaults to NU.
+`"power_units"` key as the marker type name (e.g. `"SystemBaseUnit"`); `_unit_system_instance`
+decodes that name back to the singleton. IS4 is a breaking release: the legacy IS3
+`UnitSystem` enum is **no longer accepted** anywhere in the cost-curve API — not as a
+constructor argument, not as a serialized value-name (`"SYSTEM_BASE"`). Downstream packages
+(PowerSystemCaseBuilder, PowerSystems) must pass `SystemBaseUnit()`/`DeviceBaseUnit()`/
+`NaturalUnit()` instances. `zero(c)` preserves the unit parameter; `zero(CostCurve)`
+(type form) defaults to NU.
 
 ### Time series accessors and the multiplier contract
 
 The `get_time_series_array`/`get_time_series_values` accessor family takes
-`units::AbstractUnitSystem = SU`, forwarded to the scaling-factor multiplier; IS performs
-no conversion itself. As of IS 4.0, `scaling_factor_multiplier` functions must accept
-`(owner, units)` — a legacy 1-arg multiplier produces an actionable `ArgumentError` at
-retrieval time (see `_make_time_array`). Do not remove or weaken the `units` kwarg API.
+`units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`, forwarded to the
+scaling-factor multiplier; IS performs no conversion itself. `default_units(::Any)`
+returns `nothing` (IS fallback); domain packages override it per owner type (e.g.
+PowerSystems returns `SU` for `Component`s).
+
+As of IS 4.0, `scaling_factor_multiplier` functions may be either **unit-aware**
+(define a 2-arg method `(owner, ::AbstractUnitSystem)`) or **unit-agnostic** (define
+only `(owner)` — user closures, pre-IS4 multipliers). `_apply_multiplier`
+(in `_make_time_array`) resolves the arity per retrieval:
+- It probes unit-awareness with `SU` (the 2-arg convention is `(owner, ::AbstractUnitSystem)`),
+  using `requested = units === nothing ? SU : units`.
+- **Prefers the 2-arg form** whenever the multiplier is unit-aware — including the default
+  path, where `units === nothing` still routes a 2-arg-only multiplier through `(owner, SU)`.
+- **Falls back to the 1-arg form only when no 2-arg method exists.**
+- **Never silently drops units:** a unit-aware multiplier that lacks a method for the
+  requested unit system raises an actionable `ArgumentError` rather than degrading to
+  `(owner)`.
+
+Do not remove or weaken the `units` kwarg API, the `default_units` trait, or the
+no-silent-units-drop guarantee.
 
 ## Time-Varying Cost Curve Type Hierarchy
 
