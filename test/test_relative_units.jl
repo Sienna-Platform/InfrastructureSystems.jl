@@ -19,10 +19,26 @@ end
 end
 
 @testset "DU and SU cannot be mixed" begin
-    # Falls through Base's `+`/`==` Number fallbacks into `promote`, which
-    # has no rule across distinct unit markers and throws `ErrorException`.
-    @test_throws ErrorException 0.6 * IS.DU + 0.4 * IS.SU
-    @test_throws ErrorException 0.6 * IS.DU == 0.4 * IS.SU
+    # Cross-unit operations now throw ArgumentError with a clear message
+    # instead of a cryptic ErrorException from Base's promotion path.
+    @test_throws ArgumentError 0.6 * IS.DU + 0.4 * IS.SU
+    @test_throws ArgumentError 0.6 * IS.DU == 0.4 * IS.SU
+    @test_throws ArgumentError 0.6 * IS.DU < 0.4 * IS.SU
+    # isapprox lives outside the @eval loop (needs kwargs) — most regression-prone
+    @test_throws ArgumentError isapprox(0.6 * IS.DU, 0.6 * IS.SU)
+    # subtraction and isless are inside the @eval loop — verify they also throw
+    @test_throws ArgumentError 0.6 * IS.DU - 0.4 * IS.SU
+    @test_throws ArgumentError isless(0.6 * IS.DU, 0.7 * IS.SU)
+end
+
+@testset "tagged-vs-untagged mixing raises ArgumentError" begin
+    # RelativeQuantity <: Number but NOT <: Real: the (RQ, Real) and (Real, RQ)
+    # erroring methods use Real to avoid any ambiguity with (RQ, RQ) pairs.
+    @test_throws ArgumentError 0.6 * IS.DU == 0.5
+    @test_throws ArgumentError 0.5 + 0.6 * IS.DU
+    @test_throws ArgumentError 0.6 * IS.DU - 0.5
+    # Same-unit comparison must still work (more-specific dispatch is not disrupted)
+    @test (0.6 * IS.DU == 0.6 * IS.DU)
 end
 
 @testset "RelativeQuantity zero and one" begin
@@ -78,4 +94,27 @@ end
         @test IS.convert_cost_coefficient(2.0, IS.DU, IS.SU, sb, db, -1) ≈ 2.0 * db / sb
         @test IS.convert_cost_coefficient(2.0, IS.NU, IS.SU, sb, db, -1) ≈ 2.0 / sb
     end
+end
+
+@testset "Double-tagging is rejected" begin
+    @test_throws ArgumentError (0.6 * IS.DU) * IS.SU
+    @test_throws ArgumentError IS.SU * (0.6 * IS.DU)
+end
+
+struct _FakeUnit <: IS.AbstractUnitSystem end
+
+@testset "convert_cost_coefficient unknown subtype" begin
+    fake = _FakeUnit()
+    @test_throws ArgumentError IS.convert_cost_coefficient(2.0, fake, IS.SU, 100.0, 50.0)
+    @test_throws ArgumentError IS.convert_cost_coefficient(2.0, IS.DU, fake, 100.0, 50.0)
+end
+
+@testset "RelativeQuantity hash matches ==" begin
+    q1 = 1.0 * IS.DU
+    q2 = 1 * IS.DU
+    @test q1 == q2
+    @test hash(q1) == hash(q2)
+    d = Dict(q1 => "a")
+    d[q2] = "b"
+    @test length(d) == 1
 end

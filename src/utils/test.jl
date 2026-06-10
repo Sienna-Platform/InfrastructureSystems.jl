@@ -87,6 +87,6 @@ function TestSupplemental(;
 end
 
 supports_time_series(::TestSupplemental) = true
-get_value(attr::TestSupplemental) = attr.attr_json
+get_attr_value(attr::TestSupplemental) = attr.value
 get_internal(attr::TestSupplemental) = attr.internal
 get_uuid(attr::TestSupplemental) = get_uuid(get_internal(attr))

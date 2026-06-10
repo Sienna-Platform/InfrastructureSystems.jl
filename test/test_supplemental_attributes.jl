@@ -334,3 +334,8 @@ end
     @test IS.has_association(mgr.associations, component1)
     @test IS.has_association(mgr.associations, component2)
 end
+
+@testset "get_attr_value(::TestSupplemental)" begin
+    attr = IS.TestSupplemental(; value = 42.0)
+    @test IS.get_attr_value(attr) == 42.0
+end

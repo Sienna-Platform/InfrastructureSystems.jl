@@ -5352,3 +5352,49 @@ end
     @test IS.has_time_series(component1)
     @test IS.has_time_series(component2)
 end
+
+@testset "scaling_factor_multiplier 2-arg contract" begin
+    sys = IS.SystemData()
+    name = "Component1"
+    component = IS.TestComponent(name, 5)
+    IS.add_component!(sys, component)
+
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    data = collect(1:24)
+    ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
+
+    # 1-arg-only multiplier: only accepts (owner), not (owner, units).
+    # Must NOT be IS.get_val — that already has a 2-arg method on this branch.
+    one_arg_only_mult(c) = 1.0
+
+    ts = IS.SingleTimeSeries("val_1arg", ta; scaling_factor_multiplier = one_arg_only_mult)
+    IS.add_time_series!(sys, component, ts)
+    retrieved = IS.get_time_series(IS.SingleTimeSeries, component, "val_1arg")
+
+    # Retrieval must raise an actionable ArgumentError, not a raw MethodError.
+    @test_throws ArgumentError IS.get_time_series_array(component, retrieved)
+    # Verify the error message is actionable (Julia 1.6-compatible form — no string @test_throws)
+    err = try
+        IS.get_time_series_array(component, retrieved)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("must accept (owner, units)", err.msg)
+
+    # units kwarg annotation guard: passing a non-AbstractUnitSystem value must fail
+    # at the call site with a type mismatch (TypeError or MethodError depending on Julia version).
+    ts2 = IS.SingleTimeSeries(
+        "val_units",
+        ta;
+        scaling_factor_multiplier = IS.get_val,
+    )
+    IS.add_time_series!(sys, component, ts2)
+    @test_throws TypeError IS.get_time_series_values(
+        IS.SingleTimeSeries,
+        component,
+        "val_units";
+        units = 42,
+    )
+end
