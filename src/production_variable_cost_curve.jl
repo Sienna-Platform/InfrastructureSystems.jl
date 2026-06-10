@@ -260,38 +260,11 @@ is_time_series_backed(cost::FuelCurve) =
     is_time_series_backed(get_value_curve(cost)) ||
     is_time_series_backed(get_fuel_cost(cost))
 
-"""
-$(TYPEDSIGNATURES)
-Return the `TimeSeriesKey` for a time-series-backed `FuelCurve`. If only the value
-curve is TS-backed, returns its key; if only `fuel_cost` is TS-backed, returns the
-`fuel_cost` key. If BOTH are TS-backed the key is ambiguous and this throws
-`ArgumentError` — resolve via `get_time_series_key(get_value_curve(c))` or
-`get_fuel_cost(c)` explicitly.
-"""
-get_time_series_key(cost::FuelCurve) =
-    _fuel_curve_ts_key(get_value_curve(cost), get_fuel_cost(cost))
-
-# Disambiguate: both the generic (constrains value-curve type) and the FuelCurve-generic
-# (constrains curve type) match a FuelCurve with a TS-backed value curve — add the
-# more-specific method that satisfies both constraints.
-get_time_series_key(
-    cost::FuelCurve{<:ValueCurve{<:TimeSeriesFunctionData}},
-) = _fuel_curve_ts_key(get_value_curve(cost), get_fuel_cost(cost))
-
-_fuel_curve_ts_key(vc::ValueCurve{<:TimeSeriesFunctionData}, ::Float64) =
-    get_time_series_key(vc)
-_fuel_curve_ts_key(::ValueCurve, fc::TimeSeriesKey) = fc
-_fuel_curve_ts_key(vc::ValueCurve{<:TimeSeriesFunctionData}, ::TimeSeriesKey) = throw(
-    ArgumentError(
-        "FuelCurve has both a time-series-backed value curve and a time-series fuel_cost; " *
-        "the key is ambiguous — use get_time_series_key(get_value_curve(c)) or get_fuel_cost(c) explicitly",
-    ),
-)
-_fuel_curve_ts_key(::ValueCurve, ::Float64) = throw(
-    ArgumentError(
-        "FuelCurve is not time-series-backed; get_time_series_key is undefined",
-    ),
-)
+# `get_time_series_key` is intentionally NOT defined for `FuelCurve`: its value curve
+# and `fuel_cost` are independently time-series-backed, so a single accessor would be
+# ambiguous. Callers resolve explicitly via `get_time_series_key(get_value_curve(c))`
+# or `get_fuel_cost(c)`. Any `get_time_series_key(::FuelCurve)` call falls through to
+# the `ProductionVariableCostCurve` fallback above and throws an `ArgumentError`.
 
 # ── Serialization ─────────────────────────────────────────────────────────────
 # The U type parameter has no corresponding field, so we serialize it under the
@@ -313,9 +286,10 @@ function serialize(val::ProductionVariableCostCurve)
     return data
 end
 
-# Per-field deserializers, keyed on the serialized field name. Construction
-# goes through the kwarg constructor with every data key splatted, so a field
-# added to the struct cannot be silently dropped: an unknown key fails loudly
+# Per-field deserializers, keyed on the serialized field name (pvcc =
+# ProductionVariableCostCurve, the abstract supertype of CostCurve/FuelCurve).
+# Construction goes through the kwarg constructor with every data key splatted, so a
+# field added to the struct cannot be silently dropped: an unknown key fails loudly
 # here (no `_deserialize_pvcc_field` method) or at the constructor.
 _deserialize_pvcc_field(::Val{:value_curve}, raw::AbstractDict) =
     deserialize(get_type_from_serialization_data(raw), raw)

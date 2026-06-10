@@ -217,9 +217,14 @@ function generate_structs(directory, data::Vector; print_results = true)
                 # always export the public name.
                 push!(unique_accessor_functions, accessor_name)
                 push!(unique_setter_functions, setter_name)
-                # The `_unitful` companion is deliberately NOT exported for
-                # exclude_getter fields (gating on needs_conversion alone could
-                # break PowerSystems) — coordinate with PSY before widening.
+                # The `_unitful` companion is exported only when the getter is
+                # actually generated. For exclude_getter fields we emit just the
+                # private `_get_X` (needs_conversion forced false), so `_get_X_unitful`
+                # is never generated — PowerSystems hand-writes both `get_X` and
+                # `get_X_unitful` for those fields itself. Gating this export on
+                # needs_conversion alone would make IS export a `_unitful` symbol it
+                # never defined, colliding with PSY's hand-written one — coordinate
+                # with PSY before widening.
                 if include_getter && get(param, "needs_conversion", false)
                     push!(unique_accessor_functions, accessor_name * "_unitful")
                 end
