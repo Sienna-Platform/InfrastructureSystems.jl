@@ -389,19 +389,18 @@ end
     @test IS.is_time_series_backed(IS.FuelCurve(static_vc, forecast_key)) == true
     @test IS.is_time_series_backed(IS.FuelCurve(ts_vc, forecast_key)) == true
 
-    # get_time_series_key for all four combinations
     # CostCurve with TS value curve → returns the value-curve key
     @test IS.get_time_series_key(IS.CostCurve(ts_vc)) ===
           IS.get_time_series_key(ts_vc)
 
-    # FuelCurve: TS value curve + Float64 fuel_cost → returns the value-curve key
-    @test IS.get_time_series_key(IS.FuelCurve(ts_vc, 4.0)) ===
-          IS.get_time_series_key(ts_vc)
-
-    # FuelCurve: static value curve + TS fuel_cost → returns the fuel_cost key
-    @test IS.get_time_series_key(IS.FuelCurve(static_vc, forecast_key)) === forecast_key
-
-    # FuelCurve: both TS → ArgumentError (ambiguous)
+    # get_time_series_key is intentionally undefined for FuelCurve (its value curve and
+    # fuel_cost are independently TS-backed). Callers resolve explicitly via
+    # get_time_series_key(get_value_curve(c)) or get_fuel_cost(c); the accessor itself
+    # throws an ArgumentError for every FuelCurve combination.
+    @test_throws ArgumentError IS.get_time_series_key(IS.FuelCurve(ts_vc, 4.0))
+    @test_throws ArgumentError IS.get_time_series_key(
+        IS.FuelCurve(static_vc, forecast_key),
+    )
     @test_throws ArgumentError IS.get_time_series_key(IS.FuelCurve(ts_vc, forecast_key))
 end
 

@@ -336,7 +336,10 @@ end
 
         fc = IS.FuelCurve(ts_io, 1.0)
         @test IS.is_time_series_backed(fc) == true
-        @test IS.get_time_series_key(fc) === forecast_key
+        # get_time_series_key is undefined for FuelCurve — resolve through the value
+        # curve (or get_fuel_cost) explicitly.
+        @test_throws ArgumentError IS.get_time_series_key(fc)
+        @test IS.get_time_series_key(IS.get_value_curve(fc)) === forecast_key
     end
 
     @testset "Serialization round-trip" begin

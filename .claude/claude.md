@@ -124,10 +124,11 @@ PiecewiseIncrementalCurve, PiecewiseAverageCurve + TimeSeries* counterparts (all
 Key interface functions:
 - `is_time_series_backed(x)` — uniform static-vs-TS check; propagates through
   `CostCurve`/`FuelCurve` → `ValueCurve` → `FunctionData`. Prefer this over `isa TimeSeriesKey`.
-- `get_time_series_key(x)` — returns the underlying `TimeSeriesKey`. For `FuelCurve` it
-  resolves value-curve-backed vs fuel-cost-backed; if BOTH are TS-backed it throws
-  (ambiguous — use `get_time_series_key(get_value_curve(c))` or `get_fuel_cost(c)`).
-  Non-TS-backed curves throw an `ArgumentError`, not a `MethodError`.
+- `get_time_series_key(x)` — returns the underlying `TimeSeriesKey`. Defined for
+  `ValueCurve`/`CostCurve` (and `FunctionData`); intentionally **NOT** defined for
+  `FuelCurve` — its value curve and `fuel_cost` are independently TS-backed, so resolve
+  explicitly via `get_time_series_key(get_value_curve(c))` or `get_fuel_cost(c)`.
+  Non-TS-backed curves (and any `FuelCurve`) throw an `ArgumentError`, not a `MethodError`.
 - `build_static_curve(owner, curve, start_time)` — resolves a TS curve to its static
   counterpart for one timestep. Issues one storage read per TS-backed field; hot-loop
   consumers should resolve through a `TimeSeriesCache` or batch reads.
