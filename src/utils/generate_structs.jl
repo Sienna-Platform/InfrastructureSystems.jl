@@ -68,8 +68,8 @@ end
 {{accessor}}(value::{{struct_name}}, units) = InfrastructureSystems._strip_units(get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units))
 {{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}` as a unit-bearing quantity in the requested `units` (e.g. `SU`, `DU`, `MW`). For a bare number see [`{{accessor}}`](@ref).\"\"\"{{/create_docstring}}
 {{accessor}}_unitful(value::{{struct_name}}, units) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units)
-InfrastructureSystems.display_units_arg(::typeof({{accessor}}), ::Type{<:{{struct_name}}}) = InfrastructureSystems.{{display_units}}
-InfrastructureSystems.display_units_arg(::typeof({{accessor}}_unitful), ::Type{<:{{struct_name}}}) = InfrastructureSystems.{{display_units}}
+InfrastructureSystems.display_units_arg(::typeof({{accessor}}), ::{{units_type_sig}}){{#units_bound}} where {T <: {{units_bound}}}{{/units_bound}} = InfrastructureSystems.{{display_units}}
+InfrastructureSystems.display_units_arg(::typeof({{accessor}}_unitful), ::{{units_type_sig}}){{#units_bound}} where {T <: {{units_bound}}}{{/units_bound}} = InfrastructureSystems.{{display_units}}
 {{/needs_conversion}}
 {{^needs_conversion}}
 {{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
@@ -170,6 +170,18 @@ function generate_structs(directory, data::Vector; print_results = true)
                         # Units argument used when displaying the field (tables, REPL);
                         # override per field in the descriptor with "display_units".
                         "display_units" => get(param, "display_units", "SU"),
+                        # The units trait dispatches on the component's concrete
+                        # type, so parametric structs need the `Type{Name{T}} where`
+                        # form (`Type{Name}` is the UnionAll and never matches a
+                        # concrete `Name{...}`); concrete structs use the exact form.
+                        "units_type_sig" => if haskey(item, "parametric")
+                            "Type{$(item["struct_name"]){T}}"
+                        else
+                            "Type{$(item["struct_name"])}"
+                        end,
+                        # The bound is substituted inside a literal `where {T <: …}`
+                        # template fragment (values get HTML-escaped; literals don't).
+                        "units_bound" => get(item, "parametric", false),
                     ),
                 )
             else
