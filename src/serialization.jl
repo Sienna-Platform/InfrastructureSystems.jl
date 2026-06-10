@@ -335,7 +335,9 @@ end
 # JSON.jl will happily serialize Functions, Modules, Tasks, IO handles, etc. by
 # introspecting their fields, but those values are not meaningful JSON content and
 # cannot be reliably deserialized. Restrict 'ext' values to genuine data types.
-_is_ext_value_basic(::Union{Nothing, Missing, Number, AbstractString, Symbol, Bool}) = true
+_is_ext_value_basic(
+    ::Union{Nothing, Missing, Number, AbstractString, Symbol, Bool, Char, Enum},
+) = true
 _is_ext_value_basic(x::AbstractArray) = all(_is_ext_value_basic, x)
 _is_ext_value_basic(x::Tuple) = all(_is_ext_value_basic, x)
 _is_ext_value_basic(x::AbstractDict) =
@@ -344,6 +346,7 @@ _is_ext_value_basic(::Union{Function, Module, Task, IO, Ptr, Base.RefValue}) = f
 function _is_ext_value_basic(x::T) where {T}
     isstructtype(T) || return false
     for name in fieldnames(T)
+        isdefined(x, name) || return false
         _is_ext_value_basic(getfield(x, name)) || return false
     end
     return true

@@ -231,6 +231,54 @@ Base.zero(::Type{RelativeQuantity{T, U}}) where {T, U} = RelativeQuantity(zero(T
 Base.one(::Type{RelativeQuantity{T, U}}) where {T, U} = RelativeQuantity(one(T), U())
 Base.hash(q::RelativeQuantity{T, U}, h::UInt) where {T, U} = hash(q.value, hash(U, h))
 
+# Instance forms: Base's Number fallbacks for these need
+# `convert(::Type{<:RelativeQuantity}, ::Real)`, which is deliberately
+# undefined — implicit unit-attachment is the bug class this design prevents.
+Base.zero(::RelativeQuantity{T, U}) where {T, U} = RelativeQuantity(zero(T), U())
+Base.one(::RelativeQuantity{T, U}) where {T, U} = RelativeQuantity(one(T), U())
+Base.iszero(q::RelativeQuantity) = iszero(q.value)
+Base.isnan(q::RelativeQuantity) = isnan(q.value)
+Base.isfinite(q::RelativeQuantity) = isfinite(q.value)
+Base.isinf(q::RelativeQuantity) = isinf(q.value)
+Base.abs(q::RelativeQuantity) = RelativeQuantity(abs(q.value), q.unit)
+
+# `isequal` must be total — Dict/Set lookups call it on arbitrary key pairs —
+# so unlike `==`, mixing bases or tagged/untagged values answers `false`
+# rather than erroring.
+Base.isequal(a::RelativeQuantity{T, U}, b::RelativeQuantity{S, U}) where {T, S, U} =
+    isequal(a.value, b.value)
+Base.isequal(::RelativeQuantity, ::RelativeQuantity) = false
+Base.isequal(::RelativeQuantity, ::Real) = false
+Base.isequal(::Real, ::RelativeQuantity) = false
+
+Base.isapprox(a::RelativeQuantity, b::Real; kwargs...) = throw(
+    ArgumentError(
+        "cannot compare a unit-tagged quantity ($(a.unit)) with an untagged number; " *
+        "strip units or tag the number first",
+    ),
+)
+Base.isapprox(a::Real, b::RelativeQuantity; kwargs...) = throw(
+    ArgumentError(
+        "cannot compare an untagged number with a unit-tagged quantity ($(b.unit)); " *
+        "strip units or tag the number first",
+    ),
+)
+
+# Products/quotients of two tagged quantities have no representable unit
+# (this also catches `q^2`, which lowers to `q * q`).
+Base.:*(a::RelativeQuantity, b::RelativeQuantity) = throw(
+    ArgumentError(
+        "cannot multiply two unit-tagged quantities ($(a.unit) × $(b.unit)); " *
+        "strip units first",
+    ),
+)
+Base.:/(a::RelativeQuantity, b::RelativeQuantity) = throw(
+    ArgumentError(
+        "cannot divide two unit-tagged quantities ($(a.unit) / $(b.unit)); " *
+        "strip units first",
+    ),
+)
+
 """
     convert_cost_coefficient(value, U_from, U_to,
                              system_base_power, device_base_power,
