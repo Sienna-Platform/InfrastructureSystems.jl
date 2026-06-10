@@ -75,6 +75,21 @@ end
 Base.:*(a::Number, b::AbstractRelativeUnit) = RelativeQuantity(a, b)
 Base.:*(b::AbstractRelativeUnit, a::Number) = RelativeQuantity(a, b)
 
+# Guard against double-tagging: more specific methods catch the case where
+# the left (or right) operand is already a RelativeQuantity (which is <: Number).
+Base.:*(a::RelativeQuantity, b::AbstractRelativeUnit) =
+    throw(
+        ArgumentError(
+            "cannot re-tag an already-tagged quantity: $(a.unit) value multiplied by $b; strip units first",
+        ),
+    )
+Base.:*(b::AbstractRelativeUnit, a::RelativeQuantity) =
+    throw(
+        ArgumentError(
+            "cannot re-tag an already-tagged quantity: $b multiplied by $(a.unit) value; strip units first",
+        ),
+    )
+
 # Arithmetic — same unit type only
 Base.:+(a::RelativeQuantity{T, U}, b::RelativeQuantity{S, U}) where {T, S, U} =
     RelativeQuantity(a.value + b.value, a.unit)
@@ -105,6 +120,73 @@ Base.isapprox(
     kwargs...,
 ) where {T, S, U} = isapprox(a.value, b.value; kwargs...)
 
+# Cross-unit operations: produce a clear error rather than falling into Base
+# promotion which yields a cryptic ErrorException.
+for op in (:+, :-, :(==), :(<), :(<=), :isless)
+    @eval Base.$op(
+        a::RelativeQuantity{T, U1},
+        b::RelativeQuantity{S, U2},
+    ) where {T, S, U1, U2} =
+        throw(
+            ArgumentError(
+                "cannot combine/compare quantities in different unit bases ($(a.unit) vs $(b.unit)); convert explicitly first",
+            ),
+        )
+end
+Base.isapprox(
+    a::RelativeQuantity{T, U1},
+    b::RelativeQuantity{S, U2};
+    kwargs...,
+) where {T, S, U1, U2} =
+    throw(
+        ArgumentError(
+            "cannot compare quantities in different unit bases ($(a.unit) vs $(b.unit)); convert explicitly first",
+        ),
+    )
+
+# Tagged-vs-untagged mixing: produce a clear error rather than falling into Base
+# promotion which yields a cryptic ErrorException.
+# Uses `Real` (not `Number`) for the plain-number side: RelativeQuantity <: Number
+# but NOT <: Real, so (RQ, Real) and (Real, RQ) cannot conflict with any (RQ, RQ)
+# pair — dispatch ordering is clean with no ambiguities.
+# Errors are inlined (no shared helper) to avoid a (RQ,b)/(a,RQ) helper ambiguity.
+Base.:(==)(a::RelativeQuantity, b::Real) = throw(
+    ArgumentError(
+        "cannot combine/compare a unit-tagged quantity ($(a.unit)) with an untagged number; " *
+        "strip units or tag the number first",
+    ),
+)
+Base.:(==)(a::Real, b::RelativeQuantity) = throw(
+    ArgumentError(
+        "cannot combine/compare an untagged number with a unit-tagged quantity ($(b.unit)); " *
+        "strip units or tag the number first",
+    ),
+)
+Base.:+(a::RelativeQuantity, b::Real) = throw(
+    ArgumentError(
+        "cannot combine/compare a unit-tagged quantity ($(a.unit)) with an untagged number; " *
+        "strip units or tag the number first",
+    ),
+)
+Base.:+(a::Real, b::RelativeQuantity) = throw(
+    ArgumentError(
+        "cannot combine/compare an untagged number with a unit-tagged quantity ($(b.unit)); " *
+        "strip units or tag the number first",
+    ),
+)
+Base.:-(a::RelativeQuantity, b::Real) = throw(
+    ArgumentError(
+        "cannot combine/compare a unit-tagged quantity ($(a.unit)) with an untagged number; " *
+        "strip units or tag the number first",
+    ),
+)
+Base.:-(a::Real, b::RelativeQuantity) = throw(
+    ArgumentError(
+        "cannot combine/compare an untagged number with a unit-tagged quantity ($(b.unit)); " *
+        "strip units or tag the number first",
+    ),
+)
+
 """
     ustrip(q::RelativeQuantity)
 
@@ -119,7 +201,10 @@ ustrip(q::RelativeQuantity) = q.value
 
 Drop the unit wrapper and return the bare numeric value. Used by generated
 unit-aware getters so `get_X(c, units)` returns a `Float64` while
-`get_X_unitful(c, units)` keeps the wrapper.
+`get_X_unitful(c, units)` keeps the wrapper. The fallback returns its argument
+unchanged; domain packages MUST extend `_strip_units` for their own quantity
+wrapper types (e.g. `Unitful.Quantity`), otherwise `get_X` returns the wrapper
+rather than a bare number.
 """
 _strip_units(x) = x
 _strip_units(q::RelativeQuantity) = q.value
@@ -144,6 +229,7 @@ Base.show(io::IO, ::NaturalUnit) = print(io, "NU")
 
 Base.zero(::Type{RelativeQuantity{T, U}}) where {T, U} = RelativeQuantity(zero(T), U())
 Base.one(::Type{RelativeQuantity{T, U}}) where {T, U} = RelativeQuantity(one(T), U())
+Base.hash(q::RelativeQuantity{T, U}, h::UInt) where {T, U} = hash(q.value, hash(U, h))
 
 """
     convert_cost_coefficient(value, U_from, U_to,
@@ -175,13 +261,18 @@ _cost_coeff_ratio(::NaturalUnit, ::SystemBaseUnit, sb, _) = sb
 _cost_coeff_ratio(::SystemBaseUnit, ::NaturalUnit, sb, _) = 1 / sb
 _cost_coeff_ratio(::NaturalUnit, ::DeviceBaseUnit, _, db) = db
 _cost_coeff_ratio(::DeviceBaseUnit, ::NaturalUnit, _, db) = 1 / db
+_cost_coeff_ratio(from::AbstractUnitSystem, to::AbstractUnitSystem, _, _) =
+    throw(ArgumentError("unsupported unit-system conversion: $from → $to"))
 
 """
-    display_units_arg(f, ::Type{T}) -> Union{AbstractRelativeUnit, Missing}
+    display_units_arg(f, ::Type{T})
 
-Trait returning the units argument a getter `f` expects when called on a
-component of type `T` for display/tabular output, or `missing` if the getter
-takes no units argument. Keyed on both function and type because the same
+Trait returning a units argument accepted by getter `f` when called on a
+component of type `T` for display/tabular output (e.g. `SU`), or `missing`
+if the getter takes no units argument. The returned value may be an
+`AbstractRelativeUnit` (defined in IS, e.g. `SU`) or a domain-provided units
+object (e.g. `MW` from a Unitful-based package); callers should not assume it
+is an `AbstractRelativeUnit`. Keyed on both function and type because the same
 getter name can appear on both unit-bearing and non-unit-bearing structs
 (e.g. `get_b` on `Line` vs. `DynamicExponentialLoad`). Downstream packages
 set this per-struct (typically via the struct-generator template); consumers
