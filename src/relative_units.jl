@@ -18,7 +18,7 @@ export AbstractUnitSystem, AbstractRelativeUnit
 export DeviceBaseUnit, SystemBaseUnit, NaturalUnit
 export RelativeQuantity
 export DU, SU, NU
-export convert_cost_coefficient, display_units_arg
+export display_units_arg
 
 """
 Supertype for all unit-system markers (relative and natural). Used as the
@@ -68,8 +68,27 @@ A quantity tagged with a per-unit marker.
 """
 struct RelativeQuantity{T <: Number, U <: AbstractRelativeUnit} <: Number
     value::T
-    unit::U
+
+    # The typed inner constructor replaces the implicit `(value::Any)` one,
+    # which is ambiguous against Base's generic Number constructors
+    # (TwicePrecision, AbstractChar, identity).
+    RelativeQuantity{T, U}(value::Number) where {T <: Number, U <: AbstractRelativeUnit} =
+        new{T, U}(convert(T, value))
 end
+
+# Disambiguates against Core's identity constructor `(::Type{T})(x::T)`.
+RelativeQuantity{T, U}(
+    q::RelativeQuantity{T, U},
+) where {T <: Number, U <: AbstractRelativeUnit} =
+    q
+
+# The unit is carried entirely by the type parameter; the two-argument
+# constructor and the `unit` accessor keep the marker-instance API.
+RelativeQuantity(value::T, ::U) where {T <: Number, U <: AbstractRelativeUnit} =
+    RelativeQuantity{T, U}(value)
+
+"Return the unit marker instance (`DU`/`SU`) of a `RelativeQuantity`."
+unit(::RelativeQuantity{<:Any, U}) where {U} = U()
 
 # Construction via multiplication
 Base.:*(a::Number, b::AbstractRelativeUnit) = RelativeQuantity(a, b)
@@ -80,30 +99,30 @@ Base.:*(b::AbstractRelativeUnit, a::Number) = RelativeQuantity(a, b)
 Base.:*(a::RelativeQuantity, b::AbstractRelativeUnit) =
     throw(
         ArgumentError(
-            "cannot re-tag an already-tagged quantity: $(a.unit) value multiplied by $b; strip units first",
+            "cannot re-tag an already-tagged quantity: $(unit(a)) value multiplied by $b; strip units first",
         ),
     )
 Base.:*(b::AbstractRelativeUnit, a::RelativeQuantity) =
     throw(
         ArgumentError(
-            "cannot re-tag an already-tagged quantity: $b multiplied by $(a.unit) value; strip units first",
+            "cannot re-tag an already-tagged quantity: $b multiplied by $(unit(a)) value; strip units first",
         ),
     )
 
 # Arithmetic — same unit type only
 Base.:+(a::RelativeQuantity{T, U}, b::RelativeQuantity{S, U}) where {T, S, U} =
-    RelativeQuantity(a.value + b.value, a.unit)
+    RelativeQuantity(a.value + b.value, unit(a))
 Base.:-(a::RelativeQuantity{T, U}, b::RelativeQuantity{S, U}) where {T, S, U} =
-    RelativeQuantity(a.value - b.value, a.unit)
-Base.:-(a::RelativeQuantity{T, U}) where {T, U} = RelativeQuantity(-a.value, a.unit)
+    RelativeQuantity(a.value - b.value, unit(a))
+Base.:-(a::RelativeQuantity{T, U}) where {T, U} = RelativeQuantity(-a.value, unit(a))
 
 # Scalar mul/div (Real to avoid ambiguity with unit-bearing types)
 Base.:*(a::Real, b::RelativeQuantity{T, U}) where {T, U} =
-    RelativeQuantity(a * b.value, b.unit)
+    RelativeQuantity(a * b.value, unit(b))
 Base.:*(a::RelativeQuantity{T, U}, b::Real) where {T, U} =
-    RelativeQuantity(a.value * b, a.unit)
+    RelativeQuantity(a.value * b, unit(a))
 Base.:/(a::RelativeQuantity{T, U}, b::Real) where {T, U} =
-    RelativeQuantity(a.value / b, a.unit)
+    RelativeQuantity(a.value / b, unit(a))
 
 # Comparisons
 Base.:(==)(a::RelativeQuantity{T, U}, b::RelativeQuantity{S, U}) where {T, S, U} =
@@ -129,7 +148,7 @@ for op in (:+, :-, :(==), :(<), :(<=), :isless)
     ) where {T, S, U1, U2} =
         throw(
             ArgumentError(
-                "cannot combine/compare quantities in different unit bases ($(a.unit) vs $(b.unit)); convert explicitly first",
+                "cannot combine/compare quantities in different unit bases ($(unit(a)) vs $(unit(b))); convert explicitly first",
             ),
         )
 end
@@ -140,7 +159,7 @@ Base.isapprox(
 ) where {T, S, U1, U2} =
     throw(
         ArgumentError(
-            "cannot compare quantities in different unit bases ($(a.unit) vs $(b.unit)); convert explicitly first",
+            "cannot compare quantities in different unit bases ($(unit(a)) vs $(unit(b))); convert explicitly first",
         ),
     )
 
@@ -152,47 +171,40 @@ Base.isapprox(
 # Errors are inlined (no shared helper) to avoid a (RQ,b)/(a,RQ) helper ambiguity.
 Base.:(==)(a::RelativeQuantity, b::Real) = throw(
     ArgumentError(
-        "cannot combine/compare a unit-tagged quantity ($(a.unit)) with an untagged number; " *
+        "cannot combine/compare a unit-tagged quantity ($(unit(a))) with an untagged number; " *
         "strip units or tag the number first",
     ),
 )
 Base.:(==)(a::Real, b::RelativeQuantity) = throw(
     ArgumentError(
-        "cannot combine/compare an untagged number with a unit-tagged quantity ($(b.unit)); " *
+        "cannot combine/compare an untagged number with a unit-tagged quantity ($(unit(b))); " *
         "strip units or tag the number first",
     ),
 )
 Base.:+(a::RelativeQuantity, b::Real) = throw(
     ArgumentError(
-        "cannot combine/compare a unit-tagged quantity ($(a.unit)) with an untagged number; " *
+        "cannot combine/compare a unit-tagged quantity ($(unit(a))) with an untagged number; " *
         "strip units or tag the number first",
     ),
 )
 Base.:+(a::Real, b::RelativeQuantity) = throw(
     ArgumentError(
-        "cannot combine/compare an untagged number with a unit-tagged quantity ($(b.unit)); " *
+        "cannot combine/compare an untagged number with a unit-tagged quantity ($(unit(b))); " *
         "strip units or tag the number first",
     ),
 )
 Base.:-(a::RelativeQuantity, b::Real) = throw(
     ArgumentError(
-        "cannot combine/compare a unit-tagged quantity ($(a.unit)) with an untagged number; " *
+        "cannot combine/compare a unit-tagged quantity ($(unit(a))) with an untagged number; " *
         "strip units or tag the number first",
     ),
 )
 Base.:-(a::Real, b::RelativeQuantity) = throw(
     ArgumentError(
-        "cannot combine/compare an untagged number with a unit-tagged quantity ($(b.unit)); " *
+        "cannot combine/compare an untagged number with a unit-tagged quantity ($(unit(b))); " *
         "strip units or tag the number first",
     ),
 )
-
-"""
-    ustrip(q::RelativeQuantity)
-
-Extract the numeric value from a `RelativeQuantity`.
-"""
-ustrip(q::RelativeQuantity) = q.value
 
 # Needed because Unitful.jl isn't a dependency of IS — domain packages (e.g.
 # PSY) extend `_strip_units` with a method for `Unitful.Quantity`.
@@ -212,7 +224,7 @@ _strip_units(t::NamedTuple) = map(_strip_units, t)
 
 # Type conversions
 Base.convert(::Type{RelativeQuantity{T, U}}, q::RelativeQuantity{S, U}) where {T, S, U} =
-    RelativeQuantity(convert(T, q.value), q.unit)
+    RelativeQuantity(convert(T, q.value), unit(q))
 Base.promote_rule(
     ::Type{RelativeQuantity{T, U}},
     ::Type{RelativeQuantity{S, U}},
@@ -240,26 +252,27 @@ Base.iszero(q::RelativeQuantity) = iszero(q.value)
 Base.isnan(q::RelativeQuantity) = isnan(q.value)
 Base.isfinite(q::RelativeQuantity) = isfinite(q.value)
 Base.isinf(q::RelativeQuantity) = isinf(q.value)
-Base.abs(q::RelativeQuantity) = RelativeQuantity(abs(q.value), q.unit)
+Base.abs(q::RelativeQuantity) = RelativeQuantity(abs(q.value), unit(q))
 
 # `isequal` must be total — Dict/Set lookups call it on arbitrary key pairs —
 # so unlike `==`, mixing bases or tagged/untagged values answers `false`
 # rather than erroring.
-Base.isequal(a::RelativeQuantity{T, U}, b::RelativeQuantity{S, U}) where {T, S, U} =
-    isequal(a.value, b.value)
-Base.isequal(::RelativeQuantity, ::RelativeQuantity) = false
+Base.isequal(
+    a::RelativeQuantity{<:Any, U1},
+    b::RelativeQuantity{<:Any, U2},
+) where {U1, U2} = U1 === U2 && isequal(a.value, b.value)
 Base.isequal(::RelativeQuantity, ::Real) = false
 Base.isequal(::Real, ::RelativeQuantity) = false
 
 Base.isapprox(a::RelativeQuantity, b::Real; kwargs...) = throw(
     ArgumentError(
-        "cannot compare a unit-tagged quantity ($(a.unit)) with an untagged number; " *
+        "cannot compare a unit-tagged quantity ($(unit(a))) with an untagged number; " *
         "strip units or tag the number first",
     ),
 )
 Base.isapprox(a::Real, b::RelativeQuantity; kwargs...) = throw(
     ArgumentError(
-        "cannot compare an untagged number with a unit-tagged quantity ($(b.unit)); " *
+        "cannot compare an untagged number with a unit-tagged quantity ($(unit(b))); " *
         "strip units or tag the number first",
     ),
 )
@@ -268,13 +281,13 @@ Base.isapprox(a::Real, b::RelativeQuantity; kwargs...) = throw(
 # (this also catches `q^2`, which lowers to `q * q`).
 Base.:*(a::RelativeQuantity, b::RelativeQuantity) = throw(
     ArgumentError(
-        "cannot multiply two unit-tagged quantities ($(a.unit) × $(b.unit)); " *
+        "cannot multiply two unit-tagged quantities ($(unit(a)) × $(unit(b))); " *
         "strip units first",
     ),
 )
 Base.:/(a::RelativeQuantity, b::RelativeQuantity) = throw(
     ArgumentError(
-        "cannot divide two unit-tagged quantities ($(a.unit) / $(b.unit)); " *
+        "cannot divide two unit-tagged quantities ($(unit(a)) / $(unit(b))); " *
         "strip units first",
     ),
 )
@@ -289,6 +302,10 @@ Convert a cost coefficient (e.g. \$/MW for `exponent=1`, \$/MW² for
 the corresponding power-value ratio raised to `exponent`, since if
 `obj = c · x_from` and `x_from = r · x_to`, then the equivalent coefficient
 under `x_to` is `c · r`.
+
+Deliberately not exported: it currently has no consumer in the Sienna stack;
+it is kept available (as `IS.convert_cost_coefficient`) for downstream
+packages that convert objective-function coefficients (e.g. PowerSimulations).
 """
 convert_cost_coefficient(
     value::Float64,

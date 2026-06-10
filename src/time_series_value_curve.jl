@@ -50,9 +50,9 @@ retrieved time series data.
     "The underlying `TimeSeriesFunctionData` representation of this `ValueCurve`"
     function_data::T
     "The initial input value, either a TimeSeriesKey or nothing"
-    initial_input::Union{Nothing, TimeSeriesKey}
+    initial_input::Union{Nothing, ConcreteTimeSeriesKey}
     "Optional, an explicit representation of the input value at zero output."
-    input_at_zero::Union{Nothing, TimeSeriesKey} = nothing
+    input_at_zero::Union{Nothing, ConcreteTimeSeriesKey} = nothing
 end
 
 TimeSeriesIncrementalCurve(function_data, initial_input) =
@@ -87,9 +87,9 @@ retrieved time series data.
     "The underlying `TimeSeriesFunctionData` representation of this `ValueCurve`"
     function_data::T
     "The initial input value, either a TimeSeriesKey or nothing"
-    initial_input::Union{Nothing, TimeSeriesKey}
+    initial_input::Union{Nothing, ConcreteTimeSeriesKey}
     "Optional, an explicit representation of the input value at zero output."
-    input_at_zero::Union{Nothing, TimeSeriesKey} = nothing
+    input_at_zero::Union{Nothing, ConcreteTimeSeriesKey} = nothing
 end
 
 TimeSeriesAverageRateCurve(function_data, initial_input) =
@@ -155,119 +155,119 @@ TimeSeriesAverageRateCurve(
 } = TimeSeriesAverageRateCurve{T}(function_data, initial_input, input_at_zero)
 
 # ============================================================================
-# RESOLVE TO STATIC CURVE
-# Resolves a time-series-backed ValueCurve at a single timestep. Could be
-# extended to return a Vector of static curves over a time interval (e.g. for
-# forecast windows) by accepting a `len` parameter.
+# RESOLVE TO STATIC CURVE(S)
+# Each time-series-backed curve type pairs with its static counterpart via the
+# `static_curve_type` trait; one generic `build_static_curve` resolves a single
+# timestep and `build_static_curves` resolves a window with one storage read
+# per time-series-backed field.
 # ============================================================================
 
+"Union of the time-series-backed `ValueCurve` types."
+const TimeSeriesValueCurve = Union{
+    TimeSeriesInputOutputCurve,
+    TimeSeriesIncrementalCurve,
+    TimeSeriesAverageRateCurve,
+}
+
+"The static `ValueCurve` counterpart of a time-series-backed curve type."
+static_curve_type(::Type{<:TimeSeriesInputOutputCurve}) = InputOutputCurve
+static_curve_type(::Type{<:TimeSeriesIncrementalCurve}) = IncrementalCurve
+static_curve_type(::Type{<:TimeSeriesAverageRateCurve}) = AverageRateCurve
+
+_static_function_data_type(
+    ::ValueCurve{TimeSeriesFunctionData{T}},
+) where {T <: StaticFunctionData} = T
+
 """
-Resolve a scalar `TimeSeriesKey` to the `Float64` value at the given timestep,
+Resolve a scalar `TimeSeriesKey` to the `Float64` values over a window,
 or pass through `nothing`.
 """
-function _resolve_scalar_key(
-    owner::TimeSeriesOwners,
-    key::Nothing,
-    start_time::Dates.DateTime,
-)
-    return nothing
-end
+_resolve_scalar_key_window(
+    ::TimeSeriesOwners,
+    ::Nothing,
+    ::Dates.DateTime,
+    len::Int,
+) = nothing
 
-function _resolve_scalar_key(
-    owner::TimeSeriesOwners,
-    key::TimeSeriesKey,
-    start_time::Dates.DateTime,
-)
-    vals = get_time_series_values(owner, key; start_time = start_time, len = 1)
-    return vals[1]::Float64
-end
-
-"""
-$(TYPEDSIGNATURES)
-Fetch the function-data values for `key` at `start_time` (len = 1) and extract the
-single static `FunctionData` element.
-"""
-function _resolve_function_data_key(
+function _resolve_scalar_key_window(
     owner::TimeSeriesOwners,
     key::TimeSeriesKey,
     start_time::Dates.DateTime,
-    ::Type{T},
-) where {T <: StaticFunctionData}
-    vals = get_time_series_values(owner, key; start_time = start_time, len = 1)
-    return vals[1]::T
+    len::Int,
+)
+    return get_time_series_values(
+        owner, key; start_time = start_time, len = len)::AbstractVector{Float64}
+end
+
+_window_element(::Nothing, ::Int) = nothing
+_window_element(vals::AbstractVector, i::Int) = vals[i]
+
+# Per-curve-kind extra constructor arguments, resolved for the whole window.
+_static_curve_args_window(
+    curve::TimeSeriesInputOutputCurve,
+    ::TimeSeriesOwners,
+    ::Dates.DateTime,
+    len::Int,
+) = (fill(get_input_at_zero(curve), len),)
+
+function _static_curve_args_window(
+    curve::Union{TimeSeriesIncrementalCurve, TimeSeriesAverageRateCurve},
+    owner::TimeSeriesOwners,
+    start_time::Dates.DateTime,
+    len::Int,
+)
+    initial_key = get_initial_input(curve)
+    zero_key = get_input_at_zero(curve)
+    initial_input = _resolve_scalar_key_window(owner, initial_key, start_time, len)
+    # Merge the read when both scalars reference the same series.
+    input_at_zero = if zero_key !== nothing && zero_key == initial_key
+        initial_input
+    else
+        _resolve_scalar_key_window(owner, zero_key, start_time, len)
+    end
+    return (initial_input, input_at_zero)
 end
 
 """
-    build_static_curve(
-        curve::TimeSeriesInputOutputCurve,
-        owner::TimeSeriesOwners,
-        start_time::Dates.DateTime,
-    ) -> InputOutputCurve
+    build_static_curves(curve, owner, start_time, len) -> Vector{<:ValueCurve}
+
+Resolve a time-series-backed `ValueCurve` over a window of `len` timesteps
+starting at `start_time`, returning the corresponding static `ValueCurve`s with
+all time series references replaced by their values. Issues one storage read
+per time-series-backed field for the entire window.
+"""
+function build_static_curves(
+    curve::TimeSeriesValueCurve,
+    owner::TimeSeriesOwners,
+    start_time::Dates.DateTime,
+    len::Int,
+)
+    len >= 1 || throw(ArgumentError("len must be positive, got $len"))
+    T = _static_function_data_type(curve)
+    fds = get_time_series_values(
+        owner, get_time_series_key(curve); start_time = start_time, len = len)
+    args = _static_curve_args_window(curve, owner, start_time, len)
+    S = static_curve_type(typeof(curve))
+    return [
+        S(fds[i]::T, (_window_element(a, i) for a in args)...) for i in 1:len
+    ]
+end
+
+"""
+    build_static_curve(curve, owner, start_time) -> ValueCurve
 
 Resolve a time-series-backed `ValueCurve` at a specific timestep, returning the
-corresponding static `ValueCurve` with all time series references replaced by their
-values at `start_time`.
+corresponding static `ValueCurve` with all time series references replaced by
+their values at `start_time`.
 
-Per-timestep resolution issues one storage read per time-series-backed field (the
-function data plus each of `initial_input`/`input_at_zero` when TS-backed). Hot-loop
-consumers (e.g. simulation inner loops) should resolve through a `TimeSeriesCache` or
-batch reads rather than calling this per component per timestep.
+Per-timestep resolution issues one storage read per time-series-backed field
+(the function data plus each of `initial_input`/`input_at_zero` when
+TS-backed). Hot-loop consumers should resolve a window at a time through
+[`build_static_curves`](@ref) or a `TimeSeriesCache` rather than calling this
+per component per timestep.
 """
-function build_static_curve(
-    curve::TimeSeriesInputOutputCurve{TimeSeriesFunctionData{T}},
+build_static_curve(
+    curve::TimeSeriesValueCurve,
     owner::TimeSeriesOwners,
     start_time::Dates.DateTime,
-) where {T <: StaticFunctionData}
-    fd = _resolve_function_data_key(owner, get_time_series_key(curve), start_time, T)
-    return InputOutputCurve(fd, get_input_at_zero(curve))
-end
-
-"""
-    build_static_curve(
-        curve::TimeSeriesIncrementalCurve,
-        owner::TimeSeriesOwners,
-        start_time::Dates.DateTime,
-    ) -> IncrementalCurve
-
-Resolve a time-series-backed `IncrementalCurve` at a specific timestep.
-
-Per-timestep resolution issues one storage read per time-series-backed field (the
-function data plus each of `initial_input`/`input_at_zero` when TS-backed). Hot-loop
-consumers (e.g. simulation inner loops) should resolve through a `TimeSeriesCache` or
-batch reads rather than calling this per component per timestep.
-"""
-function build_static_curve(
-    curve::TimeSeriesIncrementalCurve{TimeSeriesFunctionData{T}},
-    owner::TimeSeriesOwners,
-    start_time::Dates.DateTime,
-) where {T <: StaticFunctionData}
-    fd = _resolve_function_data_key(owner, get_time_series_key(curve), start_time, T)
-    initial_input = _resolve_scalar_key(owner, get_initial_input(curve), start_time)
-    input_at_zero = _resolve_scalar_key(owner, get_input_at_zero(curve), start_time)
-    return IncrementalCurve(fd, initial_input, input_at_zero)
-end
-
-"""
-    build_static_curve(
-        curve::TimeSeriesAverageRateCurve,
-        owner::TimeSeriesOwners,
-        start_time::Dates.DateTime,
-    ) -> AverageRateCurve
-
-Resolve a time-series-backed `AverageRateCurve` at a specific timestep.
-
-Per-timestep resolution issues one storage read per time-series-backed field (the
-function data plus each of `initial_input`/`input_at_zero` when TS-backed). Hot-loop
-consumers (e.g. simulation inner loops) should resolve through a `TimeSeriesCache` or
-batch reads rather than calling this per component per timestep.
-"""
-function build_static_curve(
-    curve::TimeSeriesAverageRateCurve{TimeSeriesFunctionData{T}},
-    owner::TimeSeriesOwners,
-    start_time::Dates.DateTime,
-) where {T <: StaticFunctionData}
-    fd = _resolve_function_data_key(owner, get_time_series_key(curve), start_time, T)
-    initial_input = _resolve_scalar_key(owner, get_initial_input(curve), start_time)
-    input_at_zero = _resolve_scalar_key(owner, get_input_at_zero(curve), start_time)
-    return AverageRateCurve(fd, initial_input, input_at_zero)
-end
+) = only(build_static_curves(curve, owner, start_time, 1))

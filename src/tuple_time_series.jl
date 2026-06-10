@@ -22,17 +22,17 @@ stages = build_static_tuple(tts, component, start_time)  # returns a StartUpStag
 ```
 """
 struct TupleTimeSeries{T <: NamedTuple} <: InfrastructureSystemsType
-    time_series_key::TimeSeriesKey
+    time_series_key::ConcreteTimeSeriesKey
 
     function TupleTimeSeries{T}(
-        time_series_key::TimeSeriesKey,
+        time_series_key::ConcreteTimeSeriesKey,
     ) where {T <: NamedTuple}
         _validate_tuple_time_series_type(T)
         return new{T}(time_series_key)
     end
 end
 
-TupleTimeSeries{T}(; time_series_key::TimeSeriesKey) where {T <: NamedTuple} =
+TupleTimeSeries{T}(; time_series_key::ConcreteTimeSeriesKey) where {T <: NamedTuple} =
     TupleTimeSeries{T}(time_series_key)
 
 @inline _assert_concrete_namedtuple(::Type{T}) where {T} =
@@ -120,6 +120,9 @@ function build_static_tuple(
 end
 
 # ── Serialization ────────────────────────────────────────────────────────────
+# Uses the shared PARAMETERS_KEY / CONSTRUCT_WITH_PARAMETERS_KEY mechanism (like
+# `TimeSeriesFunctionData{T}`); the NamedTuple shape is encoded as a structured
+# parameter entry that `get_type_from_serialization_metadata` resolves.
 
 function add_serialization_metadata!(
     data::Dict,
@@ -128,18 +131,17 @@ function add_serialization_metadata!(
     data[METADATA_KEY] = Dict{String, Any}(
         TYPE_KEY => "TupleTimeSeries",
         MODULE_KEY => string(parentmodule(TupleTimeSeries)),
-        "namedtuple_fields" => Tuple(string(n) for n in fieldnames(T)),
+        PARAMETERS_KEY => [
+            Dict(
+                "namedtuple_names" => [string(n) for n in fieldnames(T)],
+            ),
+        ],
+        CONSTRUCT_WITH_PARAMETERS_KEY => true,
     )
 end
 
-function deserialize(::Type{TupleTimeSeries}, data::Dict)
-    metadata = get_serialization_metadata(data)
-    field_names = Tuple(Symbol.(metadata["namedtuple_fields"]))
-    N = length(field_names)
-    T = NamedTuple{field_names, NTuple{N, Float64}}
+function deserialize(::Type{TupleTimeSeries{T}}, data::Dict) where {T <: NamedTuple}
     key_data = data["time_series_key"]
-    key_metadata = get_serialization_metadata(key_data)
-    key_type = get_type_from_serialization_metadata(key_metadata)
-    key = deserialize(key_type, key_data)
+    key = deserialize(get_type_from_serialization_data(key_data), key_data)
     return TupleTimeSeries{T}(key)
 end

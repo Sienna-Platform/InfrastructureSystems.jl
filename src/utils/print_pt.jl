@@ -104,6 +104,32 @@ function show_components(
 
     comps = get_components(component_type, components)
     data = Array{Any, 2}(undef, length(comps), length(column_labels))
+
+    # Resolve each column's getter and units argument once, not per cell;
+    # `component_type` is concrete (checked above), so the units trait is
+    # constant across rows. The getter logic enables application of system
+    # units in PowerSystems through its getter functions.
+    column_accessors = if additional_columns isa Dict
+        nothing
+    else
+        parent = parentmodule(component_type)
+        map(additional_columns) do column
+            getter_name = Symbol("get_$column")
+            getter_func =
+                if hasproperty(parent, getter_name)
+                    Base.getproperty(parent, getter_name)
+                else
+                    nothing
+                end
+            arg = if getter_func === nothing
+                missing
+            else
+                display_units_arg(getter_func, component_type)
+            end
+            (column, getter_func, arg)
+        end
+    end
+
     for (i, component) in enumerate(comps)
         data[i, 1] = get_name(component)
         j = 2
@@ -118,18 +144,12 @@ function show_components(
                 j += 1
             end
         else
-            for column in additional_columns
-                getter_name = Symbol("get_$column")
-                parent = parentmodule(component_type)
-                # This logic enables application of system units in PowerSystems through
-                # its getter functions.
+            for (column, getter_func, arg) in column_accessors
                 val = Base.getproperty(component, column)
                 if val isa InfrastructureSystemsType ||
                    val isa Vector{<:InfrastructureSystemsComponent}
                     val = summary(val)
-                elseif hasproperty(parent, getter_name)
-                    getter_func = Base.getproperty(parent, getter_name)
-                    arg = display_units_arg(getter_func, typeof(component))
+                elseif getter_func !== nothing
                     val = if ismissing(arg)
                         getter_func(component)
                     else

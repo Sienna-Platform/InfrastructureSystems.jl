@@ -155,12 +155,27 @@ function get_type_from_serialization_metadata(metadata::Dict)
         return base_type
     end
 
-    # This has several limitations and is only a workaround for PSY.Reserve subtypes.
-    # - each parameter must be in _module
-    # - does not support nested parametrics.
-    # Reserves should be fixed and then we can remove this hack.
-    parameters = [getproperty(_module, Symbol(x)) for x in metadata[PARAMETERS_KEY]]
+    parameters =
+        [_resolve_serialized_type_parameter(_module, x) for x in metadata[PARAMETERS_KEY]]
     return base_type{parameters...}
+end
+
+# A plain string names a type in the metadata's module.
+# This has several limitations and is only a workaround for PSY.Reserve subtypes.
+# - each parameter must be in _module
+# - does not support nested parametrics.
+# Reserves should be fixed and then we can remove this hack.
+_resolve_serialized_type_parameter(_module::Module, x::AbstractString) =
+    getproperty(_module, Symbol(x))
+
+# A structured entry encodes a parameter that is not a named type; currently a
+# `NamedTuple{names, NTuple{N, Float64}}` shape (used by `TupleTimeSeries`).
+function _resolve_serialized_type_parameter(::Module, x::AbstractDict)
+    haskey(x, "namedtuple_names") || throw(
+        ArgumentError("unrecognized serialized type parameter encoding: $x"),
+    )
+    names = Tuple(Symbol.(x["namedtuple_names"]))
+    return NamedTuple{names, NTuple{length(names), Float64}}
 end
 
 serialize(val::Base.RefValue{T}) where {T} = serialize(val[])

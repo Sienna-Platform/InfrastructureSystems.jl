@@ -156,11 +156,10 @@ using .RelativeUnits:
     DU,
     SU,
     NU,
-    convert_cost_coefficient,
     display_units_arg
-# Underscored names aren't exported from the submodule; pull them in by name
-# so existing `IS._strip_units(...)` / `IS.ustrip(...)` call sites keep working.
-using .RelativeUnits: _strip_units, ustrip
+# Names not exported from the submodule are pulled in explicitly so the
+# `IS._strip_units(...)` / `IS.convert_cost_coefficient(...)` call sites work.
+using .RelativeUnits: _strip_units, convert_cost_coefficient
 include("random_seed.jl")
 include("utils/timers.jl")
 include("utils/assert_op.jl")
@@ -225,7 +224,6 @@ include("cost_aliases.jl")
 include("function_data/convexity_checks.jl")
 include("production_variable_cost_curve.jl")
 include("function_data/make_convex.jl")
-include("deprecated.jl")
 include("Optimization/Optimization.jl")
 include("Simulation/Simulation.jl")
 
