@@ -478,4 +478,30 @@ end
         @test IS.get_initial_input(static) == 10.0
         @test IS.get_input_at_zero(static) === nothing
     end
+
+    @testset "build_static_curves window" begin
+        curve = IS.TimeSeriesIncrementalCurve(
+            IS.TimeSeriesPiecewiseStepData(fd_key), ii_key, iaz_key,
+        )
+        statics = IS.build_static_curves(curve, component, initial_time, 3)
+        @test length(statics) == 3
+        for i in 1:3
+            @test statics[i] isa IS.IncrementalCurve{IS.PiecewiseStepData}
+            @test IS.get_function_data(statics[i]) == fd_data[i]
+            @test IS.get_initial_input(statics[i]) == ii_data[i]
+            @test IS.get_input_at_zero(statics[i]) == iaz_data[i]
+        end
+        @test only(IS.build_static_curves(curve, component, initial_time, 1)) ==
+              IS.build_static_curve(curve, component, initial_time)
+        @test_throws ArgumentError IS.build_static_curves(
+            curve, component, initial_time, 0)
+
+        # Merged read when both scalar fields reference the same series
+        curve2 = IS.TimeSeriesIncrementalCurve(
+            IS.TimeSeriesPiecewiseStepData(fd_key), ii_key, ii_key,
+        )
+        statics2 = IS.build_static_curves(curve2, component, initial_time, 2)
+        @test IS.get_initial_input(statics2[2]) == ii_data[2]
+        @test IS.get_input_at_zero(statics2[2]) == ii_data[2]
+    end
 end

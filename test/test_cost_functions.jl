@@ -440,28 +440,14 @@ end
     end
 end
 
-@testset "legacy unit-system string decode" begin
-    @test IS._unit_system_instance("SYSTEM_BASE") == IS.SystemBaseUnit()
-    @test IS._unit_system_instance("DEVICE_BASE") == IS.DeviceBaseUnit()
-    @test IS._unit_system_instance("NATURAL_UNITS") == IS.NaturalUnit()
+@testset "unit-system string decode" begin
     @test IS._unit_system_instance("SystemBaseUnit") == IS.SystemBaseUnit()
     @test IS._unit_system_instance("DeviceBaseUnit") == IS.DeviceBaseUnit()
     @test IS._unit_system_instance("NaturalUnit") == IS.NaturalUnit()
     @test_throws ArgumentError IS._unit_system_instance("bogus")
-end
-
-@testset "legacy UnitSystem enum constructor shim" begin
-    @test IS.get_power_units(
-        IS.CostCurve(IS.LinearCurve(5.0), IS.UnitSystem.SYSTEM_BASE),
-    ) == IS.SystemBaseUnit()
-    # NATURAL_UNITS on CostCurve
-    @test IS.get_power_units(
-        IS.CostCurve(IS.LinearCurve(5.0), IS.UnitSystem.NATURAL_UNITS),
-    ) == IS.NaturalUnit()
-    # FuelCurve shim — what PowerSystemCaseBuilder depends on
-    @test IS.get_power_units(
-        IS.FuelCurve(IS.LinearCurve(5.0), IS.UnitSystem.DEVICE_BASE, 3.0),
-    ) == IS.DeviceBaseUnit()
+    # Legacy IS3 `UnitSystem` enum value-names are no longer accepted.
+    @test_throws ArgumentError IS._unit_system_instance("SYSTEM_BASE")
+    @test_throws ArgumentError IS._unit_system_instance("NATURAL_UNITS")
 end
 
 @testset "zero preserves unit system (PVC-002)" begin

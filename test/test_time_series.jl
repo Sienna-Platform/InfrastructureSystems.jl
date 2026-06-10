@@ -5353,7 +5353,7 @@ end
     @test IS.has_time_series(component2)
 end
 
-@testset "scaling_factor_multiplier 2-arg contract" begin
+@testset "scaling_factor_multiplier arity resolution" begin
     sys = IS.SystemData()
     name = "Component1"
     component = IS.TestComponent(name, 5)
@@ -5365,23 +5365,16 @@ end
 
     # 1-arg-only multiplier: only accepts (owner), not (owner, units).
     # Must NOT be IS.get_val — that already has a 2-arg method on this branch.
-    one_arg_only_mult(c) = 1.0
+    one_arg_only_mult(c) = 2.0
 
     ts = IS.SingleTimeSeries("val_1arg", ta; scaling_factor_multiplier = one_arg_only_mult)
     IS.add_time_series!(sys, component, ts)
     retrieved = IS.get_time_series(IS.SingleTimeSeries, component, "val_1arg")
 
-    # Retrieval must raise an actionable ArgumentError, not a raw MethodError.
-    @test_throws ArgumentError IS.get_time_series_array(component, retrieved)
-    # Verify the error message is actionable (Julia 1.6-compatible form — no string @test_throws)
-    err = try
-        IS.get_time_series_array(component, retrieved)
-        nothing
-    catch e
-        e
-    end
-    @test err isa ArgumentError
-    @test occursin("must accept (owner, units)", err.msg)
+    # Retrieval resolves the multiplier arity: 1-arg multipliers (user closures,
+    # pre-IS4 systems) keep working via the 1-arg form.
+    arr = IS.get_time_series_array(component, retrieved)
+    @test TimeSeries.values(arr) == data .* 2.0
 
     # units kwarg annotation guard: passing a non-AbstractUnitSystem value must fail
     # at the call site with a type mismatch (TypeError or MethodError depending on Julia version).
@@ -5397,4 +5390,88 @@ end
         "val_units";
         units = 42,
     )
+end
+
+# Strictly 1-arg multiplier for the compatibility test below; must NOT have a
+# 2-arg method.
+get_val_one_arg(component::IS.TestComponent) = component.val
+
+@testset "Test scaling_factor_multiplier accepts 1-arg functions" begin
+    sys = IS.SystemData()
+    component_val = 5
+    component = IS.TestComponent("Component1", component_val)
+    IS.add_component!(sys, component)
+    dates = collect(
+        Dates.DateTime("2020-01-01T00:00:00"):Dates.Hour(1):Dates.DateTime(
+            "2020-01-01T23:00:00",
+        ),
+    )
+    data = collect(1:24)
+    ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
+    ts = IS.SingleTimeSeries(;
+        name = "val",
+        data = ta,
+        scaling_factor_multiplier = get_val_one_arg,
+    )
+    IS.add_time_series!(sys, component, ts)
+    arr = IS.get_time_series_array(IS.SingleTimeSeries, component, "val")
+    @test TimeSeries.values(arr) == data .* component_val
+end
+
+# Unit-aware multiplier: defines ONLY the 2-arg (owner, units) form, no 1-arg
+# method. Exercises the default-units path — `default_units` returns `nothing`
+# for IS owners, but the 2-arg form must still be selected (probed with `SU`).
+get_val_two_arg(component::IS.TestComponent, ::IS.AbstractUnitSystem) = component.val
+
+# Unit-aware multiplier defined ONLY for `SystemBaseUnit`. Requesting a different
+# unit system must error rather than silently dropping to a 1-arg form.
+get_val_su_only(component::IS.TestComponent, ::IS.SystemBaseUnit) = component.val
+
+@testset "scaling_factor_multiplier prefers 2-arg under default units" begin
+    sys = IS.SystemData()
+    component_val = 5
+    component = IS.TestComponent("Component1", component_val)
+    IS.add_component!(sys, component)
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    data = collect(1:24)
+    ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
+
+    ts = IS.SingleTimeSeries("v2", ta; scaling_factor_multiplier = get_val_two_arg)
+    IS.add_time_series!(sys, component, ts)
+
+    # No `units` kwarg: a 2-arg-only multiplier must still be called via the
+    # 2-arg form (regression — previously raised a raw MethodError here).
+    arr = IS.get_time_series_array(component, ts)
+    @test TimeSeries.values(arr) == data .* component_val
+
+    # Explicit units also resolve to the 2-arg form.
+    arr_su = IS.get_time_series_array(component, ts; units = IS.SU)
+    @test TimeSeries.values(arr_su) == data .* component_val
+end
+
+@testset "scaling_factor_multiplier errors on unsupported units" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    data = collect(1:24)
+    ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
+
+    ts = IS.SingleTimeSeries("v_su", ta; scaling_factor_multiplier = get_val_su_only)
+    IS.add_time_series!(sys, component, ts)
+
+    # SU is supported.
+    @test TimeSeries.values(IS.get_time_series_array(component, ts; units = IS.SU)) ==
+          data .* 5
+
+    # DU is not: the unit-aware multiplier must NOT silently fall back to a 1-arg
+    # form; it must raise an actionable ArgumentError.
+    err = try
+        IS.get_time_series_array(component, ts; units = IS.DU)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("no method for units", err.msg)
 end

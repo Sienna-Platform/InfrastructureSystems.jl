@@ -140,8 +140,13 @@
     end
 
     @testset "Serialization round-trip" begin
+        # The NamedTuple shape rides the shared PARAMETERS_KEY mechanism: the
+        # concrete type is resolved from the serialized metadata.
         tts = IS.TupleTimeSeries{StartUpStages}(static_key)
-        tts_rt = IS.deserialize(IS.TupleTimeSeries, IS.serialize_struct(tts))
+        data = IS.serialize_struct(tts)
+        @test IS.get_type_from_serialization_data(data) ===
+              IS.TupleTimeSeries{StartUpStages}
+        tts_rt = IS.deserialize(IS.get_type_from_serialization_data(data), data)
         @test tts_rt isa IS.TupleTimeSeries{StartUpStages}
         rt_key = IS.get_time_series_key(tts_rt)
         @test IS.get_name(rt_key) == IS.get_name(static_key)
@@ -149,7 +154,8 @@
 
         # Arity-2 round-trip
         tts2 = IS.TupleTimeSeries{MinMax}(static_key)
-        tts2_rt = IS.deserialize(IS.TupleTimeSeries, IS.serialize_struct(tts2))
+        data2 = IS.serialize_struct(tts2)
+        tts2_rt = IS.deserialize(IS.get_type_from_serialization_data(data2), data2)
         @test tts2_rt isa IS.TupleTimeSeries{MinMax}
     end
 
