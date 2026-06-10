@@ -12,8 +12,10 @@ convert_output_to_natural_units(::Type{<:VariableType}) = false
 convert_output_to_natural_units(::Type{<:ConstraintType}) = false
 convert_output_to_natural_units(::Type{<:AuxVariableType}) = false
 convert_output_to_natural_units(::Type{<:ExpressionType}) = false
-convert_output_to_natural_units(::Type{<:InitialConditionType}) = ArgumentError(
-    "Initial conditions aren't written to output store: this shouldn't be called.",
+convert_output_to_natural_units(::Type{<:InitialConditionType}) = throw(
+    ArgumentError(
+        "Initial conditions aren't written to output store: this shouldn't be called.",
+    ),
 )
 convert_output_to_natural_units(::Type{<:ParameterType}) = false
 
@@ -21,8 +23,10 @@ should_write_resulting_value(::Type{<:VariableType}) = true
 should_write_resulting_value(::Type{<:ConstraintType}) = true
 should_write_resulting_value(::Type{<:AuxVariableType}) = true
 should_write_resulting_value(::Type{<:ExpressionType}) = false
-should_write_resulting_value(::Type{<:InitialConditionType}) = ArgumentError(
-    "Initial conditions aren't written to output store: this shouldn't be called.",
+should_write_resulting_value(::Type{<:InitialConditionType}) = throw(
+    ArgumentError(
+        "Initial conditions aren't written to output store: this shouldn't be called.",
+    ),
 )
 # TODO: Piecewise linear parameter are broken to write
 should_write_resulting_value(::Type{<:ParameterType}) = false
