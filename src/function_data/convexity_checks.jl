@@ -175,6 +175,25 @@ function is_valid_data(curve::AverageRateCurve)
     return is_valid_data(io_curve)
 end
 
+# TimeSeriesFunctionData and time-series-backed ValueCurves do not hold inline
+# numerical data, so validity checks cannot be performed without resolving the
+# time series.  Throw a clear ArgumentError instead of a bare MethodError.
+function is_valid_data(::TimeSeriesFunctionData)
+    throw(
+        ArgumentError(
+            "validity is not defined for time-series-backed data; validate the resolved static curve per timestep instead",
+        ),
+    )
+end
+
+function is_valid_data(::ValueCurve{T}) where {T <: TimeSeriesFunctionData}
+    throw(
+        ArgumentError(
+            "validity is not defined for time-series-backed ValueCurve; validate the resolved static curve per timestep instead",
+        ),
+    )
+end
+
 # ============================================================================
 # MONOTONICITY HELPER METHODS
 # Functions for checking if curves are strictly increasing or decreasing.
