@@ -4,5 +4,6 @@
 Modules = [InfrastructureSystems,
     InfrastructureSystems.Simulation,
     InfrastructureSystems.Optimization,
-    InfrastructureSystems.RelativeUnits]
+    InfrastructureSystems.RelativeUnits,
+    InfrastructureSystems.InfrastructureMatrices]
 ```
