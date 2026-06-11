@@ -5,8 +5,12 @@ const DB_FILENAME = "time_series_metadata.db"
 # This version is also used in the Python package infrasys.
 const TS_METADATA_FORMAT_VERSION = "1.1.0"
 const TS_DB_INDEXES = Dict(
+    # owner_category is part of the key because component and supplemental attribute ids are
+    # independent streams and may collide numerically; (owner_id, owner_category) identifies
+    # an owner uniquely.
     "by_c_n_tst_features" => [
         "owner_id",
+        "owner_category",
         "time_series_type",
         "name",
         "resolution",
