@@ -70,3 +70,19 @@ end
     @test IS.Optimization.ArgumentConstructStage() isa IS.Optimization.ConstructStage
     @test IS.Optimization.ModelConstructStage() isa IS.Optimization.ConstructStage
 end
+
+@testset "InitialConditionType trait methods throw instead of returning errors" begin
+    @test_throws ArgumentError IS.Optimization.convert_output_to_natural_units(
+        MockInitialCondition,
+    )
+    @test_throws ArgumentError IS.Optimization.should_write_resulting_value(
+        MockInitialCondition,
+    )
+end
+
+@testset "ModelBuildStatus convert from String" begin
+    @test convert(IS.Optimization.ModelBuildStatus, "BUILT") ==
+          IS.Optimization.ModelBuildStatus.BUILT
+    @test convert(IS.Optimization.ModelBuildStatus, "IN_PROGRESS") ==
+          IS.Optimization.ModelBuildStatus.IN_PROGRESS
+end

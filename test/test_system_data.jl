@@ -195,15 +195,13 @@ end
     @test IS.compare_values(my_match_fn_2, data3, data4)
 
     special1 = SpecialComparable(1)
+    # A 2-arg `compare_values(::T, ::T)` override is still dispatched directly.
     @test !(@test_logs (:info, "reached custom compare_values") IS.compare_values(
         special1,
         special1,
     ))
-    @test !(@test_logs (:info, "reached custom compare_values") IS.compare_values(
-        nothing,
-        special1,
-        special1,
-    ))
+    # IS4 no longer redispatches the 3-arg `nothing` form to 2-arg overrides, so the
+    # custom method is NOT reached here — it recurses into fields instead.
     @test IS.compare_values(==, special1, special1)
 
     # https://github.com/Sienna-Platform/InfrastructureSystems.jl/issues/407

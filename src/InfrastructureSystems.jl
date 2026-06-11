@@ -10,9 +10,10 @@ export TimeSeriesPiecewiseIncrementalCurve, TimeSeriesPiecewiseAverageCurve
 
 # Units interface: declared here, methods implemented by domain packages
 # (e.g., PowerSystems.jl provides power-domain `get_value`/`set_value` methods).
-"Get a field value with optional unit conversion. Methods are provided by domain packages."
+# Domain packages must EXTEND (add methods to), not own/redefine, these generics.
+"Get a field value with optional unit conversion. Methods are provided by domain packages. Domain packages must EXTEND (add methods to), not own/redefine, this generic."
 function get_value end
-"Set a field value with optional unit conversion. Methods are provided by domain packages."
+"Set a field value with optional unit conversion. Methods are provided by domain packages. Domain packages must EXTEND (add methods to), not own/redefine, this generic."
 function set_value end
 export get_value, set_value
 
@@ -45,8 +46,11 @@ using DocStringExtensions
                                  $(DOCSTRING)
                                  """
 
-# IS should not export any function since it can have name clashes with other packages.
-# Do not add export statements.
+# Policy: IS generally does NOT export functions, to avoid name clashes with
+# downstream packages. The single sanctioned exception is the units-interface
+# generics `get_value`/`set_value` (exported above): the struct-generator template
+# emits methods that extend `IS.get_value`/`IS.set_value`, and cost-alias display
+# relies on their export. Do not add other exports.
 
 """
 Base type for any struct in the Sienna packages.
@@ -152,11 +156,10 @@ using .RelativeUnits:
     DU,
     SU,
     NU,
-    convert_cost_coefficient,
     display_units_arg
-# Underscored names aren't exported from the submodule; pull them in by name
-# so existing `IS._strip_units(...)` / `IS.ustrip(...)` call sites keep working.
-using .RelativeUnits: _strip_units, ustrip
+# Names not exported from the submodule are pulled in explicitly so the
+# `IS._strip_units(...)` / `IS.convert_cost_coefficient(...)` call sites work.
+using .RelativeUnits: _strip_units, convert_cost_coefficient
 include("random_seed.jl")
 include("utils/timers.jl")
 include("utils/assert_op.jl")
@@ -221,8 +224,8 @@ include("cost_aliases.jl")
 include("function_data/convexity_checks.jl")
 include("production_variable_cost_curve.jl")
 include("function_data/make_convex.jl")
-include("deprecated.jl")
 include("Optimization/Optimization.jl")
 include("Simulation/Simulation.jl")
+include("InfrastructureMatrices/InfrastructureMatrices.jl")
 
 end # module

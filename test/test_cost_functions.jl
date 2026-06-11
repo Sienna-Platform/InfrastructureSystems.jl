@@ -388,6 +388,29 @@ end
     @test IS.is_time_series_backed(IS.FuelCurve(ts_vc, 4.0)) == true
     @test IS.is_time_series_backed(IS.FuelCurve(static_vc, forecast_key)) == true
     @test IS.is_time_series_backed(IS.FuelCurve(ts_vc, forecast_key)) == true
+
+    # CostCurve with TS value curve → returns the value-curve key
+    @test IS.get_time_series_key(IS.CostCurve(ts_vc)) ===
+          IS.get_time_series_key(ts_vc)
+
+    # get_time_series_key is intentionally undefined for FuelCurve (its value curve and
+    # fuel_cost are independently TS-backed). Callers resolve explicitly via
+    # get_time_series_key(get_value_curve(c)) or get_fuel_cost(c); the accessor itself
+    # throws an ArgumentError for every FuelCurve combination.
+    @test_throws ArgumentError IS.get_time_series_key(IS.FuelCurve(ts_vc, 4.0))
+    @test_throws ArgumentError IS.get_time_series_key(
+        IS.FuelCurve(static_vc, forecast_key),
+    )
+    @test_throws ArgumentError IS.get_time_series_key(IS.FuelCurve(ts_vc, forecast_key))
+end
+
+@testset "get_time_series_key fallback for non-TS-backed curves (PVC-E)" begin
+    # Previously CostCurve gave a bare MethodError; now a clear ArgumentError
+    @test_throws ArgumentError IS.get_time_series_key(IS.CostCurve(IS.LinearCurve(5.0)))
+    # FuelCurve static value_curve + Float64 fuel_cost — previously also a MethodError
+    @test_throws ArgumentError IS.get_time_series_key(
+        IS.FuelCurve(IS.LinearCurve(5.0), 4.0),
+    )
 end
 
 @testset "Test prohibited FunctionData types" begin
@@ -399,6 +422,51 @@ end
     @test_throws MethodError IS.AverageRateCurve(q_fd, 0.0)
     @test_throws MethodError IS.IncrementalCurve(pwl_fd, 0.0)
     @test_throws MethodError IS.AverageRateCurve(pwl_fd, 0.0)
+end
+
+@testset "CostCurve/FuelCurve serialize round-trip all unit systems" begin
+    vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1.0, 2.0, 3.0))
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+        cc = IS.CostCurve(vc, U)
+        cc_rt = IS.deserialize(IS.CostCurve, IS.serialize(cc))
+        @test cc_rt == cc
+        @test IS.get_power_units(cc_rt) == U
+
+        fc = IS.FuelCurve(vc, U, 5.0)
+        fc_rt = IS.deserialize(IS.FuelCurve, IS.serialize(fc))
+        @test fc_rt == fc
+        @test IS.get_power_units(fc_rt) == U
+    end
+end
+
+@testset "unit-system string decode" begin
+    @test IS._unit_system_instance("SystemBaseUnit") == IS.SystemBaseUnit()
+    @test IS._unit_system_instance("DeviceBaseUnit") == IS.DeviceBaseUnit()
+    @test IS._unit_system_instance("NaturalUnit") == IS.NaturalUnit()
+    @test_throws ArgumentError IS._unit_system_instance("bogus")
+    # Legacy IS3 `UnitSystem` enum value-names are no longer accepted.
+    @test_throws ArgumentError IS._unit_system_instance("SYSTEM_BASE")
+    @test_throws ArgumentError IS._unit_system_instance("NATURAL_UNITS")
+end
+
+@testset "zero preserves unit system (PVC-002)" begin
+    vc = IS.InputOutputCurve(IS.LinearFunctionData(1.0, 1.0))
+    # Full 6-combo matrix: 3 unit systems × {CostCurve, FuelCurve}
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+        c = IS.CostCurve(vc, U)
+        @test IS.get_power_units(zero(c)) == U
+        f = IS.FuelCurve(vc, U, 3.0)
+        @test IS.get_power_units(zero(f)) == U
+    end
+    # Type-form behavior unchanged: always NaturalUnit
+    @test IS.get_power_units(zero(IS.CostCurve)) == IS.NaturalUnit()
+    @test IS.get_power_units(zero(IS.FuelCurve)) == IS.NaturalUnit()
+end
+
+@testset "FuelCurve deserialize garbage fuel_cost (PVC-003)" begin
+    fc_example = IS.FuelCurve(IS.InputOutputCurve(IS.LinearFunctionData(1.0, 0.0)), 2.5)
+    bad_dict = merge(IS.serialize(fc_example), Dict("fuel_cost" => "oops"))
+    @test_throws ArgumentError IS.deserialize(IS.FuelCurve, bad_dict)
 end
 
 @testset "Test InputOutputCurve evaluation" begin

@@ -3,7 +3,6 @@ import SHA
 import JSON
 
 const HASH_FILENAME = "check.sha256"
-const COMPARE_VALUES_SENTINEL = :(!NOUPGRADE)  # A Symbol that can't be a field name
 
 # Supported element types for transform_array_for_hdf Vector inputs
 const TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES = [
@@ -245,15 +244,6 @@ Recursively compares struct values. Prints all mismatched values to stdout.
 """
 function compare_values(match_fn::Union{Function, Nothing}, x::T, y::U;
     compare_uuids = false, exclude = Set{Symbol}()) where {T, U}
-    # Special case: if match_fn is nothing, try calling the two-argument version to maintain
-    # backwards compatibility with packages that only implement that. Keep track of this to
-    # avoid infinite recursion. TODO remove in next major version
-    if isnothing(match_fn) && !(COMPARE_VALUES_SENTINEL in exclude)
-        return compare_values(x, y; compare_uuids = compare_uuids,
-            exclude = union(exclude, [COMPARE_VALUES_SENTINEL]))
-    end
-    exclude = setdiff(exclude, [COMPARE_VALUES_SENTINEL])
-
     _is_compare_directly(x, y) && (return _fetch_match_fn(match_fn)(x, y))
 
     match = true

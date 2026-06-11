@@ -73,6 +73,49 @@ function show_container_table(io::IO, container::InfrastructureSystemsContainer;
     return
 end
 
+# Resolve each additional column's getter function and units argument once for a
+# concrete `component_type` — the units trait is constant across rows. Returns a vector
+# of `(column, getter_func, arg)` tuples. The getter logic enables application of system
+# units in PowerSystems through its getter functions. Dict-form `additional_columns`
+# carry their own accessor closures, so there is nothing to resolve (returns `nothing`).
+_resolve_column_accessors(::Type, ::Dict) = nothing
+
+function _resolve_column_accessors(component_type::Type, additional_columns::Vector)
+    parent = parentmodule(component_type)
+    return map(additional_columns) do column
+        getter_name = Symbol("get_$column")
+        getter_func = if hasproperty(parent, getter_name)
+            Base.getproperty(parent, getter_name)
+        else
+            nothing
+        end
+        arg = if getter_func === nothing
+            missing
+        else
+            display_units_arg(getter_func, component_type)
+        end
+        (column, getter_func, arg)
+    end
+end
+
+# Resolve a single cell value for `column` on `component`. Nested components and
+# component vectors are summarized; otherwise the resolved getter is applied, passing
+# the units argument when one is available.
+function _populate_column_value(component, column, getter_func, arg)
+    val = Base.getproperty(component, column)
+    if val isa InfrastructureSystemsType ||
+       val isa Vector{<:InfrastructureSystemsComponent}
+        return summary(val)
+    elseif getter_func !== nothing
+        if ismissing(arg)
+            return getter_func(component)
+        else
+            return getter_func(component, arg)
+        end
+    end
+    return val
+end
+
 function show_components(
     io::IO,
     components::Components,
@@ -104,6 +147,10 @@ function show_components(
 
     comps = get_components(component_type, components)
     data = Array{Any, 2}(undef, length(comps), length(column_labels))
+
+    # Resolve each column's getter and units argument once, not per cell.
+    column_accessors = _resolve_column_accessors(component_type, additional_columns)
+
     for (i, component) in enumerate(comps)
         data[i, 1] = get_name(component)
         j = 2
@@ -118,25 +165,8 @@ function show_components(
                 j += 1
             end
         else
-            for column in additional_columns
-                getter_name = Symbol("get_$column")
-                parent = parentmodule(component_type)
-                # This logic enables application of system units in PowerSystems through
-                # its getter functions.
-                val = Base.getproperty(component, column)
-                if val isa InfrastructureSystemsType ||
-                   val isa Vector{<:InfrastructureSystemsComponent}
-                    val = summary(val)
-                elseif hasproperty(parent, getter_name)
-                    getter_func = Base.getproperty(parent, getter_name)
-                    arg = display_units_arg(getter_func, typeof(component))
-                    val = if ismissing(arg)
-                        getter_func(component)
-                    else
-                        getter_func(component, arg)
-                    end
-                end
-                data[i, j] = val
+            for (column, getter_func, arg) in column_accessors
+                data[i, j] = _populate_column_value(component, column, getter_func, arg)
                 j += 1
             end
         end

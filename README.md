@@ -7,7 +7,7 @@
 
 The `InfrastructureSystems.jl` package provides utilities to support data models for infrastructure modeling in [Sienna-Platform](https://github.com/Sienna-Platform). The `InfrastructureSystems.jl` package is used to support functionalities in [PowerSystems.jl](https://github.com/Sienna-Platform/PowerSystems.jl), [PowerSimulations.jl](https://github.com/Sienna-Platform/PowerSimulations.jl), [PowerSimulationsDynamics.jl](https://github.com/Sienna-Platform/PowerSimulationsDynamics.jl) and other modeling packages in the Sienna ecosystem.
 
-This package is only compatible with Julia 1.6 or higher.
+This package is only compatible with Julia 1.10 or higher.
 
 ## Development
 

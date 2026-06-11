@@ -258,6 +258,45 @@ end
     @test IS.is_valid_data(valid_arc) == true
 end
 
+@testset "is_valid_data rejects time-series-backed data" begin
+    forecast_key = IS.ForecastKey(;
+        time_series_type = IS.Deterministic,
+        name = "test_forecast",
+        initial_timestamp = Dates.DateTime("2020-01-01"),
+        resolution = Dates.Hour(1),
+        horizon = Dates.Hour(24),
+        interval = Dates.Hour(24),
+        count = 1,
+        features = Dict{String, Any}(),
+    )
+
+    # Raw TimeSeriesFunctionData — no inline data to validate
+    ts_lin_fd = IS.TimeSeriesLinearFunctionData(forecast_key)
+    @test_throws ArgumentError IS.is_valid_data(ts_lin_fd)
+
+    ts_psd_fd = IS.TimeSeriesPiecewiseStepData(forecast_key)
+    @test_throws ArgumentError IS.is_valid_data(ts_psd_fd)
+
+    # TimeSeriesInputOutputCurve — wraps TimeSeriesFunctionData
+    ts_io_curve =
+        IS.TimeSeriesInputOutputCurve(IS.TimeSeriesLinearFunctionData(forecast_key))
+    @test_throws ArgumentError IS.is_valid_data(ts_io_curve)
+
+    # TimeSeriesIncrementalCurve — wraps TimeSeriesFunctionData
+    ts_inc_curve = IS.TimeSeriesIncrementalCurve(
+        IS.TimeSeriesPiecewiseStepData(forecast_key),
+        nothing,
+    )
+    @test_throws ArgumentError IS.is_valid_data(ts_inc_curve)
+
+    # TimeSeriesAverageRateCurve — wraps TimeSeriesFunctionData
+    ts_arc_curve = IS.TimeSeriesAverageRateCurve(
+        IS.TimeSeriesPiecewiseStepData(forecast_key),
+        nothing,
+    )
+    @test_throws ArgumentError IS.is_valid_data(ts_arc_curve)
+end
+
 @testset "Test Monotonicity Predicates" begin
     # =========================================================================
     # LinearFunctionData

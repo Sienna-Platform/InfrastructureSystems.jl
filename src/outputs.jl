@@ -27,7 +27,7 @@ function get_timestamp(r::T) where {T <: Outputs}
 end
 
 function write_outputs(r::T) where {T <: Outputs}
-    error("write_output must be implemented for $T")
+    error("write_outputs must be implemented for $T")
 end
 
 # Must override if your concrete Outputs subtype has the notion of an associated source data

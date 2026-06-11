@@ -12,13 +12,6 @@ Concrete subtypes include [`CostCurve`](@ref) and [`FuelCurve`](@ref).
 """
 abstract type ProductionVariableCostCurve{T <: ValueCurve, U <: AbstractUnitSystem} end
 
-"""
-`ProductionVariableCostCurve{T}` with any unit system. Use at `isa` sites or in
-docstrings where the curve's unit-system parameter doesn't matter.
-"""
-const AnyProductionVariableCostCurve{T} =
-    ProductionVariableCostCurve{T, U} where {U <: AbstractUnitSystem}
-
 "Get the underlying `ValueCurve` representation of this `ProductionVariableCostCurve`"
 get_value_curve(cost::ProductionVariableCostCurve) = cost.value_curve
 "Get the variable operation and maintenance cost in currency/(power_units h)"
@@ -53,10 +46,23 @@ function is_concave(curve::ValueCurve{T}) where {T <: TimeSeriesFunctionData}
     )
 end
 is_concave(cost::ProductionVariableCostCurve) = is_concave(get_value_curve(cost))
-"Get the `TimeSeriesKey` from the underlying `ValueCurve` of a time-series-backed `ProductionVariableCostCurve`."
+"Get the `TimeSeriesKey` from the underlying `ValueCurve` of a time-series-backed `CostCurve`."
+# A `CostCurve` has a single TS-backing field (its value curve), so the key is
+# unambiguous. `FuelCurve` is excluded here (see the throwing methods defined once
+# `FuelCurve` is in scope below): its value curve and `fuel_cost` are independently
+# TS-backed, so callers must resolve explicitly. `CostCurve` is not yet defined at this
+# point in the file, so this dispatches on the abstract type and the `FuelCurve` methods
+# below shadow it.
 get_time_series_key(
     cost::ProductionVariableCostCurve{<:ValueCurve{<:TimeSeriesFunctionData}},
 ) = get_time_series_key(get_value_curve(cost))
+
+"Fallback: throw a clear `ArgumentError` when `get_time_series_key` is called on a non-TS-backed curve."
+get_time_series_key(cost::ProductionVariableCostCurve) = throw(
+    ArgumentError(
+        "$(nameof(typeof(cost))) is not time-series-backed; get_time_series_key is undefined",
+    ),
+)
 
 Base.:(==)(a::T, b::T) where {T <: ProductionVariableCostCurve} =
     double_equals_from_fields(a, b)
@@ -115,7 +121,7 @@ CostCurve(
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} =
     CostCurve{T, U}(; value_curve, vom_cost)
 
-# Keyword-based constructor exposing `power_units`, replacing the former field default
+# Keyword-based constructor exposing `power_units`, replacing the former field default.
 function CostCurve(;
     value_curve,
     power_units::AbstractUnitSystem = NaturalUnit(),
@@ -124,8 +130,10 @@ function CostCurve(;
     return CostCurve{typeof(value_curve), typeof(power_units)}(; value_curve, vom_cost)
 end
 
-"Get a `CostCurve` representing zero variable cost"
-Base.zero(::Union{CostCurve, Type{CostCurve}}) = CostCurve(zero(ValueCurve))
+"Get a `CostCurve` representing zero variable cost (NaturalUnit)"
+Base.zero(::Type{CostCurve}) = CostCurve(zero(ValueCurve))
+"Get a `CostCurve` representing zero variable cost, preserving the unit system of `c`"
+Base.zero(::CostCurve{T, U}) where {T, U} = CostCurve(zero(ValueCurve), U())
 
 """
 `CostCurve{T}` with any unit system. Equivalent to `CostCurve{T, U} where U`;
@@ -179,6 +187,9 @@ FuelCurve{T, U}(;
 ) where {T, U} =
     FuelCurve{T, U}(value_curve, fuel_cost, startup_fuel_offtake, vom_cost)
 
+_normalize_fuel_cost(x::Real) = Float64(x)
+_normalize_fuel_cost(x::TimeSeriesKey) = x
+
 # Outer constructors — mirror the CostCurve style
 FuelCurve(value_curve::T, fuel_cost::Real) where {T <: ValueCurve} =
     FuelCurve{T, NaturalUnit}(; value_curve, fuel_cost = Float64(fuel_cost))
@@ -192,7 +203,7 @@ FuelCurve(
     vom_cost::LinearCurve,
 ) where {T <: ValueCurve} = FuelCurve{T, NaturalUnit}(;
     value_curve,
-    fuel_cost = fuel_cost isa Real ? Float64(fuel_cost) : fuel_cost,
+    fuel_cost = _normalize_fuel_cost(fuel_cost),
     startup_fuel_offtake,
     vom_cost,
 )
@@ -203,7 +214,7 @@ FuelCurve(
     fuel_cost::Union{Real, TimeSeriesKey},
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
     value_curve,
-    fuel_cost = fuel_cost isa Real ? Float64(fuel_cost) : fuel_cost,
+    fuel_cost = _normalize_fuel_cost(fuel_cost),
 )
 
 FuelCurve(
@@ -214,12 +225,12 @@ FuelCurve(
     vom_cost::LinearCurve,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
     value_curve,
-    fuel_cost = fuel_cost isa Real ? Float64(fuel_cost) : fuel_cost,
+    fuel_cost = _normalize_fuel_cost(fuel_cost),
     startup_fuel_offtake,
     vom_cost,
 )
 
-# Keyword-based constructor exposing `power_units`
+# Keyword-based constructor exposing `power_units`.
 function FuelCurve(;
     value_curve,
     power_units::AbstractUnitSystem = NaturalUnit(),
@@ -227,23 +238,18 @@ function FuelCurve(;
     startup_fuel_offtake::LinearCurve = LinearCurve(0.0),
     vom_cost::LinearCurve = LinearCurve(0.0),
 )
-    fc = fuel_cost isa Real ? Float64(fuel_cost) : fuel_cost
     return FuelCurve{typeof(value_curve), typeof(power_units)}(;
         value_curve,
-        fuel_cost = fc,
+        fuel_cost = _normalize_fuel_cost(fuel_cost),
         startup_fuel_offtake,
         vom_cost,
     )
 end
 
-"Get a `FuelCurve` representing zero fuel usage and zero fuel cost"
-Base.zero(::Union{FuelCurve, Type{FuelCurve}}) = FuelCurve(zero(ValueCurve), 0.0)
-
-"""
-`FuelCurve{T}` with any unit system. Equivalent to `FuelCurve{T, U} where U`;
-use at `isa` sites where the unit-system parameter doesn't matter.
-"""
-const AnyFuelCurve{T} = FuelCurve{T, U} where {U <: AbstractUnitSystem}
+"Get a `FuelCurve` representing zero fuel usage and zero fuel cost (NaturalUnit)"
+Base.zero(::Type{FuelCurve}) = FuelCurve(zero(ValueCurve), 0.0)
+"Get a `FuelCurve` representing zero fuel usage and zero fuel cost, preserving the unit system of `c`"
+Base.zero(::FuelCurve{T, U}) where {T, U} = FuelCurve(zero(ValueCurve), U(), 0.0)
 
 "Get the fuel cost or the name of the fuel cost time series"
 get_fuel_cost(cost::FuelCurve) = cost.fuel_cost
@@ -260,39 +266,36 @@ is_time_series_backed(cost::FuelCurve) =
     is_time_series_backed(get_value_curve(cost)) ||
     is_time_series_backed(get_fuel_cost(cost))
 
+# `get_time_series_key` is intentionally undefined for `FuelCurve`: its value curve and
+# `fuel_cost` are independently time-series-backed, so a single accessor would be
+# ambiguous. Callers resolve explicitly via `get_time_series_key(get_value_curve(c))` or
+# `get_fuel_cost(c)`. These throwing methods shadow the generic TS method above for every
+# `FuelCurve` (the second is needed to resolve dispatch ambiguity with that generic
+# method when the value curve is TS-backed).
+_fuel_curve_no_ts_key() = throw(
+    ArgumentError(
+        "get_time_series_key is not defined for FuelCurve; its value curve and fuel_cost " *
+        "are independently time-series-backed — resolve explicitly via " *
+        "get_time_series_key(get_value_curve(c)) or get_fuel_cost(c)",
+    ),
+)
+get_time_series_key(::FuelCurve) = _fuel_curve_no_ts_key()
+get_time_series_key(::FuelCurve{<:ValueCurve{<:TimeSeriesFunctionData}}) =
+    _fuel_curve_no_ts_key()
+
 # ── Serialization ─────────────────────────────────────────────────────────────
 # The U type parameter has no corresponding field, so we serialize it under the
 # conventional "power_units" key (preserving the field name from the previous
 # schema) and reconstruct it at deserialize time.
 
-# Accept both new (type-name) and legacy (UnitSystem enum-value-name) encodings so
-# existing serialized fixtures keep deserializing.
+# Map the serialized `power_units` type name back to its marker instance.
 _unit_system_instance(name::AbstractString) = _unit_system_instance(String(name))
 function _unit_system_instance(name::String)
-    if name in ("NATURAL_UNITS", "NaturalUnit")
-        return NaturalUnit()
-    elseif name in ("SYSTEM_BASE", "SystemBaseUnit")
-        return SystemBaseUnit()
-    elseif name in ("DEVICE_BASE", "DeviceBaseUnit")
-        return DeviceBaseUnit()
-    end
+    name == "NaturalUnit" && return NaturalUnit()
+    name == "SystemBaseUnit" && return SystemBaseUnit()
+    name == "DeviceBaseUnit" && return DeviceBaseUnit()
     throw(ArgumentError("$name is not a known AbstractUnitSystem"))
 end
-
-# TODO: remove once downstream packages (PowerSystemCaseBuilder, etc.) migrate
-# off the `IS.UnitSystem.SYSTEM_BASE` enum and pass `SystemBaseUnit()` instances
-# directly. Kept now only so PSB-built fixtures keep constructing FuelCurves.
-function _unit_system_instance(u::UnitSystem)
-    u == UnitSystem.NATURAL_UNITS && return NaturalUnit()
-    u == UnitSystem.SYSTEM_BASE && return SystemBaseUnit()
-    u == UnitSystem.DEVICE_BASE && return DeviceBaseUnit()
-    throw(ArgumentError("Unknown legacy UnitSystem value: $u"))
-end
-
-CostCurve(value_curve::ValueCurve, power_units::UnitSystem, args...; kwargs...) =
-    CostCurve(value_curve, _unit_system_instance(power_units), args...; kwargs...)
-FuelCurve(value_curve::ValueCurve, power_units::UnitSystem, args...; kwargs...) =
-    FuelCurve(value_curve, _unit_system_instance(power_units), args...; kwargs...)
 
 function serialize(val::ProductionVariableCostCurve)
     data = serialize_struct(val)
@@ -300,30 +303,33 @@ function serialize(val::ProductionVariableCostCurve)
     return data
 end
 
-function deserialize(::Type{CostCurve}, data::Dict)
-    vc_data = data["value_curve"]
-    vc_type = get_type_from_serialization_data(vc_data)
-    value_curve = deserialize(vc_type, vc_data)
-    vom_cost = deserialize(LinearCurve, data["vom_cost"])
-    power_units = _unit_system_instance(data["power_units"])
-    return CostCurve(value_curve, power_units, vom_cost)
-end
+# Per-field deserializers, keyed on the serialized field name (pvcc =
+# ProductionVariableCostCurve, the abstract supertype of CostCurve/FuelCurve).
+# Construction goes through the kwarg constructor with every data key splatted, so a
+# field added to the struct cannot be silently dropped: an unknown key fails loudly
+# here (no `_deserialize_pvcc_field` method) or at the constructor.
+_deserialize_pvcc_field(::Val{:value_curve}, raw::AbstractDict) =
+    deserialize(get_type_from_serialization_data(raw), raw)
+_deserialize_pvcc_field(::Val{:vom_cost}, raw) = deserialize(LinearCurve, raw)
+_deserialize_pvcc_field(::Val{:startup_fuel_offtake}, raw) = deserialize(LinearCurve, raw)
+_deserialize_pvcc_field(::Val{:fuel_cost}, raw) = _deserialize_fuel_cost(raw)
 
-function deserialize(::Type{FuelCurve}, data::Dict)
-    vc_data = data["value_curve"]
-    vc_type = get_type_from_serialization_data(vc_data)
-    value_curve = deserialize(vc_type, vc_data)
-    startup = deserialize(LinearCurve, data["startup_fuel_offtake"])
-    vom = deserialize(LinearCurve, data["vom_cost"])
-    fuel_cost_raw = data["fuel_cost"]
-    fuel_cost = if fuel_cost_raw isa Dict
-        fc_type = get_type_from_serialization_data(fuel_cost_raw)
-        deserialize(fc_type, fuel_cost_raw)
-    else
-        Float64(fuel_cost_raw)
-    end
-    power_units = _unit_system_instance(data["power_units"])
-    return FuelCurve(value_curve, power_units, fuel_cost, startup, vom)
+_deserialize_fuel_cost(raw::AbstractDict) =
+    deserialize(get_type_from_serialization_data(raw), raw)
+_deserialize_fuel_cost(raw::Real) = Float64(raw)
+_deserialize_fuel_cost(raw) =
+    throw(
+        ArgumentError(
+            "FuelCurve fuel_cost must be a number or serialized TimeSeriesKey, got $(typeof(raw))",
+        ),
+    )
+
+function deserialize(::Type{T}, data::Dict) where {T <: Union{CostCurve, FuelCurve}}
+    vals = Dict{Symbol, Any}(
+        Symbol(k) => _deserialize_pvcc_field(Val(Symbol(k)), v)
+        for (k, v) in data if k != METADATA_KEY && k != "power_units"
+    )
+    return T(; vals..., power_units = _unit_system_instance(data["power_units"]))
 end
 
 Base.show(io::IO, m::MIME"text/plain", curve::ProductionVariableCostCurve) =

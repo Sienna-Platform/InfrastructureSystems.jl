@@ -262,6 +262,9 @@ Specify `start_time` and `len` if you only need a subset of data.
     timestamps). If nothing, use the entire length.
   - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
+  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
+    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
+    multipliers receive `SU`). IS performs no conversion itself.
   - `features...`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
 
@@ -305,7 +308,7 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
-    units = SU,
+    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
     features...,
 ) where {T <: TimeSeriesData}
     ts = get_time_series(
@@ -349,6 +352,9 @@ factor multiplier by default.
     timestamps). If nothing, use the entire length.
   - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
+  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
+    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
+    multipliers receive `SU`). IS performs no conversion itself.
 
 See also: [`get_time_series_array` by name](@ref get_time_series_array(
     ::Type{T},
@@ -368,7 +374,7 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
-    units = SU,
+    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
     features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
     return get_time_series_array(
@@ -400,6 +406,9 @@ factor multiplier by default.
     timestamps). If nothing, use the entire length.
   - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
+  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
+    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
+    multipliers receive `SU`). IS performs no conversion itself.
 
 See also [`get_time_series_values`](@ref get_time_series_values(
     owner::TimeSeriesOwners,
@@ -436,7 +445,7 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len = nothing,
     ignore_scaling_factors = false,
-    units = SU,
+    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
     initial_time = isnothing(start_time) ? get_initial_timestamp(forecast) : start_time
     return _make_time_array(
@@ -464,6 +473,9 @@ factor multiplier by default.
     of timestamps). If nothing, use the entire length
   - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
+  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
+    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
+    multipliers receive `SU`). IS performs no conversion itself.
 
 See also: [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing, ignore_scaling_factors = false)),
 [`get_time_series_timestamps`](@ref get_time_series_timestamps(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing,)),
@@ -491,7 +503,7 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
-    units = SU,
+    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
     if start_time === nothing
         start_time = get_initial_timestamp(time_series)
@@ -741,6 +753,9 @@ that accepts a cached `TimeSeriesData` instance.
     timestamps). If nothing, use the entire length.
   - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
+  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
+    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
+    multipliers receive `SU`). IS performs no conversion itself.
   - `features...`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
 
@@ -786,7 +801,7 @@ function get_time_series_values(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
-    units = SU,
+    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
     features...,
 ) where {T <: TimeSeriesData}
     return TimeSeries.values(
@@ -818,6 +833,9 @@ Return a vector of time series data without timestamps from storage, using a tim
     timestamps). If nothing, use the entire length.
   - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
+  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
+    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
+    multipliers receive `SU`). IS performs no conversion itself.
 
 See also: [`get_time_series_values` by name](@ref get_time_series_values(
     ::Type{T},
@@ -837,7 +855,7 @@ function get_time_series_values(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
-    units = SU,
+    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
     features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
     return get_time_series_values(
@@ -866,6 +884,9 @@ cached `Forecast` instance.
     timestamps). If nothing, use the entire length.
   - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
+  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
+    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
+    multipliers receive `SU`). IS performs no conversion itself.
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
@@ -902,7 +923,7 @@ function get_time_series_values(
     start_time::Union{Dates.DateTime, Nothing} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
-    units = SU,
+    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
     return TimeSeries.values(
         get_time_series_array(
@@ -928,6 +949,9 @@ Return an vector of timeseries data without timestamps from a cached `StaticTime
     of timestamps). If nothing, use the entire length
   - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
     result of calling the stored `scaling_factor_multiplier` function on the `owner`
+  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
+    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
+    multipliers receive `SU`). IS performs no conversion itself.
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
@@ -960,7 +984,7 @@ function get_time_series_values(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     ignore_scaling_factors = false,
-    units = SU,
+    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
     return TimeSeries.values(
         get_time_series_array(
@@ -974,13 +998,46 @@ function get_time_series_values(
     )
 end
 
+"""
+    default_units(owner)
+
+The units argument forwarded to scaling-factor multipliers when the caller does
+not pass one. Domain packages override this per owner type (e.g. PowerSystems
+returns `SU` for `Component`s). The IS fallback returns `nothing`, in which case
+a unit-aware (2-arg) multiplier receives `SU` and a unit-agnostic (1-arg)
+multiplier is called without units.
+"""
+default_units(::Any) = nothing
+
+# Scaling-factor multipliers come in two arities: unit-aware accessors from
+# downstream packages define `(owner, ::AbstractUnitSystem)`, while user-supplied
+# closures and pre-IS4 multipliers define only `(owner)`. Prefer the 2-arg form
+# whenever the multiplier is unit-aware, and fall back to the 1-arg form only when
+# no 2-arg method exists. A unit-aware multiplier that lacks a method for the
+# requested units is an error — the units must not be silently dropped. The 2-arg
+# convention is `(owner, ::AbstractUnitSystem)`, so `SU` probes unit-awareness.
+function _apply_multiplier(multiplier, owner, units)
+    requested = units === nothing ? SU : units
+    if applicable(multiplier, owner, requested)
+        return multiplier(owner, requested)
+    elseif applicable(multiplier, owner, SU)
+        throw(
+            ArgumentError(
+                "scaling_factor_multiplier `$(nameof(multiplier))` is unit-aware but " *
+                "defines no method for units `$(requested)`; pass a supported unit system",
+            ),
+        )
+    end
+    return multiplier(owner)
+end
+
 function _make_time_array(
     owner,
     time_series,
     start_time,
     len,
     ignore_scaling_factors,
-    units = SU,
+    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
     ta = make_time_array(time_series, start_time; len = len)
     if ignore_scaling_factors
@@ -992,11 +1049,7 @@ function _make_time_array(
         return ta
     end
 
-    # Scaling-factor multipliers (e.g. `get_max_active_power`) are unit-aware
-    # accessors from downstream packages. Default `SU` matches the system base
-    # that simulation/optimization consumers expect; callers (e.g. plotting,
-    # printing) can pass `NU` to get natural units.
-    return ta .* multiplier(owner, units)
+    return ta .* _apply_multiplier(multiplier, owner, units)
 end
 
 """

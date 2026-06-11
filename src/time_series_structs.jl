@@ -75,6 +75,11 @@ See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::
     features::Dict{String, Any}
 end
 
+# All concrete key types, for use in struct fields: a `Union` of concrete types
+# union-splits (no boxing / dynamic dispatch in per-timestep paths), unlike the
+# abstract `TimeSeriesKey`.
+const ConcreteTimeSeriesKey = Union{StaticTimeSeriesKey, ForecastKey}
+
 function make_time_series_key(metadata::ForecastMetadata)
     return ForecastKey(;
         time_series_type = time_series_metadata_to_data(metadata),

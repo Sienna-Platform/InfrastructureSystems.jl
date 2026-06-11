@@ -212,6 +212,27 @@ end
     ) == component
 end
 
+@enum TestExtEnum TEST_EXT_A TEST_EXT_B
+
+mutable struct PartiallyInitializedExt
+    x::Int
+    y::Vector{Int}
+    PartiallyInitializedExt(x) = new(x)
+end
+
+@testset "Test ext serialization of Char, Enum, and partially initialized structs" begin
+    @test IS.is_ext_valid_for_serialization('a')
+    @test IS.is_ext_valid_for_serialization(TEST_EXT_A)
+    @test IS.is_ext_valid_for_serialization(Dict("c" => 'x', "e" => TEST_EXT_B))
+    @test(
+        @test_logs(
+            (:error, r"only basic types are allowed"),
+            match_mode = :any,
+            !IS.is_ext_valid_for_serialization(PartiallyInitializedExt(1))
+        )
+    )
+end
+
 @testset "Test ext serialization" begin
     @test IS.is_ext_valid_for_serialization(nothing)
     @test IS.is_ext_valid_for_serialization(1)

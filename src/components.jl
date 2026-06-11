@@ -67,8 +67,7 @@ function add_component!(
     component::T;
     kwargs...,
 ) where {T <: InfrastructureSystemsComponent}
-    kw = _add_component_kwarg_deprecation(kwargs)
-    _add_component!(components, component; kw...)
+    _add_component!(components, component; kwargs...)
     return
 end
 
