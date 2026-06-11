@@ -46,7 +46,13 @@ function is_concave(curve::ValueCurve{T}) where {T <: TimeSeriesFunctionData}
     )
 end
 is_concave(cost::ProductionVariableCostCurve) = is_concave(get_value_curve(cost))
-"Get the `TimeSeriesKey` from the underlying `ValueCurve` of a time-series-backed `ProductionVariableCostCurve`."
+"Get the `TimeSeriesKey` from the underlying `ValueCurve` of a time-series-backed `CostCurve`."
+# A `CostCurve` has a single TS-backing field (its value curve), so the key is
+# unambiguous. `FuelCurve` is excluded here (see the throwing methods defined once
+# `FuelCurve` is in scope below): its value curve and `fuel_cost` are independently
+# TS-backed, so callers must resolve explicitly. `CostCurve` is not yet defined at this
+# point in the file, so this dispatches on the abstract type and the `FuelCurve` methods
+# below shadow it.
 get_time_series_key(
     cost::ProductionVariableCostCurve{<:ValueCurve{<:TimeSeriesFunctionData}},
 ) = get_time_series_key(get_value_curve(cost))
@@ -260,11 +266,22 @@ is_time_series_backed(cost::FuelCurve) =
     is_time_series_backed(get_value_curve(cost)) ||
     is_time_series_backed(get_fuel_cost(cost))
 
-# `get_time_series_key` is intentionally NOT defined for `FuelCurve`: its value curve
-# and `fuel_cost` are independently time-series-backed, so a single accessor would be
-# ambiguous. Callers resolve explicitly via `get_time_series_key(get_value_curve(c))`
-# or `get_fuel_cost(c)`. Any `get_time_series_key(::FuelCurve)` call falls through to
-# the `ProductionVariableCostCurve` fallback above and throws an `ArgumentError`.
+# `get_time_series_key` is intentionally undefined for `FuelCurve`: its value curve and
+# `fuel_cost` are independently time-series-backed, so a single accessor would be
+# ambiguous. Callers resolve explicitly via `get_time_series_key(get_value_curve(c))` or
+# `get_fuel_cost(c)`. These throwing methods shadow the generic TS method above for every
+# `FuelCurve` (the second is needed to resolve dispatch ambiguity with that generic
+# method when the value curve is TS-backed).
+_fuel_curve_no_ts_key() = throw(
+    ArgumentError(
+        "get_time_series_key is not defined for FuelCurve; its value curve and fuel_cost " *
+        "are independently time-series-backed — resolve explicitly via " *
+        "get_time_series_key(get_value_curve(c)) or get_fuel_cost(c)",
+    ),
+)
+get_time_series_key(::FuelCurve) = _fuel_curve_no_ts_key()
+get_time_series_key(::FuelCurve{<:ValueCurve{<:TimeSeriesFunctionData}}) =
+    _fuel_curve_no_ts_key()
 
 # ── Serialization ─────────────────────────────────────────────────────────────
 # The U type parameter has no corresponding field, so we serialize it under the
