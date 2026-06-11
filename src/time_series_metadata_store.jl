@@ -6,7 +6,7 @@ const DB_FILENAME = "time_series_metadata.db"
 const TS_METADATA_FORMAT_VERSION = "1.1.0"
 const TS_DB_INDEXES = Dict(
     "by_c_n_tst_features" => [
-        "owner_uuid",
+        "owner_id",
         "time_series_type",
         "name",
         "resolution",
@@ -91,7 +91,7 @@ function _load_metadata_into_memory!(store::TimeSeriesMetadataStore)
         store.db,
         "SELECT * FROM $ASSOCIATIONS_TABLE_NAME",
     )
-    exclude_keys = Set((:metadata_uuid, :owner_uuid, :time_series_type))
+    exclude_keys = Set((:metadata_uuid, :owner_id, :time_series_type))
     for row in Tables.rowtable(SQLite.DBInterface.execute(stmt))
         time_series_type = TIME_SERIES_STRING_TO_TYPE[row.time_series_type]
         metadata_type = time_series_data_to_metadata(time_series_type)
@@ -214,7 +214,7 @@ function _migrate_from_v2_3(store::TimeSeriesMetadataStore)
                 SELECT
                     id
                     ,time_series_type
-                    ,owner_uuid
+                    ,owner_id
                     ,owner_type
                     ,owner_category
                     ,features
@@ -261,7 +261,7 @@ function _migrate_from_v2_4(store::TimeSeriesMetadataStore)
                 SELECT
                     id
                     ,time_series_type
-                    ,owner_uuid
+                    ,owner_id
                     ,owner_type
                     ,owner_category
                     ,features
@@ -290,7 +290,7 @@ function _create_migrated_row(metadata::SingleTimeSeriesMetadata, row)
         missing,
         get_length(metadata),
         get_name(metadata),
-        row.owner_uuid,
+        row.owner_id,
         row.owner_type,
         row.owner_category,
         row.features,
@@ -313,7 +313,7 @@ function _create_migrated_row(metadata::ForecastMetadata, row)
         get_count(metadata),
         missing,
         get_name(metadata),
-        row.owner_uuid,
+        row.owner_id,
         row.owner_type,
         row.owner_category,
         row.features,
@@ -339,7 +339,7 @@ function _add_migrated_rows!(store::TimeSeriesMetadataStore, rows)
             "window_count",
             "length",
             "name",
-            "owner_uuid",
+            "owner_id",
             "owner_type",
             "owner_category",
             "features",
@@ -382,7 +382,7 @@ function _create_associations_table!(store::TimeSeriesMetadataStore)
         "window_count INTEGER",
         "length INTEGER",
         "name TEXT NOT NULL",
-        "owner_uuid TEXT NOT NULL",
+        "owner_id INTEGER NOT NULL",
         "owner_type TEXT NOT NULL",
         "owner_category TEXT NOT NULL",
         "features TEXT NOT NULL",
@@ -808,12 +808,12 @@ Return an instance of TimeSeriesCounts.
 """
 function get_time_series_counts(store::TimeSeriesMetadataStore)
     query_components = """
-        SELECT COUNT(DISTINCT owner_uuid) AS count
+        SELECT COUNT(DISTINCT owner_id) AS count
         FROM $ASSOCIATIONS_TABLE_NAME
         WHERE owner_category = 'Component'
     """
     query_attributes = """
-        SELECT COUNT(DISTINCT owner_uuid) AS count
+        SELECT COUNT(DISTINCT owner_id) AS count
         FROM $ASSOCIATIONS_TABLE_NAME
         WHERE owner_category = 'SupplementalAttribute'
     """
@@ -1019,7 +1019,9 @@ function has_metadata(store::TimeSeriesMetadataStore, time_series_uuid::Base.UUI
     return _has_metadata(store, _QUERY_HAS_METADATA_BY_TS_UUID, params)
 end
 
-const _QUERY_BASE_HAS_METADATA = "SELECT id FROM $ASSOCIATIONS_TABLE_NAME WHERE owner_uuid = ?"
+# Component and supplemental attribute ids are independent streams, so an owner is
+# identified by (owner_id, owner_category), never owner_id alone.
+const _QUERY_BASE_HAS_METADATA = "SELECT id FROM $ASSOCIATIONS_TABLE_NAME WHERE owner_id = ? AND owner_category = ?"
 
 function _make_has_metadata_statement!(
     store::TimeSeriesMetadataStore,
@@ -1075,7 +1077,8 @@ function _make_has_metadata_params(
     feature_value::Union{String, Nothing} = nothing,
 )
     return (
-        string(get_uuid(owner)),
+        get_id(owner),
+        _get_owner_category(owner),
         _get_name_params(name)...,
         _get_ts_type_params(time_series_type)...,
         _get_resolution_param(resolution)...,
@@ -1225,7 +1228,7 @@ end
 """
 Return a Vector of NamedTuple of owner UUID and time series metadata matching the inputs.
 """
-function list_metadata_with_owner_uuid(
+function list_metadata_with_owner_id(
     store::TimeSeriesMetadataStore,
     owner_type::Type{<:TimeSeriesOwners};
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
@@ -1243,20 +1246,20 @@ function list_metadata_with_owner_uuid(
         features...,
     )
     query = """
-        SELECT owner_uuid, metadata_uuid
+        SELECT owner_id, metadata_uuid
         FROM $ASSOCIATIONS_TABLE_NAME
         $where_clause
     """
     table = Tables.rowtable(_execute(store, query, params))
     return [
         (
-            owner_uuid = Base.UUID(x.owner_uuid),
+            owner_id = Int(x.owner_id),
             metadata = store.metadata_uuids[Base.UUID(x.metadata_uuid)],
         ) for x in table
     ]
 end
 
-function list_owner_uuids_with_time_series(
+function list_owner_ids_with_time_series(
     store::TimeSeriesMetadataStore,
     owner_type::Type{<:TimeSeriesOwners};
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
@@ -1277,11 +1280,11 @@ function list_owner_uuids_with_time_series(
     where_clause = join(vals, " AND ")
     query = """
         SELECT
-            DISTINCT owner_uuid
+            DISTINCT owner_id
         FROM $ASSOCIATIONS_TABLE_NAME
         WHERE $where_clause
     """
-    return Base.UUID.(Tables.columntable(_execute(store, query, params)).owner_uuid)
+    return collect(Int, Tables.columntable(_execute(store, query, params)).owner_id)
 end
 
 """
@@ -1399,18 +1402,18 @@ function _handle_removed_metadata(store::TimeSeriesMetadataStore, metadata_uuid:
     end
 end
 
-const _QUERY_REPLACE_COMP_UUID_TS = """
+const _QUERY_REPLACE_COMP_ID_TS = """
     UPDATE $ASSOCIATIONS_TABLE_NAME
-    SET owner_uuid = ?
-    WHERE owner_uuid = ?
+    SET owner_id = ?
+    WHERE owner_id = ? AND owner_category = 'Component'
 """
-function replace_component_uuid!(
+function replace_component_id!(
     store::TimeSeriesMetadataStore,
-    old_uuid::Base.UUID,
-    new_uuid::Base.UUID,
+    old_id::Int,
+    new_id::Int,
 )
-    params = (string(new_uuid), string(old_uuid))
-    _execute(store, _QUERY_REPLACE_COMP_UUID_TS, params)
+    params = (new_id, old_id)
+    _execute(store, _QUERY_REPLACE_COMP_ID_TS, params)
     return
 end
 
@@ -1463,7 +1466,7 @@ function _create_row(
         get_count(metadata),
         missing,
         get_name(metadata),
-        string(get_uuid(owner)),
+        get_id(owner),
         string(nameof(typeof(owner))),
         owner_category,
         features,
@@ -1496,7 +1499,7 @@ function _create_row(
         missing,
         get_length(metadata),
         get_name(metadata),
-        string(get_uuid(owner)),
+        get_id(owner),
         string(nameof(typeof(owner))),
         owner_category,
         features,
@@ -1585,9 +1588,9 @@ function compare_values(
     exclude = Set{Symbol}(),
 )
     # Note that we can't compare missing values.
-    owner_uuid = compare_uuids ? ", owner_uuid" : ""
+    owner_id = compare_uuids ? ", owner_id" : ""
     query = """
-        SELECT id, metadata_uuid, time_series_uuid $owner_uuid
+        SELECT id, metadata_uuid, time_series_uuid $owner_id
         FROM $ASSOCIATIONS_TABLE_NAME ORDER BY id
     """
     table_x = Tables.rowtable(_execute(x, query))
@@ -1699,9 +1702,12 @@ function _make_where_clause(
     if isnothing(params)
         params = []
     end
-    push!(params, string(get_uuid(owner)))
+    # Owner ids are unique only within a category (component vs supplemental attribute), so
+    # match on both.
+    push!(params, get_id(owner))
+    push!(params, _get_owner_category(owner))
     return _make_where_clause(;
-        owner_clause = "owner_uuid = ?",
+        owner_clause = "owner_id = ? AND owner_category = ?",
         time_series_type = time_series_type,
         name = name,
         resolution = resolution,

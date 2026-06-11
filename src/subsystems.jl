@@ -6,7 +6,7 @@ function add_subsystem!(data::SystemData, subsystem_name::AbstractString)
         throw(ArgumentError("There is already a subsystem with name = $subsystem_name."))
     end
 
-    data.subsystems[subsystem_name] = Set{Base.UUID}()
+    data.subsystems[subsystem_name] = Set{Int}()
     @debug "Added subystem $subsystem_name" _group = LOG_GROUP_SYSTEM
     return
 end
@@ -51,8 +51,8 @@ function add_component_to_subsystem!(
     _throw_if_not_stored(data, subsystem_name)
 
     container = data.subsystems[subsystem_name]
-    uuid = get_uuid(component)
-    if uuid in container
+    id = get_id(component)
+    if id in container
         throw(
             ArgumentError(
                 "Subsystem $subsystem_name already contains $(summary(component))",
@@ -60,7 +60,7 @@ function add_component_to_subsystem!(
         )
     end
 
-    push!(container, uuid)
+    push!(container, id)
     @debug "Added $(summary(component)) to subystem $subsystem_name" _group =
         LOG_GROUP_SYSTEM
     return
@@ -76,7 +76,7 @@ function get_subsystem_components(data::SystemData, subsystem_name::AbstractStri
     return (get_component(data, x) for x in data.subsystems[subsystem_name])
 end
 
-function get_component_uuids(data::SystemData, subsystem_name::AbstractString)
+function get_component_ids(data::SystemData, subsystem_name::AbstractString)
     _throw_if_not_stored(data, subsystem_name)
     return data.subsystems[subsystem_name]
 end
@@ -97,7 +97,7 @@ function remove_component_from_subsystem!(
         )
     end
 
-    pop!(data.subsystems[subsystem_name], get_uuid(component))
+    pop!(data.subsystems[subsystem_name], get_id(component))
     @debug "Removed $(summary(component)) from subystem $subsystem_name" _group =
         LOG_GROUP_SYSTEM
     return
@@ -107,9 +107,9 @@ function remove_component_from_subsystems!(
     data::SystemData,
     component::InfrastructureSystemsComponent,
 )
-    uuid = get_uuid(component)
-    for (subsystem_name, uuids) in data.subsystems
-        pop!(uuids, uuid, nothing)
+    id = get_id(component)
+    for (subsystem_name, ids) in data.subsystems
+        pop!(ids, id, nothing)
         @debug "Removed $(summary(component)) from subystem $subsystem_name" _group =
             LOG_GROUP_SYSTEM
     end
@@ -125,7 +125,7 @@ function has_component(
     component::InfrastructureSystemsComponent,
 )
     _throw_if_not_stored(data, subsystem_name)
-    return get_uuid(component) in data.subsystems[subsystem_name]
+    return get_id(component) in data.subsystems[subsystem_name]
 end
 
 """
@@ -135,8 +135,8 @@ function get_assigned_subsystems(
     data::SystemData,
     component::InfrastructureSystemsComponent,
 )
-    uuid = get_uuid(component)
-    return [k for (k, v) in data.subsystems if uuid in v]
+    id = get_id(component)
+    return [k for (k, v) in data.subsystems if id in v]
 end
 
 """
@@ -146,9 +146,9 @@ function is_assigned_to_subsystem(
     data::SystemData,
     component::InfrastructureSystemsComponent,
 )
-    uuid = get_uuid(component)
-    for uuids in values(data.subsystems)
-        if uuid in uuids
+    id = get_id(component)
+    for ids in values(data.subsystems)
+        if id in ids
             return true
         end
     end
@@ -165,7 +165,7 @@ function is_assigned_to_subsystem(
     subsystem_name::AbstractString,
 )
     _throw_if_not_stored(data, subsystem_name)
-    return get_uuid(component) in data.subsystems[subsystem_name]
+    return get_id(component) in data.subsystems[subsystem_name]
 end
 
 function _throw_if_not_stored(data::SystemData, subsystem_name::AbstractString)

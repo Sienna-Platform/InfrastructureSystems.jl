@@ -3080,7 +3080,7 @@ end
     end
 end
 
-@testset "Test assign_new_uuid_internal! for component with time series" begin
+@testset "Test assign_new_id! for component with time series" begin
     for in_memory in (true, false)
         sys = IS.SystemData(; time_series_in_memory = in_memory)
         name = "Component1"
@@ -3101,12 +3101,12 @@ end
         @test IS.get_time_series(IS.SingleTimeSeries, component, name) isa
               IS.SingleTimeSeries
 
-        old_uuid = IS.get_uuid(component)
-        IS.assign_new_uuid_internal!(component)
-        new_uuid = IS.get_uuid(component)
-        @test old_uuid != new_uuid
+        old_id = IS.get_id(component)
+        IS.assign_new_id!(sys, component)
+        new_id = IS.get_id(component)
+        @test old_id != new_id
 
-        # The time series storage uses component UUIDs, so they must get updated.
+        # The time series storage uses component ids, so they must get updated.
         @test IS.get_time_series(IS.SingleTimeSeries, component, name) isa
               IS.SingleTimeSeries
     end
@@ -3849,7 +3849,7 @@ end
             row.window_count,
             row.length,
             row.name,
-            row.owner_uuid,
+            row.owner_id,
             row.owner_type,
             row.owner_category,
             row.features,
@@ -3871,7 +3871,7 @@ end
         "window_count INTEGER",
         "length INTEGER",
         "name TEXT NOT NULL",
-        "owner_uuid TEXT NOT NULL",
+        "owner_id INTEGER NOT NULL",
         "owner_type TEXT NOT NULL",
         "owner_category TEXT NOT NULL",
         "features TEXT NOT NULL",
@@ -3897,7 +3897,7 @@ end
             "window_count",
             "length",
             "name",
-            "owner_uuid",
+            "owner_id",
             "owner_type",
             "owner_category",
             "features",
@@ -3946,7 +3946,7 @@ function _setup_for_migration_tests_from_IS_v2_3()
                         missing,
                         IS.get_length(metadata),
                         IS.get_name(metadata),
-                        string(IS.get_uuid(component)),
+                        IS.get_id(component),
                         string(nameof(typeof(component))),
                         owner_category,
                         features,
@@ -4036,7 +4036,7 @@ function _create_metadata_table_v2_3!(db::SQLite.DB)
         "window_count INTEGER",
         "length INTEGER",
         "name TEXT NOT NULL",
-        "owner_uuid TEXT NOT NULL",
+        "owner_id INTEGER NOT NULL",
         "owner_type TEXT NOT NULL",
         "owner_category TEXT NOT NULL",
         "features TEXT NOT NULL",
