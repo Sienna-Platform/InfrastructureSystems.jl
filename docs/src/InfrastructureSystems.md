@@ -3,5 +3,6 @@
 ```@autodocs
 Modules = [InfrastructureSystems,
     InfrastructureSystems.Simulation,
-    InfrastructureSystems.Optimization]
+    InfrastructureSystems.Optimization,
+    InfrastructureSystems.RelativeUnits]
 ```
