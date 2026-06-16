@@ -572,19 +572,19 @@ end
     @test IS.get_component(IS.TestComponent, data, name).name == name
 end
 
-@testset "Test independent integer id streams" begin
+@testset "Test independent integer ID streams" begin
     data = IS.SystemData()
     component1 = IS.TestComponent("component1", 5)
     component2 = IS.TestComponent("component2", 6)
-    # Unattached components have no id.
+    # Unattached components have no ID.
     @test IS.get_id(component1) == IS.UNASSIGNED_ID
     IS.add_component!(data, component1)
     IS.add_component!(data, component2)
     @test IS.get_id(component1) == 1
     @test IS.get_id(component2) == 2
 
-    # Components and supplemental attributes have independent id streams, each starting at 1,
-    # so a component and an attribute may share a numeric id.
+    # Components and supplemental attributes have independent ID streams, each starting at 1,
+    # so a component and an attribute may share a numeric ID.
     attr1 = IS.GeographicInfo()
     attr2 = IS.TestSupplemental(; value = 1.0)
     IS.add_supplemental_attribute!(data, component1, attr1)
@@ -592,7 +592,7 @@ end
     @test IS.get_id(attr1) == 1
     @test IS.get_id(attr2) == 2
 
-    # Component ids are unique among components; attribute ids unique among attributes.
+    # Component IDs are unique among components; attribute ids unique among attributes.
     component_ids = IS.get_id.(IS.get_components(IS.TestComponent, data))
     @test length(component_ids) == length(unique(component_ids))
     attribute_ids = vcat(

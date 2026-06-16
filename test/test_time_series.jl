@@ -3106,7 +3106,7 @@ end
         new_id = IS.get_id(component)
         @test old_id != new_id
 
-        # The time series storage uses component ids, so they must get updated.
+        # The time series storage uses component IDs, so they must get updated.
         @test IS.get_time_series(IS.SingleTimeSeries, component, name) isa
               IS.SingleTimeSeries
     end

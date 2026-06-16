@@ -1,6 +1,6 @@
 """
-Assign a new integer id to the component, drawn from the system counter, and update any
-references to its old id in the time series metadata store and supplemental attribute
+Assign a new integer ID to the component, drawn from the system counter, and update any
+references to its old ID in the time series metadata store and supplemental attribute
 associations.
 """
 function assign_new_id_internal!(data, component::InfrastructureSystemsComponent)

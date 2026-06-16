@@ -310,7 +310,7 @@ function has_association(
     )
 end
 
-# component ids from attribute
+# component IDs from attribute
 const _QUERY_LIST_ASSOCIATED_COMP_IDS = """
     SELECT DISTINCT component_id
     FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
@@ -318,7 +318,7 @@ const _QUERY_LIST_ASSOCIATED_COMP_IDS = """
 """
 
 """
-Return the distinct component ids associated with the attribute.
+Return the distinct component IDs associated with the attribute.
 """
 function list_associated_component_ids(
     associations::SupplementalAttributeAssociations,
@@ -363,7 +363,7 @@ list_associated_supplemental_attribute_ids(
     component::InfrastructureSystemsComponent,
 ) = list_associated_supplemental_attribute_ids(associations, component, nothing)
 
-# component ids from attribute plus component type
+# component IDs from attribute plus component type
 const _QUERY_LIST_ASSOCIATED_COMP_IDS_BY_C_TYPE = StringTemplates.@template """
     SELECT DISTINCT component_id
     FROM $table_name
@@ -371,7 +371,7 @@ const _QUERY_LIST_ASSOCIATED_COMP_IDS_BY_C_TYPE = StringTemplates.@template """
 """
 
 """
-Return the distinct component ids associated with the attribute, filter by component type.
+Return the distinct component IDs associated with the attribute, filter by component type.
 """
 function list_associated_component_ids(
     associations::SupplementalAttributeAssociations,
@@ -420,9 +420,9 @@ function list_associated_supplemental_attribute_ids(
     return collect(Int, table.attribute_id)
 end
 
-# component ids from attribute type driver function
+# component IDs from attribute type driver function
 """
-Return the distinct component ids associated with the attribute type.
+Return the distinct component IDs associated with the attribute type.
 """
 function list_associated_component_ids(
     associations::SupplementalAttributeAssociations,
@@ -457,7 +457,7 @@ function list_associated_supplemental_attribute_ids(
     return _list_associated_supplemental_attribute_ids(associations, subtypes)
 end
 
-# component ids from attribute type plus component type
+# component IDs from attribute type plus component type
 const _QUERY_LIST_ASSOCIATED_COMP_IDS_BY_TYPES = StringTemplates.@template """
     SELECT DISTINCT component_id
     FROM $table_name
@@ -465,7 +465,7 @@ const _QUERY_LIST_ASSOCIATED_COMP_IDS_BY_TYPES = StringTemplates.@template """
 """
 
 """
-Return the distinct component ids associated with the attribute type, filter by
+Return the distinct component IDs associated with the attribute type, filter by
 component_type.
 """
 function list_associated_component_ids(
@@ -567,7 +567,7 @@ function _get_type_clause!(
     return type_clause
 end
 
-# component ids from attribute type implementation
+# component IDs from attribute type implementation
 const _QUERY_LIST_ASSOCIATED_COMP_IDS_BY_ONE_TYPE = """
     SELECT DISTINCT component_id
     FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
@@ -682,7 +682,7 @@ const _QUERY_REPLACE_COMP_ID_SA = """
 """
 
 """
-Replace the component id in the table.
+Replace the component ID in the table.
 """
 function replace_component_id!(
     associations::SupplementalAttributeAssociations,

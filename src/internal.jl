@@ -52,7 +52,7 @@ mutable struct InfrastructureSystemsInternal <: InfrastructureSystemsType
 end
 
 """
-Creates InfrastructureSystemsInternal with a new UUID and an unassigned integer id.
+Creates InfrastructureSystemsInternal with a new UUID and an unassigned integer ID.
 """
 InfrastructureSystemsInternal(;
     id = UNASSIGNED_ID,
@@ -113,7 +113,7 @@ function get_uuid(obj::InfrastructureSystemsType)
 end
 
 """
-Gets the integer id of a component or supplemental attribute. Returns [`UNASSIGNED_ID`](@ref)
+Get the integer id of a component or supplemental attribute. Returns [`UNASSIGNED_ID`](@ref)
 if the object has not been attached to a [`SystemData`](@ref).
 """
 function get_id(obj::InfrastructureSystemsType)
@@ -121,7 +121,7 @@ function get_id(obj::InfrastructureSystemsType)
 end
 
 """
-Sets the integer id of a component or supplemental attribute.
+Set the integer ID of a component or supplemental attribute.
 """
 function set_id!(obj::InfrastructureSystemsType, id::Int)
     set_id!(get_internal(obj), id)

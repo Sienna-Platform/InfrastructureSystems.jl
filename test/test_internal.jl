@@ -1,6 +1,6 @@
-@testset "Test integer id" begin
+@testset "Test integer ID" begin
     component = IS.TestComponent("component", 5)
-    # A freshly constructed component has no id until attached to a system.
+    # A freshly constructed component has no ID until attached to a system.
     @test IS.get_id(component) == IS.UNASSIGNED_ID
     IS.set_id!(component, 5)
     @test IS.get_id(component) == 5

@@ -4,7 +4,7 @@ const SupplementalAttributesByType =
 """
 Owns supplemental attributes and their associations to components in a [`SystemData`](@ref).
 
-Attributes are stored by type and integer id. Component links are tracked in
+Attributes are stored by type and integer ID. Component links are tracked in
 [`SupplementalAttributeAssociations`](@ref). User code typically calls
 [`add_supplemental_attribute!`](@ref) on [`SystemData`](@ref) rather than on the manager
 directly.
@@ -103,7 +103,7 @@ function is_attached(attribute::SupplementalAttribute, mgr::SupplementalAttribut
     isnothing(_attribute) && return false
 
     if attribute !== _attribute
-        @warn "An attribute with the same id as $(summary(attribute)) is stored in " *
+        @warn "An attribute with the same ID as $(summary(attribute)) is stored in " *
               "the system but is not the same instance."
         return false
     end

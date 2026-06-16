@@ -20,11 +20,11 @@ Container for system components and time series data
 mutable struct SystemData <: ComponentContainer
     components::Components
     masked_components::Components
-    "Maps the integer id of every attached component, regular and masked, to the component."
+    "Maps the integer ID of every attached component, regular and masked, to the component."
     component_ids::Dict{Int, <:InfrastructureSystemsComponent}
-    "Next integer id to assign to a component. Independent of the supplemental attribute id stream. Starts at 1."
+    "Next integer ID to assign to a component. Independent of the supplemental attribute ID stream. Starts at 1."
     next_component_id::Int
-    "Next integer id to assign to a supplemental attribute. Independent of the component id stream. Starts at 1."
+    "Next integer ID to assign to a supplemental attribute. Independent of the component ID stream. Starts at 1."
     next_supplemental_attribute_id::Int
     "User-defined subystems. Components can be regular or masked."
     subsystems::Dict{String, Set{Int}}
@@ -108,7 +108,7 @@ function SystemData(
 end
 
 """
-Return the next integer id to assign to a component and advance the component counter.
+Return the next integer ID to assign to a component and advance the component counter.
 """
 function get_next_component_id!(data::SystemData)
     id = data.next_component_id
@@ -117,7 +117,7 @@ function get_next_component_id!(data::SystemData)
 end
 
 """
-Return the next integer id to assign to a supplemental attribute and advance the
+Return the next integer ID to assign to a supplemental attribute and advance the
 supplemental attribute counter.
 """
 function get_next_supplemental_attribute_id!(data::SystemData)
@@ -412,6 +412,11 @@ function compare_values(
             # the components.
             continue
         end
+        if !compare_uuids && name in (:next_component_id, :next_supplemental_attribute_id)
+            # These counters track the integer ID streams and only match when the ids
+            # themselves match, so skip them unless ids/UUIDs are being compared.
+            continue
+        end
         val_x = getproperty(x, name)
         val_y = getproperty(y, name)
         if !compare_values(
@@ -456,7 +461,7 @@ end
 function _handle_component_removal!(data::SystemData, component)
     id = get_id(component)
     if !haskey(data.component_ids, id)
-        error("Bug: component = $(summary(component)) did not have its id stored $id")
+        error("Bug: component = $(summary(component)) did not have its ID stored $id")
     end
 
     pop!(data.component_ids, id)
@@ -1062,9 +1067,9 @@ function deserialize(
         read_only = time_series_read_only,
         metadata_store = time_series_metadata_store,
     )
-    subsystems = Dict(k => Set(Int.(v)) for (k, v) in raw["subsystems"])
-    next_component_id = Int(get(raw, "next_component_id", 1))
-    next_supplemental_attribute_id = Int(get(raw, "next_supplemental_attribute_id", 1))
+    subsystems = Dict(k => Set{Int}(v) for (k, v) in raw["subsystems"])
+    next_component_id = raw["next_component_id"]
+    next_supplemental_attribute_id = raw["next_supplemental_attribute_id"]
     supplemental_attribute_manager = deserialize(
         SupplementalAttributeManager,
         get(
@@ -1103,13 +1108,13 @@ function deserialize(
 
     system_component_ids = Set{Int}()
     for component in Iterators.Flatten((raw["components"], raw["masked_components"]))
-        push!(system_component_ids, Int(component["internal"]["id"]))
+        push!(system_component_ids, component["internal"]["id"])
     end
 
     for (name, subsystem_component_ids) in sys.subsystems
         if !issubset(subsystem_component_ids, system_component_ids)
             diff = setdiff(subsystem_component_ids, system_component_ids)
-            error("Subsystem $name has component ids that are not in the system: $diff")
+            error("Subsystem $name has component IDs that are not in the system: $diff")
         end
     end
 
@@ -1121,14 +1126,14 @@ end
 # Redirect functions to Components
 
 """
-Assign an integer id to a component being attached to `data`, drawn from the component id
+Assign an integer ID to a component being attached to `data`, drawn from the component ID
 stream.
 
 A freshly constructed component has [`UNASSIGNED_ID`](@ref) and receives the next component
-id. A component that already carries an id (for example, one restored during
+ID. A component that already carries an id (for example, one restored during
 deserialization) keeps it; the counter is advanced past it so future ids do not collide.
-Components and supplemental attributes have independent id streams, so a component and an
-attribute may share a numeric id.
+Components and supplemental attributes have independent ID streams, so a component and an
+attribute may share a numeric ID.
 """
 function assign_id!(data::SystemData, component::InfrastructureSystemsComponent)
     id = get_id(component)
@@ -1142,8 +1147,8 @@ function assign_id!(data::SystemData, component::InfrastructureSystemsComponent)
 end
 
 """
-Assign an integer id to a supplemental attribute being attached to `data`, drawn from the
-supplemental attribute id stream (independent of the component id stream).
+Assign an integer ID to a supplemental attribute being attached to `data`, drawn from the
+supplemental attribute ID stream (independent of the component ID stream).
 """
 function assign_id!(data::SystemData, attribute::SupplementalAttribute)
     id = get_id(attribute)
@@ -1159,7 +1164,7 @@ end
 """
 Add a component to a [`SystemData`](@ref) instance.
 
-Assigns the component's integer id, wires [`SharedSystemReferences`](@ref) for time series
+Assigns the component's integer ID, wires [`SharedSystemReferences`](@ref) for time series
 and supplemental attributes, and delegates storage to the underlying [`Components`](@ref)
 container.
 
@@ -1222,7 +1227,7 @@ get_component(::Type{T}, data::SystemData, args...) where {T} =
 function get_component(data::SystemData, id::Int)
     component = get(data.component_ids, id, nothing)
     if isnothing(component)
-        throw(ArgumentError("No component with id = $id is stored."))
+        throw(ArgumentError("No component with ID = $id is stored."))
     end
 
     return component
@@ -1244,7 +1249,7 @@ end
 function assign_new_id!(data::SystemData, component::InfrastructureSystemsComponent)
     orig_id = get_id(component)
     if isnothing(pop!(data.component_ids, orig_id, nothing))
-        throw(ArgumentError("component with id = $orig_id is not stored."))
+        throw(ArgumentError("component with ID = $orig_id is not stored."))
     end
 
     assign_new_id_internal!(data, component)
@@ -1404,7 +1409,7 @@ function get_masked_component(data::SystemData, id::Int)
         end
     end
 
-    @error "no component with id $id is stored"
+    @error "no component with ID $id is stored"
     return nothing
 end
 
