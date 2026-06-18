@@ -108,6 +108,10 @@ julia --project=test test/runtests.jl                       # full test suite
 julia --project=test test/runtests.jl test_file_name        # a single test file
 julia --project=test -e 'using Pkg; Pkg.instantiate()'      # instantiate test env
 julia --project=docs docs/make.jl                           # build docs
+
+# Alternative: TestEnv.jl-based workflow (if TestEnv is present in Project.toml, prefer this)
+julia --project=. -e 'using TestEnv; TestEnv.activate(); include("test/runtests.jl")'
+julia --project=. -e 'using TestEnv; TestEnv.activate(); push!(ARGS, "test_file_name"); include("test/runtests.jl")'
 ```
 
 (See each repo's `CLAUDE.md` for its exact, verified commands and test-runner style.)
@@ -123,3 +127,4 @@ julia --project=docs docs/make.jl                           # build docs
 
 - **Tests fail unexpectedly / packages missing:** re-instantiate — `julia --project=test -e 'using Pkg; Pkg.instantiate()'`.
 - **Poor performance, many allocations:** run `@code_warntype` on the suspect function (see the performance anti-patterns above).
+- **`Pkg`/`TestEnv` errors (e.g. `can not merge projects`):** under the `TestEnv.jl`-based workflow, the local project should NOT be `dev`'ed in `test/Project.toml`. Otherwise check `[compat]` in `Project.toml`; delete `Manifest.toml` and re-resolve; ask user about updating packages.
