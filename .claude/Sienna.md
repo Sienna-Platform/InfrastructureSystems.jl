@@ -138,10 +138,10 @@ julia --project=test test/runtests.jl
 julia --project=test test/runtests.jl test_file_name
 
 # Run tests using TestEnv.jl
-julia --project=. -e 'using TestEnv; TestEnv.activate(); include(\"test/runtests.jl\")'
+julia --project=. -e 'using TestEnv; TestEnv.activate(); include("test/runtests.jl")'
 
 # Run specific tests using TestEnv.jl
-julia --project=. -e 'using TestEnv; TestEnv.activate(); push!(ARGS, \"test_file_name\"); include(\"test/runtests.jl\")'
+julia --project=. -e 'using TestEnv; TestEnv.activate(); push!(ARGS, "test_file_name"); include("test/runtests.jl")'
 
 # Run expression
 julia --project=test -e 'using PackageName; ...'
@@ -174,4 +174,4 @@ julia --project=docs docs/make.jl
 
 **Environment issues**
 - Symptom: `Pkg` or `TestEnv` throws errors.
-- Solution: check `[compat]` in `Project.toml`; delete `Manifest.toml` and re-resolve; ask user about updating packages.
+- Solution: check `[compat]` in `Project.toml`; delete `Manifest.toml` and re-resolve; confirm with the PR author/maintainers before updating dependency versions.
