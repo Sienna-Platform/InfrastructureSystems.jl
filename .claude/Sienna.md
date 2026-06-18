@@ -155,7 +155,7 @@ julia --project=docs docs/make.jl
 
 **Why this matters:** Running without `--project=<env>` will fail because required packages won't be available in the default environment. The test/docs environments contain all necessary dependencies for their respective tasks.
 
-**Note:** under the `TestEnv.jl` based workflow above, the local project should NOT be `dev`'ed in `test/Project.toml`. Otherwise, `TestEnv.jl` will report `ERROR: can not merge projects`. If `TestEnv.jl` is present in `Project.toml`, generally default to using the `TestEnv.jl`-based workflow.
+**Note:** under the `TestEnv.jl` based workflow above, do NOT run `Pkg.develop(path=".")` in the `test` environment. Avoid other major differences between the root and test environment: if dependencies are `dev`'ed in one environment, they should be `dev`'ed to the same local path or remote branch in the other, too. If `TestEnv.jl` is present in `Project.toml`, generally default to using the `TestEnv.jl`-based workflow.
 
 ## Troubleshooting
 
