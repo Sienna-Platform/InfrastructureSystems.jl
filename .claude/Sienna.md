@@ -131,11 +131,17 @@ Branch naming: `feature/description` or `fix/description`
 Common patterns:
 
 ```sh
-# Run tests (using test environment)
+# Run tests using test environment
 julia --project=test test/runtests.jl
 
 # Run specific test
 julia --project=test test/runtests.jl test_file_name
+
+# Run tests using TestEnv.jl
+julia --project=. -e 'using TestEnv; TestEnv.activate(); include("test/runtests.jl")'
+
+# Run specific tests using TestEnv.jl
+julia --project=. -e 'using TestEnv; TestEnv.activate(); push!(ARGS, "test_file_name"); include("test/runtests.jl")'
 
 # Run expression
 julia --project=test -e 'using PackageName; ...'
@@ -148,6 +154,8 @@ julia --project=docs docs/make.jl
 ```
 
 **Why this matters:** Running without `--project=<env>` will fail because required packages won't be available in the default environment. The test/docs environments contain all necessary dependencies for their respective tasks.
+
+**Note:** under the `TestEnv.jl` based workflow above, do NOT run `Pkg.develop(path=".")` in the `test` environment. Avoid other major differences between the root and test environment: if dependencies are `dev`'ed in one environment, they should be `dev`'ed to the same local path or remote branch in the other, too. If `TestEnv.jl` is present in `Project.toml`, generally default to using the `TestEnv.jl`-based workflow.
 
 ## Troubleshooting
 
@@ -163,3 +171,7 @@ julia --project=docs docs/make.jl
 **Test failures**
 - Symptom: Tests fail unexpectedly
 - Solution: `julia --project=test -e 'using Pkg; Pkg.instantiate()'`
+
+**Environment issues**
+- Symptom: `Pkg` or `TestEnv` throws errors.
+- Solution: check `[compat]` in `Project.toml`; delete `Manifest.toml` and re-resolve; confirm with the PR author/maintainers before updating dependency versions.
