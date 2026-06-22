@@ -1,6 +1,16 @@
 const SupplementalAttributesByType =
-    Dict{DataType, Dict{Base.UUID, <:SupplementalAttribute}}
+    Dict{DataType, Dict{Int, <:SupplementalAttribute}}
 
+"""
+Owns supplemental attributes and their associations to components in a [`SystemData`](@ref).
+
+Attributes are stored by type and integer ID. Component links are tracked in
+[`SupplementalAttributeAssociations`](@ref). User code typically calls
+[`add_supplemental_attribute!`](@ref) on [`SystemData`](@ref) rather than on the manager
+directly.
+
+See also: [`SupplementalAttribute`](@ref), [`iterate_supplemental_attributes`](@ref)
+"""
 mutable struct SupplementalAttributeManager <: InfrastructureSystemsContainer
     data::SupplementalAttributesByType
     associations::SupplementalAttributeAssociations
@@ -79,21 +89,31 @@ function _attach_attribute!(
         )
     end
 
+    id = get_id(attribute)
+    if id == UNASSIGNED_ID
+        throw(
+            ArgumentError(
+                "$(summary(attribute)) has an unassigned ID; attach it through " *
+                "`add_supplemental_attribute!` on `SystemData` so an ID is assigned first.",
+            ),
+        )
+    end
+
     T = typeof(attribute)
     if !haskey(mgr.data, T)
-        mgr.data[T] = Dict{Base.UUID, T}()
+        mgr.data[T] = Dict{Int, T}()
     end
-    mgr.data[T][get_uuid(attribute)] = attribute
+    mgr.data[T][id] = attribute
 end
 
 function is_attached(attribute::SupplementalAttribute, mgr::SupplementalAttributeManager)
     T = typeof(attribute)
     !haskey(mgr.data, T) && return false
-    _attribute = get(mgr.data[T], get_uuid(attribute), nothing)
+    _attribute = get(mgr.data[T], get_id(attribute), nothing)
     isnothing(_attribute) && return false
 
     if attribute !== _attribute
-        @warn "An attribute with the same UUUID as $(summary(attribute)) is stored in " *
+        @warn "An attribute with the same ID as $(summary(attribute)) is stored in " *
               "the system but is not the same instance."
         return false
     end
@@ -170,7 +190,7 @@ function remove_supplemental_attribute!(
     end
 
     T = typeof(supplemental_attribute)
-    pop!(mgr.data[T], get_uuid(supplemental_attribute))
+    pop!(mgr.data[T], get_id(supplemental_attribute))
     prepare_for_removal!(supplemental_attribute)
     if isempty(mgr.data[T])
         pop!(mgr.data, T)
@@ -230,31 +250,31 @@ function get_supplemental_attributes(
     return iterate_instances(T, mgr.data, nothing)
 end
 
-function get_supplemental_attribute(mgr::SupplementalAttributeManager, uuid::Base.UUID)
+function get_supplemental_attribute(mgr::SupplementalAttributeManager, id::Int)
     for attr_dict in values(mgr.data)
-        attribute = get(attr_dict, uuid, nothing)
+        attribute = get(attr_dict, id, nothing)
         if !isnothing(attribute)
             return attribute
         end
     end
 
-    throw(ArgumentError("No attribute with UUID = $uuid is stored"))
+    throw(ArgumentError("No attribute with id = $id is stored"))
 end
 
-function list_associated_component_uuids(
+function list_associated_component_ids(
     mgr::SupplementalAttributeManager,
     attribute_type::Type{<:SupplementalAttribute},
     component_type::Union{Nothing, Type{<:InfrastructureSystemsComponent}},
 )
-    return list_associated_component_uuids(mgr.associations, attribute_type, component_type)
+    return list_associated_component_ids(mgr.associations, attribute_type, component_type)
 end
 
-function list_associated_supplemental_attribute_uuids(
+function list_associated_supplemental_attribute_ids(
     mgr::SupplementalAttributeManager,
     component_type::Type{<:InfrastructureSystemsComponent},
     attribute_type::Union{Nothing, Type{<:SupplementalAttribute}},
 )
-    return list_associated_supplemental_attribute_uuids(
+    return list_associated_supplemental_attribute_ids(
         mgr.associations,
         component_type,
         attribute_type,
@@ -284,14 +304,14 @@ function deserialize(
     for attr_dict in data["attributes"]
         type = get_type_from_serialization_metadata(get_serialization_metadata(attr_dict))
         if !haskey(mgr.data, type)
-            mgr.data[type] = Dict{Base.UUID, SupplementalAttribute}()
+            mgr.data[type] = Dict{Int, SupplementalAttribute}()
         end
         attr = deserialize(type, attr_dict)
-        uuid = get_uuid(attr)
-        if haskey(mgr.data[type], uuid)
-            error("Bug: duplicate UUID in attributes container: type=$type uuid=$uuid")
+        id = get_id(attr)
+        if haskey(mgr.data[type], id)
+            error("Bug: duplicate id in attributes container: type=$type id=$id")
         end
-        mgr.data[type][uuid] = attr
+        mgr.data[type][id] = attr
         set_shared_system_references!(attr, refs)
         @debug "Deserialized $(summary(attr))" _group = LOG_GROUP_SERIALIZATION
     end
