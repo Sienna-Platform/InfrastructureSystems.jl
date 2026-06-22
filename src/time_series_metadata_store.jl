@@ -1230,7 +1230,7 @@ function list_metadata(
 end
 
 """
-Return a Vector of NamedTuple of owner UUID and time series metadata matching the inputs.
+Return a Vector of NamedTuple of owner ID and time series metadata matching the inputs.
 """
 function list_metadata_with_owner_id(
     store::TimeSeriesMetadataStore,

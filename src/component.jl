@@ -1,7 +1,7 @@
 """
 Assign a new integer ID to the component, drawn from the system counter, and update any
-references to its old ID in the time series metadata store and supplemental attribute
-associations.
+references to its old ID in the time series metadata store, supplemental attribute
+associations, and subsystem membership sets.
 """
 function assign_new_id_internal!(data, component::InfrastructureSystemsComponent)
     old_id = get_id(component)
@@ -14,6 +14,13 @@ function assign_new_id_internal!(data, component::InfrastructureSystemsComponent
     associations = _get_supplemental_attribute_associations(component)
     if !isnothing(associations)
         replace_component_id!(associations, old_id, new_id)
+    end
+
+    for ids in values(data.subsystems)
+        if old_id in ids
+            pop!(ids, old_id)
+            push!(ids, new_id)
+        end
     end
 
     set_id!(get_internal(component), new_id)

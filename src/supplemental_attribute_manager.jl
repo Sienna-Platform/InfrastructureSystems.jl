@@ -89,11 +89,21 @@ function _attach_attribute!(
         )
     end
 
+    id = get_id(attribute)
+    if id == UNASSIGNED_ID
+        throw(
+            ArgumentError(
+                "$(summary(attribute)) has an unassigned ID; attach it through " *
+                "`add_supplemental_attribute!` on `SystemData` so an ID is assigned first.",
+            ),
+        )
+    end
+
     T = typeof(attribute)
     if !haskey(mgr.data, T)
         mgr.data[T] = Dict{Int, T}()
     end
-    mgr.data[T][get_id(attribute)] = attribute
+    mgr.data[T][id] = attribute
 end
 
 function is_attached(attribute::SupplementalAttribute, mgr::SupplementalAttributeManager)
