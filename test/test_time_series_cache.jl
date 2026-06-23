@@ -248,7 +248,7 @@ end
     component_name = "Component1"
     component = IS.TestComponent(component_name, 5)
     IS.add_component!(sys, component)
-    forecast = IS.Probabilistic(name, data, ones(99), resolution)
+    forecast = IS.Probabilistic(name, data, collect(range(0.01, 0.99; length = 99)), resolution)
     IS.add_time_series!(sys, component, forecast)
 
     # Iterate over all initial times with custom cache size.

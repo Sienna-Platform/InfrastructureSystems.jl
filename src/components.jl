@@ -316,18 +316,18 @@ See also: [`iterate_components`](@ref)
 function get_components(
     ::Type{T},
     components::Components;
-    component_uuids::Union{Nothing, Set{Base.UUID}} = nothing,
+    component_ids::Union{Nothing, Set{Int}} = nothing,
 ) where {T <: InfrastructureSystemsComponent}
-    return iterate_instances(T, components.data, component_uuids)
+    return iterate_instances(T, components.data, component_ids)
 end
 
 function get_components(
     filter_func::Function,
     ::Type{T},
     components::Components;
-    component_uuids::Union{Nothing, Set{Base.UUID}} = nothing,
+    component_ids::Union{Nothing, Set{Int}} = nothing,
 ) where {T <: InfrastructureSystemsComponent}
-    return iterate_instances(filter_func, T, components.data, component_uuids)
+    return iterate_instances(filter_func, T, components.data, component_ids)
 end
 
 """

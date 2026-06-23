@@ -21,10 +21,14 @@ Container for system components and time series data
 mutable struct SystemData <: ComponentContainer
     components::Components
     masked_components::Components
-    "Contains all attached component UUIDs, regular and masked."
-    component_uuids::Dict{Base.UUID, <:InfrastructureSystemsComponent}
+    "Maps the integer id of every attached component, regular and masked, to the component."
+    component_ids::Dict{Int, <:InfrastructureSystemsComponent}
+    "Next integer id to assign to a component. Independent of the supplemental attribute id stream. Starts at 1."
+    next_component_id::Int
+    "Next integer id to assign to a supplemental attribute. Independent of the component id stream. Starts at 1."
+    next_supplemental_attribute_id::Int
     "User-defined subystems. Components can be regular or masked."
-    subsystems::Dict{String, Set{Base.UUID}}
+    subsystems::Dict{String, Set{Int}}
     supplemental_attribute_manager::SupplementalAttributeManager
     time_series_manager::TimeSeriesManager
     validation_descriptors::Vector
@@ -68,8 +72,10 @@ function SystemData(;
     return SystemData(
         components,
         masked_components,
-        Dict{Base.UUID, InfrastructureSystemsComponent}(),
-        Dict{String, Set{Base.UUID}}(),
+        Dict{Int, InfrastructureSystemsComponent}(),
+        1,
+        1,
+        Dict{String, Set{Int}}(),
         supplemental_attribute_mgr,
         time_series_mgr,
         validation_descriptors,
@@ -80,6 +86,8 @@ end
 function SystemData(
     validation_descriptors,
     time_series_manager,
+    next_component_id,
+    next_supplemental_attribute_id,
     subsystems,
     supplemental_attribute_manager,
     internal,
@@ -89,13 +97,34 @@ function SystemData(
     return SystemData(
         components,
         masked_components,
-        Dict{Base.UUID, InfrastructureSystemsComponent}(),
+        Dict{Int, InfrastructureSystemsComponent}(),
+        next_component_id,
+        next_supplemental_attribute_id,
         subsystems,
         supplemental_attribute_manager,
         time_series_manager,
         validation_descriptors,
         internal,
     )
+end
+
+"""
+Return the next integer id to assign to a component and advance the component counter.
+"""
+function get_next_component_id!(data::SystemData)
+    id = data.next_component_id
+    data.next_component_id += 1
+    return id
+end
+
+"""
+Return the next integer id to assign to a supplemental attribute and advance the
+supplemental attribute counter.
+"""
+function get_next_supplemental_attribute_id!(data::SystemData)
+    id = data.next_supplemental_attribute_id
+    data.next_supplemental_attribute_id += 1
+    return id
 end
 
 function open_time_series_store!(
@@ -358,7 +387,7 @@ function _validate(
 end
 
 function _validate(data::SystemData, attribute::SupplementalAttribute)
-    _attribute = get_supplemental_attribute(data, get_uuid(attribute))
+    _attribute = get_supplemental_attribute(data, get_id(attribute))
     if attribute !== _attribute
         throw(
             ArgumentError(
@@ -379,7 +408,7 @@ function compare_values(
     match = true
     for name in fieldnames(SystemData)
         name in exclude && continue
-        if name == :component_uuids
+        if name == :component_ids
             # These are not serialized. They get rebuilt when the parent package adds
             # the components.
             continue
@@ -426,12 +455,12 @@ function remove_components!(::Type{T}, data::SystemData) where {T}
 end
 
 function _handle_component_removal!(data::SystemData, component)
-    uuid = get_uuid(component)
-    if !haskey(data.component_uuids, uuid)
-        error("Bug: component = $(summary(component)) did not have its uuid stored $uuid")
+    id = get_id(component)
+    if !haskey(data.component_ids, id)
+        error("Bug: component = $(summary(component)) did not have its id stored $id")
     end
 
-    pop!(data.component_uuids, uuid)
+    pop!(data.component_ids, id)
     remove_component_from_subsystems!(data, component)
     set_shared_system_references!(component, nothing)
     return
@@ -470,7 +499,7 @@ function iterate_components_with_time_series(
 )
     return (
         get_component(data, x) for
-        x in _rust_list_owner_uuids(
+        x in _rust_list_owner_ids(
             data.time_series_manager.data_store,
             InfrastructureSystemsComponent;
             time_series_type = time_series_type,
@@ -485,7 +514,7 @@ function iterate_supplemental_attributes_with_time_series(
 )
     return (
         get_supplemental_attribute(data, x) for
-        x in _rust_list_owner_uuids(
+        x in _rust_list_owner_ids(
             data.time_series_manager.data_store,
             SupplementalAttribute;
             time_series_type = time_series_type,
@@ -703,7 +732,7 @@ function _check_transform_single_time_series(
             interval = params.interval,
         )
         check_params_compatibility(system_params, params)
-        component = get_component(data, item.owner_uuid)
+        component = get_component(data, item.owner_id)
 
         # We do not allow a component to have both Deterministic and
         # DeterministicSingleTimeSeries with the same parameters.
@@ -904,6 +933,8 @@ function to_dict(data::SystemData)
             (
             :components,
             :masked_components,
+            :next_component_id,
+            :next_supplemental_attribute_id,
             :subsystems,
             :supplemental_attribute_manager,
             :internal,
@@ -997,7 +1028,9 @@ function deserialize(
             ),
         )
     end
-    subsystems = Dict(k => Set(Base.UUID.(v)) for (k, v) in raw["subsystems"])
+    subsystems = Dict(k => Set(Int.(v)) for (k, v) in raw["subsystems"])
+    next_component_id = Int(get(raw, "next_component_id", 1))
+    next_supplemental_attribute_id = Int(get(raw, "next_supplemental_attribute_id", 1))
     supplemental_attribute_manager = deserialize(
         SupplementalAttributeManager,
         get(
@@ -1017,30 +1050,32 @@ function deserialize(
     sys = SystemData(
         validation_descriptors,
         time_series_manager,
+        next_component_id,
+        next_supplemental_attribute_id,
         subsystems,
         supplemental_attribute_manager,
         internal,
     )
-    attributes_by_uuid = Dict{Base.UUID, SupplementalAttribute}()
+    attributes_by_id = Dict{Int, SupplementalAttribute}()
     for attr_dict in values(supplemental_attribute_manager.data)
         for attr in values(attr_dict)
-            uuid = get_uuid(attr)
-            if haskey(attributes_by_uuid, uuid)
-                error("Bug: Found duplicate supplemental attribute UUID: $uuid")
+            id = get_id(attr)
+            if haskey(attributes_by_id, id)
+                error("Bug: Found duplicate supplemental attribute id: $id")
             end
-            attributes_by_uuid[uuid] = attr
+            attributes_by_id[id] = attr
         end
     end
 
-    system_component_uuids = Set{Base.UUID}()
+    system_component_ids = Set{Int}()
     for component in Iterators.Flatten((raw["components"], raw["masked_components"]))
-        push!(system_component_uuids, UUIDs.UUID(component["internal"]["uuid"]["value"]))
+        push!(system_component_ids, Int(component["internal"]["id"]))
     end
 
-    for (name, subsystem_component_uuids) in sys.subsystems
-        if !issubset(subsystem_component_uuids, system_component_uuids)
-            diff = setdiff(subsystem_component_uuids, system_component_uuids)
-            error("Subsystem $name has component UUIDs that are not in the system: $diff")
+    for (name, subsystem_component_ids) in sys.subsystems
+        if !issubset(subsystem_component_ids, system_component_ids)
+            diff = setdiff(subsystem_component_ids, system_component_ids)
+            error("Subsystem $name has component ids that are not in the system: $diff")
         end
     end
 
@@ -1051,10 +1086,55 @@ end
 
 # Redirect functions to Components
 
+"""
+Assign an integer id to a component being attached to `data`, drawn from the component id
+stream.
+
+A freshly constructed component has [`UNASSIGNED_ID`](@ref) and receives the next component
+id. A component that already carries an id (for example, one restored during
+deserialization) keeps it; the counter is advanced past it so future ids do not collide.
+Components and supplemental attributes have independent id streams, so a component and an
+attribute may share a numeric id.
+"""
+function assign_id!(data::SystemData, component::InfrastructureSystemsComponent)
+    id = get_id(component)
+    if id == UNASSIGNED_ID
+        id = get_next_component_id!(data)
+        set_id!(component, id)
+    elseif id >= data.next_component_id
+        data.next_component_id = id + 1
+    end
+    return id
+end
+
+"""
+Assign an integer id to a supplemental attribute being attached to `data`, drawn from the
+supplemental attribute id stream (independent of the component id stream).
+"""
+function assign_id!(data::SystemData, attribute::SupplementalAttribute)
+    id = get_id(attribute)
+    if id == UNASSIGNED_ID
+        id = get_next_supplemental_attribute_id!(data)
+        set_id!(attribute, id)
+    elseif id >= data.next_supplemental_attribute_id
+        data.next_supplemental_attribute_id = id + 1
+    end
+    return id
+end
+
+"""
+Add a component to a [`SystemData`](@ref) instance.
+
+Assigns the component's integer id, wires [`SharedSystemReferences`](@ref) for time series
+and supplemental attributes, and delegates storage to the underlying [`Components`](@ref)
+container.
+
+See also: [`add_component!`](@ref) on [`Components`](@ref)
+"""
 function add_component!(data::SystemData, component; kwargs...)
     _check_add_component(data, component)
     add_component!(data.components, component; kwargs...)
-    data.component_uuids[get_uuid(component)] = component
+    data.component_ids[assign_id!(data, component)] = component
     refs = SharedSystemReferences(;
         time_series_manager = data.time_series_manager,
         supplemental_attribute_manager = data.supplemental_attribute_manager,
@@ -1071,7 +1151,7 @@ function add_masked_component!(data::SystemData, component; kwargs...)
         allow_existing_time_series = true,
         kwargs...,
     )
-    data.component_uuids[get_uuid(component)] = component
+    data.component_ids[assign_id!(data, component)] = component
     refs = SharedSystemReferences(;
         time_series_manager = data.time_series_manager,
         supplemental_attribute_manager = data.supplemental_attribute_manager,
@@ -1087,16 +1167,16 @@ function remove_masked_component!(data::SystemData, component)
 end
 
 function _check_add_component(data::SystemData, component)
-    _check_duplicate_component_uuid(data, component)
+    _check_duplicate_component_id(data, component)
     if !isnothing(get_shared_system_references(component))
         error("$(summary(component)) is already attached to a system")
     end
 end
 
-function _check_duplicate_component_uuid(data::SystemData, component)
-    uuid = get_uuid(component)
-    if haskey(data.component_uuids, uuid)
-        throw(ArgumentError("Component $(summary(component)) uuid=$uuid is already stored"))
+function _check_duplicate_component_id(data::SystemData, component)
+    id = get_id(component)
+    if id != UNASSIGNED_ID && haskey(data.component_ids, id)
+        throw(ArgumentError("Component $(summary(component)) id=$id is already stored"))
     end
 end
 
@@ -1105,10 +1185,10 @@ iterate_components(data::SystemData) = iterate_components(data.components)
 get_component(::Type{T}, data::SystemData, args...) where {T} =
     get_component(T, data.components, args...)
 
-function get_component(data::SystemData, uuid::Base.UUID)
-    component = get(data.component_uuids, uuid, nothing)
+function get_component(data::SystemData, id::Int)
+    component = get(data.component_ids, id, nothing)
     if isnothing(component)
-        throw(ArgumentError("No component with uuid = $uuid is stored."))
+        throw(ArgumentError("No component with id = $id is stored."))
     end
 
     return component
@@ -1124,17 +1204,17 @@ has_component(
 ) = has_component(data.components, T, name)
 
 function has_component(data::SystemData, component::InfrastructureSystemsComponent)
-    return get_uuid(component) in keys(data.component_uuids)
+    return get_id(component) in keys(data.component_ids)
 end
 
-function assign_new_uuid!(data::SystemData, component::InfrastructureSystemsComponent)
-    orig_uuid = get_uuid(component)
-    if isnothing(pop!(data.component_uuids, orig_uuid, nothing))
-        throw(ArgumentError("component with uuid = $orig_uuid is not stored."))
+function assign_new_id!(data::SystemData, component::InfrastructureSystemsComponent)
+    orig_id = get_id(component)
+    if isnothing(pop!(data.component_ids, orig_id, nothing))
+        throw(ArgumentError("component with id = $orig_id is not stored."))
     end
 
-    assign_new_uuid_internal!(component)
-    data.component_uuids[get_uuid(component)] = component
+    assign_new_id_internal!(data, component)
+    data.component_ids[get_id(component)] = component
     return
 end
 
@@ -1144,8 +1224,8 @@ function get_components(
     data::SystemData;
     subsystem_name::Union{Nothing, AbstractString} = nothing,
 ) where {T}
-    uuids = isnothing(subsystem_name) ? nothing : get_component_uuids(data, subsystem_name)
-    return get_components(filter_func, T, data.components; component_uuids = uuids)
+    ids = isnothing(subsystem_name) ? nothing : get_component_ids(data, subsystem_name)
+    return get_components(filter_func, T, data.components; component_ids = ids)
 end
 
 function get_components(
@@ -1153,8 +1233,8 @@ function get_components(
     data::SystemData;
     subsystem_name::Union{Nothing, AbstractString} = nothing,
 ) where {T}
-    uuids = isnothing(subsystem_name) ? nothing : get_component_uuids(data, subsystem_name)
-    return get_components(T, data.components; component_uuids = uuids)
+    ids = isnothing(subsystem_name) ? nothing : get_component_ids(data, subsystem_name)
+    return get_components(T, data.components; component_ids = ids)
 end
 
 get_components_by_name(::Type{T}, data::SystemData, args...) where {T} =
@@ -1167,7 +1247,7 @@ function get_associated_components(
 )
     return [
         get_component(data, x) for x in
-        list_associated_component_uuids(
+        list_associated_component_ids(
             data.supplemental_attribute_manager,
             attribute_type,
             component_type,
@@ -1192,7 +1272,7 @@ function get_associated_supplemental_attributes(
 )
     return [
         get_supplemental_attribute(data, x) for x in
-        list_associated_supplemental_attribute_uuids(
+        list_associated_supplemental_attribute_ids(
             data.supplemental_attribute_manager,
             component_type,
             attribute_type,
@@ -1216,7 +1296,7 @@ function get_associated_components(
 )
     return [
         get_component(data, x) for x in
-        list_associated_component_uuids(
+        list_associated_component_ids(
             data.supplemental_attribute_manager.associations,
             attribute,
             component_type,
@@ -1239,23 +1319,23 @@ function get_component_supplemental_attribute_pairs(
     attributes = nothing,
 ) where {T <: InfrastructureSystemsComponent, U <: SupplementalAttribute}
     ca_pairs = NamedTuple{(:component, :supplemental_attribute), Tuple{T, U}}[]
-    c_uuids = isnothing(components) ? Set{Base.UUID}() : Set(get_uuid.(components))
-    a_uuids = isnothing(attributes) ? Set{Base.UUID}() : Set(get_uuid.(attributes))
-    for (component_uuid, attribute_uuid) in
-        list_associated_pair_uuids(
+    c_ids = isnothing(components) ? Set{Int}() : Set(get_id.(components))
+    a_ids = isnothing(attributes) ? Set{Int}() : Set(get_id.(attributes))
+    for (component_id, attribute_id) in
+        list_associated_pair_ids(
         data.supplemental_attribute_manager.associations,
         U,
         T,
     )
-        if !isnothing(components) && !(component_uuid in c_uuids)
+        if !isnothing(components) && !(component_id in c_ids)
             continue
         end
-        if !isnothing(attributes) && !(attribute_uuid in a_uuids)
+        if !isnothing(attributes) && !(attribute_id in a_ids)
             continue
         end
-        component = get_component(data, component_uuid)
+        component = get_component(data, component_id)
 
-        attribute = get_supplemental_attribute(data, attribute_uuid)
+        attribute = get_supplemental_attribute(data, attribute_id)
         push!(ca_pairs, (component = component, supplemental_attribute = attribute))
     end
 
@@ -1283,14 +1363,14 @@ get_masked_components_by_name(::Type{T}, data::SystemData, args...) where {T} =
 get_masked_component(::Type{T}, data::SystemData, name) where {T} =
     get_component(T, data.masked_components, name)
 
-function get_masked_component(data::SystemData, uuid::Base.UUID)
+function get_masked_component(data::SystemData, id::Int)
     for component in get_masked_components(InfrastructureSystemsComponent, data)
-        if get_uuid(component) == uuid
+        if get_id(component) == id
             return component
         end
     end
 
-    @error "no component with UUID $uuid is stored"
+    @error "no component with id $id is stored"
     return nothing
 end
 
@@ -1410,6 +1490,7 @@ function add_supplemental_attribute!(data::SystemData, component, attribute; kwa
     # Note that we do not support adding attributes to masked components
     # and this check doesn't look at those.
     throw_if_not_attached(data.components, component)
+    assign_id!(data, attribute)
     add_supplemental_attribute!(
         data.supplemental_attribute_manager,
         component,
@@ -1441,8 +1522,8 @@ function get_supplemental_attributes(
     return get_supplemental_attributes(T, data.supplemental_attribute_manager)
 end
 
-function get_supplemental_attribute(data::SystemData, uuid::Base.UUID)
-    return get_supplemental_attribute(data.supplemental_attribute_manager, uuid)
+function get_supplemental_attribute(data::SystemData, id::Int)
+    return get_supplemental_attribute(data.supplemental_attribute_manager, id)
 end
 
 function iterate_supplemental_attributes(data::SystemData)

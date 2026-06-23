@@ -1,8 +1,9 @@
-@testset "Test assign_new_uuid_internal" begin
+@testset "Test integer id" begin
     component = IS.TestComponent("component", 5)
-    uuid1 = IS.get_uuid(component)
-    IS.assign_new_uuid_internal!(component)
-    @test uuid1 != IS.get_uuid(component)
+    # A freshly constructed component has no id until attached to a system.
+    @test IS.get_id(component) == IS.UNASSIGNED_ID
+    IS.set_id!(component, 5)
+    @test IS.get_id(component) == 5
 end
 
 @testset "Test ext" begin
@@ -14,6 +15,7 @@ end
 
     internal2 = IS.deserialize(IS.InfrastructureSystemsInternal, IS.serialize(internal))
     @test internal.uuid == internal2.uuid
+    @test internal.id == internal2.id
     @test internal.ext == internal2.ext
 
     IS.clear_ext!(internal)

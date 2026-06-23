@@ -40,10 +40,13 @@ function TimeSeriesManager(;
     return TimeSeriesManager(data_store, read_only)
 end
 
-# (owner_uuid::String, owner_type::String, owner_category::String) for the Rust FFI.
+# (owner_id::Int, owner_type::String, owner_category::String) for the Rust FFI.
+# The owner is identified by its integer id; `owner_category` is the String tag
+# ("Component" / "SupplementalAttribute"), converted to a `TSS.OwnerCategory`
+# enum via `_tss_category` at the call sites that need it.
 function _rust_owner_args(owner::TimeSeriesOwners)
     return (
-        string(get_uuid(owner)),
+        get_id(owner),
         string(nameof(typeof(owner))),
         _get_owner_category(owner),
     )
@@ -133,8 +136,8 @@ end
 
 function clear_time_series!(mgr::TimeSeriesManager, component::TimeSeriesOwners)
     _throw_if_read_only(mgr)
-    owner_uuid, _, _ = _rust_owner_args(component)
-    _rust_clear_owner!(mgr.data_store, owner_uuid)
+    owner_id, _, owner_category = _rust_owner_args(component)
+    _rust_clear_owner!(mgr.data_store, owner_id, _tss_category(owner_category))
     @debug "Cleared time_series in $(summary(component))." _group =
         LOG_GROUP_TIME_SERIES
     return
@@ -188,7 +191,8 @@ function remove_time_series!(
 )
     _throw_if_read_only(mgr)
     store = mgr.data_store
-    owner_uuid, _, _ = _rust_owner_args(owner)
+    owner_id, _, owner_category = _rust_owner_args(owner)
+    category = _tss_category(owner_category)
     # Subset (partial) feature/resolution matching: remove every stored series of
     # type `time_series_type` that contains at least the requested features.
     for metadata in _rust_owner_list_metadata(owner;
@@ -203,7 +207,7 @@ function remove_time_series!(
             # DST — i.e. a DST references the array and this is its last backing
             # SingleTimeSeries. Other components sharing the array make removal safe.
             hash =
-                get_metadata(store, owner_uuid, name;
+                get_metadata(store, owner_id, category, name;
                     resolution = res, features = feats).data_hash
             c = _rust_array_sts_dst_counts(store, hash)
             if c.dst >= 1 && c.sts <= 1
@@ -213,9 +217,9 @@ function remove_time_series!(
                         "DeterministicSingleTimeSeries."),
                 )
             end
-            remove_single!(store, owner_uuid, name; resolution = res, features = feats)
+            remove_single!(store, owner_id, category, name; resolution = res, features = feats)
         else
-            remove_typed!(store, owner_uuid, name, _rust_ts_code(mt);
+            remove_typed!(store, owner_id, category, name, _rust_ts_code(mt);
                 resolution = res, features = feats)
         end
     end

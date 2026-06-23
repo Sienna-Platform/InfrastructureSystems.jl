@@ -195,6 +195,41 @@ end
     end
 end
 
+@testset "Test integer id preservation across serialization" begin
+    sys = IS.SystemData()
+    components = IS.TestComponent[]
+    for i in 1:3
+        component = IS.TestComponent("component_$(i)", i)
+        IS.add_component!(sys, component)
+        push!(components, component)
+    end
+    attr = IS.GeographicInfo()
+    IS.add_supplemental_attribute!(sys, components[1], attr)
+    expected_ids = Dict(IS.get_name(c) => IS.get_id(c) for c in components)
+    attr_id = IS.get_id(attr)
+    next_component_id_before = sys.next_component_id
+    next_attribute_id_before = sys.next_supplemental_attribute_id
+
+    sys2, result = validate_serialization(sys)
+    @test result
+
+    # Component and attribute ids are preserved.
+    for c in IS.get_components(IS.TestComponent, sys2)
+        @test IS.get_id(c) == expected_ids[IS.get_name(c)]
+    end
+    attr2 = only(IS.get_supplemental_attributes(IS.GeographicInfo, sys2))
+    @test IS.get_id(attr2) == attr_id
+
+    # Both next-id counters survive the round trip; newly added objects do not collide
+    # within their own stream.
+    @test sys2.next_component_id == next_component_id_before
+    @test sys2.next_supplemental_attribute_id == next_attribute_id_before
+    new_component = IS.TestComponent("new_component", 9)
+    IS.add_component!(sys2, new_component)
+    @test IS.get_id(new_component) == next_component_id_before
+    @test IS.get_id(new_component) ∉ values(expected_ids)
+end
+
 @testset "Test version info" begin
     data = IS.serialize_julia_info()
     @test haskey(data, "julia_version")

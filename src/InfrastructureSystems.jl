@@ -93,13 +93,10 @@ Required interface functions for subtypes:
 
 Optional interface functions:
 
-  - get_uuid()
+  - [`get_id`](@ref)
+  - [`supports_time_series`](@ref)
 
-Subtypes may contain time series. Which requires
-
-  - `supports_time_series(::SupplementalAttribute)`
-
-All subtypes must include an instance of ComponentUUIDs in order to track
+All subtypes must include an instance of [`ComponentIDs`](@ref) in order to track
 components attached to each attribute.
 """
 abstract type SupplementalAttribute <: InfrastructureSystemsType end
@@ -155,7 +152,7 @@ include("static_time_series.jl")
 include("time_series_parameters.jl")
 include("containers.jl")
 include("component_container.jl")
-include("component_uuids.jl")
+include("component_ids.jl")
 include("geographic_supplemental_attribute.jl")
 include("generated/includes.jl")
 include("time_series_parser.jl")

@@ -267,7 +267,8 @@ end
         end
         if with_resolution && with_interval
             deterministic = IS.Deterministic(name, one_dim_data; kwargs...)
-            probabilistic = IS.Probabilistic(name, two_dim_data, rand(99); kwargs...)
+            probabilistic =
+                IS.Probabilistic(name, two_dim_data, collect(range(0.01, 0.99; length = 99)); kwargs...)
             scenarios = IS.Scenarios(name, two_dim_data; kwargs...)
             for forecast in (deterministic, probabilistic, scenarios)
                 IS.add_time_series!(sys, component, forecast)
@@ -424,7 +425,7 @@ end
     component_name = "Component1"
     component = IS.TestComponent(component_name, 5)
     IS.add_component!(sys, component)
-    forecast = IS.Probabilistic(name, data_vec, ones(99), resolution)
+    forecast = IS.Probabilistic(name, data_vec, collect(range(0.01, 0.99; length = 99)), resolution)
     IS.add_time_series!(sys, component, forecast)
     @test IS.has_time_series(component)
     @test IS.get_initial_timestamp(forecast) == initial_time
@@ -451,7 +452,7 @@ end
     component_name = "Component1"
     component = IS.TestComponent(component_name, 5)
     IS.add_component!(sys, component)
-    forecast = IS.Probabilistic(name, data_ts, ones(99))
+    forecast = IS.Probabilistic(name, data_ts, collect(range(0.01, 0.99; length = 99)))
     IS.add_time_series!(sys, component, forecast)
     @test IS.has_time_series(component)
     @test IS.get_initial_timestamp(forecast) == initial_time
@@ -2755,7 +2756,7 @@ end
     component_name = "Component1"
     component = IS.TestComponent(component_name, 5)
     IS.add_component!(sys, component)
-    forecast = IS.Probabilistic(name, data_vec, ones(99), resolution)
+    forecast = IS.Probabilistic(name, data_vec, collect(range(0.01, 0.99; length = 99)), resolution)
     IS.add_time_series!(sys, component, forecast)
     @test IS.has_time_series(component)
     @test IS.get_initial_timestamp(forecast) == initial_time
@@ -2911,7 +2912,7 @@ end
     @test_throws IS.ConflictingInputsError IS.add_time_series!(sys, component, forecast)
 end
 
-@testset "Test assign_new_uuid_internal! for component with time series" begin
+@testset "Test assign_new_id! for component with time series" begin
     for in_memory in (true, false)
         sys = IS.SystemData(; time_series_in_memory = in_memory)
         name = "Component1"
@@ -2932,12 +2933,12 @@ end
         @test IS.get_time_series(IS.SingleTimeSeries, component, name) isa
               IS.SingleTimeSeries
 
-        old_uuid = IS.get_uuid(component)
-        IS.assign_new_uuid_internal!(component)
-        new_uuid = IS.get_uuid(component)
-        @test old_uuid != new_uuid
+        old_id = IS.get_id(component)
+        IS.assign_new_id!(sys, component)
+        new_id = IS.get_id(component)
+        @test old_id != new_id
 
-        # The time series storage uses component UUIDs, so they must get updated.
+        # The time series storage uses component ids, so they must get updated.
         @test IS.get_time_series(IS.SingleTimeSeries, component, name) isa
               IS.SingleTimeSeries
     end
@@ -3018,7 +3019,7 @@ function test_forecasts_with_shared_component_fields(forecast_type)
             forecast1a = IS.Probabilistic(
                 name1,
                 data,
-                ones(99),
+                collect(range(0.01, 0.99; length = 99)),
                 resolution,
             )
         elseif forecast_type <: IS.Scenarios
