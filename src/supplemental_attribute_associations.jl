@@ -128,10 +128,20 @@ function add_association!(
     attribute::SupplementalAttribute,
 )
     TimerOutputs.@timeit_debug SYSTEM_TIMERS "add supplemental attribute association" begin
+        attribute_id = get_id(attribute)
+        component_id = get_id(component)
+        if attribute_id == UNASSIGNED_ID || component_id == UNASSIGNED_ID
+            throw(
+                ArgumentError(
+                    "cannot associate $(summary(attribute)) with $(summary(component)): " *
+                    "both must have assigned IDs (attach them to `SystemData` first).",
+                ),
+            )
+        end
         row = (
-            get_id(attribute),
+            attribute_id,
             string(nameof(typeof(attribute))),
-            get_id(component),
+            component_id,
             string(nameof(typeof(component))),
         )
         placeholder = chop(repeat("?,", length(row)))

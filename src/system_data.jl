@@ -27,7 +27,7 @@ mutable struct SystemData <: ComponentContainer
     next_component_id::Int
     "Next integer id to assign to a supplemental attribute. Independent of the component id stream. Starts at 1."
     next_supplemental_attribute_id::Int
-    "User-defined subystems. Components can be regular or masked."
+    "User-defined subsystems. Components can be regular or masked."
     subsystems::Dict{String, Set{Int}}
     supplemental_attribute_manager::SupplementalAttributeManager
     time_series_manager::TimeSeriesManager

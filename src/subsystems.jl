@@ -7,7 +7,7 @@ function add_subsystem!(data::SystemData, subsystem_name::AbstractString)
     end
 
     data.subsystems[subsystem_name] = Set{Int}()
-    @debug "Added subystem $subsystem_name" _group = LOG_GROUP_SYSTEM
+    @debug "Added subsystem $subsystem_name" _group = LOG_GROUP_SYSTEM
     return
 end
 
@@ -33,7 +33,7 @@ Throws ArgumentError if the subsystem name is not stored.
 function remove_subsystem!(data::SystemData, subsystem_name::AbstractString)
     _throw_if_not_stored(data, subsystem_name)
     container = pop!(data.subsystems, subsystem_name)
-    @debug "Removed subystem $subsystem_name" length(container) _group = LOG_GROUP_SYSTEM
+    @debug "Removed subsystem $subsystem_name" length(container) _group = LOG_GROUP_SYSTEM
     return
 end
 
@@ -61,7 +61,7 @@ function add_component_to_subsystem!(
     end
 
     push!(container, id)
-    @debug "Added $(summary(component)) to subystem $subsystem_name" _group =
+    @debug "Added $(summary(component)) to subsystem $subsystem_name" _group =
         LOG_GROUP_SYSTEM
     return
 end
@@ -98,7 +98,7 @@ function remove_component_from_subsystem!(
     end
 
     pop!(data.subsystems[subsystem_name], get_id(component))
-    @debug "Removed $(summary(component)) from subystem $subsystem_name" _group =
+    @debug "Removed $(summary(component)) from subsystem $subsystem_name" _group =
         LOG_GROUP_SYSTEM
     return
 end
@@ -110,7 +110,7 @@ function remove_component_from_subsystems!(
     id = get_id(component)
     for (subsystem_name, ids) in data.subsystems
         pop!(ids, id, nothing)
-        @debug "Removed $(summary(component)) from subystem $subsystem_name" _group =
+        @debug "Removed $(summary(component)) from subsystem $subsystem_name" _group =
             LOG_GROUP_SYSTEM
     end
     return

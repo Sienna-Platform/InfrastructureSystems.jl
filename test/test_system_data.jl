@@ -566,12 +566,20 @@ end
     component = IS.TestComponent(name, 5)
     IS.add_component!(data, component)
     id1 = IS.get_id(component)
+    subsystem_name = "subsystem1"
+    IS.add_subsystem!(data, subsystem_name)
+    IS.add_component_to_subsystem!(data, subsystem_name, component)
     IS.assign_new_id!(data, component)
     id2 = IS.get_id(component)
     @test id1 != id2
     @test IS.get_component(data, id2) === component
     @test_throws ArgumentError IS.get_component(data, id1)
     @test IS.get_component(IS.TestComponent, data, name).name == name
+    # The subsystem membership set must track the new ID after reassignment.
+    @test IS.has_component(data, subsystem_name, component)
+    @test collect(IS.get_subsystem_components(data, subsystem_name)) == [component]
+    @test id2 in IS.get_component_ids(data, subsystem_name)
+    @test !(id1 in IS.get_component_ids(data, subsystem_name))
 end
 
 @testset "Test independent integer id streams" begin

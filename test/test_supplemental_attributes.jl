@@ -184,16 +184,16 @@ end
 
 @testset "Test iterate_SupplementalAttributeManager" begin
     mgr = IS.SupplementalAttributeManager()
-    geo_supplemental_attribute = IS.GeographicInfo()
-    component = IS.TestComponent("component1", 5)
+    geo_supplemental_attribute = _id!(IS.GeographicInfo(), 2)
+    component = _id!(IS.TestComponent("component1", 5), 1)
     IS.add_supplemental_attribute!(mgr, component, geo_supplemental_attribute)
     @test length(collect(IS.iterate_supplemental_attributes(mgr))) == 1
 end
 
 @testset "Summarize SupplementalAttributeManager" begin
     mgr = IS.SupplementalAttributeManager()
-    geo_supplemental_attribute = IS.GeographicInfo()
-    component = IS.TestComponent("component1", 5)
+    geo_supplemental_attribute = _id!(IS.GeographicInfo(), 2)
+    component = _id!(IS.TestComponent("component1", 5), 1)
     IS.add_supplemental_attribute!(mgr, component, geo_supplemental_attribute)
     summary(devnull, mgr)
 end
