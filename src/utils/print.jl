@@ -50,7 +50,7 @@ make_label(type::Type{<:InfrastructureSystemsType}, name) = "$(nameof(type)): $n
 Base.summary(x::InfrastructureSystemsComponent) = make_label(typeof(x), get_name(x))
 Base.summary(x::SupplementalAttribute) = make_label(typeof(x), get_uuid(x))
 Base.summary(x::TimeSeriesData) = make_label(typeof(x), get_name(x))
-Base.summary(x::TimeSeriesMetadata) = make_label(typeof(x), get_name(x))
+Base.summary(x::TimeSeriesKey) = make_label(typeof(x), get_name(x))
 
 function Base.summary(x::Forecast)
     label = make_label(typeof(x), get_name(x))
@@ -59,7 +59,7 @@ function Base.summary(x::Forecast)
     return "$(label) resolution=$(resolution) interval=$(interval)"
 end
 
-function Base.summary(x::ForecastMetadata)
+function Base.summary(x::ForecastKey)
     label = make_label(typeof(x), get_name(x))
     resolution = Dates.canonicalize(get_resolution(x))
     interval = Dates.canonicalize(get_interval(x))

@@ -936,55 +936,34 @@ _rust_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
         row_type <: T
     end
 
-# Build the matching IS `TimeSeriesMetadata` from a `TSS.list_metadata` row.
-function _metadata_from_row(row)
-    feats = Dict{String, Union{Bool, Int, String}}(row.features)
+# Build the matching IS `TimeSeriesKey` from a `TSS.list_metadata` row. The key is
+# the single descriptor for a stored association; forecast-only fields
+# (percentiles, scenario_count) are not carried — they come from the data on read.
+function _key_from_row(row)
+    feats = Dict{String, Any}(string(k) => v for (k, v) in row.features)
     is_type = _rust_is_type(row.time_series_type)
-    if is_type <: SingleTimeSeries
-        return SingleTimeSeriesMetadata(;
+    if is_type <: StaticTimeSeries
+        return StaticTimeSeriesKey(;
+            time_series_type = is_type,
             name = row.name,
-            resolution = row.resolution,
             initial_timestamp = row.initial_timestamp,
+            resolution = row.resolution,
             length = row.length,
             features = feats,
         )
-    elseif is_type <: AbstractDeterministic
-        return DeterministicMetadata(;
-            name = row.name,
-            resolution = row.resolution,
-            initial_timestamp = row.initial_timestamp,
-            interval = row.interval,
-            count = row.count,
-            horizon = row.horizon,
+    elseif is_type <: Forecast
+        return ForecastKey(;
             time_series_type = is_type,
-            features = feats,
-        )
-    elseif is_type <: Probabilistic
-        return ProbabilisticMetadata(;
             name = row.name,
             initial_timestamp = row.initial_timestamp,
             resolution = row.resolution,
+            horizon = row.horizon,
             interval = row.interval,
             count = row.count,
-            percentiles = row.percentiles,
-            horizon = row.horizon,
-            features = feats,
-        )
-    elseif is_type <: Scenarios
-        # Scenarios store as (scenario_count, horizon, count); the row's `length`
-        # is the array's leading dim, i.e. the scenario count.
-        return ScenariosMetadata(;
-            name = row.name,
-            resolution = row.resolution,
-            initial_timestamp = row.initial_timestamp,
-            interval = row.interval,
-            scenario_count = row.length,
-            count = row.count,
-            horizon = row.horizon,
             features = feats,
         )
     end
-    error("Rust backend cannot reconstruct metadata for $(row.time_series_type)")
+    error("Rust backend cannot build a key for $(row.time_series_type)")
 end
 
 # True if a metadata row passes the optional type/name/resolution/interval/feature
@@ -1005,7 +984,7 @@ function _row_matches(row; time_series_type, name, resolution, interval, feature
     return true
 end
 
-# All matching metadata for one owner, as IS `TimeSeriesMetadata` objects.
+# All matching associations for one owner, as `TimeSeriesKey` objects.
 function _rust_list_metadata(
     store::RustTimeSeriesStore,
     owner_id::Integer,
@@ -1018,18 +997,18 @@ function _rust_list_metadata(
 )
     rows = TSS.list_metadata(store.inner;
         owner_id = owner_id, owner_category = owner_category)
-    out = TimeSeriesMetadata[]
+    out = TimeSeriesKey[]
     for row in rows
         _row_matches(row; time_series_type = time_series_type, name = name,
             resolution = resolution, interval = interval, features = features) || continue
-        push!(out, _metadata_from_row(row))
+        push!(out, _key_from_row(row))
     end
     return out
 end
 
-# Metadata for every time series in the store (all owners).
+# A key for every time series in the store (all owners).
 _rust_all_metadata(store::RustTimeSeriesStore) =
-    [_metadata_from_row(row) for row in TSS.list_metadata(store.inner)]
+    [_key_from_row(row) for row in TSS.list_metadata(store.inner)]
 
 # Owner-level `list_metadata` entry point (mirrors the metadata-store signature).
 function _rust_owner_list_metadata(
@@ -1074,9 +1053,8 @@ function _rust_get_metadata(
     return items[1]
 end
 
-# `get_time_series_keys` for an owner.
-_rust_get_time_series_keys(owner::TimeSeriesOwners) =
-    [make_time_series_key(m) for m in _rust_owner_list_metadata(owner)]
+# `get_time_series_keys` for an owner. `_rust_owner_list_metadata` already returns keys.
+_rust_get_time_series_keys(owner::TimeSeriesOwners) = _rust_owner_list_metadata(owner)
 
 # Reconstruct each matching time series for an owner; applies `filter_func`.
 function _rust_get_time_series_multiple(
@@ -1092,7 +1070,7 @@ function _rust_get_time_series_multiple(
     Channel() do channel
         for m in metas
             feats = (Symbol(k) => v for (k, v) in get_features(m))
-            ts = if m isa ForecastMetadata
+            ts = if m isa ForecastKey
                 _rust_get_forecast(owner, get_name(m); resolution = get_resolution(m), feats...)
             else
                 _rust_get_time_series(SingleTimeSeries, owner, get_name(m);
@@ -1289,7 +1267,7 @@ function _rust_list_metadata_with_owner(
         isnothing(resolution) || row.resolution == resolution || continue
         push!(
             out,
-            (owner_id = Int(row.owner_id), metadata = _metadata_from_row(row)),
+            (owner_id = Int(row.owner_id), metadata = _key_from_row(row)),
         )
     end
     return out

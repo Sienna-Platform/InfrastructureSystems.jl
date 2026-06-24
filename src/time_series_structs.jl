@@ -18,6 +18,8 @@ abstract type TimeSeriesKey <: InfrastructureSystemsType end
 get_name(key::TimeSeriesKey) = key.name
 get_resolution(key::TimeSeriesKey) = key.resolution
 get_time_series_type(key::TimeSeriesKey) = key.time_series_type
+get_initial_timestamp(key::TimeSeriesKey) = key.initial_timestamp
+get_features(key::TimeSeriesKey) = key.features
 
 function deserialize_struct(T::Type{<:TimeSeriesKey}, data::Dict)
     vals = Dict{Symbol, Any}()
@@ -48,16 +50,11 @@ See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::
     features::Dict{String, Any}
 end
 
-function make_time_series_key(metadata::StaticTimeSeriesMetadata)
-    return StaticTimeSeriesKey(;
-        time_series_type = time_series_metadata_to_data(metadata),
-        name = get_name(metadata),
-        initial_timestamp = get_initial_timestamp(metadata),
-        resolution = get_resolution(metadata),
-        length = get_length(metadata),
-        features = get_features(metadata),
-    )
-end
+# A static key has no forecast interval and represents a single window.
+get_length(key::StaticTimeSeriesKey) = key.length
+get_interval(::StaticTimeSeriesKey) = nothing
+get_count(::StaticTimeSeriesKey) = 1
+Base.length(key::StaticTimeSeriesKey) = get_length(key)
 
 """
 A unique key to identify and retrieve a [`Forecast`](@ref)
@@ -75,18 +72,11 @@ See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::
     features::Dict{String, Any}
 end
 
-function make_time_series_key(metadata::ForecastMetadata)
-    return ForecastKey(;
-        time_series_type = time_series_metadata_to_data(metadata),
-        name = get_name(metadata),
-        initial_timestamp = get_initial_timestamp(metadata),
-        resolution = get_resolution(metadata),
-        horizon = get_horizon(metadata),
-        interval = get_interval(metadata),
-        count = get_count(metadata),
-        features = get_features(metadata),
-    )
-end
+get_horizon(key::ForecastKey) = key.horizon
+get_interval(key::ForecastKey) = key.interval
+get_count(key::ForecastKey) = key.count
+get_horizon_count(key::ForecastKey) = get_horizon_count(get_horizon(key), get_resolution(key))
+Base.length(key::ForecastKey) = get_horizon_count(key)
 
 """
 Provides counts of time series including attachments to components and supplemental

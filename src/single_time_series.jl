@@ -198,32 +198,6 @@ function SingleTimeSeries(time_series::Vector{SingleTimeSeries})
     return time_series
 end
 
-function SingleTimeSeries(ts_metadata::SingleTimeSeriesMetadata, data::TimeSeries.TimeArray)
-    return SingleTimeSeries(
-        get_name(ts_metadata),
-        data,
-        get_resolution(ts_metadata),
-        InfrastructureSystemsInternal(),
-    )
-end
-
-# The deserialize path calls `T(metadata, data)` with the concrete parametric
-# type (e.g. `SingleTimeSeries{Float64}`); forward to the eltype-inferring path.
-SingleTimeSeries{T}(
-    ts_metadata::SingleTimeSeriesMetadata,
-    data::TimeSeries.TimeArray,
-) where {T} = SingleTimeSeries(ts_metadata, data)
-
-function SingleTimeSeriesMetadata(ts::SingleTimeSeries; features...)
-    return SingleTimeSeriesMetadata(
-        get_name(ts),
-        get_resolution(ts),
-        get_initial_timestamp(ts),
-        length(ts),
-        Dict{String, Any}(string(k) => v for (k, v) in features),
-    )
-end
-
 function SingleTimeSeries(info::TimeSeriesParsedInfo)
     data = make_time_array(info)
     return SingleTimeSeries(;
@@ -380,8 +354,6 @@ function SingleTimeSeries(time_series::SingleTimeSeries, data::TimeSeries.TimeAr
     return SingleTimeSeries(vals...)
 end
 
-get_columns(::Type{<:TimeSeriesMetadata}, ta::TimeSeries.TimeArray) = nothing
-
 function make_time_array(
     time_series::SingleTimeSeries,
     start_time::Dates.DateTime;
@@ -399,12 +371,3 @@ function make_time_array(
     return ta[start_index:end_index]
 end
 
-function SingleTimeSeriesMetadata(ts_metadata::DeterministicMetadata)
-    return SingleTimeSeriesMetadata(;
-        name = get_name(ts_metadata),
-        resolution = get_resolution(ts_metadata),
-        initial_timestamp = get_initial_timestamp(ts_metadata),
-        length = get_count(ts_metadata) * get_horizon_count(ts_metadata),
-        internal = get_internal(ts_metadata),
-    )
-end

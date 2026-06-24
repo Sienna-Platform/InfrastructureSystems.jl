@@ -241,7 +241,7 @@ function ForecastCache(
     interval::Union{Nothing, Dates.Period} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: Forecast}
-    ts_metadata = get_time_series_metadata(
+    ts_metadata = get_time_series_key(
         T,
         component,
         name;
@@ -372,7 +372,7 @@ function StaticTimeSeriesCache(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: StaticTimeSeries}
-    ts_metadata = get_time_series_metadata(T, component, name; resolution = resolution)
+    ts_metadata = get_time_series_key(T, component, name; resolution = resolution)
     initial_timestamp = get_initial_timestamp(ts_metadata)
     if start_time === nothing
         start_time = initial_timestamp

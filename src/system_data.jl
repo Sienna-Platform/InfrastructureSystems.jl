@@ -317,9 +317,9 @@ end
 function remove_time_series!(
     data::SystemData,
     owner::TimeSeriesOwners,
-    ts_metadata::TimeSeriesMetadata,
+    ts_key::TimeSeriesKey,
 )
-    return remove_time_series!(data.time_series_manager, owner, ts_metadata)
+    return remove_time_series!(data.time_series_manager, owner, ts_key)
 end
 
 """
@@ -346,16 +346,16 @@ function remove_time_series!(
         time_series_type = T,
         resolution = resolution,
     )
-        for ts_metadata in get_time_series_metadata(
+        for ts_key in get_time_series_keys(
             component;
             time_series_type = T,
             resolution = resolution,
         )
-            ts_interval = get_interval(ts_metadata)
+            ts_interval = get_interval(ts_key)
             if !isnothing(interval) && ts_interval != interval
                 continue
             end
-            remove_time_series!(data, component, ts_metadata)
+            remove_time_series!(data, component, ts_key)
         end
     end
 end
@@ -797,7 +797,7 @@ function _check_transform_single_time_series(
 end
 
 function _check_single_time_series_transformed_parameters(
-    metadata::SingleTimeSeriesMetadata,
+    metadata::StaticTimeSeriesKey,
     ::Type{DeterministicSingleTimeSeries},
     desired_horizon::Dates.Period,
     desired_interval::Dates.Period,
