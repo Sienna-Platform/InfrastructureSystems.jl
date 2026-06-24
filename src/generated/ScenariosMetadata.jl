@@ -12,7 +12,6 @@ This file is auto-generated. Do not edit.
         interval::Dates.Period
         scenario_count::Int64
         count::Int
-        time_series_uuid::UUIDs.UUID
         horizon::Dates.Period
         features::Dict{String, Union{Bool, Int, String}}
         internal::InfrastructureSystemsInternal
@@ -27,7 +26,6 @@ A Discrete Scenario Based time series for a particular data field in a Component
 - `interval::Dates.Period`: time step between forecast windows
 - `scenario_count::Int64`: Number of scenarios
 - `count::Int`: number of forecast windows
-- `time_series_uuid::UUIDs.UUID`: reference to time series data
 - `horizon::Dates.Period`: length of this time series
 - `features::Dict{String, Union{Bool, Int, String}}`: (default: `Dict{String, Any}()`) User-defined tags that differentiate multiple time series arrays that represent the same component attribute, such as different arrays for different scenarios or years.
 - `internal::InfrastructureSystemsInternal`:
@@ -44,8 +42,6 @@ mutable struct ScenariosMetadata <: ForecastMetadata
     scenario_count::Int64
     "number of forecast windows"
     count::Int
-    "reference to time series data"
-    time_series_uuid::UUIDs.UUID
     "length of this time series"
     horizon::Dates.Period
     "User-defined tags that differentiate multiple time series arrays that represent the same component attribute, such as different arrays for different scenarios or years."
@@ -53,12 +49,12 @@ mutable struct ScenariosMetadata <: ForecastMetadata
     internal::InfrastructureSystemsInternal
 end
 
-function ScenariosMetadata(name, resolution, initial_timestamp, interval, scenario_count, count, time_series_uuid, horizon, features=Dict{String, Any}(), )
-    ScenariosMetadata(name, resolution, initial_timestamp, interval, scenario_count, count, time_series_uuid, horizon, features, InfrastructureSystemsInternal(), )
+function ScenariosMetadata(name, resolution, initial_timestamp, interval, scenario_count, count, horizon, features=Dict{String, Any}(), )
+    ScenariosMetadata(name, resolution, initial_timestamp, interval, scenario_count, count, horizon, features, InfrastructureSystemsInternal(), )
 end
 
-function ScenariosMetadata(; name, resolution, initial_timestamp, interval, scenario_count, count, time_series_uuid, horizon, features=Dict{String, Any}(), internal=InfrastructureSystemsInternal(), )
-    ScenariosMetadata(name, resolution, initial_timestamp, interval, scenario_count, count, time_series_uuid, horizon, features, internal, )
+function ScenariosMetadata(; name, resolution, initial_timestamp, interval, scenario_count, count, horizon, features=Dict{String, Any}(), internal=InfrastructureSystemsInternal(), )
+    ScenariosMetadata(name, resolution, initial_timestamp, interval, scenario_count, count, horizon, features, internal, )
 end
 
 """Get [`ScenariosMetadata`](@ref) `name`."""
@@ -73,8 +69,6 @@ get_interval(value::ScenariosMetadata) = value.interval
 get_scenario_count(value::ScenariosMetadata) = value.scenario_count
 """Get [`ScenariosMetadata`](@ref) `count`."""
 get_count(value::ScenariosMetadata) = value.count
-"""Get [`ScenariosMetadata`](@ref) `time_series_uuid`."""
-get_time_series_uuid(value::ScenariosMetadata) = value.time_series_uuid
 """Get [`ScenariosMetadata`](@ref) `horizon`."""
 get_horizon(value::ScenariosMetadata) = value.horizon
 """Get [`ScenariosMetadata`](@ref) `features`."""
@@ -94,8 +88,6 @@ set_interval!(value::ScenariosMetadata, val) = value.interval = val
 set_scenario_count!(value::ScenariosMetadata, val) = value.scenario_count = val
 """Set [`ScenariosMetadata`](@ref) `count`."""
 set_count!(value::ScenariosMetadata, val) = value.count = val
-"""Set [`ScenariosMetadata`](@ref) `time_series_uuid`."""
-set_time_series_uuid!(value::ScenariosMetadata, val) = value.time_series_uuid = val
 """Set [`ScenariosMetadata`](@ref) `horizon`."""
 set_horizon!(value::ScenariosMetadata, val) = value.horizon = val
 """Set [`ScenariosMetadata`](@ref) `features`."""

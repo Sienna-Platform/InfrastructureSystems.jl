@@ -1,25 +1,17 @@
 const SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME = "supplemental_attributes"
 
 # Design note:
-# Supplemental attributes and time series are stored in independent SQLite databases.
-# Ideally, they would be different tables in the same database. This is not practical
-# because of requirements set by the team for serialization output files.
+# Supplemental attribute associations are kept in their own in-memory SQLite database,
+# separate from time series storage.
 #
 # Background:
-#   - Time series metadata is always persisted as a SQLite file during serialization.
-#   - That SQLite file is written as an HDF5 dataset in the time series data file.
-#   - The result of serialization is system.json, system_metadata.json, and
-#     system_time_series.h5.
-#   - If there is no time series in the system, then there is no extra file: only
-#     system.json and system_metadata.json.
+#   - Time series data and its association catalog are persisted by the `time-series-store`
+#     Rust backend as a `<path>.nc` / `<path>.sqlite` pair, independent of this database.
+#   - Supplemental attribute associations are never persisted as a database file; they are
+#     serialized into the system JSON instead, so a system with supplemental attributes but
+#     no time series produces no extra storage artifact.
 #
-# If we persist supplemental attribute associations to a SQLite file and there is no time
-# series, serialization would produce an extra file. The team was strongly opposed to this
-# and set a requirement that those associations must be written to the system JSON file.
-#
-# Rather than try to manage the complexities of temporarily sharing a database across
-# serialization and deepcopy operations, this design keeps them separate in order to
-# simplifiy the code. The supplemental attribute database is always ephemeral.
+# This database is therefore always ephemeral (in-memory only).
 
 mutable struct SupplementalAttributeAssociations
     db::SQLite.DB

@@ -80,9 +80,6 @@
         end
     end
     @test found == count
-
-    @test IS.get_uuid(forecast) == IS.get_uuid(var1)
-    @test IS.get_uuid(forecast) == IS.get_uuid(var2)
 end
 
 @testset "Test add Deterministic" begin
@@ -3099,56 +3096,6 @@ end
     counts = IS.get_time_series_counts(sys)
     @test counts.static_time_series_count == 1
     @test counts.components_with_time_series == 2
-end
-
-@testset "Test get_time_series_uuid" begin
-    sys = IS.SystemData()
-    name = "Component1"
-    component = IS.TestComponent(name, 5)
-    IS.add_component!(sys, component)
-
-    initial_time = Dates.DateTime("2020-09-01")
-    resolution = Dates.Hour(1)
-
-    data = TimeSeries.TimeArray(
-        range(initial_time; length = 365, step = resolution),
-        rand(365),
-    )
-    ts_name = "test"
-    ts = IS.SingleTimeSeries(; data = data, name = ts_name)
-    IS.add_time_series!(sys, component, ts)
-    # The Rust backend is content-addressed: storing a time series gives it (and
-    # its object) the content-derived UUID, so capture it after the add.
-    uuid = IS.get_uuid(ts)
-    @test IS.get_time_series_uuid(IS.SingleTimeSeries, component, ts_name) == uuid
-end
-
-@testset "Test get_time_series_uuid with multiple resolutions" begin
-    params = setup_for_multi_resolution_tests()
-    component = params.component
-    sts_name = params.sts_name
-    resolution1 = params.resolution1
-    resolution2 = params.resolution2
-    uuid1 = IS.get_uuid(params.sts1)
-    uuid2 = IS.get_uuid(params.sts2)
-
-    @test IS.get_time_series_uuid(
-        IS.SingleTimeSeries,
-        component,
-        sts_name;
-        resolution = resolution1,
-    ) == uuid1
-    @test IS.get_time_series_uuid(
-        IS.SingleTimeSeries,
-        component,
-        sts_name;
-        resolution = resolution2,
-    ) == uuid2
-    @test_throws ArgumentError IS.get_time_series_uuid(
-        IS.SingleTimeSeries,
-        component,
-        sts_name,
-    )
 end
 
 @testset "Test serialization of time series keys" begin

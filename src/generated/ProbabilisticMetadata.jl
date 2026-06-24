@@ -12,7 +12,6 @@ This file is auto-generated. Do not edit.
         interval::Dates.Period
         count::Int
         percentiles::Vector{Float64}
-        time_series_uuid::UUIDs.UUID
         horizon::Dates.Period
         features::Dict{String, Union{Bool, Int, String}}
         internal::InfrastructureSystemsInternal
@@ -27,7 +26,6 @@ A Probabilistic forecast for a particular data field in a Component.
 - `interval::Dates.Period`: time step between forecast windows
 - `count::Int`: number of forecast windows
 - `percentiles::Vector{Float64}`: Percentiles for the probabilistic forecast
-- `time_series_uuid::UUIDs.UUID`: reference to time series data
 - `horizon::Dates.Period`: length of this time series
 - `features::Dict{String, Union{Bool, Int, String}}`: (default: `Dict{String, Any}()`) User-defined tags that differentiate multiple time series arrays that represent the same component attribute, such as different arrays for different scenarios or years.
 - `internal::InfrastructureSystemsInternal`:
@@ -44,8 +42,6 @@ mutable struct ProbabilisticMetadata <: ForecastMetadata
     count::Int
     "Percentiles for the probabilistic forecast"
     percentiles::Vector{Float64}
-    "reference to time series data"
-    time_series_uuid::UUIDs.UUID
     "length of this time series"
     horizon::Dates.Period
     "User-defined tags that differentiate multiple time series arrays that represent the same component attribute, such as different arrays for different scenarios or years."
@@ -53,12 +49,12 @@ mutable struct ProbabilisticMetadata <: ForecastMetadata
     internal::InfrastructureSystemsInternal
 end
 
-function ProbabilisticMetadata(name, initial_timestamp, resolution, interval, count, percentiles, time_series_uuid, horizon, features=Dict{String, Any}(), )
-    ProbabilisticMetadata(name, initial_timestamp, resolution, interval, count, percentiles, time_series_uuid, horizon, features, InfrastructureSystemsInternal(), )
+function ProbabilisticMetadata(name, initial_timestamp, resolution, interval, count, percentiles, horizon, features=Dict{String, Any}(), )
+    ProbabilisticMetadata(name, initial_timestamp, resolution, interval, count, percentiles, horizon, features, InfrastructureSystemsInternal(), )
 end
 
-function ProbabilisticMetadata(; name, initial_timestamp, resolution, interval, count, percentiles, time_series_uuid, horizon, features=Dict{String, Any}(), internal=InfrastructureSystemsInternal(), )
-    ProbabilisticMetadata(name, initial_timestamp, resolution, interval, count, percentiles, time_series_uuid, horizon, features, internal, )
+function ProbabilisticMetadata(; name, initial_timestamp, resolution, interval, count, percentiles, horizon, features=Dict{String, Any}(), internal=InfrastructureSystemsInternal(), )
+    ProbabilisticMetadata(name, initial_timestamp, resolution, interval, count, percentiles, horizon, features, internal, )
 end
 
 """Get [`ProbabilisticMetadata`](@ref) `name`."""
@@ -73,8 +69,6 @@ get_interval(value::ProbabilisticMetadata) = value.interval
 get_count(value::ProbabilisticMetadata) = value.count
 """Get [`ProbabilisticMetadata`](@ref) `percentiles`."""
 get_percentiles(value::ProbabilisticMetadata) = value.percentiles
-"""Get [`ProbabilisticMetadata`](@ref) `time_series_uuid`."""
-get_time_series_uuid(value::ProbabilisticMetadata) = value.time_series_uuid
 """Get [`ProbabilisticMetadata`](@ref) `horizon`."""
 get_horizon(value::ProbabilisticMetadata) = value.horizon
 """Get [`ProbabilisticMetadata`](@ref) `features`."""
@@ -94,8 +88,6 @@ set_interval!(value::ProbabilisticMetadata, val) = value.interval = val
 set_count!(value::ProbabilisticMetadata, val) = value.count = val
 """Set [`ProbabilisticMetadata`](@ref) `percentiles`."""
 set_percentiles!(value::ProbabilisticMetadata, val) = value.percentiles = val
-"""Set [`ProbabilisticMetadata`](@ref) `time_series_uuid`."""
-set_time_series_uuid!(value::ProbabilisticMetadata, val) = value.time_series_uuid = val
 """Set [`ProbabilisticMetadata`](@ref) `horizon`."""
 set_horizon!(value::ProbabilisticMetadata, val) = value.horizon = val
 """Set [`ProbabilisticMetadata`](@ref) `features`."""

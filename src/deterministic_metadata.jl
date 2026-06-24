@@ -5,7 +5,6 @@ function DeterministicMetadata(ts::AbstractDeterministic; features...)
         get_initial_timestamp(ts),
         get_interval(ts),
         get_count(ts),
-        get_uuid(ts),
         get_horizon(ts),
         typeof(ts),
         Dict{String, Any}(string(k) => v for (k, v) in features),
