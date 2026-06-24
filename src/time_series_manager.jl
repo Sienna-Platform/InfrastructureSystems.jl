@@ -195,12 +195,12 @@ function remove_time_series!(
     category = _tss_category(owner_category)
     # Subset (partial) feature/resolution matching: remove every stored series of
     # type `time_series_type` that contains at least the requested features.
-    for metadata in _rust_owner_list_metadata(owner;
+    for key in _rust_owner_list_metadata(owner;
         time_series_type = time_series_type, name = name, resolution = resolution,
         features...)
-        mt = time_series_metadata_to_data(metadata)
-        res = get_resolution(metadata)
-        feats = _rust_features((Symbol(k) => v for (k, v) in get_features(metadata)))
+        mt = get_time_series_type(key)
+        res = get_resolution(key)
+        feats = _rust_features((Symbol(k) => v for (k, v) in get_features(key)))
         if mt <: SingleTimeSeries
             # A DeterministicSingleTimeSeries shares the underlying SingleTimeSeries
             # array, so the base series cannot be removed if doing so would orphan a
@@ -229,16 +229,16 @@ end
 function remove_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
-    metadata::TimeSeriesMetadata,
+    key::TimeSeriesKey,
 )
     _throw_if_read_only(mgr)
-    feats = (Symbol(k) => v for (k, v) in get_features(metadata))
+    feats = (Symbol(k) => v for (k, v) in get_features(key))
     remove_time_series!(
         mgr,
-        time_series_metadata_to_data(metadata),
+        get_time_series_type(key),
         owner,
-        get_name(metadata);
-        resolution = get_resolution(metadata),
+        get_name(key);
+        resolution = get_resolution(key),
         feats...,
     )
     return

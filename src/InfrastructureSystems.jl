@@ -154,7 +154,28 @@ include("containers.jl")
 include("component_container.jl")
 include("component_ids.jl")
 include("geographic_supplemental_attribute.jl")
-include("generated/includes.jl")
+
+# Time-series accessor exports. These getters/setters are defined on the time
+# series data types and on the `TimeSeriesKey` hierarchy. (They were previously
+# emitted by the generated metadata structs, which have been removed.)
+export get_count
+export get_features
+export get_horizon
+export get_initial_timestamp
+export get_interval
+export get_length
+export get_name
+export get_percentiles
+export get_resolution
+export get_scenario_count
+export get_time_series_type
+export set_count!
+export set_horizon!
+export set_initial_timestamp!
+export set_interval!
+export set_name!
+export set_percentiles!
+export set_resolution!
 include("time_series_parser.jl")
 include("single_time_series.jl")
 include("deterministic_single_time_series.jl")

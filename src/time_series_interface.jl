@@ -170,7 +170,14 @@ function get_time_series_multiple(
     )
 end
 
-function get_time_series_metadata(
+"""
+Return the [`TimeSeriesKey`](@ref) identifying the single time series of type `T`
+attached to `owner` under `name` (and the given resolution/interval/features).
+
+Pairs with [`get_time_series_keys`](@ref) (enumeration) and
+[`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref) (retrieval).
+"""
+function get_time_series_key(
     ::Type{T},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -942,23 +949,23 @@ function _copy_time_series!(
 
     # The Rust store is content-addressed, so re-adding a reconstructed series to
     # `dst` only creates a new association row; the underlying array is shared.
-    for ts_metadata in get_time_series_metadata(src)
-        name = get_name(ts_metadata)
+    for ts_key in get_time_series_keys(src)
+        name = get_name(ts_key)
         new_name = name
         if !isnothing(name_mapping)
             new_name = get(name_mapping, (get_name(src), name), nothing)
             if isnothing(new_name)
-                @debug "Skip copying ts_metadata" _group = LOG_GROUP_TIME_SERIES name
+                @debug "Skip copying ts_key" _group = LOG_GROUP_TIME_SERIES name
                 continue
             end
-            @debug "Copy ts_metadata with" _group = LOG_GROUP_TIME_SERIES new_name
+            @debug "Copy ts_key with" _group = LOG_GROUP_TIME_SERIES new_name
         end
-        feats = Dict(Symbol(k) => v for (k, v) in get_features(ts_metadata))
+        feats = Dict(Symbol(k) => v for (k, v) in get_features(ts_key))
         ts = get_time_series(
-            time_series_metadata_to_data(ts_metadata),
+            get_time_series_type(ts_key),
             src,
             name;
-            resolution = get_resolution(ts_metadata),
+            resolution = get_resolution(ts_key),
             feats...,
         )
         if new_name != name
@@ -970,17 +977,11 @@ function _copy_time_series!(
 end
 
 """
-Return information about each time series array attached to the owner.
-This information can be used to call
-[`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
+Return the [`TimeSeriesKey`](@ref) for each time series attached to `owner`,
+optionally filtered by type/name/resolution/interval/features. Each key can be
+passed to [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
 """
-function get_time_series_keys(owner::TimeSeriesOwners)
-    mgr = get_time_series_manager(owner)
-    isnothing(mgr) && return []
-    return _rust_get_time_series_keys(owner)
-end
-
-function get_time_series_metadata(
+function get_time_series_keys(
     owner::TimeSeriesOwners;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
     name::Union{String, Nothing} = nothing,
@@ -989,7 +990,7 @@ function get_time_series_metadata(
     features...,
 )
     mgr = get_time_series_manager(owner)
-    isnothing(mgr) && return []
+    isnothing(mgr) && return TimeSeriesKey[]
     return list_metadata(
         mgr,
         owner;
@@ -1058,108 +1059,6 @@ function add_time_series_info!(
     info = TimeSeriesParsedInfo(metadata, time_series)
     @debug "Added TimeSeriesParsedInfo" _group = LOG_GROUP_TIME_SERIES metadata
     return info
-end
-
-function _get_columns(start_time, count, ts_metadata::ForecastMetadata)
-    offset = start_time - get_initial_timestamp(ts_metadata)
-    interval = time_period_conversion(get_interval(ts_metadata))
-    window_count = get_count(ts_metadata)
-    if window_count > 1
-        index = Int(offset / interval) + 1
-    else
-        index = 1
-    end
-    if count === nothing
-        count = window_count - index + 1
-    end
-
-    if index + count - 1 > get_count(ts_metadata)
-        throw(
-            ArgumentError(
-                "The requested start_time $start_time and count $count are invalid",
-            ),
-        )
-    end
-    return UnitRange(index, index + count - 1)
-end
-
-_get_columns(start_time, count, ts_metadata::StaticTimeSeriesMetadata) = UnitRange(1, 1)
-
-function _get_rows(start_time, len, ts_metadata::StaticTimeSeriesMetadata)
-    index = compute_time_array_index(
-        get_initial_timestamp(ts_metadata),
-        start_time,
-        get_resolution(ts_metadata),
-    )
-    if len === nothing
-        len = length(ts_metadata) - index + 1
-    end
-    if index + len - 1 > length(ts_metadata)
-        throw(
-            ArgumentError(
-                "The requested index=$index len=$len exceeds the range $(length(ts_metadata))",
-            ),
-        )
-    end
-
-    return UnitRange(index, index + len - 1)
-end
-
-function _get_rows(start_time, len, ts_metadata::ForecastMetadata)
-    if len === nothing
-        len = get_horizon_count(ts_metadata)
-    end
-
-    return UnitRange(1, len)
-end
-
-function _check_start_time(start_time, metadata::StaticTimeSeriesMetadata)
-    return _check_start_time_common(start_time, metadata)
-end
-
-function _check_start_time(start_time, metadata::ForecastMetadata)
-    initial_time = get_initial_timestamp(metadata)
-    actual_start_time = _check_start_time_common(start_time, metadata)
-    if actual_start_time != initial_time
-        # This will throw ArgumentError if start_time is not on a multiple of interval.
-        compute_periods_between(initial_time, actual_start_time, get_interval(metadata))
-    end
-    return actual_start_time
-end
-
-function _check_start_time_common(start_time, metadata::TimeSeriesMetadata)
-    if start_time === nothing
-        return get_initial_timestamp(metadata)
-    end
-
-    if start_time < get_initial_timestamp(metadata)
-        throw(
-            ArgumentError(
-                "start_time = $start_time is earlier than $(get_initial_timestamp(metadata))",
-            ),
-        )
-    end
-
-    last_time = _get_last_user_start_timestamp(metadata)
-    if start_time > last_time
-        throw(
-            ArgumentError(
-                "start_time = $start_time is greater than the last timestamp $last_time",
-            ),
-        )
-    end
-
-    return start_time
-end
-
-function _get_last_user_start_timestamp(metadata::StaticTimeSeriesMetadata)
-    return get_initial_timestamp(metadata) +
-           (get_length(metadata) - 1) * get_resolution(metadata)
-end
-
-function _get_last_user_start_timestamp(forecast::ForecastMetadata)
-    return get_initial_timestamp(forecast) +
-           (get_count(forecast) - 1) * get_interval(forecast)
 end
 
 function get_forecast_window_count(

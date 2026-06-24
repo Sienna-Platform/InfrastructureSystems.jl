@@ -711,7 +711,7 @@ end
     @test length(IS.get_time_series_keys(component)) == 4
     @test IS.get_time_series_type(IS.get_time_series_keys(component)[1]) ===
           IS.SingleTimeSeries
-    @test length(IS.get_time_series_metadata(component)) == 4
+    @test length(IS.get_time_series_keys(component)) == 4
     for key in IS.get_time_series_keys(component)
         @test IS.get_data(IS.get_time_series(component, key)) == data
     end
@@ -877,19 +877,19 @@ end
         scenario = "low",
         model_year = "2035",
     ) isa IS.Deterministic
-    @test length(IS.get_time_series_metadata(component)) == 4
+    @test length(IS.get_time_series_keys(component)) == 4
     @test length(
-        IS.get_time_series_metadata(component; time_series_type = IS.Deterministic),
+        IS.get_time_series_keys(component; time_series_type = IS.Deterministic),
     ) == 4
     @test length(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.Deterministic,
             name = ts_name,
         ),
     ) == 4
     @test length(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.Deterministic,
             name = ts_name,
@@ -897,7 +897,7 @@ end
         ),
     ) == 2
     @test length(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.Deterministic,
             name = ts_name,
@@ -905,7 +905,7 @@ end
             model_year = "2035",
         ),
     ) == 1
-    @test IS.get_time_series_metadata(
+    @test IS.get_time_series_keys(
         component;
         time_series_type = IS.Deterministic,
         name = ts_name,
@@ -918,14 +918,14 @@ end
 
     IS.remove_time_series!(sys, IS.Deterministic, component, ts_name; scenario = "low")
     @test length(
-        IS.get_time_series_metadata(component; time_series_type = IS.Deterministic),
+        IS.get_time_series_keys(component; time_series_type = IS.Deterministic),
     ) == 2
     for metadata in
-        IS.get_time_series_metadata(component; time_series_type = IS.Deterministic)
+        IS.get_time_series_keys(component; time_series_type = IS.Deterministic)
         @test metadata.features["scenario"] == "high"
     end
     IS.remove_time_series!(sys, IS.Deterministic, component, ts_name)
-    @test isempty(IS.get_time_series_metadata(component))
+    @test isempty(IS.get_time_series_keys(component))
 end
 
 @testset "Test Deterministic with a wrapped SingleTimeSeries" begin
@@ -1282,7 +1282,7 @@ end
 
     # Both sets should coexist.
     all_metadata = collect(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.DeterministicSingleTimeSeries,
         ),
@@ -1322,7 +1322,7 @@ end
     )
 
     all_metadata = collect(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.DeterministicSingleTimeSeries,
         ),
@@ -1359,7 +1359,7 @@ end
     )
 
     all_metadata = collect(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.DeterministicSingleTimeSeries,
         ),
@@ -1376,7 +1376,7 @@ end
     )
 
     all_metadata = collect(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.DeterministicSingleTimeSeries,
         ),
@@ -3729,17 +3729,17 @@ end
         ),
     )
     @test length(
-        IS.get_time_series_metadata(component; time_series_type = IS.SingleTimeSeries),
+        IS.get_time_series_keys(component; time_series_type = IS.SingleTimeSeries),
     ) == 2
     @test length(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.SingleTimeSeries,
             resolution = resolution1,
         ),
     ) == 1
     @test length(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.SingleTimeSeries,
             name = ts_name,
@@ -3856,17 +3856,17 @@ end
         ),
     )
     @test length(
-        IS.get_time_series_metadata(component; time_series_type = IS.Deterministic),
+        IS.get_time_series_keys(component; time_series_type = IS.Deterministic),
     ) == 2
     @test length(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.Deterministic,
             resolution = resolution1,
         ),
     ) == 1
     @test length(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.Deterministic,
             name = f_name,
@@ -4083,19 +4083,19 @@ end
         ),
     )
 
-    # get_time_series_metadata with interval
+    # get_time_series_keys with interval
     @test length(
-        IS.get_time_series_metadata(component; time_series_type = IS.Deterministic),
+        IS.get_time_series_keys(component; time_series_type = IS.Deterministic),
     ) == 2
     @test length(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.Deterministic,
             interval = interval1,
         ),
     ) == 1
     @test length(
-        IS.get_time_series_metadata(
+        IS.get_time_series_keys(
             component;
             time_series_type = IS.Deterministic,
             name = f_name,
@@ -4538,12 +4538,12 @@ end
         ts_name = "test"
         data = IS.SingleTimeSeries(; data = data, name = ts_name)
         IS.add_time_series!(sys, attr, data)
-        all_metadata = IS.get_time_series_metadata(
+        all_metadata = IS.get_time_series_keys(
             attr;
             time_series_type = IS.SingleTimeSeries,
         )
         @test isempty(
-            IS.get_time_series_metadata(
+            IS.get_time_series_keys(
                 component;
                 time_series_type = IS.SingleTimeSeries,
             ),
@@ -4555,7 +4555,7 @@ end
             IS.remove_time_series!(sys, IS.SingleTimeSeries, attr, ts_name)
         end
         @test isempty(
-            IS.get_time_series_metadata(
+            IS.get_time_series_keys(
                 attr;
                 time_series_type = IS.SingleTimeSeries,
             ),
@@ -4601,7 +4601,7 @@ end
     # so that we can test removing just the SingleTimeSeries from the other component
     IS.remove_time_series!(mgr, IS.DeterministicSingleTimeSeries, component2, ts_name)
 
-    metadata = IS.get_time_series_metadata(
+    metadata = IS.get_time_series_keys(
         component;
         time_series_type = IS.SingleTimeSeries,
         name = ts_name,

@@ -177,16 +177,6 @@ function Deterministic(
     )
 end
 
-function Deterministic(ts_metadata::DeterministicMetadata, data::SortedDict)
-    return Deterministic(;
-        name = get_name(ts_metadata),
-        resolution = get_resolution(ts_metadata),
-        interval = get_interval(ts_metadata),
-        data = data,
-        internal = InfrastructureSystemsInternal(),
-    )
-end
-
 # Note: interval is not supported in this workflow.
 
 function Deterministic(info::TimeSeriesParsedInfo)

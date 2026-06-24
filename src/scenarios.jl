@@ -164,16 +164,6 @@ function Scenarios(
     )
 end
 
-function Scenarios(ts_metadata::ScenariosMetadata, data::SortedDict)
-    return Scenarios(;
-        name = get_name(ts_metadata),
-        scenario_count = get_scenario_count(ts_metadata),
-        resolution = get_resolution(ts_metadata),
-        interval = get_interval(ts_metadata),
-        data = data,
-        internal = InfrastructureSystemsInternal(),
-    )
-end
 
 # Note: interval is not support in this workflow.
 
@@ -183,19 +173,6 @@ function Scenarios(info::TimeSeriesParsedInfo)
         info.data,
         info.resolution;
         normalization_factor = info.normalization_factor,
-    )
-end
-
-function ScenariosMetadata(time_series::Scenarios; features...)
-    return ScenariosMetadata(
-        get_name(time_series),
-        get_resolution(time_series),
-        get_initial_timestamp(time_series),
-        get_interval(time_series),
-        get_scenario_count(time_series),
-        get_count(time_series),
-        get_horizon(time_series),
-        Dict{String, Any}(string(k) => v for (k, v) in features),
     )
 end
 

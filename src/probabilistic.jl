@@ -177,17 +177,6 @@ function Probabilistic(
     )
 end
 
-function Probabilistic(ts_metadata::ProbabilisticMetadata, data::SortedDict)
-    return Probabilistic(;
-        name = get_name(ts_metadata),
-        percentiles = get_percentiles(ts_metadata),
-        resolution = get_resolution(ts_metadata),
-        interval = get_interval(ts_metadata),
-        data = data,
-        internal = InfrastructureSystemsInternal(),
-    )
-end
-
 # Note: interval is not support in this workflow.
 
 function Probabilistic(info::TimeSeriesParsedInfo)
@@ -219,19 +208,6 @@ function Probabilistic(
         src.resolution,
         src.interval,
         internal,
-    )
-end
-
-function ProbabilisticMetadata(time_series::Probabilistic; features...)
-    return ProbabilisticMetadata(
-        get_name(time_series),
-        get_initial_timestamp(time_series),
-        get_resolution(time_series),
-        get_interval(time_series),
-        get_count(time_series),
-        get_percentiles(time_series),
-        get_horizon(time_series),
-        Dict{String, Any}(string(k) => v for (k, v) in features),
     )
 end
 
