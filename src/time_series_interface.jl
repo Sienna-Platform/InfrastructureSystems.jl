@@ -170,23 +170,6 @@ function get_time_series_multiple(
     )
 end
 
-function get_time_series_uuid(
-    ::Type{T},
-    component::InfrastructureSystemsComponent,
-    name::AbstractString;
-    resolution::Union{Nothing, Dates.Period} = nothing,
-    interval::Union{Nothing, Dates.Period} = nothing,
-) where {T <: TimeSeriesData}
-    metadata = get_time_series_metadata(
-        T,
-        component,
-        name;
-        resolution = resolution,
-        interval = interval,
-    )
-    return get_time_series_uuid(metadata)
-end
-
 function get_time_series_metadata(
     ::Type{T},
     owner::TimeSeriesOwners,

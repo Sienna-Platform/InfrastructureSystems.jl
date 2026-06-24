@@ -183,7 +183,7 @@ function Deterministic(ts_metadata::DeterministicMetadata, data::SortedDict)
         resolution = get_resolution(ts_metadata),
         interval = get_interval(ts_metadata),
         data = data,
-        internal = InfrastructureSystemsInternal(get_time_series_uuid(ts_metadata)),
+        internal = InfrastructureSystemsInternal(),
     )
 end
 

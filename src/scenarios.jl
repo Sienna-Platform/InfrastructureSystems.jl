@@ -171,7 +171,7 @@ function Scenarios(ts_metadata::ScenariosMetadata, data::SortedDict)
         resolution = get_resolution(ts_metadata),
         interval = get_interval(ts_metadata),
         data = data,
-        internal = InfrastructureSystemsInternal(get_time_series_uuid(ts_metadata)),
+        internal = InfrastructureSystemsInternal(),
     )
 end
 
@@ -194,7 +194,6 @@ function ScenariosMetadata(time_series::Scenarios; features...)
         get_interval(time_series),
         get_scenario_count(time_series),
         get_count(time_series),
-        get_uuid(time_series),
         get_horizon(time_series),
         Dict{String, Any}(string(k) => v for (k, v) in features),
     )

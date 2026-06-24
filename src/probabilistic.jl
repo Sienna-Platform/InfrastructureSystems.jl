@@ -184,7 +184,7 @@ function Probabilistic(ts_metadata::ProbabilisticMetadata, data::SortedDict)
         resolution = get_resolution(ts_metadata),
         interval = get_interval(ts_metadata),
         data = data,
-        internal = InfrastructureSystemsInternal(get_time_series_uuid(ts_metadata)),
+        internal = InfrastructureSystemsInternal(),
     )
 end
 
@@ -230,7 +230,6 @@ function ProbabilisticMetadata(time_series::Probabilistic; features...)
         get_interval(time_series),
         get_count(time_series),
         get_percentiles(time_series),
-        get_uuid(time_series),
         get_horizon(time_series),
         Dict{String, Any}(string(k) => v for (k, v) in features),
     )

@@ -203,7 +203,7 @@ function SingleTimeSeries(ts_metadata::SingleTimeSeriesMetadata, data::TimeSerie
         get_name(ts_metadata),
         data,
         get_resolution(ts_metadata),
-        InfrastructureSystemsInternal(get_time_series_uuid(ts_metadata)),
+        InfrastructureSystemsInternal(),
     )
 end
 
@@ -219,7 +219,6 @@ function SingleTimeSeriesMetadata(ts::SingleTimeSeries; features...)
         get_name(ts),
         get_resolution(ts),
         get_initial_timestamp(ts),
-        get_uuid(ts),
         length(ts),
         Dict{String, Any}(string(k) => v for (k, v) in features),
     )
@@ -405,7 +404,6 @@ function SingleTimeSeriesMetadata(ts_metadata::DeterministicMetadata)
         name = get_name(ts_metadata),
         resolution = get_resolution(ts_metadata),
         initial_timestamp = get_initial_timestamp(ts_metadata),
-        time_series_uuid = get_time_series_uuid(ts_metadata),
         length = get_count(ts_metadata) * get_horizon_count(ts_metadata),
         internal = get_internal(ts_metadata),
     )

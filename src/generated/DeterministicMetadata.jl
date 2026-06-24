@@ -11,7 +11,6 @@ This file is auto-generated. Do not edit.
         initial_timestamp::Dates.DateTime
         interval::Dates.Period
         count::Int
-        time_series_uuid::UUIDs.UUID
         horizon::Dates.Period
         time_series_type::Type{<:AbstractDeterministic}
         features::Dict{String, Union{Bool, Int, String}}
@@ -26,7 +25,6 @@ A deterministic forecast for a particular data field in a Component.
 - `initial_timestamp::Dates.DateTime`: time series availability time
 - `interval::Dates.Period`: time step between forecast windows
 - `count::Int`: number of forecast windows
-- `time_series_uuid::UUIDs.UUID`: reference to time series data
 - `horizon::Dates.Period`: length of this time series
 - `time_series_type::Type{<:AbstractDeterministic}`: Type of the time series data associated with this metadata.
 - `features::Dict{String, Union{Bool, Int, String}}`: (default: `Dict{String, Any}()`) User-defined tags that differentiate multiple time series arrays that represent the same component attribute, such as different arrays for different scenarios or years.
@@ -42,8 +40,6 @@ mutable struct DeterministicMetadata <: ForecastMetadata
     interval::Dates.Period
     "number of forecast windows"
     count::Int
-    "reference to time series data"
-    time_series_uuid::UUIDs.UUID
     "length of this time series"
     horizon::Dates.Period
     "Type of the time series data associated with this metadata."
@@ -53,12 +49,12 @@ mutable struct DeterministicMetadata <: ForecastMetadata
     internal::InfrastructureSystemsInternal
 end
 
-function DeterministicMetadata(name, resolution, initial_timestamp, interval, count, time_series_uuid, horizon, time_series_type, features=Dict{String, Any}(), )
-    DeterministicMetadata(name, resolution, initial_timestamp, interval, count, time_series_uuid, horizon, time_series_type, features, InfrastructureSystemsInternal(), )
+function DeterministicMetadata(name, resolution, initial_timestamp, interval, count, horizon, time_series_type, features=Dict{String, Any}(), )
+    DeterministicMetadata(name, resolution, initial_timestamp, interval, count, horizon, time_series_type, features, InfrastructureSystemsInternal(), )
 end
 
-function DeterministicMetadata(; name, resolution, initial_timestamp, interval, count, time_series_uuid, horizon, time_series_type, features=Dict{String, Any}(), internal=InfrastructureSystemsInternal(), )
-    DeterministicMetadata(name, resolution, initial_timestamp, interval, count, time_series_uuid, horizon, time_series_type, features, internal, )
+function DeterministicMetadata(; name, resolution, initial_timestamp, interval, count, horizon, time_series_type, features=Dict{String, Any}(), internal=InfrastructureSystemsInternal(), )
+    DeterministicMetadata(name, resolution, initial_timestamp, interval, count, horizon, time_series_type, features, internal, )
 end
 
 """Get [`DeterministicMetadata`](@ref) `name`."""
@@ -71,8 +67,6 @@ get_initial_timestamp(value::DeterministicMetadata) = value.initial_timestamp
 get_interval(value::DeterministicMetadata) = value.interval
 """Get [`DeterministicMetadata`](@ref) `count`."""
 get_count(value::DeterministicMetadata) = value.count
-"""Get [`DeterministicMetadata`](@ref) `time_series_uuid`."""
-get_time_series_uuid(value::DeterministicMetadata) = value.time_series_uuid
 """Get [`DeterministicMetadata`](@ref) `horizon`."""
 get_horizon(value::DeterministicMetadata) = value.horizon
 """Get [`DeterministicMetadata`](@ref) `time_series_type`."""
@@ -92,8 +86,6 @@ set_initial_timestamp!(value::DeterministicMetadata, val) = value.initial_timest
 set_interval!(value::DeterministicMetadata, val) = value.interval = val
 """Set [`DeterministicMetadata`](@ref) `count`."""
 set_count!(value::DeterministicMetadata, val) = value.count = val
-"""Set [`DeterministicMetadata`](@ref) `time_series_uuid`."""
-set_time_series_uuid!(value::DeterministicMetadata, val) = value.time_series_uuid = val
 """Set [`DeterministicMetadata`](@ref) `horizon`."""
 set_horizon!(value::DeterministicMetadata, val) = value.horizon = val
 """Set [`DeterministicMetadata`](@ref) `time_series_type`."""

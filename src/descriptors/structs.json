@@ -29,11 +29,6 @@
           "comment": "number of forecast windows"
         },
         {
-          "name": "time_series_uuid",
-          "data_type": "UUIDs.UUID",
-          "comment": "reference to time series data"
-        },
-        {
           "name": "horizon",
           "data_type": "Dates.Period",
           "comment": "length of this time series"
@@ -91,11 +86,6 @@
           "comment": "Percentiles for the probabilistic forecast"
         },
         {
-          "name": "time_series_uuid",
-          "data_type": "UUIDs.UUID",
-          "comment": "reference to time series data"
-        },
-        {
           "name": "horizon",
           "data_type": "Dates.Period",
           "comment": "length of this time series"
@@ -148,11 +138,6 @@
           "comment": "number of forecast windows"
         },
         {
-          "name": "time_series_uuid",
-          "data_type": "UUIDs.UUID",
-          "comment": "reference to time series data"
-        },
-        {
           "name": "horizon",
           "data_type": "Dates.Period",
           "comment": "length of this time series"
@@ -188,11 +173,6 @@
           "name": "initial_timestamp",
           "data_type": "Dates.DateTime",
           "comment": "time series availability time"
-        },
-        {
-          "name": "time_series_uuid",
-          "data_type": "UUIDs.UUID",
-          "comment": "reference to time series data"
         },
         {
           "name": "length",

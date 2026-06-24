@@ -5,7 +5,7 @@
 # The Rust store owns both: arrays land in a NetCDF4 `.nc` file (content-addressed
 # by SHA-256 hash) and metadata in a sibling `.sqlite` file. Time series *data*
 # identity is the array content hash, not a UUID. Persisting a system writes the
-# `.nc` + `.sqlite` pair directly; no HDF5 is involved.
+# `.nc` + `.sqlite` pair directly.
 #
 # This file holds the IS-specific glue (owner/feature conversion, window
 # flatten/reshape, manager routing). All low-level FFI lives in `TimeSeriesStore`.
@@ -100,7 +100,7 @@ close!(store::RustTimeSeriesStore) = TSS.close!(store.inner)
 
 # ---- Conversions -----------------------------------------------------------
 
-_tss_category(category::AbstractString) =
+_tss_category(category::String) =
     if category == "Component"
         TSS.Component
     elseif category == "SupplementalAttribute"
@@ -324,7 +324,6 @@ function get_single(
         data = TimeSeries.TimeArray(collect(timestamps), values),
         resolution = meta.resolution,
     )
-    set_uuid!(get_internal(sts), _rust_ts_uuid(meta.data_hash))
     return sts
 end
 
@@ -401,20 +400,10 @@ _rust_row_identity(row) = (
 # Counts of SingleTimeSeries and DeterministicSingleTimeSeries associations that
 # reference the given content hash, across all owners. Used to decide whether a
 # SingleTimeSeries can be removed without orphaning a DST that shares its array.
-function _rust_array_sts_dst_counts(store::RustTimeSeriesStore, hash::Vector{UInt8})
-    sts = 0
-    dst = 0
-    for row in TSS.list_metadata(store.inner)
-        row.data_hash == hash || continue
-        t = _rust_is_type(row.time_series_type)
-        if t <: DeterministicSingleTimeSeries
-            dst += 1
-        elseif t <: SingleTimeSeries
-            sts += 1
-        end
-    end
-    return (sts = sts, dst = dst)
-end
+# Resolved by a single catalog query in the Rust core rather than scanning every
+# association here.
+_rust_array_sts_dst_counts(store::RustTimeSeriesStore, hash::Vector{UInt8}) =
+    TSS.count_array_references(store.inner, hash)
 
 # Remove the single association described by a `TSS.list_metadata` row.
 function _rust_remove_row!(store::RustTimeSeriesStore, row)
@@ -486,8 +475,6 @@ function _rust_add_time_series!(
 
     serialize_single!(store, owner_id, owner_type, owner_category, name, time_series;
         features = feats)
-    _rust_assign_stored_uuid!(store, time_series, owner_id, category, name,
-        TSS.TS_TYPE_SINGLE; resolution = resolution, features = feats)
     return StaticTimeSeriesKey(;
         time_series_type = SingleTimeSeries,
         name = name,
@@ -573,7 +560,6 @@ function _rust_get_time_series(
         data = TimeSeries.TimeArray(collect(timestamps), vals),
         resolution = meta.resolution,
     )
-    set_uuid!(get_internal(sts), _rust_ts_uuid(meta.data_hash))
     return sts
 end
 
@@ -624,8 +610,6 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
             interval, get_count(ts), Float64.(get_percentiles(ts)), arr, name)
         TSS.add_time_series!(store.inner, owner_id, owner_type,
             category, prob; features = feats)
-        _rust_assign_stored_uuid!(store, ts, owner_id, category, name,
-            TSS.TS_TYPE_PROBABILISTIC; resolution = resolution, features = feats)
         return ForecastKey(;
             time_series_type = typeof(ts), name = name,
             initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
@@ -702,8 +686,6 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
     end
     TSS.add_time_series!(store.inner, owner_id, owner_type,
         category, tss_ts; features = feats)
-    _rust_assign_stored_uuid!(store, ts, owner_id, category, name, ts_type;
-        resolution = resolution, features = feats)
     return ForecastKey(;
         time_series_type = typeof(ts), name = name,
         initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
@@ -789,9 +771,6 @@ function _rust_get_forecast(
         result = Probabilistic(; name = String(name), data = data,
             percentiles = p.percentiles, resolution = p.resolution,
             interval = p.interval)
-        _rust_assign_stored_uuid!(store, result, owner_id, category, name,
-            TSS.TS_TYPE_PROBABILISTIC;
-            resolution = resolution, features = feats)
         return result
     elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_DETERMINISTIC;
         resolution = resolution, features = feats)
@@ -821,7 +800,6 @@ function _rust_get_forecast(
         )
         result = Deterministic(; name = String(name), data = data,
             resolution = d.resolution, interval = d.interval)
-        set_uuid!(get_internal(result), _rust_ts_uuid(fmeta.data_hash))
         return result
     elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_DETERMINISTIC_SINGLE;
         resolution = resolution, features = feats)
@@ -872,9 +850,6 @@ function _rust_get_forecast(
         result = Scenarios(; name = String(name), data = data,
             scenario_count = s_ts.scenario_count,
             resolution = s_ts.resolution, interval = s_ts.interval)
-        _rust_assign_stored_uuid!(store, result, owner_id, category, name,
-            TSS.TS_TYPE_SCENARIOS;
-            resolution = resolution, features = feats)
         return result
     end
     throw(RustTimeSeriesNotFound("no forecast for owner=$owner_id name=$name"))
@@ -931,53 +906,6 @@ function _rust_has_any(owner; time_series_type::Union{Nothing, Type} = nothing)
 end
 
 # ---- Metadata reconstruction (parity with the SQLite metadata store) --------
-#
-# The Rust store is content-addressed: a time series' identity is the SHA-256
-# hash of its array, not a per-association UUID. IS still exposes
-# `time_series_uuid`, so we derive a stable `Base.UUID` from the hash. A UUID is
-# 16 bytes, so we use the hash's 16-byte prefix; identical arrays therefore share
-# a UUID, consistent with the store's content-addressed de-duplication.
-function _rust_ts_uuid(hash::Vector{UInt8})
-    length(hash) >= 16 ||
-        error("Rust data hash too short to derive a UUID: $(length(hash))")
-    u = UInt128(0)
-    @inbounds for i in 1:16
-        u = (u << 8) | hash[i]
-    end
-    return Base.UUID(u)
-end
-
-# Give a just-stored time series object the content-addressed identity used on
-# reconstruction (UUID derived from the array hash), so `get_uuid(original)`
-# matches `get_uuid(get_time_series(...))`.
-function _rust_assign_stored_uuid!(
-    store::RustTimeSeriesStore,
-    ts::TimeSeriesData,
-    owner_id::Integer,
-    owner_category::TSS.OwnerCategory,
-    name::AbstractString,
-    ts_type_code::Integer;
-    resolution = nothing,
-    features = Dict{String, Any}(),
-)
-    hash = if ts_type_code in (TSS.TS_TYPE_SINGLE, TSS.TS_TYPE_DETERMINISTIC_SINGLE)
-        # A DST shares its underlying SingleTimeSeries array; use that hash.
-        get_metadata(
-            store,
-            owner_id,
-            owner_category,
-            name;
-            resolution = resolution,
-            features = features,
-        ).data_hash
-    else
-        TSS.get_forecast_metadata(store.inner, owner_id, owner_category, name, ts_type_code;
-            resolution = resolution, features = features).data_hash
-    end
-    set_uuid!(get_internal(ts), _rust_ts_uuid(hash))
-    return
-end
-
 # IS time series type for a `TimeSeriesStore` metadata-row type (matched by name).
 _rust_is_type(t::Type) = _rust_is_type(nameof(t))
 _rust_is_type(s::Symbol) =
@@ -1011,14 +939,12 @@ _rust_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
 # Build the matching IS `TimeSeriesMetadata` from a `TSS.list_metadata` row.
 function _metadata_from_row(row)
     feats = Dict{String, Union{Bool, Int, String}}(row.features)
-    uuid = _rust_ts_uuid(row.data_hash)
     is_type = _rust_is_type(row.time_series_type)
     if is_type <: SingleTimeSeries
         return SingleTimeSeriesMetadata(;
             name = row.name,
             resolution = row.resolution,
             initial_timestamp = row.initial_timestamp,
-            time_series_uuid = uuid,
             length = row.length,
             features = feats,
         )
@@ -1029,7 +955,6 @@ function _metadata_from_row(row)
             initial_timestamp = row.initial_timestamp,
             interval = row.interval,
             count = row.count,
-            time_series_uuid = uuid,
             horizon = row.horizon,
             time_series_type = is_type,
             features = feats,
@@ -1042,7 +967,6 @@ function _metadata_from_row(row)
             interval = row.interval,
             count = row.count,
             percentiles = row.percentiles,
-            time_series_uuid = uuid,
             horizon = row.horizon,
             features = feats,
         )
@@ -1056,7 +980,6 @@ function _metadata_from_row(row)
             interval = row.interval,
             scenario_count = row.length,
             count = row.count,
-            time_series_uuid = uuid,
             horizon = row.horizon,
             features = feats,
         )
