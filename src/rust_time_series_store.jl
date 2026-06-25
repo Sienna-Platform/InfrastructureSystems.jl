@@ -386,7 +386,7 @@ _rust_clear_owner!(store::RustTimeSeriesStore, owner_id::Integer,
     owner_category::TSS.OwnerCategory) =
     TSS.clear!(store.inner; owner_id = owner_id, owner_category = owner_category)
 
-# A hashable identity for one stored association (a `TSS.list_metadata` row),
+# A hashable identity for one stored association (a `TSS.list_keys` row),
 # used to diff the store before/after a batch update for rollback.
 _rust_row_identity(row) = (
     row.owner_id,
@@ -405,7 +405,7 @@ _rust_row_identity(row) = (
 _rust_array_sts_dst_counts(store::RustTimeSeriesStore, hash::Vector{UInt8}) =
     TSS.count_array_references(store.inner, hash)
 
-# Remove the single association described by a `TSS.list_metadata` row.
+# Remove the single association described by a `TSS.list_keys` row.
 function _rust_remove_row!(store::RustTimeSeriesStore, row)
     feats = Dict{String, Any}(row.features)
     category = _tss_category(row.owner_category)
@@ -679,10 +679,10 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
     end
     tss_ts = if ts_type == TSS.TS_TYPE_DETERMINISTIC
         TSS.Deterministic(get_initial_timestamp(ts), resolution, get_horizon(ts),
-        interval, count, arr, name; logical_type = logical)
+            interval, count, arr, name; logical_type = logical)
     else
         TSS.Scenarios(get_initial_timestamp(ts), resolution, get_horizon(ts),
-        interval, count, arr, name; logical_type = logical)
+            interval, count, arr, name; logical_type = logical)
     end
     TSS.add_time_series!(store.inner, owner_id, owner_type,
         category, tss_ts; features = feats)
@@ -889,7 +889,37 @@ _rust_query_codes(::Type{<:Probabilistic}) = (TSS.TS_TYPE_PROBABILISTIC,)
 _rust_query_codes(::Type{<:Scenarios}) = (TSS.TS_TYPE_SCENARIOS,)
 _rust_query_codes(::Type{<:Forecast}) = (TSS.TS_TYPE_DETERMINISTIC,
     TSS.TS_TYPE_DETERMINISTIC_SINGLE, TSS.TS_TYPE_PROBABILISTIC, TSS.TS_TYPE_SCENARIOS)
+_rust_query_codes(::Type{<:StaticTimeSeries}) =
+    (TSS.TS_TYPE_SINGLE, TSS.TS_TYPE_NON_SEQUENTIAL)
 _rust_query_codes(::Type{<:TimeSeriesData}) = ()
+
+# The single stored TimeSeriesType code to push into the core `list_keys` filter
+# for a query type, or `nothing` when the type cannot be expressed as one code:
+# an abstract family, or `Deterministic` (which, under the metadata-store
+# semantics encoded in `_rust_type_matches`, also matches a stored
+# `DeterministicSingleTimeSeries`). When `nothing`, the caller applies the
+# residual `_rust_type_matches` filter on the (already narrowed) rows.
+_rust_pushable_code(::Type{<:SingleTimeSeries}) = TSS.TS_TYPE_SINGLE
+_rust_pushable_code(::Type{<:DeterministicSingleTimeSeries}) =
+    TSS.TS_TYPE_DETERMINISTIC_SINGLE
+_rust_pushable_code(::Type{<:Probabilistic}) = TSS.TS_TYPE_PROBABILISTIC
+_rust_pushable_code(::Type{<:Scenarios}) = TSS.TS_TYPE_SCENARIOS
+_rust_pushable_code(::Type{<:TimeSeriesData}) = nothing
+
+# All stored TimeSeriesType codes whose IS type is a subtype of `T` (strict `<:`
+# semantics — distinct from `_rust_type_matches`, which treats a `Deterministic`
+# query as also matching a `DeterministicSingleTimeSeries`). Used by the
+# store-wide filters (`resolutions`, `list_owner_ids`) that key on subtyping.
+# `NonSequentialTimeSeries` is omitted: the Rust backend does not store it yet.
+const _RUST_CODE_TYPES = (
+    (TSS.TS_TYPE_SINGLE, SingleTimeSeries),
+    (TSS.TS_TYPE_DETERMINISTIC, Deterministic),
+    (TSS.TS_TYPE_DETERMINISTIC_SINGLE, DeterministicSingleTimeSeries),
+    (TSS.TS_TYPE_PROBABILISTIC, Probabilistic),
+    (TSS.TS_TYPE_SCENARIOS, Scenarios),
+)
+_rust_subtype_codes(::Type{T}) where {T <: TimeSeriesData} =
+    Tuple(c for (c, k) in _RUST_CODE_TYPES if k <: T)
 
 # True iff `owner` has any time series, optionally restricted to type `T`.
 function _rust_has_any(owner; time_series_type::Union{Nothing, Type} = nothing)
@@ -936,7 +966,7 @@ _rust_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
         row_type <: T
     end
 
-# Build the matching IS `TimeSeriesKey` from a `TSS.list_metadata` row. The key is
+# Build the matching IS `TimeSeriesKey` from a `TSS.list_keys` row. The key is
 # the single descriptor for a stored association; forecast-only fields
 # (percentiles, scenario_count) are not carried — they come from the data on read.
 function _key_from_row(row)
@@ -966,25 +996,11 @@ function _key_from_row(row)
     error("Rust backend cannot build a key for $(row.time_series_type)")
 end
 
-# True if a metadata row passes the optional type/name/resolution/interval/feature
-# filters. `time_series_type` is an IS type; features match as a subset.
-function _row_matches(row; time_series_type, name, resolution, interval, features)
-    isnothing(name) || row.name == name || return false
-    isnothing(resolution) || (row.resolution == resolution) || return false
-    if !isnothing(interval)
-        (row.interval !== nothing && row.interval == interval) || return false
-    end
-    if !isnothing(time_series_type)
-        _rust_type_matches(_rust_is_type(row.time_series_type), time_series_type) ||
-            return false
-    end
-    for (k, v) in features
-        haskey(row.features, String(k)) && row.features[String(k)] == v || return false
-    end
-    return true
-end
-
-# All matching associations for one owner, as `TimeSeriesKey` objects.
+# All matching associations for one owner, as `TimeSeriesKey` objects. The core
+# `list_keys` query filters owner / name / resolution / features; an abstract
+# `time_series_type` (or `Deterministic`, which also matches a DST) and `interval`
+# are not catalog filter columns, so they are applied as a residual on the
+# already-narrowed rows.
 function _rust_list_metadata(
     store::RustTimeSeriesStore,
     owner_id::Integer,
@@ -995,12 +1011,25 @@ function _rust_list_metadata(
     interval = nothing,
     features = (),
 )
-    rows = TSS.list_metadata(store.inner;
-        owner_id = owner_id, owner_category = owner_category)
+    type_code =
+        isnothing(time_series_type) ? nothing : _rust_pushable_code(time_series_type)
+    feats = Dict{String, Any}(string(k) => v for (k, v) in features)
+    rows = TSS.list_keys(store.inner; owner_id = owner_id, owner_category = owner_category,
+        time_series_type = type_code, name = name, features = feats)
     out = TimeSeriesKey[]
     for row in rows
-        _row_matches(row; time_series_type = time_series_type, name = name,
-            resolution = resolution, interval = interval, features = features) || continue
+        if !isnothing(time_series_type)
+            _rust_type_matches(_rust_is_type(row.time_series_type), time_series_type) ||
+                continue
+        end
+        # `resolution`/`interval` are matched here, not pushed into the catalog
+        # query, so `Period` equality is used (a regular `Hour(1)` equals the
+        # stored `Millisecond`, while an irregular `Month`/`Year` does not — the
+        # Rust store keys on milliseconds and cannot represent those exactly).
+        isnothing(resolution) || row.resolution == resolution || continue
+        if !isnothing(interval)
+            (row.interval !== nothing && row.interval == interval) || continue
+        end
         push!(out, _key_from_row(row))
     end
     return out
@@ -1008,7 +1037,7 @@ end
 
 # A key for every time series in the store (all owners).
 _rust_all_metadata(store::RustTimeSeriesStore) =
-    [_key_from_row(row) for row in TSS.list_metadata(store.inner)]
+    [_key_from_row(row) for row in TSS.list_keys(store.inner)]
 
 # Owner-level `list_metadata` entry point (mirrors the metadata-store signature).
 function _rust_owner_list_metadata(
@@ -1094,18 +1123,17 @@ end
 
 # ---- Store-wide aggregates (parity with the SQLite metadata store) ----------
 
-# Distinct, sorted resolutions across the store, optionally restricted to a type.
+# Distinct, sorted resolutions across the store, optionally restricted to a type
+# (strict subtype). One DISTINCT query per concrete subtype code, in the core.
 function _rust_get_time_series_resolutions(
     store::RustTimeSeriesStore;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
 )
-    res = Set{Dates.Period}()
-    for row in TSS.list_metadata(store.inner)
-        if !isnothing(time_series_type) &&
-           !(_rust_is_type(row.time_series_type) <: time_series_type)
-            continue
-        end
-        isnothing(row.resolution) || push!(res, Dates.Millisecond(row.resolution))
+    isnothing(time_series_type) && return sort!(TSS.get_resolutions(store.inner))
+    codes = _rust_subtype_codes(time_series_type)
+    res = Set{Dates.Millisecond}()
+    for code in codes
+        union!(res, TSS.get_resolutions(store.inner; time_series_type = code))
     end
     return sort!(collect(res))
 end
@@ -1113,93 +1141,49 @@ end
 # Counts of time series grouped by type name (parity with counts_by_type).
 function _rust_get_time_series_counts_by_type(store::RustTimeSeriesStore)
     counts = OrderedDict{String, Int}()
-    for row in TSS.list_metadata(store.inner)
-        t = string(nameof(row.time_series_type))
-        counts[t] = get(counts, t, 0) + 1
+    for r in TSS.counts_by_type(store.inner)
+        counts[string(nameof(r.time_series_type))] = r.count
     end
     return [OrderedDict("type" => k, "count" => v) for (k, v) in sort!(OrderedDict(counts))]
 end
 
 # Number of distinct stored arrays (parity with get_num_time_series).
-function _rust_get_num_time_series(store::RustTimeSeriesStore)
-    hashes = Set{Vector{UInt8}}()
-    for row in TSS.list_metadata(store.inner)
-        push!(hashes, row.data_hash)
-    end
-    return length(hashes)
-end
+_rust_get_num_time_series(store::RustTimeSeriesStore) = TSS.num_distinct_arrays(store.inner)
 
 # Counts of distinct stored arrays (shared series count once) and owners by
 # category, matching the metadata-store's `get_time_series_counts`.
-function _rust_time_series_counts(store::RustTimeSeriesStore)
-    static_hashes = Set{Vector{UInt8}}()
-    forecast_hashes = Set{Vector{UInt8}}()
-    component_owners = Set{Int}()
-    attribute_owners = Set{Int}()
-    for row in TSS.list_metadata(store.inner)
-        if _rust_is_type(row.time_series_type) <: Forecast
-            push!(forecast_hashes, row.data_hash)
-        else
-            push!(static_hashes, row.data_hash)
-        end
-        if row.owner_category == "Component"
-            push!(component_owners, row.owner_id)
-        else
-            push!(attribute_owners, row.owner_id)
-        end
-    end
-    return (
-        components_with_time_series = length(component_owners),
-        supplemental_attributes_with_time_series = length(attribute_owners),
-        static_time_series_count = length(static_hashes),
-        forecast_count = length(forecast_hashes),
-    )
-end
+_rust_time_series_counts(store::RustTimeSeriesStore) = TSS.time_series_counts(store.inner)
 
 # Static-time-series summary DataFrame (parity with the metadata-store version).
+# The core groups the rows; we shape them into the DataFrame.
 function _rust_static_summary_table(store::RustTimeSeriesStore)
-    groups = OrderedDict{Tuple, Int}()
-    for row in TSS.list_metadata(store.inner)
-        _rust_is_type(row.time_series_type) <: StaticTimeSeries || continue
-        key = (row.owner_type, row.owner_category, row.name,
-            string(nameof(row.time_series_type)), row.initial_timestamp,
-            Dates.Millisecond(row.resolution), row.length)
-        groups[key] = get(groups, key, 0) + 1
-    end
+    rows = TSS.static_summary(store.inner)
     return DataFrames.DataFrame(;
-        owner_type = [k[1] for k in keys(groups)],
-        owner_category = [k[2] for k in keys(groups)],
-        name = [k[3] for k in keys(groups)],
-        time_series_type = [k[4] for k in keys(groups)],
-        initial_timestamp = [k[5] for k in keys(groups)],
-        resolution = [Dates.canonicalize(k[6]) for k in keys(groups)],
-        count = collect(values(groups)),
-        time_step_count = [k[7] for k in keys(groups)],
+        owner_type = [r.owner_type for r in rows],
+        owner_category = [r.owner_category for r in rows],
+        name = [r.name for r in rows],
+        time_series_type = [string(nameof(r.time_series_type)) for r in rows],
+        initial_timestamp = [r.initial_timestamp for r in rows],
+        resolution = [Dates.canonicalize(r.resolution) for r in rows],
+        count = [r.count for r in rows],
+        time_step_count = [r.time_step_count for r in rows],
     )
 end
 
 # Forecast summary DataFrame (parity with the metadata-store version).
 function _rust_forecast_summary_table(store::RustTimeSeriesStore)
-    groups = OrderedDict{Tuple, Int}()
-    for row in TSS.list_metadata(store.inner)
-        _rust_is_type(row.time_series_type) <: Forecast || continue
-        key = (row.owner_type, row.owner_category, row.name,
-            string(nameof(row.time_series_type)), row.initial_timestamp,
-            Dates.Millisecond(row.resolution), Dates.Millisecond(row.horizon),
-            Dates.Millisecond(row.interval), row.count)
-        groups[key] = get(groups, key, 0) + 1
-    end
+    rows = TSS.forecast_summary(store.inner)
     return DataFrames.DataFrame(;
-        owner_type = [k[1] for k in keys(groups)],
-        owner_category = [k[2] for k in keys(groups)],
-        name = [k[3] for k in keys(groups)],
-        time_series_type = [k[4] for k in keys(groups)],
-        initial_timestamp = [k[5] for k in keys(groups)],
-        resolution = [Dates.canonicalize(k[6]) for k in keys(groups)],
-        count = collect(values(groups)),
-        horizon = [Dates.canonicalize(k[7]) for k in keys(groups)],
-        interval = [Dates.canonicalize(k[8]) for k in keys(groups)],
-        window_count = [k[9] for k in keys(groups)],
+        owner_type = [r.owner_type for r in rows],
+        owner_category = [r.owner_category for r in rows],
+        name = [r.name for r in rows],
+        time_series_type = [string(nameof(r.time_series_type)) for r in rows],
+        initial_timestamp = [r.initial_timestamp for r in rows],
+        resolution = [Dates.canonicalize(r.resolution) for r in rows],
+        count = [r.count for r in rows],
+        horizon = [Dates.canonicalize(r.horizon) for r in rows],
+        interval = [Dates.canonicalize(r.interval) for r in rows],
+        window_count = [r.window_count for r in rows],
     )
 end
 
@@ -1211,7 +1195,12 @@ function _rust_forecast_parameters(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
 )
-    for row in TSS.list_metadata(store.inner)
+    # The first forecast key matching `resolution`/`interval`. These are compared
+    # with `Period` equality (not pushed into the catalog query), so an irregular
+    # `Month`/`Year` resolution does not match the stored millisecond resolution —
+    # preserving the pre-existing behavior of skipping the cross-forecast
+    # compatibility check for resolutions the Rust store cannot represent exactly.
+    for row in TSS.list_keys(store.inner)
         _rust_is_type(row.time_series_type) <: Forecast || continue
         isnothing(resolution) || row.resolution == resolution || continue
         if !isnothing(interval)
@@ -1229,67 +1218,71 @@ function _rust_forecast_parameters(
 end
 
 # Distinct owner ids of the given category that have time series, optionally
-# restricted by time series type and resolution.
+# restricted by time series type (strict subtype) and resolution.
 function _rust_list_owner_ids(
     store::RustTimeSeriesStore,
     owner_type::Type;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
-    category = _get_owner_category(owner_type)
+    category = _tss_category(_get_owner_category(owner_type))
+    # Without a resolution filter, enumerate owner ids in the core (optionally per
+    # concrete subtype code). With one, scan the category's keys so `Period`
+    # equality is used for the resolution match (see `_rust_list_metadata`).
+    if isnothing(resolution)
+        isnothing(time_series_type) && return TSS.list_owner_ids(store.inner, category)
+        ids = Set{Int}()
+        for code in _rust_subtype_codes(time_series_type)
+            union!(ids, TSS.list_owner_ids(store.inner, category; time_series_type = code))
+        end
+        return collect(ids)
+    end
     ids = Set{Int}()
-    for row in TSS.list_metadata(store.inner)
-        row.owner_category == category || continue
+    for row in TSS.list_keys(store.inner; owner_category = category)
         if !isnothing(time_series_type)
             _rust_is_type(row.time_series_type) <: time_series_type || continue
         end
-        isnothing(resolution) || row.resolution == resolution || continue
+        row.resolution == resolution || continue
         push!(ids, Int(row.owner_id))
     end
     return collect(ids)
 end
 
-# (owner_id, metadata) for every time series of the given owner category,
-# optionally restricted by time series type and resolution.
+# (owner_id, key) for every time series of the given owner category, optionally
+# restricted by time series type (strict subtype) and resolution. Owner category
+# and resolution are pushed into the core query; the strict type filter is applied
+# on the returned keys.
 function _rust_list_metadata_with_owner(
     store::RustTimeSeriesStore,
     owner_type::Type;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
-    category = _get_owner_category(owner_type)
+    category = _tss_category(_get_owner_category(owner_type))
+    rows = TSS.list_keys(store.inner; owner_category = category)
     out = NamedTuple[]
-    for row in TSS.list_metadata(store.inner)
-        row.owner_category == category || continue
+    for row in rows
         if !isnothing(time_series_type)
             _rust_is_type(row.time_series_type) <: time_series_type || continue
         end
         isnothing(resolution) || row.resolution == resolution || continue
-        push!(
-            out,
-            (owner_id = Int(row.owner_id), metadata = _key_from_row(row)),
-        )
+        push!(out, (owner_id = Int(row.owner_id), metadata = _key_from_row(row)))
     end
     return out
 end
 
 # Verify all SingleTimeSeries share an initial timestamp and length; return
-# `(initial_timestamp, length)` (parity with the metadata-store check).
+# `(initial_timestamp, length)` (parity with the metadata-store check). Resolved
+# by a single DISTINCT query in the core.
 function _rust_check_consistency(store::RustTimeSeriesStore, ::Type{<:SingleTimeSeries})
-    pairs = Set{Tuple{Dates.DateTime, Int}}()
-    for row in TSS.list_metadata(store.inner)
-        _rust_is_type(row.time_series_type) <: SingleTimeSeries || continue
-        push!(pairs, (row.initial_timestamp, row.length))
+    result = try
+        TSS.check_static_consistency(store.inner)
+    catch e
+        e isa TSS.IntegrityError || rethrow()
+        throw(InvalidValue(e.msg))
     end
-    isempty(pairs) && return (Dates.DateTime(Dates.Minute(0)), 0)
-    if length(pairs) > 1
-        throw(
-            InvalidValue(
-                "There are more than one sets of SingleTimeSeries initial times and lengths: $pairs",
-            ),
-        )
-    end
-    return first(pairs)
+    isnothing(result) && return (Dates.DateTime(Dates.Minute(0)), 0)
+    return (result.initial_timestamp, result.length)
 end
 
 _rust_check_consistency(::RustTimeSeriesStore, ::Type{<:Forecast}) = nothing

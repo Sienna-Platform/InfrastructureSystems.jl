@@ -76,7 +76,7 @@ function begin_time_series_update(
     mgr::TimeSeriesManager,
 )
     store = mgr.data_store
-    before = Set(_rust_row_identity(r) for r in TSS.list_metadata(store.inner))
+    before = Set(_rust_row_identity(r) for r in TSS.list_keys(store.inner))
     try
         open_store!(store, "r+") do
             func()
@@ -85,7 +85,7 @@ function begin_time_series_update(
     catch
         # Roll back: remove associations added during this update so the store is
         # left consistent with its pre-update state.
-        for row in TSS.list_metadata(store.inner)
+        for row in TSS.list_keys(store.inner)
             _rust_row_identity(row) in before && continue
             try
                 _rust_remove_row!(store, row)
@@ -217,7 +217,14 @@ function remove_time_series!(
                         "DeterministicSingleTimeSeries."),
                 )
             end
-            remove_single!(store, owner_id, category, name; resolution = res, features = feats)
+            remove_single!(
+                store,
+                owner_id,
+                category,
+                name;
+                resolution = res,
+                features = feats,
+            )
         else
             remove_typed!(store, owner_id, category, name, _rust_ts_code(mt);
                 resolution = res, features = feats)
