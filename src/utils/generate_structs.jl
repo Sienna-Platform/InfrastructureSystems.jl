@@ -258,8 +258,22 @@ function test_generated_structs(descriptor_file, existing_dir)
 
     generate_structs(descriptor_file, output_dir; print_results = false)
 
+    # `includes.jl` is a manifest derived from the set of struct files, not a
+    # struct itself; exclude it so an empty descriptor (no structs, hence no
+    # committed `src/generated` dir) compares as a match.
+    is_struct_file(f) = f != "includes.jl"
+    generated_files = filter(is_struct_file, readdir(output_dir))
+    # `existing_dir` may not exist when the descriptor defines no auto-generated
+    # structs (an empty `src/generated` is not tracked by git); treat it as empty.
+    existing_files =
+        isdir(existing_dir) ? filter(is_struct_file, readdir(existing_dir)) : String[]
+
     matched = true
-    for (file1, file2) in zip(readdir(output_dir), readdir(existing_dir))
+    if length(generated_files) != length(existing_files)
+        @error "Number of generated struct files does not match the descriptor" generated_files existing_files
+        matched = false
+    end
+    for (file1, file2) in zip(generated_files, existing_files)
         path1 = joinpath(output_dir, file1)
         path2 = joinpath(existing_dir, file2)
         for (line1, line2) in zip(readlines(path1), readlines(path2))

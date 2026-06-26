@@ -158,6 +158,24 @@ get_fuel_cost(cost::FuelCurve) = cost.fuel_cost
 "Get the function for the fuel consumption at startup"
 get_startup_fuel_offtake(cost::FuelCurve) = cost.startup_fuel_offtake
 
+# Compact (single-argument) show. Mirrors Julia's default struct printing but
+# renders a cost-alias value-curve type parameter unqualified (e.g.
+# `CostCurve{QuadraticCurve}` rather than `CostCurve{InfrastructureSystems.QuadraticCurve}`,
+# which newer Julia versions would otherwise produce). Non-alias value curves keep
+# the default rendering.
+function Base.show(io::IO, curve::T) where {T <: ProductionVariableCostCurve}
+    vc = get_value_curve(curve)
+    if !is_cost_alias(vc)
+        return Base.show_default(io, curve)
+    end
+    print(io, parentmodule(T), ".", nameof(T), "{", simple_type_name(vc), "}(")
+    for (i, field_name) in enumerate(fieldnames(T))
+        i > 1 && print(io, ", ")
+        show(io, getproperty(curve, field_name))
+    end
+    print(io, ")")
+end
+
 Base.show(io::IO, m::MIME"text/plain", curve::ProductionVariableCostCurve) =
     (get(io, :compact, false)::Bool ? _show_compact : _show_expanded)(io, m, curve)
 

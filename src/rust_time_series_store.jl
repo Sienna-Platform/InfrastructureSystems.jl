@@ -1199,11 +1199,10 @@ function _rust_forecast_parameters(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
 )
-    # The first forecast key matching `resolution`/`interval`. These are compared
-    # with `Period` equality (not pushed into the catalog query), so an irregular
-    # `Month`/`Year` resolution does not match the stored millisecond resolution —
-    # preserving the pre-existing behavior of skipping the cross-forecast
-    # compatibility check for resolutions the Rust store cannot represent exactly.
+    # The first forecast key matching `resolution`/`interval`, compared with
+    # `Period` equality. The store preserves the calendar-aware `Period` type, so
+    # the stored periods are passed through unchanged — converting them to
+    # `Millisecond` would throw for irregular `Month`/`Year` resolutions.
     for row in TSS.list_keys(store.inner)
         _rust_is_type(row.time_series_type) <: Forecast || continue
         isnothing(resolution) || row.resolution == resolution || continue
@@ -1211,11 +1210,11 @@ function _rust_forecast_parameters(
             (row.interval !== nothing && row.interval == interval) || continue
         end
         return ForecastParameters(;
-            horizon = Dates.Millisecond(row.horizon),
+            horizon = row.horizon,
             initial_timestamp = row.initial_timestamp,
-            interval = Dates.Millisecond(row.interval),
+            interval = row.interval,
             count = row.count,
-            resolution = Dates.Millisecond(row.resolution),
+            resolution = row.resolution,
         )
     end
     return nothing
