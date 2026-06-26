@@ -169,13 +169,7 @@ export get_percentiles
 export get_resolution
 export get_scenario_count
 export get_time_series_type
-export set_count!
-export set_horizon!
-export set_initial_timestamp!
-export set_interval!
 export set_name!
-export set_percentiles!
-export set_resolution!
 include("time_series_parser.jl")
 include("single_time_series.jl")
 include("deterministic_single_time_series.jl")

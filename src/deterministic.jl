@@ -17,33 +17,45 @@ A deterministic forecast for a particular data field in a Component.
   - `interval::Dates.Period`: forecast interval
   - `internal::InfrastructureSystemsInternal`
 """
-mutable struct Deterministic <: AbstractDeterministic
+struct Deterministic{T, N} <: AbstractDeterministic
     "user-defined name"
     name::String
-    "timestamp - scalingfactor"
-    data::SortedDict  # TODO handle typing here in a more principled fashion
+    "timestamp - scalingfactor (per-window arrays of rank `N`)"
+    data::SortedDict{Dates.DateTime, Array{T, N}}
     "forecast resolution"
     resolution::Dates.Period
     "forecast interval"
     interval::Dates.Period
-    internal::InfrastructureSystemsInternal
 
-    function Deterministic(
-        name::String,
-        data::SortedDict,
+    # Inner constructor validates HDF-storability on every construction (including
+    # the inferring outer constructor below), so unsupported element types are
+    # rejected early.
+    function Deterministic{T, N}(
+        name::AbstractString,
+        data::SortedDict{Dates.DateTime, Array{T, N}},
         resolution::Dates.Period,
         interval::Dates.Period,
-        internal::InfrastructureSystemsInternal,
-    )
+    ) where {T, N}
         validate_time_series_data_for_hdf(data)
-        new(
-            name,
-            data,
-            resolution,
-            interval,
-            internal,
-        )
+        return new{T, N}(String(name), data, resolution, interval)
     end
+end
+
+# Infer `{T, N}` — element type and per-window array rank — from the data; the
+# inner constructor performs validation. `data` is normalized to a typed `SortedDict`.
+function Deterministic(
+    name::AbstractString,
+    data::AbstractDict{Dates.DateTime},
+    resolution::Dates.Period,
+    interval::Dates.Period,
+)
+    sorted = data isa SortedDict ? data : SortedDict(data...)
+    return Deterministic{_window_eltype(sorted), _window_ndims(sorted)}(
+        String(name),
+        sorted,
+        resolution,
+        interval,
+    )
 end
 
 function Deterministic(;
@@ -52,7 +64,6 @@ function Deterministic(;
     resolution,
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor = 1.0,
-    internal = InfrastructureSystemsInternal(),
 )
     if isnothing(interval)
         interval = get_interval_from_initial_times(get_sorted_keys(data))
@@ -64,7 +75,6 @@ function Deterministic(;
         data,
         resolution,
         interval,
-        internal,
     )
 end
 
@@ -80,7 +90,6 @@ function Deterministic(
         data = data,
         resolution = resolution,
         interval = interval,
-        internal = InfrastructureSystemsInternal(),
     )
 end
 
@@ -192,21 +201,12 @@ end
 Construct a new Deterministic from an existing instance and a subset of data.
 """
 function Deterministic(forecast::Deterministic, data)
-    vals = Dict{Symbol, Any}()
-    for (fname, ftype) in zip(fieldnames(Deterministic), fieldtypes(Deterministic))
-        if ftype <: SortedDict
-            val = data
-        elseif ftype <: InfrastructureSystemsInternal
-            # Need to create a new UUID.
-            val = InfrastructureSystemsInternal()
-        else
-            val = getproperty(forecast, fname)
-        end
-
-        vals[fname] = val
-    end
-
-    return Deterministic(; vals...)
+    return Deterministic(
+        get_name(forecast),
+        data,
+        get_resolution(forecast),
+        get_interval(forecast),
+    )
 end
 
 """
@@ -241,14 +241,13 @@ function Deterministic(
     src::Deterministic,
     name::AbstractString,
 )
-    # units and ext are not copied
-    internal = InfrastructureSystemsInternal(; uuid = get_uuid(src))
+    # units and ext are not copied. Under the key-centric model there is no shared
+    # UUID; the content-addressed data is simply reused with a different name.
     return Deterministic(
         name,
         src.data,
         src.resolution,
         src.interval,
-        internal,
     )
 end
 
@@ -293,31 +292,6 @@ get_resolution(value::Deterministic) = value.resolution
 Get [`Deterministic`](@ref) `interval`.
 """
 get_interval(value::Deterministic) = value.interval
-
-"""
-Get [`Deterministic`](@ref) `internal`.
-"""
-get_internal(value::Deterministic) = value.internal
-
-"""
-Set [`Deterministic`](@ref) `name`.
-"""
-set_name!(value::Deterministic, val) = value.name = val
-
-"""
-Set [`Deterministic`](@ref) `data`.
-"""
-set_data!(value::Deterministic, val) = value.data = val
-
-"""
-Set [`Deterministic`](@ref) `resolution`.
-"""
-set_resolution!(value::Deterministic, val) = value.resolution = val
-
-"""
-Set [`Deterministic`](@ref) `internal`.
-"""
-set_internal!(value::Deterministic, val) = value.internal = val
 
 # TODO handle typing here in a more principled fashion
 eltype_data(forecast::Deterministic) = eltype_data_common(forecast)

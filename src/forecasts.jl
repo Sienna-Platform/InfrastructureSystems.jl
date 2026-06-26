@@ -70,6 +70,11 @@ function eltype_data_common(forecast::Forecast)
     return eltype(first(values(get_data(forecast))))
 end
 
+# Element type and per-window array rank of a forecast's window dict, used to infer
+# the `{T, N}` parameters of the concrete forecast structs.
+_window_eltype(data::AbstractDict) = eltype(valtype(data))
+_window_ndims(data::AbstractDict) = ndims(valtype(data))
+
 # This method requires that the forecast type implement a `get_data` method like
 # Deterministic.
 function get_count(forecast::Forecast)

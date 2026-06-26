@@ -190,7 +190,7 @@ end
         for attr in attrs
             @test IS.has_time_series(IS.SingleTimeSeries, attr)
             ts2 = IS.get_time_series(IS.SingleTimeSeries, attr, "test")
-            @test ts2.data == ta
+            @test IS.get_data(ts2) == ta
         end
     end
 end

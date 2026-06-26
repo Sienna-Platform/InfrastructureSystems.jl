@@ -19,18 +19,35 @@ A Discrete Scenario Based time series for a particular data field in a Component
   - `data::SortedDict`: timestamp - scalingfactor
   - `internal::InfrastructureSystemsInternal`
 """
-mutable struct Scenarios <: Forecast
+struct Scenarios{T, N} <: Forecast
     "user-defined name"
     name::String
-    "timestamp - scalingfactor"
-    data::SortedDict  # TODO see note in Deterministic
+    "timestamp - scalingfactor (per-window arrays of rank `N`)"
+    data::SortedDict{Dates.DateTime, Array{T, N}}
     "Number of scenarios"
     scenario_count::Int
     "forecast resolution"
     resolution::Dates.Period
     "forecast interval"
     interval::Dates.Period
-    internal::InfrastructureSystemsInternal
+end
+
+# Infer `{T, N}` — element type and per-window array rank — from the data.
+function Scenarios(
+    name::AbstractString,
+    data::AbstractDict{Dates.DateTime},
+    scenario_count::Int,
+    resolution::Dates.Period,
+    interval::Dates.Period,
+)
+    sorted = data isa SortedDict ? data : SortedDict(data...)
+    return Scenarios{_window_eltype(sorted), _window_ndims(sorted)}(
+        String(name),
+        sorted,
+        scenario_count,
+        resolution,
+        interval,
+    )
 end
 
 function Scenarios(;
@@ -40,7 +57,6 @@ function Scenarios(;
     resolution::Dates.Period,
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor = 1.0,
-    internal = InfrastructureSystemsInternal(),
 )
     data = handle_normalization_factor(data, normalization_factor)
 
@@ -54,7 +70,6 @@ function Scenarios(;
         scenario_count,
         resolution,
         interval,
-        internal,
     )
 end
 
@@ -86,7 +101,6 @@ function Scenarios(
         resolution = resolution,
         interval = interval,
         normalization_factor = normalization_factor,
-        internal = InfrastructureSystemsInternal(),
     )
 end
 
@@ -152,18 +166,15 @@ function Scenarios(
     src::Scenarios,
     name::AbstractString,
 )
-    # units and ext are not copied
-    internal = InfrastructureSystemsInternal(; uuid = get_uuid(src))
+    # units and ext are not copied. No shared UUID under the key-centric model.
     return Scenarios(
         name,
         src.data,
         src.scenario_count,
         src.resolution,
         src.interval,
-        internal,
     )
 end
-
 
 # Note: interval is not support in this workflow.
 
@@ -209,30 +220,6 @@ get_scenario_count(value::Scenarios) = value.scenario_count
 Get [`Scenarios`](@ref) `data`.
 """
 get_data(value::Scenarios) = value.data
-"""
-Get [`Scenarios`](@ref) `internal`.
-"""
-get_internal(value::Scenarios) = value.internal
-"""
-Set [`Scenarios`](@ref) `name`.
-"""
-set_name!(value::Scenarios, val) = value.name = val
-"""
-Set [`Scenarios`](@ref) `resolution`.
-"""
-set_resolution!(value::Scenarios, val) = value.resolution = val
-"""
-Set [`Scenarios`](@ref) `scenario_count`.
-"""
-set_scenario_count!(value::Scenarios, val) = value.scenario_count = val
-"""
-Set [`Scenarios`](@ref) `data`.
-"""
-set_data!(value::Scenarios, val) = value.data = val
-"""
-Set [`Scenarios`](@ref) `internal`.
-"""
-set_internal!(value::Scenarios, val) = value.internal = val
 
 # TODO see Deterministic
 eltype_data(forecast::Scenarios) = eltype_data_common(forecast)

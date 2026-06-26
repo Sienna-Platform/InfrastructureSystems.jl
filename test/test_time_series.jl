@@ -265,7 +265,12 @@ end
         if with_resolution && with_interval
             deterministic = IS.Deterministic(name, one_dim_data; kwargs...)
             probabilistic =
-                IS.Probabilistic(name, two_dim_data, collect(range(0.01, 0.99; length = 99)); kwargs...)
+                IS.Probabilistic(
+                    name,
+                    two_dim_data,
+                    collect(range(0.01, 0.99; length = 99));
+                    kwargs...,
+                )
             scenarios = IS.Scenarios(name, two_dim_data; kwargs...)
             for forecast in (deterministic, probabilistic, scenarios)
                 IS.add_time_series!(sys, component, forecast)
@@ -422,7 +427,12 @@ end
     component_name = "Component1"
     component = IS.TestComponent(component_name, 5)
     IS.add_component!(sys, component)
-    forecast = IS.Probabilistic(name, data_vec, collect(range(0.01, 0.99; length = 99)), resolution)
+    forecast = IS.Probabilistic(
+        name,
+        data_vec,
+        collect(range(0.01, 0.99; length = 99)),
+        resolution,
+    )
     IS.add_time_series!(sys, component, forecast)
     @test IS.has_time_series(component)
     @test IS.get_initial_timestamp(forecast) == initial_time
@@ -556,7 +566,11 @@ end
         len = 12,
     )
 
-    ts = IS.SingleTimeSeries(;
+    # Irregular timestamps with an inferred (regular) resolution are now rejected
+    # at construction: a SingleTimeSeries stores only (initial_timestamp,
+    # resolution, data) and is regular by contract, so regularity is validated
+    # against the original timestamps while they are still available.
+    @test_throws IS.ConflictingInputsError IS.SingleTimeSeries(;
         data = TimeSeries.TimeArray(
             [
                 Dates.DateTime(2020, 1, 1),
@@ -567,7 +581,6 @@ end
         ),
         name = "test",
     )
-    @test_throws IS.ConflictingInputsError IS.add_time_series!(sys, component, ts)
 
     # As of PSY 4.0, multiple resolutions are supported.
     data = TimeSeries.TimeArray(
@@ -590,21 +603,130 @@ end
     data = TimeSeries.TimeArray(range(initial_time; length = 12, step = resolution), 1:12)
     ts_name = "ts"
 
-    # resolution must be passed for irregular time series.
-    ts_invalid = IS.SingleTimeSeries(; data = data, name = ts_name)
-    @test_throws IS.ConflictingInputsError IS.add_time_series!(sys, component, ts_invalid)
+    # resolution must be passed for irregular time series; otherwise the inferred
+    # regular resolution conflicts with the calendar spacing and is rejected at
+    # construction.
+    @test_throws IS.ConflictingInputsError IS.SingleTimeSeries(;
+        data = data,
+        name = ts_name,
+    )
 
     ts1 = IS.SingleTimeSeries(; data = data, name = ts_name, resolution = resolution)
     IS.add_time_series!(sys, component, ts1)
 
-    # KNOWN PARITY GAP (Rust backend): the time-series-store represents a
-    # resolution as a fixed `Duration` (milliseconds) and cannot preserve calendar
-    # periods such as `Month`/`Year`. An irregular resolution is therefore stored as
-    # its average-millisecond length, so reconstructed timestamps drift and
-    # `start_time` indexing on an irregular resolution is unsupported. Re-enable
-    # these once the store preserves the period type (a store-model change).
+    # The store now preserves calendar periods (`Month`/`Year`) via the
+    # calendar-aware `Period` type, so an irregular resolution round-trips exactly.
     ts2_full = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
-    @test_broken IS.get_data(ts2_full) == IS.get_data(ts1)
+    @test IS.get_data(ts2_full) == IS.get_data(ts1)
+end
+
+@testset "Test SingleTimeSeries {T, N} accessors" begin
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+
+    # N = 1, Float64: get_array returns the raw Array, get_time_array rebuilds the
+    # TimeArray with the correct timestamps, and get_data aliases get_time_array.
+    vals = collect(1.0:24.0)
+    ts = IS.SingleTimeSeries("scalar", initial_time, resolution, vals)
+    @test ts isa IS.SingleTimeSeries{Float64, 1}
+    @test IS.get_array(ts) === ts.data
+    @test IS.get_array(ts) == vals
+    @test IS.get_data_type(ts) == "Float64"
+    @test IS.get_initial_timestamp(ts) == initial_time
+    @test length(ts) == 24
+    ta = IS.get_time_array(ts)
+    @test TimeSeries.values(ta) == vals
+    @test TimeSeries.timestamp(ta) ==
+          collect(range(initial_time; step = resolution, length = 24))
+    @test IS.get_data(ts) == ta  # get_data is the get_time_array alias
+
+    # Non-Float64 dtype is preserved through {T, N}.
+    its = IS.SingleTimeSeries("ints", initial_time, resolution, Int64[1, 2, 3, 4])
+    @test its isa IS.SingleTimeSeries{Int64, 1}
+    @test IS.get_data_type(its) == "Int64"
+    @test eltype(IS.get_array(its)) == Int64
+
+    # N = 2 (matrix-valued): get_array keeps the rank; get_time_array reproduces a
+    # matrix-valued TimeArray.
+    mat = reshape(collect(1.0:8.0), 4, 2)
+    mts = IS.SingleTimeSeries("matrix", initial_time, resolution, mat)
+    @test mts isa IS.SingleTimeSeries{Float64, 2}
+    @test IS.get_array(mts) == mat
+    mta = IS.get_time_array(mts)
+    @test TimeSeries.values(mta) == mat
+    @test TimeSeries.timestamp(mta)[1] == initial_time
+
+    # N > 2 has no TimeArray representation: get_time_array errors, get_array works.
+    cube = reshape(collect(1.0:24.0), 4, 2, 3)
+    cts = IS.SingleTimeSeries("cube", initial_time, resolution, cube)
+    @test cts isa IS.SingleTimeSeries{Float64, 3}
+    @test IS.get_array(cts) == cube
+    @test_throws ArgumentError IS.get_time_array(cts)
+
+    # Function-data (non-numeric T, N = 1) round-trips through the accessors.
+    fd = [IS.LinearFunctionData(Float64(i), Float64(i + 1)) for i in 1:5]
+    fts = IS.SingleTimeSeries("fd", initial_time, resolution, fd)
+    @test fts isa IS.SingleTimeSeries{IS.LinearFunctionData, 1}
+    @test IS.get_data_type(fts) == string(IS.LinearFunctionData)
+    @test IS.get_array(fts) == fd
+    @test TimeSeries.values(IS.get_time_array(fts)) == fd
+
+    # Reimplemented slicing/truncation ops keep {T, N} and the right timestamps.
+    @test IS.get_array(IS.head(ts, 3)) == vals[1:3]
+    @test IS.get_initial_timestamp(IS.head(ts, 3)) == initial_time
+    @test IS.get_array(IS.tail(ts, 2)) == vals[(end - 1):end]
+    @test IS.get_initial_timestamp(IS.tail(ts, 2)) == initial_time + resolution * 22
+    @test IS.get_array(IS.from(ts, initial_time + resolution * 2))[1] == vals[3]
+    @test IS.get_array(IS.to(ts, initial_time + resolution * 2)) == vals[1:3]
+
+    # The (src, name) copy constructor reuses the data with a new name.
+    renamed = IS.SingleTimeSeries(ts, "renamed")
+    @test IS.get_name(renamed) == "renamed"
+    @test IS.get_array(renamed) == vals
+    @test renamed isa IS.SingleTimeSeries{Float64, 1}
+end
+
+@testset "Test forecast {T, N} parameters" begin
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+
+    # Deterministic windows are vectors -> N = 1; element type drives T.
+    det_data = SortedDict(
+        initial_time => [1.0, 2.0],
+        initial_time + resolution => [3.0, 4.0],
+    )
+    det = IS.Deterministic("d", det_data, resolution, resolution)
+    @test det isa IS.Deterministic{Float64, 1}
+    @test IS.Deterministic(det, "d2") isa IS.Deterministic{Float64, 1}
+
+    # Probabilistic / Scenarios windows are matrices -> N = 2.
+    mat = reshape(collect(1.0:6.0), 3, 2)
+    prob = IS.Probabilistic(;
+        name = "p",
+        data = SortedDict(initial_time => mat),
+        resolution = resolution,
+        percentiles = [0.1, 0.9],
+    )
+    @test prob isa IS.Probabilistic{Float64, 2}
+
+    scen = IS.Scenarios(;
+        name = "s",
+        data = SortedDict(initial_time => mat),
+        scenario_count = 2,
+        resolution = resolution,
+    )
+    @test scen isa IS.Scenarios{Float64, 2}
+
+    # DeterministicSingleTimeSeries propagates {T, N} from the wrapped series.
+    sts = IS.SingleTimeSeries("u", initial_time, resolution, collect(1.0:24.0))
+    dst = IS.DeterministicSingleTimeSeries(;
+        single_time_series = sts,
+        initial_timestamp = initial_time,
+        interval = resolution,
+        count = 1,
+        horizon = 24 * resolution,
+    )
+    @test dst isa IS.DeterministicSingleTimeSeries{Float64, 1}
 end
 
 @testset "Test add SingleTimeSeries with features" begin
@@ -624,20 +746,25 @@ end
     ts = IS.SingleTimeSeries(; data = data, name = ts_name)
     IS.add_time_series!(sys, component, ts; scenario = "low", model_year = "2030")
     # get_time_series with partial query works if there is only 1.
-    @test IS.get_time_series(IS.SingleTimeSeries, component, ts_name).data == data
-    @test IS.get_time_series(
-        IS.SingleTimeSeries,
-        component,
-        ts_name;
-        scenario = "low",
-    ).data == data
-    @test IS.get_time_series(
-        IS.SingleTimeSeries,
-        component,
-        ts_name;
-        scenario = "low",
-        model_year = "2030",
-    ).data == data
+    # `.data` is now a raw `Array`; compare the rebuilt `TimeArray` via get_data.
+    @test IS.get_data(IS.get_time_series(IS.SingleTimeSeries, component, ts_name)) == data
+    @test IS.get_data(
+        IS.get_time_series(
+            IS.SingleTimeSeries,
+            component,
+            ts_name;
+            scenario = "low",
+        ),
+    ) == data
+    @test IS.get_data(
+        IS.get_time_series(
+            IS.SingleTimeSeries,
+            component,
+            ts_name;
+            scenario = "low",
+            model_year = "2030",
+        ),
+    ) == data
     @test IS.get_time_series_values(
         IS.SingleTimeSeries,
         component,
@@ -2753,7 +2880,12 @@ end
     component_name = "Component1"
     component = IS.TestComponent(component_name, 5)
     IS.add_component!(sys, component)
-    forecast = IS.Probabilistic(name, data_vec, collect(range(0.01, 0.99; length = 99)), resolution)
+    forecast = IS.Probabilistic(
+        name,
+        data_vec,
+        collect(range(0.01, 0.99; length = 99)),
+        resolution,
+    )
     IS.add_time_series!(sys, component, forecast)
     @test IS.has_time_series(component)
     @test IS.get_initial_timestamp(forecast) == initial_time

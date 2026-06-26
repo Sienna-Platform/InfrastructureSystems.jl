@@ -25,9 +25,9 @@ is unavailable.
   - `count::Int`: number of forecast windows
   - `horizon::Int`: length of this time series
 """
-mutable struct DeterministicSingleTimeSeries <: AbstractDeterministic
+struct DeterministicSingleTimeSeries{T, N} <: AbstractDeterministic
     "wrapped SingleTimeSeries object"
-    single_time_series::SingleTimeSeries
+    single_time_series::SingleTimeSeries{T, N}
     "time series availability time"
     initial_timestamp::Dates.DateTime
     "time step between forecast windows"
@@ -36,6 +36,23 @@ mutable struct DeterministicSingleTimeSeries <: AbstractDeterministic
     count::Int
     "length of this time series"
     horizon::Dates.Period
+end
+
+# `{T, N}` is propagated from the wrapped SingleTimeSeries.
+function DeterministicSingleTimeSeries(
+    single_time_series::SingleTimeSeries{T, N},
+    initial_timestamp::Dates.DateTime,
+    interval::Dates.Period,
+    count::Integer,
+    horizon::Dates.Period,
+) where {T, N}
+    return DeterministicSingleTimeSeries{T, N}(
+        single_time_series,
+        initial_timestamp,
+        interval,
+        Int(count),
+        horizon,
+    )
 end
 
 function DeterministicSingleTimeSeries(;
@@ -75,29 +92,6 @@ get_count(value::DeterministicSingleTimeSeries) = value.count
 Get [`DeterministicSingleTimeSeries`](@ref) `horizon`.
 """
 get_horizon(value::DeterministicSingleTimeSeries) = value.horizon
-
-"""
-Set [`DeterministicSingleTimeSeries`](@ref) `single_time_series`.
-"""
-set_single_time_series!(value::DeterministicSingleTimeSeries, val) =
-    value.single_time_series = val
-"""
-Set [`DeterministicSingleTimeSeries`](@ref) `initial_timestamp`.
-"""
-set_initial_timestamp!(value::DeterministicSingleTimeSeries, val) =
-    value.initial_timestamp = val
-"""
-Set [`DeterministicSingleTimeSeries`](@ref) `interval`.
-"""
-set_interval!(value::DeterministicSingleTimeSeries, val) = value.interval = val
-"""
-Set [`DeterministicSingleTimeSeries`](@ref) `count`.
-"""
-set_count!(value::DeterministicSingleTimeSeries, val) = value.count = val
-"""
-Set [`DeterministicSingleTimeSeries`](@ref) `horizon`.
-"""
-set_horizon!(value::DeterministicSingleTimeSeries, val) = value.horizon = val
 
 eltype_data(ts::DeterministicSingleTimeSeries) = eltype_data(ts.single_time_series)
 

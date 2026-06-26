@@ -643,7 +643,7 @@ end
                 component = IS.get_component(IS.TestComponent, sys, name)
                 @test !isnothing(component)
                 ts = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
-                @test ts.data == expected_array
+                @test IS.get_data(ts) == expected_array
             end
         end
     end
@@ -677,7 +677,7 @@ end
         )
 
         ts = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
-        @test ts.data == ta
+        @test IS.get_data(ts) == ta
     end
 end
 
@@ -735,7 +735,7 @@ end
         sys2 = deepcopy(sys)
         component2 = IS.get_component(IS.TestComponent, sys2, name)
         ts2 = IS.get_time_series(IS.SingleTimeSeries, component2, ts_name)
-        @test ts2.data == array
+        @test IS.get_data(ts2) == array
     end
 end
 

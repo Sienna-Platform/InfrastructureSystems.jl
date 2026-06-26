@@ -932,6 +932,17 @@ function copy_time_series!(
     end
 end
 
+# Return a copy of `ts` carrying `new_name`. `SingleTimeSeries` is immutable, so it
+# is rebuilt through its copy constructor (the content-addressed array is reused);
+# the still-mutable forecast types are deep-copied and renamed in place.
+_copy_time_series_with_name(ts::SingleTimeSeries, new_name) = SingleTimeSeries(ts, new_name)
+
+function _copy_time_series_with_name(ts, new_name)
+    ts = deepcopy(ts)
+    set_name!(ts, new_name)
+    return ts
+end
+
 function _copy_time_series!(
     dst::TimeSeriesOwners,
     src::TimeSeriesOwners;
@@ -969,8 +980,7 @@ function _copy_time_series!(
             feats...,
         )
         if new_name != name
-            ts = deepcopy(ts)
-            setproperty!(ts, :name, new_name)
+            ts = _copy_time_series_with_name(ts, new_name)
         end
         add_time_series!(mgr, dst, ts; feats...)
     end

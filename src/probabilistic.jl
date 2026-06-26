@@ -19,18 +19,35 @@ A Probabilistic forecast for a particular data field in a Component.
   - `data::SortedDict`: timestamp - scalingfactor
   - `internal::InfrastructureSystemsInternal`
 """
-mutable struct Probabilistic <: Forecast
+struct Probabilistic{T, N} <: Forecast
     "user-defined name"
     name::String
-    "timestamp - scalingfactor"
-    data::SortedDict  # TODO see note in Deterministic
+    "timestamp - scalingfactor (per-window arrays of rank `N`)"
+    data::SortedDict{Dates.DateTime, Array{T, N}}
     "Percentiles for the probabilistic forecast"
     percentiles::Vector{Float64}
     "forecast resolution"
     resolution::Dates.Period
     "forecast interval"
     interval::Dates.Period
-    internal::InfrastructureSystemsInternal
+end
+
+# Infer `{T, N}` — element type and per-window array rank — from the data.
+function Probabilistic(
+    name::AbstractString,
+    data::AbstractDict{Dates.DateTime},
+    percentiles,
+    resolution::Dates.Period,
+    interval::Dates.Period,
+)
+    sorted = data isa SortedDict ? data : SortedDict(data...)
+    return Probabilistic{_window_eltype(sorted), _window_ndims(sorted)}(
+        String(name),
+        sorted,
+        Vector{Float64}(percentiles),
+        resolution,
+        interval,
+    )
 end
 
 function Probabilistic(;
@@ -40,7 +57,6 @@ function Probabilistic(;
     interval::Union{Nothing, Dates.Period} = nothing,
     percentiles,
     normalization_factor = 1.0,
-    internal = InfrastructureSystemsInternal(),
 )
     data = handle_normalization_factor(convert_data(data), normalization_factor)
     quantile_count = size(first(values(data)))[2]
@@ -62,7 +78,6 @@ function Probabilistic(;
         percentiles,
         resolution,
         interval,
-        internal,
     )
 end
 
@@ -96,7 +111,6 @@ function Probabilistic(
         resolution = resolution,
         interval = interval,
         normalization_factor = normalization_factor,
-        internal = InfrastructureSystemsInternal(),
     )
 end
 
@@ -199,15 +213,13 @@ function Probabilistic(
     src::Probabilistic,
     name::AbstractString,
 )
-    # units and ext are not copied
-    internal = InfrastructureSystemsInternal(; uuid = get_uuid(src))
+    # units and ext are not copied. No shared UUID under the key-centric model.
     return Probabilistic(
         name,
         src.data,
         src.percentiles,
         src.resolution,
         src.interval,
-        internal,
     )
 end
 
@@ -239,31 +251,6 @@ get_percentiles(value::Probabilistic) = value.percentiles
 Get [`Probabilistic`](@ref) `data`.
 """
 get_data(value::Probabilistic) = value.data
-"""
-Get [`Probabilistic`](@ref) `internal`.
-"""
-get_internal(value::Probabilistic) = value.internal
-
-"""
-Set [`Probabilistic`](@ref) `name`.
-"""
-set_name!(value::Probabilistic, val) = value.name = val
-"""
-Set [`Probabilistic`](@ref) `resolution`.
-"""
-set_resolution!(value::Probabilistic, val) = value.resolution = val
-"""
-Set [`Probabilistic`](@ref) `percentiles`.
-"""
-set_percentiles!(value::Probabilistic, val) = value.percentiles = val
-"""
-Set [`Probabilistic`](@ref) `data`.
-"""
-set_data!(value::Probabilistic, val) = value.data = val
-"""
-Set [`Probabilistic`](@ref) `internal`.
-"""
-set_internal!(value::Probabilistic, val) = value.internal = val
 
 function get_array_for_hdf(forecast::Probabilistic)
     interval_count = get_count(forecast)

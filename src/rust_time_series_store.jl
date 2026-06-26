@@ -261,7 +261,8 @@ function serialize_single!(
 )
     # Encode the values: scalars stay 1-D; FunctionData becomes a (length, k)
     # Float64 matrix. The logical-type tag drives reconstruction on read.
-    arr, logical = _storage_array(TimeSeries.values(get_data(sts)))
+    # `get_array` returns the raw `Array{T, N}` (no TimeArray allocation).
+    arr, logical = _storage_array(get_array(sts))
     # `name` is carried on the binding struct (matching the
     # InfrastructureSystems.jl object shape), not on add_time_series!.
     tss_ts = TSS.SingleTimeSeries(
@@ -318,11 +319,14 @@ function get_single(
         get_metadata(store, owner_id, owner_category, name;
             resolution = resolution, features = features)
     values = _read_values(store, meta.data_hash, meta.logical_type, meta.dtype, meta.length)
-    timestamps = range(meta.initial_timestamp; length = meta.length, step = meta.resolution)
-    sts = SingleTimeSeries(;
-        name = String(name),
-        data = TimeSeries.TimeArray(collect(timestamps), values),
-        resolution = meta.resolution,
+    # Construct directly from the decoded array (no TimeArray hop). `{T, N}` is
+    # recovered from the array's eltype/ndims; `logical_type` already drove the
+    # domain-type decode in `_read_values`.
+    sts = SingleTimeSeries(
+        String(name),
+        meta.initial_timestamp,
+        meta.resolution,
+        values,
     )
     return sts
 end
@@ -554,11 +558,11 @@ function _rust_get_time_series(
     end
     vals = full[index:(index + n - 1)]
     t0 = meta.initial_timestamp + meta.resolution * (index - 1)
-    timestamps = range(t0; length = n, step = meta.resolution)
-    sts = SingleTimeSeries(;
-        name = String(name),
-        data = TimeSeries.TimeArray(collect(timestamps), vals),
-        resolution = meta.resolution,
+    sts = SingleTimeSeries(
+        String(name),
+        t0,
+        meta.resolution,
+        vals,
     )
     return sts
 end
