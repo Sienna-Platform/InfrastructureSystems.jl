@@ -144,71 +144,6 @@ function open_time_series_store!(
 end
 
 """
-Adds time_series from a metadata file or metadata descriptors.
-
-# Arguments
-
-  - `data::SystemData`: system
-  - `::Type{T}`: type of the component associated with time series data; may be abstract
-  - `metadata_file::AbstractString`: metadata file for time series
-    that includes an array of TimeSeriesFileMetadata instances or a vector.
-  - `resolution::DateTime.Period=nothing`: skip time_series that don't match this resolution.
-"""
-function add_time_series_from_file_metadata!(
-    data::SystemData,
-    ::Type{T},
-    metadata_file::AbstractString;
-    resolution = nothing,
-) where {T <: InfrastructureSystemsComponent}
-    metadata = read_time_series_file_metadata(metadata_file)
-    return add_time_series_from_file_metadata!(data, T, metadata; resolution = resolution)
-end
-
-"""
-Adds time series data from a metadata file or metadata descriptors.
-
-# Arguments
-
-  - `data::SystemData`: system
-  - `file_metadata::Vector{TimeSeriesFileMetadata}`: metadata for time series
-  - `resolution::DateTime.Period=nothing`: skip time_series that don't match this resolution.
-"""
-function add_time_series_from_file_metadata!(
-    data::SystemData,
-    component_type::Type{<:InfrastructureSystemsComponent},
-    file_metadata::Vector{TimeSeriesFileMetadata};
-    resolution = nothing,
-)
-    return bulk_add_time_series!(
-        data,
-        _get_ts_associations_from_metadata(data, component_type, file_metadata, resolution),
-    )
-end
-
-function _get_ts_associations_from_metadata(
-    data::SystemData,
-    component_type::Type{<:InfrastructureSystemsComponent},
-    file_metadata,
-    resolution,
-)
-    Channel() do channel
-        cache = TimeSeriesParsingCache()
-        for metadata in file_metadata
-            if resolution === nothing || metadata.resolution == resolution
-                for association in add_time_series_from_file_metadata_internal!(
-                    data,
-                    component_type,
-                    cache,
-                    metadata,
-                )
-                    put!(channel, association)
-                end
-            end
-        end
-    end
-end
-
-"""
 Add time series data to a component or supplemental attribute.
 
 # Arguments
@@ -275,20 +210,6 @@ function add_time_series!(
     end
 
     return key
-end
-
-function add_time_series_from_file_metadata_internal!(
-    data::SystemData,
-    ::Type{T},
-    cache::TimeSeriesParsingCache,
-    file_metadata::TimeSeriesFileMetadata,
-) where {T <: InfrastructureSystemsComponent}
-    TimerOutputs.@timeit_debug SYSTEM_TIMERS "add_time_series_from_file_metadata_internal" begin
-        set_component!(file_metadata, data, InfrastructureSystems)
-        time_series = make_time_series!(cache, file_metadata)
-        add_assignment!(cache, file_metadata)
-        return [TimeSeriesAssociation(file_metadata.component, time_series)]
-    end
 end
 
 """
@@ -849,37 +770,6 @@ function _check_single_time_series_transformed_parameters(
         interval = desired_interval,
         resolution = resolution,
     )
-end
-
-"""
-Set the component value in metadata by looking up the category in module.
-This requires that category be a string version of a component's abstract type.
-Modules can override for custom behavior.
-"""
-function set_component!(metadata::TimeSeriesFileMetadata, data::SystemData, mod::Module)
-    category = getproperty(mod, Symbol(metadata.category))
-    if isconcretetype(category)
-        metadata.component =
-            get_component(category, data.components, metadata.component_name)
-        if isnothing(metadata.component)
-            @warn "no component category=$category name=$(metadata.component_name)"
-        end
-    else
-        # Note: this could dispatch to higher-level modules that reimplement it.
-        components = get_components_by_name(category, data, metadata.component_name)
-        if length(components) == 0
-            @warn "no component category=$category name=$(metadata.component_name)"
-            metadata.component = nothing
-        elseif length(components) == 1
-            metadata.component = components[1]
-        else
-            throw(
-                DataFormatError(
-                    "duplicate names type=$(category) name=$(metadata.component_name)",
-                ),
-            )
-        end
-    end
 end
 
 """

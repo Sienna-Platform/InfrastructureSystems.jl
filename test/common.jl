@@ -10,12 +10,16 @@ function create_system_data(;
     IS.add_component!(data, component)
 
     if with_time_series
-        file = joinpath(FORECASTS_DIR, "ComponentsAsColumnsNoTime.json")
-        IS.add_time_series_from_file_metadata!(
-            data,
-            IS.InfrastructureSystemsComponent,
-            file,
+        # Start at the current day to match the behavior previously provided by the
+        # CSV-based `ComponentsAsColumnsNoTime` parser, which some tests rely on.
+        sts_resolution = Dates.Hour(1)
+        sts_initial_time = Dates.DateTime(Dates.today())
+        sts_data = TimeSeries.TimeArray(
+            range(sts_initial_time; length = 24, step = sts_resolution),
+            ones(24),
         )
+        ts = IS.SingleTimeSeries(; name = "val", data = sts_data)
+        IS.add_time_series!(data, component, ts)
 
         resolution = Dates.Hour(1)
         it1 = Dates.DateTime("2020-09-01")

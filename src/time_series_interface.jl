@@ -1044,33 +1044,6 @@ function throw_if_does_not_support_time_series(owner::TimeSeriesOwners)
     end
 end
 
-"""
-Return a time series from TimeSeriesFileMetadata.
-
-# Arguments
-
-  - `cache::TimeSeriesParsingCache`: cached data
-  - `ts_file_metadata::TimeSeriesFileMetadata`: metadata
-  - `resolution::{Nothing, Dates.Period}`: skip any time_series that don't match this resolution
-"""
-function make_time_series!(
-    cache::TimeSeriesParsingCache,
-    ts_file_metadata::TimeSeriesFileMetadata,
-)
-    info = add_time_series_info!(cache, ts_file_metadata)
-    return ts_file_metadata.time_series_type(info)
-end
-
-function add_time_series_info!(
-    cache::TimeSeriesParsingCache,
-    metadata::TimeSeriesFileMetadata,
-)
-    time_series = _add_time_series_info!(cache, metadata)
-    info = TimeSeriesParsedInfo(metadata, time_series)
-    @debug "Added TimeSeriesParsedInfo" _group = LOG_GROUP_TIME_SERIES metadata
-    return info
-end
-
 function get_forecast_window_count(
     initial_timestamp::Dates.DateTime,
     interval::Dates.Period,

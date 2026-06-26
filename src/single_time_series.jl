@@ -189,36 +189,6 @@ function SingleTimeSeries(
 end
 
 """
-Construct SingleTimeSeries from a CSV file. The file must have a column that is the name of the
-component.
-
-# Arguments
-
-  - `name::AbstractString`: user-defined name
-  - `filename::AbstractString`: name of CSV file containing data
-  - `component::InfrastructureSystemsComponent`: component associated with the data
-  - `resolution::Dates.Period`: resolution of the time series
-  - `normalization_factor::NormalizationFactor = 1.0`: optional normalization factor to apply
-    to each data entry
-"""
-function SingleTimeSeries(
-    name::AbstractString,
-    filename::AbstractString,
-    component::InfrastructureSystemsComponent,
-    resolution::Dates.Period;
-    normalization_factor::NormalizationFactor = 1.0,
-)
-    component_name = get_name(component)
-    raw = read_time_series(SingleTimeSeries, filename, component_name)
-    ta = make_time_array(raw, component_name, resolution)
-    return SingleTimeSeries(;
-        name = name,
-        data = ta,
-        normalization_factor = normalization_factor,
-    )
-end
-
-"""
 Construct SingleTimeSeries of constant `1.0` values from `initial_time` and
 `time_steps`.
 """
@@ -244,15 +214,6 @@ function SingleTimeSeries(time_series::AbstractVector{<:SingleTimeSeries})
     )
     @debug "concatenated time_series" LOG_GROUP_TIME_SERIES time_series
     return time_series
-end
-
-function SingleTimeSeries(info::TimeSeriesParsedInfo)
-    data = make_time_array(info)
-    return SingleTimeSeries(;
-        name = info.name,
-        data = data,
-        normalization_factor = info.normalization_factor,
-    )
 end
 
 function check_time_series_data(ts::SingleTimeSeries)

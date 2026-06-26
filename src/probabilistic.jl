@@ -171,39 +171,6 @@ function Probabilistic(
 end
 
 """
-Construct Deterministic from RawTimeSeries.
-"""
-function Probabilistic(
-    name::AbstractString,
-    series_data::RawTimeSeries,
-    percentiles::Vector,
-    resolution::Dates.Period;
-    interval::Union{Nothing, Dates.Period} = nothing,
-    normalization_factor::NormalizationFactor = 1.0,
-)
-    return Probabilistic(;
-        name = name,
-        data = series_data.data,
-        percentiles = percentiles,
-        resolution = resolution,
-        interval = interval,
-        normalization_factor = normalization_factor,
-    )
-end
-
-# Note: interval is not support in this workflow.
-
-function Probabilistic(info::TimeSeriesParsedInfo)
-    return Probabilistic(;
-        name = info.name,
-        data = info.data,
-        percentiles = info.percentiles,
-        resolution = info.resolution,
-        normalization_factor = info.normalization_factor,
-    )
-end
-
-"""
 Construct a Probabilistic that shares the data from an existing instance.
 
 This is useful in cases where you want a component to use the same time series data for

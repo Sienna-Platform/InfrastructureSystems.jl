@@ -7,7 +7,6 @@ export LinearCurve, QuadraticCurve
 export PiecewisePointCurve, PiecewiseIncrementalCurve, PiecewiseAverageCurve
 
 import Base: @kwdef
-import CSV
 import DataFrames
 import DataFrames: DataFrame
 import Dates
@@ -170,7 +169,7 @@ export get_resolution
 export get_scenario_count
 export get_time_series_type
 export set_name!
-include("time_series_parser.jl")
+include("time_series_normalization.jl")
 include("single_time_series.jl")
 include("deterministic_single_time_series.jl")
 include("deterministic.jl")
@@ -178,7 +177,6 @@ include("probabilistic.jl")
 include("scenarios.jl")
 include("deterministic_metadata.jl")
 include("time_series_structs.jl")
-include("time_series_formats.jl")
 include("time_series_manager.jl")
 include("time_series_interface.jl")
 include("rust_time_series_store.jl")

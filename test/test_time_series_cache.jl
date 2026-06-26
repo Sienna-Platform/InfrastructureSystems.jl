@@ -3,8 +3,15 @@
     name = "Component1"
     component = IS.TestComponent(name, 5)
     IS.add_component!(sys, component)
-    file = joinpath(FORECASTS_DIR, "DateTimeAsColumnDeterministic.csv")
-    forecast = IS.Deterministic("test", file, component, Dates.Hour(1))
+    resolution = Dates.Hour(1)
+    first_timestamp = Dates.DateTime("2020-01-01T00:00:00")
+    horizon_count = 24
+    window_count = 168
+    data = SortedDict(
+        first_timestamp + (i - 1) * resolution => ones(horizon_count) for
+        i in 1:window_count
+    )
+    forecast = IS.Deterministic(; name = "test", data = data, resolution = resolution)
     initial_timestamp = IS.get_initial_timestamp(forecast)
     initial_times = collect(IS.get_initial_times(forecast))
     interval = IS.get_interval(forecast)
@@ -248,7 +255,8 @@ end
     component_name = "Component1"
     component = IS.TestComponent(component_name, 5)
     IS.add_component!(sys, component)
-    forecast = IS.Probabilistic(name, data, collect(range(0.01, 0.99; length = 99)), resolution)
+    forecast =
+        IS.Probabilistic(name, data, collect(range(0.01, 0.99; length = 99)), resolution)
     IS.add_time_series!(sys, component, forecast)
 
     # Iterate over all initial times with custom cache size.
@@ -270,9 +278,15 @@ end
     name = "Component1"
     component = IS.TestComponent(name, 5)
     IS.add_component!(sys, component)
-    file = joinpath(FORECASTS_DIR, "DateTimeAsColumnDeterministic.csv")
     resolution = Dates.Hour(1)
-    forecast = IS.Deterministic("test", file, component, resolution)
+    first_timestamp = Dates.DateTime("2020-01-01T00:00:00")
+    horizon_count = 24
+    window_count = 168
+    data = SortedDict(
+        first_timestamp + (i - 1) * resolution => ones(horizon_count) for
+        i in 1:window_count
+    )
+    forecast = IS.Deterministic(; name = "test", data = data, resolution = resolution)
     initial_timestamp = IS.get_initial_timestamp(forecast)
     initial_times = collect(IS.get_initial_times(forecast))
     interval = IS.get_interval(forecast)

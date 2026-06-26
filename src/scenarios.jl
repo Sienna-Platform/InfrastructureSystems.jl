@@ -176,17 +176,6 @@ function Scenarios(
     )
 end
 
-# Note: interval is not support in this workflow.
-
-function Scenarios(info::TimeSeriesParsedInfo)
-    return Scenarios(
-        info.name,
-        info.data,
-        info.resolution;
-        normalization_factor = info.normalization_factor,
-    )
-end
-
 function get_array_for_hdf(forecast::Scenarios)
     interval_count = get_count(forecast)
     scenario_count = get_scenario_count(forecast)

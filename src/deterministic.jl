@@ -137,67 +137,6 @@ function Deterministic(
 end
 
 """
-Construct Deterministic from a CSV file. The first column must be a timestamp in
-DateTime format and the columns the values in the forecast window.
-
-# Arguments
-
-  - `name::AbstractString`: user-defined name
-  - `filename::AbstractString`: name of CSV file containing data
-  - `component::InfrastructureSystemsComponent`: component associated with the data
-  - `normalization_factor::NormalizationFactor = 1.0`: optional normalization factor to apply
-    to each data entry
-"""
-function Deterministic(
-    name::AbstractString,
-    filename::AbstractString,
-    component::InfrastructureSystemsComponent,
-    resolution::Dates.Period;
-    interval::Union{Nothing, Dates.Period} = nothing,
-    normalization_factor::NormalizationFactor = 1.0,
-)
-    component_name = get_name(component)
-    raw_data = read_time_series(Deterministic, filename, component_name)
-    return Deterministic(
-        name,
-        raw_data,
-        resolution;
-        interval = interval,
-        normalization_factor = normalization_factor,
-    )
-end
-
-"""
-Construct Deterministic from RawTimeSeries.
-"""
-function Deterministic(
-    name::AbstractString,
-    series_data::RawTimeSeries,
-    resolution::Dates.Period;
-    interval::Union{Nothing, Dates.Period} = nothing,
-    normalization_factor::NormalizationFactor = 1.0,
-)
-    return Deterministic(;
-        name = name,
-        data = series_data.data,
-        resolution = resolution,
-        interval = interval,
-        normalization_factor = normalization_factor,
-    )
-end
-
-# Note: interval is not supported in this workflow.
-
-function Deterministic(info::TimeSeriesParsedInfo)
-    return Deterministic(
-        info.name,
-        info.data,
-        info.resolution;
-        normalization_factor = info.normalization_factor,
-    )
-end
-
-"""
 Construct a new Deterministic from an existing instance and a subset of data.
 """
 function Deterministic(forecast::Deterministic, data)

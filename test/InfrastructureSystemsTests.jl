@@ -26,8 +26,6 @@ Aqua.test_deps_compat(InfrastructureSystems)
 
 const BASE_DIR =
     abspath(joinpath(dirname(Base.find_package("InfrastructureSystems")), ".."))
-const DATA_DIR = joinpath(BASE_DIR, "test", "data")
-const FORECASTS_DIR = joinpath(DATA_DIR, "time_series")
 
 const LOG_FILE = "infrastructure-systems.log"
 
