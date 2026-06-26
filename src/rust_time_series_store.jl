@@ -697,11 +697,17 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
         features = Dict{String, Any}(feats))
 end
 
-# Validate `start_time` / `count` against a forecast's `total_count` windows
-# (spaced by `interval` from `initial_timestamp`) and return the 1-based window
-# index range `(start_idx, n)` to keep. Throws ArgumentError if `start_time` is
-# not a window boundary or the requested range exceeds what is stored.
-function _forecast_window_range(initial_timestamp, interval, total_count, start_time, count)
+# Translate IS's `start_time` / `count` window selection into the core's
+# half-open `[start, end)` `time_range`, validated against the forecast's stored
+# window grid (`initial_timestamp + k·interval`, `total_count` windows). Returns
+# `nothing` when no slice is requested (read every window). Throws ArgumentError
+# on a misaligned `start_time` or an out-of-range / oversized request — the store
+# would otherwise silently truncate an over-request rather than error. The
+# computed range is pushed into `get_time_series`, so the store slices the
+# windows server-side instead of returning all of them for us to discard.
+function _forecast_time_range(initial_timestamp, interval, total_count, start_time, count)
+    isnothing(start_time) && isnothing(count) && return nothing
+
     if isnothing(start_time)
         start_idx = 1
     else
@@ -728,7 +734,10 @@ function _forecast_window_range(initial_timestamp, interval, total_count, start_
                 "$total_count stored forecast windows"),
         )
     end
-    return start_idx, n
+
+    start_ts = initial_timestamp + interval * (start_idx - 1)
+    end_ts = initial_timestamp + interval * (start_idx - 1 + n)  # exclusive
+    return (start_ts, end_ts)
 end
 
 """Reconstruct a forecast from the Rust store (matches the STORED type),
@@ -758,17 +767,13 @@ function _rust_get_forecast(
     if has_typed(store, owner_id, category, name, TSS.TS_TYPE_PROBABILISTIC;
         resolution = resolution, features = feats)
         # `.data` is the canonical (percentile_count, horizon_count, count) array.
+        tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
+            get_count(matched), start_time, count)
         p = TSS.get_time_series(TSS.Probabilistic, store.inner, owner_id, category, name;
-            resolution = resolution, features = feats)
-        s, n = _forecast_window_range(
-            p.initial_timestamp,
-            p.interval,
-            p.count,
-            start_time,
-            count,
-        )
+            resolution = resolution, features = feats, time_range = tr)
+        # `p` is already sliced to the requested window range by the store.
         data = SortedDict{Dates.DateTime, Matrix{Float64}}()
-        for i in s:(s + n - 1)
+        for i in 1:(p.count)
             data[p.initial_timestamp + p.interval * (i - 1)] =
                 _truncate(permutedims(p.data[:, :, i]))
         end
@@ -779,15 +784,10 @@ function _rust_get_forecast(
     elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_DETERMINISTIC;
         resolution = resolution, features = feats)
         # `.data` is the canonical (horizon_count, count) array.
+        tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
+            get_count(matched), start_time, count)
         d = TSS.get_time_series(TSS.Deterministic, store.inner, owner_id, category, name;
-            resolution = resolution, features = feats)
-        s, n = _forecast_window_range(
-            d.initial_timestamp,
-            d.interval,
-            d.count,
-            start_time,
-            count,
-        )
+            resolution = resolution, features = feats, time_range = tr)
         fmeta = TSS.get_forecast_metadata(store.inner, owner_id, category, name,
             TSS.TS_TYPE_DETERMINISTIC; resolution = resolution, features = feats)
         logical = fmeta.logical_type  # `nothing` for scalar windows
@@ -798,9 +798,10 @@ function _rust_get_forecast(
                 _decode_forecast_window(d.data, logical, i)
             end,
         )
+        # `d` is already sliced to the requested window range by the store.
         data = SortedDict(
             d.initial_timestamp + d.interval * (i - 1) => window(i)
-            for i in s:(s + n - 1)
+            for i in 1:(d.count)
         )
         result = Deterministic(; name = String(name), data = data,
             resolution = d.resolution, interval = d.interval)
@@ -809,16 +810,11 @@ function _rust_get_forecast(
         resolution = resolution, features = feats)
         # A DST shares the underlying SingleTimeSeries array; rebuild that series
         # and wrap it with the DST windowing parameters (read as a Deterministic).
+        tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
+            get_count(matched), start_time, count)
         d = TSS.get_time_series(TSS.DeterministicSingleTimeSeries, store.inner, owner_id,
             category, name;
-            resolution = resolution, features = feats)
-        s, n = _forecast_window_range(
-            d.initial_timestamp,
-            d.interval,
-            d.count,
-            start_time,
-            count,
-        )
+            resolution = resolution, features = feats, time_range = tr)
         # A DST is a view over the shared SingleTimeSeries array; its windows
         # cannot be truncated, so a partial `len` is rejected.
         if !isnothing(len)
@@ -831,23 +827,27 @@ function _rust_get_forecast(
         end
         sts = get_single(store, owner_id, category, name;
             resolution = resolution, features = feats)
+        # `d` is already sliced: its `initial_timestamp` / `count` describe the
+        # requested window range over the (full) shared SingleTimeSeries array.
         # When a single window spans the whole series (count == 1 and the interval
         # equals the horizon), IS represents the interval as `Second(0)`; otherwise
         # the stored interval is kept.
-        result_interval = (n == 1 && d.interval == d.horizon) ? Dates.Second(0) : d.interval
+        result_interval =
+            (d.count == 1 && d.interval == d.horizon) ? Dates.Second(0) : d.interval
         # DeterministicSingleTimeSeries has no internal UUID, so none is assigned.
         return DeterministicSingleTimeSeries(; single_time_series = sts,
-            initial_timestamp = d.initial_timestamp + d.interval * (s - 1),
-            interval = result_interval, count = n, horizon = d.horizon)
+            initial_timestamp = d.initial_timestamp,
+            interval = result_interval, count = d.count, horizon = d.horizon)
     elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_SCENARIOS;
         resolution = resolution, features = feats)
         # `.data` is the canonical (scenario_count, horizon_count, count) array.
+        tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
+            get_count(matched), start_time, count)
         s_ts = TSS.get_time_series(TSS.Scenarios, store.inner, owner_id, category, name;
-            resolution = resolution, features = feats)
-        s, n = _forecast_window_range(s_ts.initial_timestamp, s_ts.interval, s_ts.count,
-            start_time, count)
+            resolution = resolution, features = feats, time_range = tr)
+        # `s_ts` is already sliced to the requested window range by the store.
         data = SortedDict{Dates.DateTime, Matrix{Float64}}()
-        for i in s:(s + n - 1)
+        for i in 1:(s_ts.count)
             data[s_ts.initial_timestamp + s_ts.interval * (i - 1)] =
                 _truncate(permutedims(s_ts.data[:, :, i]))
         end
