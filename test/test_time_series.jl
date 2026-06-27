@@ -4987,3 +4987,62 @@ end
         resolution = resolution,
     )
 end
+
+@testset "Test time series content hash and sharing" begin
+    sys = IS.SystemData()
+    c1 = IS.TestComponent("c1", 5)
+    c2 = IS.TestComponent("c2", 5)
+    c3 = IS.TestComponent("c3", 5)
+    foreach(c -> IS.add_component!(sys, c), (c1, c2, c3))
+
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+    shared = ones(48)
+    mk(vals) = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = length(vals), step = resolution), vals),
+        name = "load")
+
+    k1 = IS.add_time_series!(sys, c1, mk(copy(shared)))
+    k2 = IS.add_time_series!(sys, c2, mk(copy(shared)))      # identical -> deduped
+    k3 = IS.add_time_series!(sys, c3, mk(collect(1.0:48.0))) # distinct array
+
+    h1 = IS.get_time_series_hash(c1, k1)
+    h2 = IS.get_time_series_hash(c2, k2)
+    h3 = IS.get_time_series_hash(c3, k3)
+
+    # Hashes identify the stored array: shared data hashes equal, distinct differs.
+    @test h1 isa String
+    @test length(h1) == 64
+    @test h1 == h2
+    @test h1 != h3
+
+    # A DeterministicSingleTimeSeries shares the underlying SingleTimeSeries array,
+    # so it reports the same hash. transform_single_time_series! is system-wide, so
+    # every component's STS gains a DST over its own (shared) array.
+    IS.transform_single_time_series!(
+        sys, IS.DeterministicSingleTimeSeries, Dates.Hour(6), Dates.Hour(6))
+    dst_key = only(
+        IS.get_time_series_keys(c1; time_series_type = IS.DeterministicSingleTimeSeries))
+    @test IS.get_time_series_hash(c1, dst_key) == h1
+
+    # System-wide grouping: one entry per stored array, listing every (owner, key).
+    groups = IS.get_shared_time_series(sys)
+    @test groups isa Dict
+    @test Set(keys(groups)) == Set([h1, h3])
+    # Array A is referenced by c1 and c2, each via an STS and a derived DST (4 pairs).
+    @test Set(IS.get_name(o) for (o, _) in groups[h1]) == Set(["c1", "c2"])
+    @test length(groups[h1]) == 4
+    # Array B is c3's STS plus its derived DST.
+    @test Set(IS.get_name(o) for (o, _) in groups[h3]) == Set(["c3"])
+    @test length(groups[h3]) == 2
+    for (o, k) in groups[h1]
+        @test k isa IS.TimeSeriesKey
+        @test IS.get_time_series_hash(o, k) == h1
+    end
+
+    # A key with no matching stored array (an owner that has none) raises.
+    c4 = IS.TestComponent("c4", 5)
+    IS.add_component!(sys, c4)
+    @test_throws IS.RustTimeSeriesNotFound IS.get_time_series_hash(c4, k1)
+end

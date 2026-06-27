@@ -511,11 +511,19 @@ function compare_values(
     return get_counts(x) == get_counts(y)
 end
 
-# ---- TimeSeriesManager routing (SingleTimeSeries only) ---------------------
+# ---- TimeSeriesManager routing ---------------------------------------------
+
+# Validate the raw time series array before storing. A DeterministicSingleTimeSeries
+# is a derived view over an already-validated SingleTimeSeries (it has no raw
+# `get_data`), so it skips the check.
+_rust_check_time_series_data(time_series::TimeSeriesData) =
+    check_time_series_data(time_series)
+_rust_check_time_series_data(::DeterministicSingleTimeSeries) = nothing
 
 """
-Route a manager-level `add_time_series!` to the Rust store. Only SingleTimeSeries
-is supported; data identity is the array content hash (no `time_series_uuid`).
+Route a manager-level `add_time_series!` to the Rust store, dispatching on the
+concrete time series type. Data identity is the array content hash (no
+`time_series_uuid`).
 """
 function _rust_add_time_series!(
     mgr::TimeSeriesManager,
@@ -524,20 +532,37 @@ function _rust_add_time_series!(
     features...,
 )
     throw_if_does_not_support_time_series(owner)
-    # A DeterministicSingleTimeSeries is a derived view over an already-validated
-    # SingleTimeSeries (it has no raw `get_data`), so it skips the data check.
-    time_series isa DeterministicSingleTimeSeries || check_time_series_data(time_series)
-    if time_series isa Forecast
-        return _rust_add_forecast!(mgr, owner, time_series; features...)
-    elseif time_series isa NonSequentialTimeSeries
-        return _rust_add_non_sequential!(mgr, owner, time_series; features...)
-    end
-    time_series isa SingleTimeSeries ||
-        error(
-            "Rust backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
-            "Deterministic, DeterministicSingleTimeSeries, Probabilistic, and Scenarios " *
-            "(got $(typeof(time_series)))",
-        )
+    _rust_check_time_series_data(time_series)
+    return _rust_add!(mgr, owner, time_series; features...)
+end
+
+# Dispatch on the concrete series type. Forecasts (including
+# DeterministicSingleTimeSeries) and NonSequentialTimeSeries route to their
+# dedicated handlers; SingleTimeSeries is stored below; anything else is
+# unsupported on the Rust backend.
+_rust_add!(mgr::TimeSeriesManager, owner::TimeSeriesOwners, ts::Forecast; features...) =
+    _rust_add_forecast!(mgr, owner, ts; features...)
+
+_rust_add!(
+    mgr::TimeSeriesManager,
+    owner::TimeSeriesOwners,
+    ts::NonSequentialTimeSeries;
+    features...,
+) = _rust_add_non_sequential!(mgr, owner, ts; features...)
+
+_rust_add!(::TimeSeriesManager, ::TimeSeriesOwners, ts::TimeSeriesData; features...) =
+    error(
+        "Rust backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
+        "Deterministic, DeterministicSingleTimeSeries, Probabilistic, and Scenarios " *
+        "(got $(typeof(ts)))",
+    )
+
+function _rust_add!(
+    mgr::TimeSeriesManager,
+    owner::TimeSeriesOwners,
+    time_series::SingleTimeSeries;
+    features...,
+)
     store = mgr.data_store::RustTimeSeriesStore
     owner_id, owner_type, owner_category = _rust_owner_args(owner)
     category = _tss_category(owner_category)
@@ -1257,6 +1282,45 @@ end
 
 # `get_time_series_keys` for an owner. `_rust_owner_list_metadata` already returns keys.
 _rust_get_time_series_keys(owner::TimeSeriesOwners) = _rust_owner_list_metadata(owner)
+
+# Content hash (hex) of the array `key` resolves to under `owner`. Narrows the
+# catalog to the owner + the key's type/name in one query, then matches the exact
+# resolution + features in-memory (Period equality, as in `_rust_list_metadata`).
+function _rust_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
+    mgr = get_time_series_manager(owner)
+    isnothing(mgr) &&
+        throw(RustTimeSeriesNotFound("owner has no time series to hash"))
+    store = mgr.data_store::RustTimeSeriesStore
+    owner_id, _, owner_category = _rust_owner_args(owner)
+    T = get_time_series_type(key)
+    rows = TSS.list_array_groups(store.inner; owner_id = owner_id,
+        owner_category = _tss_category(owner_category),
+        time_series_type = _rust_pushable_code(T), name = get_name(key))
+    target_res = get_resolution(key)
+    target_feats = get_features(key)
+    for row in rows
+        _rust_type_matches(_rust_is_type(row.time_series_type), T) || continue
+        row.resolution == target_res || continue
+        row.features == target_feats || continue
+        return row.data_hash
+    end
+    throw(RustTimeSeriesNotFound("no stored array matches key name=$(get_name(key))"))
+end
+
+# Group every stored association by content hash, as `(owner, key)` pairs. The
+# `id_to_owner` callback resolves an `(owner_id, owner_category)` row back to the
+# owner object (the system holds the component / supplemental-attribute maps).
+# One catalog query returns the hash on every row, so no per-row metadata fetch.
+function _rust_group_by_hash(store::RustTimeSeriesStore, id_to_owner)
+    groups = Dict{String, Vector{Tuple{TimeSeriesOwners, TimeSeriesKey}}}()
+    for row in TSS.list_array_groups(store.inner)
+        owner = id_to_owner(Int(row.owner_id), row.owner_category)
+        pairs = get!(
+            () -> Tuple{TimeSeriesOwners, TimeSeriesKey}[], groups, row.data_hash)
+        push!(pairs, (owner, _key_from_row(row)))
+    end
+    return groups
+end
 
 # Reconstruct each matching time series for an owner; applies `filter_func`.
 function _rust_get_time_series_multiple(

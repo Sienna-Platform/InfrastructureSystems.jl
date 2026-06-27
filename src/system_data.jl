@@ -1304,6 +1304,31 @@ get_time_series_resolutions(
     time_series_type = time_series_type,
 )
 
+"""
+$(TYPEDSIGNATURES)
+Group every time series in `data` by the array it is stored in. Returns a
+`Dict` mapping each content hash (a 64-character lowercase hex string) to the
+`(owner, key)` pairs that resolve to that one shared array.
+
+Time series that share their underlying data appear together: identical data
+that was deduplicated, and a `SingleTimeSeries` together with any
+`DeterministicSingleTimeSeries` derived from it. A group with more than one
+`(owner, key)` pair is therefore a set of time series that share data — across
+owners. Resolved by a single catalog query (no per-series reads).
+
+See also [`get_time_series_hash`](@ref) for the hash of one `(owner, key)`.
+"""
+function get_shared_time_series(data::SystemData)
+    store = data.time_series_manager.data_store::RustTimeSeriesStore
+    id_to_owner =
+        (id, category) -> if category == "Component"
+            get_component(data, id)
+        else
+            get_supplemental_attribute(data, id)
+        end
+    return _rust_group_by_hash(store, id_to_owner)
+end
+
 function get_forecast_total_period(
     data::SystemData;
     resolution::Union{Nothing, Dates.Period} = nothing,

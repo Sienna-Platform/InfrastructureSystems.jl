@@ -1012,6 +1012,23 @@ function get_time_series_keys(
     )
 end
 
+"""
+$(TYPEDSIGNATURES)
+Return the content hash (64-character lowercase hex string) of the array that
+`key` resolves to under `owner`.
+
+The hash identifies the underlying *stored array*, not the logical time series:
+two `(owner, key)` pairs return the same hash exactly when they share the same
+stored array. That happens both when identical data is deduplicated and when a
+`SingleTimeSeries` and a `DeterministicSingleTimeSeries` derived from it share
+their array. Throws if no stored time series matches `key`.
+
+To enumerate every group of time series that share data across a whole system,
+use [`get_shared_time_series`](@ref).
+"""
+get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey) =
+    _rust_get_time_series_hash(owner, key)
+
 function clear_time_series!(owner::TimeSeriesOwners)
     mgr = get_time_series_manager(owner)
     if !isnothing(mgr)
