@@ -194,6 +194,27 @@ function _read_values(
     end
 end
 
+# Decode an already-materialized static value array (the inverse of `_storage_array`),
+# keyed on `logical_type`. Used by the non-sequential read path, where the backend
+# returns the `(len, k)` FunctionData matrix (or scalar vector) in memory rather than
+# by content hash. `len` is the timestep count (`size(arr, 1)`).
+function _decode_static_values(arr, logical_type, len::Integer)
+    if logical_type == "LinearFunctionData"
+        return [LinearFunctionData(arr[i, 1], arr[i, 2]) for i in 1:len]
+    elseif logical_type == "QuadraticFunctionData"
+        return [QuadraticFunctionData(arr[i, 1], arr[i, 2], arr[i, 3]) for i in 1:len]
+    elseif logical_type == "PiecewiseLinearData"
+        out = Vector{PiecewiseLinearData}(undef, len)
+        for i in 1:len
+            n = Int(round(arr[i, 1]))
+            out[i] = PiecewiseLinearData([(arr[i, 2j], arr[i, 2j + 1]) for j in 1:n])
+        end
+        return out
+    else
+        return arr  # scalar (1-D vector, or an N-D per-step array)
+    end
+end
+
 # ---- Forecast element encoding ---------------------------------------------
 # Forecast windows of scalars store as a `(horizon, count)` array (logical_type
 # `nothing`). FunctionData windows store as `(horizon, count, k)` tagged with the
@@ -331,6 +352,60 @@ function get_single(
     return sts
 end
 
+"""
+    serialize_non_sequential!(store, owner_id, owner_type, owner_category, name, nts;
+                              features=Dict(), units=nothing)
+
+Add a `NonSequentialTimeSeries` (irregular timestamps + data) to the Rust store.
+The array is content-addressed (and de-duplicated); the explicit timestamps are
+carried on the association. `owner_category` is the String tag ("Component" /
+"SupplementalAttribute").
+"""
+function serialize_non_sequential!(
+    store::RustTimeSeriesStore,
+    owner_id::Integer,
+    owner_type::AbstractString,
+    owner_category::AbstractString,
+    name::AbstractString,
+    nts::NonSequentialTimeSeries;
+    features = Dict{String, Any}(),
+    units::Union{Nothing, AbstractString} = nothing,
+)
+    # Same element encoding as SingleTimeSeries: scalars stay 1-D; FunctionData
+    # becomes a (length, k) Float64 matrix, with the logical-type tag driving the
+    # reconstruction on read.
+    arr, logical = _storage_array(get_array(nts))
+    tss_ts = TSS.NonSequentialTimeSeries(
+        get_timestamps(nts),
+        arr,
+        name;
+        logical_type = logical,
+    )
+    TSS.add_time_series!(store.inner, owner_id, owner_type, _tss_category(owner_category),
+        tss_ts; features = features, units = units)
+    return
+end
+
+"""
+    get_non_sequential(store, owner_id, owner_category, name; features=Dict()) -> NonSequentialTimeSeries
+
+Reconstruct a `NonSequentialTimeSeries` (timestamps + decoded array) from the Rust
+store. A non-sequential series is addressed by name + features (it has no resolution).
+"""
+function get_non_sequential(
+    store::RustTimeSeriesStore,
+    owner_id::Integer,
+    owner_category::TSS.OwnerCategory,
+    name::AbstractString;
+    features = Dict{String, Any}(),
+)
+    nts = TSS.get_time_series(TSS.NonSequentialTimeSeries, store.inner, owner_id,
+        owner_category, name; features = features)
+    len = length(nts.timestamps)
+    values = _decode_static_values(nts.data, nts.logical_type, len)
+    return NonSequentialTimeSeries(String(name), nts.timestamps, values)
+end
+
 has_time_series(store::RustTimeSeriesStore, owner_id::Integer,
     owner_category::TSS.OwnerCategory, name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing, features = Dict{String, Any}()) =
@@ -454,11 +529,13 @@ function _rust_add_time_series!(
     time_series isa DeterministicSingleTimeSeries || check_time_series_data(time_series)
     if time_series isa Forecast
         return _rust_add_forecast!(mgr, owner, time_series; features...)
+    elseif time_series isa NonSequentialTimeSeries
+        return _rust_add_non_sequential!(mgr, owner, time_series; features...)
     end
     time_series isa SingleTimeSeries ||
         error(
-            "Rust backend supports SingleTimeSeries, Deterministic, " *
-            "DeterministicSingleTimeSeries, Probabilistic, and Scenarios " *
+            "Rust backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
+            "Deterministic, DeterministicSingleTimeSeries, Probabilistic, and Scenarios " *
             "(got $(typeof(time_series)))",
         )
     store = mgr.data_store::RustTimeSeriesStore
@@ -489,7 +566,44 @@ function _rust_add_time_series!(
     )
 end
 
-# Anything other than SingleTimeSeries / Forecast is unsupported on the Rust backend.
+"""
+Route a manager-level `add_time_series!` of a `NonSequentialTimeSeries` to the Rust
+store. Addressed by name + features (a non-sequential series has no resolution);
+data identity is the array content hash.
+"""
+function _rust_add_non_sequential!(
+    mgr::TimeSeriesManager,
+    owner::TimeSeriesOwners,
+    time_series::NonSequentialTimeSeries;
+    features...,
+)
+    store = mgr.data_store::RustTimeSeriesStore
+    owner_id, owner_type, owner_category = _rust_owner_args(owner)
+    category = _tss_category(owner_category)
+    name = get_name(time_series)
+    feats = _rust_features(features)
+
+    if has_typed(store, owner_id, category, name, TSS.TS_TYPE_NON_SEQUENTIAL;
+        features = feats)
+        throw(
+            ArgumentError(
+                "Time series data with duplicate attributes are already stored: " *
+                "$(owner_type)/$(name) features=$(feats)"),
+        )
+    end
+
+    serialize_non_sequential!(store, owner_id, owner_type, owner_category, name,
+        time_series; features = feats)
+    return NonSequentialTimeSeriesKey(;
+        time_series_type = NonSequentialTimeSeries,
+        name = name,
+        length = length(time_series),
+        features = Dict{String, Any}(feats),
+    )
+end
+
+# Anything other than SingleTimeSeries / NonSequentialTimeSeries / Forecast is
+# unsupported on the Rust backend.
 _rust_get_time_series(
     ::Type{T},
     owner::TimeSeriesOwners,
@@ -565,6 +679,49 @@ function _rust_get_time_series(
         vals,
     )
     return sts
+end
+
+"""
+Route a public `get_time_series(NonSequentialTimeSeries, owner, name; ...)` to the
+Rust store, honoring `start_time` / `len` slicing on the (irregular) time axis.
+"""
+function _rust_get_time_series(
+    ::Type{<:NonSequentialTimeSeries},
+    owner::TimeSeriesOwners,
+    name::AbstractString;
+    start_time::Union{Nothing, Dates.DateTime} = nothing,
+    len::Union{Nothing, Int} = nothing,
+    count::Union{Nothing, Int} = nothing,  # not applicable to a static series; ignored
+    resolution::Union{Nothing, Dates.Period} = nothing,  # not applicable; ignored
+    features...,
+)
+    mgr = get_time_series_manager(owner)
+    store = mgr.data_store::RustTimeSeriesStore
+    owner_id, _, owner_category = _rust_owner_args(owner)
+    category = _tss_category(owner_category)
+    # Resolve the unique series matching a possibly-partial (subset) feature query,
+    # then read it by its exact stored attributes.
+    matched = _rust_get_metadata(owner, NonSequentialTimeSeries, name; features...)
+    feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
+    nts = get_non_sequential(store, owner_id, category, name; features = feats)
+    (isnothing(start_time) && isnothing(len)) && return nts
+
+    # Slice on the explicit, strictly-increasing timestamps. The values are sliced
+    # directly (not via a TimeArray) so FunctionData / N-D series slice too.
+    timestamps = get_timestamps(nts)
+    full = get_array(nts)
+    total = size(full, 1)
+    start = isnothing(start_time) ? timestamps[1] : start_time
+    index = searchsortedfirst(timestamps, start)
+    (index <= total && timestamps[index] == start) ||
+        throw(ArgumentError("start_time=$start is not a timestamp in the series"))
+    n = isnothing(len) ? (total - index + 1) : len
+    if n < 1 || index + n - 1 > total
+        throw(ArgumentError("requested index=$index len=$n exceeds range $total"))
+    end
+    colons = ntuple(_ -> Colon(), ndims(full) - 1)
+    vals = full[index:(index + n - 1), colons...]
+    return NonSequentialTimeSeries(String(name), timestamps[index:(index + n - 1)], vals)
 end
 
 # ---- Forecasts (Deterministic / DeterministicSingleTimeSeries) -------------
@@ -877,6 +1034,7 @@ end
 
 # The single stored TimeSeriesType code for a concrete IS time series type.
 _rust_ts_code(::Type{<:SingleTimeSeries}) = TSS.TS_TYPE_SINGLE
+_rust_ts_code(::Type{<:NonSequentialTimeSeries}) = TSS.TS_TYPE_NON_SEQUENTIAL
 _rust_ts_code(::Type{<:DeterministicSingleTimeSeries}) = TSS.TS_TYPE_DETERMINISTIC_SINGLE
 _rust_ts_code(::Type{<:Deterministic}) = TSS.TS_TYPE_DETERMINISTIC
 _rust_ts_code(::Type{<:Probabilistic}) = TSS.TS_TYPE_PROBABILISTIC
@@ -885,6 +1043,7 @@ _rust_ts_code(::Type{<:Scenarios}) = TSS.TS_TYPE_SCENARIOS
 # Name-less existence queries. `_rust_query_codes(T)` maps a query type to the
 # stored TimeSeriesType codes to match (empty tuple = any type).
 _rust_query_codes(::Type{<:SingleTimeSeries}) = (TSS.TS_TYPE_SINGLE,)
+_rust_query_codes(::Type{<:NonSequentialTimeSeries}) = (TSS.TS_TYPE_NON_SEQUENTIAL,)
 _rust_query_codes(::Type{<:DeterministicSingleTimeSeries}) =
     (TSS.TS_TYPE_DETERMINISTIC_SINGLE,)
 _rust_query_codes(::Type{<:AbstractDeterministic}) =
@@ -904,6 +1063,7 @@ _rust_query_codes(::Type{<:TimeSeriesData}) = ()
 # `DeterministicSingleTimeSeries`). When `nothing`, the caller applies the
 # residual `_rust_type_matches` filter on the (already narrowed) rows.
 _rust_pushable_code(::Type{<:SingleTimeSeries}) = TSS.TS_TYPE_SINGLE
+_rust_pushable_code(::Type{<:NonSequentialTimeSeries}) = TSS.TS_TYPE_NON_SEQUENTIAL
 _rust_pushable_code(::Type{<:DeterministicSingleTimeSeries}) =
     TSS.TS_TYPE_DETERMINISTIC_SINGLE
 _rust_pushable_code(::Type{<:Probabilistic}) = TSS.TS_TYPE_PROBABILISTIC
@@ -914,9 +1074,9 @@ _rust_pushable_code(::Type{<:TimeSeriesData}) = nothing
 # semantics — distinct from `_rust_type_matches`, which treats a `Deterministic`
 # query as also matching a `DeterministicSingleTimeSeries`). Used by the
 # store-wide filters (`resolutions`, `list_owner_ids`) that key on subtyping.
-# `NonSequentialTimeSeries` is omitted: the Rust backend does not store it yet.
 const _RUST_CODE_TYPES = (
     (TSS.TS_TYPE_SINGLE, SingleTimeSeries),
+    (TSS.TS_TYPE_NON_SEQUENTIAL, NonSequentialTimeSeries),
     (TSS.TS_TYPE_DETERMINISTIC, Deterministic),
     (TSS.TS_TYPE_DETERMINISTIC_SINGLE, DeterministicSingleTimeSeries),
     (TSS.TS_TYPE_PROBABILISTIC, Probabilistic),
@@ -945,6 +1105,8 @@ _rust_is_type(t::Type) = _rust_is_type(nameof(t))
 _rust_is_type(s::Symbol) =
     if s === :SingleTimeSeries
         SingleTimeSeries
+    elseif s === :NonSequentialTimeSeries
+        NonSequentialTimeSeries
     elseif s === :Deterministic
         Deterministic
     elseif s === :DeterministicSingleTimeSeries
@@ -976,7 +1138,14 @@ _rust_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
 function _key_from_row(row)
     feats = Dict{String, Any}(string(k) => v for (k, v) in row.features)
     is_type = _rust_is_type(row.time_series_type)
-    if is_type <: StaticTimeSeries
+    if is_type <: NonSequentialTimeSeries
+        return NonSequentialTimeSeriesKey(;
+            time_series_type = is_type,
+            name = row.name,
+            length = row.length,
+            features = feats,
+        )
+    elseif is_type <: StaticTimeSeries
         return StaticTimeSeriesKey(;
             time_series_type = is_type,
             name = row.name,
@@ -1105,6 +1274,8 @@ function _rust_get_time_series_multiple(
             feats = (Symbol(k) => v for (k, v) in get_features(m))
             ts = if m isa ForecastKey
                 _rust_get_forecast(owner, get_name(m); resolution = get_resolution(m), feats...)
+            elseif m isa NonSequentialTimeSeriesKey
+                _rust_get_time_series(NonSequentialTimeSeries, owner, get_name(m); feats...)
             else
                 _rust_get_time_series(SingleTimeSeries, owner, get_name(m);
                     resolution = get_resolution(m), feats...)

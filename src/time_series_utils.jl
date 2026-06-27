@@ -1,6 +1,7 @@
 const TIME_SERIES_STRING_TO_TYPE = Dict(
     "Deterministic" => Deterministic,
     "DeterministicSingleTimeSeries" => DeterministicSingleTimeSeries,
+    "NonSequentialTimeSeries" => NonSequentialTimeSeries,
     "Probabilistic" => Probabilistic,
     "Scenarios" => Scenarios,
     "SingleTimeSeries" => SingleTimeSeries,

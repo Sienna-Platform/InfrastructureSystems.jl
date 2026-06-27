@@ -5,6 +5,7 @@ Supertype for keys that can be used to access a desired time series dataset
 
 Concrete subtypes:
 - [`StaticTimeSeriesKey`](@ref)
+- [`NonSequentialTimeSeriesKey`](@ref)
 - [`ForecastKey`](@ref)
 
 Required methods:
@@ -57,6 +58,32 @@ get_count(::StaticTimeSeriesKey) = 1
 Base.length(key::StaticTimeSeriesKey) = get_length(key)
 
 """
+A unique key to identify and retrieve a [`NonSequentialTimeSeries`](@ref)
+
+Unlike [`StaticTimeSeriesKey`](@ref), a non-sequential series is irregular: it has
+no `resolution` and no regular `initial_timestamp` (its timestamps are stored with
+the data), so the key carries only its `length`. This mirrors the dedicated
+non-sequential key in the time-series-store backend.
+
+See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
+"""
+@kwdef struct NonSequentialTimeSeriesKey <: TimeSeriesKey
+    time_series_type::Type{<:NonSequentialTimeSeries}
+    name::String
+    length::Int
+    features::Dict{String, Any}
+end
+
+# A non-sequential key is irregular: no resolution, no regular initial timestamp,
+# no forecast interval; it represents a single window.
+get_length(key::NonSequentialTimeSeriesKey) = key.length
+get_resolution(::NonSequentialTimeSeriesKey) = nothing
+get_initial_timestamp(::NonSequentialTimeSeriesKey) = nothing
+get_interval(::NonSequentialTimeSeriesKey) = nothing
+get_count(::NonSequentialTimeSeriesKey) = 1
+Base.length(key::NonSequentialTimeSeriesKey) = get_length(key)
+
+"""
 A unique key to identify and retrieve a [`Forecast`](@ref)
 
 See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
@@ -75,7 +102,8 @@ end
 get_horizon(key::ForecastKey) = key.horizon
 get_interval(key::ForecastKey) = key.interval
 get_count(key::ForecastKey) = key.count
-get_horizon_count(key::ForecastKey) = get_horizon_count(get_horizon(key), get_resolution(key))
+get_horizon_count(key::ForecastKey) =
+    get_horizon_count(get_horizon(key), get_resolution(key))
 Base.length(key::ForecastKey) = get_horizon_count(key)
 
 """

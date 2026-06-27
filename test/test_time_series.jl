@@ -2706,6 +2706,203 @@ end
     @test IS.get_time_series_values(IS.SingleTimeSeries, component, name) == data
 end
 
+@testset "Test add NonSequentialTimeSeries" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    # Deliberately irregular timestamps (no constant resolution).
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+        Dates.DateTime("2020-01-03T00:00:00"),
+        Dates.DateTime("2020-01-10T00:00:00"),
+    ]
+    values = [10.0, 20.0, 30.0, 40.0]
+    name = "events"
+    ts = IS.NonSequentialTimeSeries(name, timestamps, values)
+    @test ts isa IS.NonSequentialTimeSeries{Float64, 1}
+    @test IS.get_resolution(ts) === nothing
+    @test IS.get_initial_timestamp(ts) == timestamps[1]
+    @test IS.length(ts) == 4
+    @test IS.get_timestamps(ts) == timestamps
+    @test IS.get_array(ts) == values
+    @test IS.eltype_data(ts) == Float64
+    IS.add_time_series!(sys, component, ts)
+
+    got = IS.get_time_series(IS.NonSequentialTimeSeries, component, name)
+    @test IS.get_timestamps(got) == timestamps
+    @test IS.get_array(got) == values
+    @test IS.get_resolution(got) === nothing
+
+    # Slice on the irregular time axis.
+    sl = IS.get_time_series(
+        IS.NonSequentialTimeSeries,
+        component,
+        name;
+        start_time = timestamps[3],
+        len = 2,
+    )
+    @test IS.get_timestamps(sl) == timestamps[3:4]
+    @test IS.get_array(sl) == values[3:4]
+
+    # A start_time that is not a stored timestamp is rejected.
+    @test_throws ArgumentError IS.get_time_series(
+        IS.NonSequentialTimeSeries,
+        component,
+        name;
+        start_time = Dates.DateTime("2020-01-02T00:00:00"),
+    )
+    # An over-long request is rejected.
+    @test_throws ArgumentError IS.get_time_series(
+        IS.NonSequentialTimeSeries,
+        component,
+        name;
+        start_time = timestamps[3],
+        len = 5,
+    )
+
+    # Duplicate add (same name + features) is rejected.
+    @test_throws ArgumentError IS.add_time_series!(
+        sys,
+        component,
+        IS.NonSequentialTimeSeries(name, timestamps, values),
+    )
+
+    # The key is a dedicated NonSequentialTimeSeriesKey (no resolution).
+    keys = collect(IS.get_time_series_keys(component))
+    @test length(keys) == 1
+    key = keys[1]
+    @test key isa IS.NonSequentialTimeSeriesKey
+    @test IS.get_resolution(key) === nothing
+    @test IS.get_name(key) == name
+    @test IS.length(key) == 4
+    # Retrieval through the key round-trips.
+    got_by_key = IS.get_time_series(component, key)
+    @test IS.get_timestamps(got_by_key) == timestamps
+    @test IS.get_array(got_by_key) == values
+end
+
+@testset "Test NonSequentialTimeSeries validation" begin
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+    ]
+    # Mismatched timestamp/value counts are rejected at construction.
+    @test_throws IS.ConflictingInputsError IS.NonSequentialTimeSeries(
+        "bad",
+        timestamps,
+        [1.0, 2.0, 3.0],
+    )
+
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    # Non-increasing timestamps are rejected on add (check_time_series_data).
+    nonincreasing = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+    ]
+    bad = IS.NonSequentialTimeSeries("bad", nonincreasing, [1.0, 2.0, 3.0])
+    @test_throws IS.ConflictingInputsError IS.add_time_series!(sys, component, bad)
+end
+
+@testset "Test NonSequentialTimeSeries slicing helpers" begin
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+        Dates.DateTime("2020-01-03T00:00:00"),
+        Dates.DateTime("2020-01-10T00:00:00"),
+    ]
+    values = [10.0, 20.0, 30.0, 40.0]
+    ts = IS.NonSequentialTimeSeries("events", timestamps, values)
+
+    h = IS.head(ts, 2)
+    @test h isa IS.NonSequentialTimeSeries
+    @test IS.get_timestamps(h) == timestamps[1:2]
+    @test IS.get_array(h) == values[1:2]
+
+    t = IS.tail(ts, 2)
+    @test IS.get_timestamps(t) == timestamps[3:4]
+    @test IS.get_array(t) == values[3:4]
+
+    f = IS.from(ts, timestamps[3])
+    @test IS.get_timestamps(f) == timestamps[3:4]
+
+    to = IS.to(ts, timestamps[2])
+    @test IS.get_timestamps(to) == timestamps[1:2]
+
+    ta = IS.get_time_array(ts)
+    @test ta isa TimeSeries.TimeArray
+    @test TimeSeries.timestamp(ta) == timestamps
+    @test TimeSeries.values(ta) == values
+end
+
+@testset "Test get_time_series_array NonSequentialTimeSeries" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+        Dates.DateTime("2020-01-03T00:00:00"),
+        Dates.DateTime("2020-01-10T00:00:00"),
+    ]
+    values = collect(1.0:4.0)
+    name = "events"
+    ts = IS.NonSequentialTimeSeries(name, timestamps, values)
+    IS.add_time_series!(sys, component, ts)
+
+    ta = IS.get_time_series_array(IS.NonSequentialTimeSeries, component, name)
+    @test ta isa TimeSeries.TimeArray
+    @test TimeSeries.timestamp(ta) == timestamps
+    @test TimeSeries.values(ta) == values
+    @test IS.get_time_series_timestamps(IS.NonSequentialTimeSeries, component, name) ==
+          timestamps
+    @test IS.get_time_series_values(IS.NonSequentialTimeSeries, component, name) == values
+
+    # Custom offsets.
+    ta2 = IS.get_time_series_array(
+        IS.NonSequentialTimeSeries,
+        component,
+        name;
+        start_time = timestamps[2],
+        len = 2,
+    )
+    @test TimeSeries.timestamp(ta2) == timestamps[2:3]
+    @test TimeSeries.values(ta2) == values[2:3]
+end
+
+@testset "Test NonSequentialTimeSeries with FunctionData" begin
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+        Dates.DateTime("2020-01-03T00:00:00"),
+    ]
+    cases = (
+        [IS.LinearFunctionData(Float64(i), Float64(2i)) for i in 1:3],
+        [IS.QuadraticFunctionData(Float64(i), Float64(2i), Float64(3i)) for i in 1:3],
+        [
+            IS.PiecewiseLinearData([(0.0, 0.0), (Float64(i), Float64(2i))]) for
+            i in 1:3
+        ],
+    )
+    for (idx, values) in enumerate(cases)
+        sys = IS.SystemData()
+        component = IS.TestComponent("Component1", 5)
+        IS.add_component!(sys, component)
+        name = "curves_$idx"
+        ts = IS.NonSequentialTimeSeries(name, timestamps, values)
+        IS.add_time_series!(sys, component, ts)
+
+        got = IS.get_time_series(IS.NonSequentialTimeSeries, component, name)
+        @test IS.get_timestamps(got) == timestamps
+        @test IS.get_array(got) == values
+    end
+end
+
 @testset "Test get_time_series_array Deterministic" begin
     sys = IS.SystemData()
     name = "Component1"

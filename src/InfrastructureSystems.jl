@@ -171,6 +171,7 @@ export get_time_series_type
 export set_name!
 include("time_series_normalization.jl")
 include("single_time_series.jl")
+include("non_sequential_time_series.jl")
 include("deterministic_single_time_series.jl")
 include("deterministic.jl")
 include("probabilistic.jl")

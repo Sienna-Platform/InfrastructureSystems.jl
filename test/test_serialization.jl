@@ -110,6 +110,42 @@ end
     end
 end
 
+@testset "Test JSON serialization of NonSequentialTimeSeries" begin
+    if rust_ts_available()
+        sys = IS.SystemData()
+        component = IS.TestComponent("Component1", 5)
+        IS.add_component!(sys, component)
+        timestamps = [
+            Dates.DateTime("2020-01-01T00:00:00"),
+            Dates.DateTime("2020-01-01T04:00:00"),
+            Dates.DateTime("2020-01-03T00:00:00"),
+        ]
+        IS.add_time_series!(
+            sys,
+            component,
+            IS.NonSequentialTimeSeries("events", timestamps, [10.0, 20.0, 30.0]),
+        )
+        # A FunctionData series exercises the logical-type tag through the round-trip.
+        IS.add_time_series!(
+            sys,
+            component,
+            IS.NonSequentialTimeSeries(
+                "curves",
+                timestamps,
+                [IS.LinearFunctionData(Float64(i), Float64(2i)) for i in 1:3],
+            ),
+        )
+        sys2, result = validate_serialization(sys)
+        @test result
+        component2 = first(IS.get_components(IS.TestComponent, sys2))
+        got = IS.get_time_series(IS.NonSequentialTimeSeries, component2, "events")
+        @test IS.get_timestamps(got) == timestamps
+        @test IS.get_array(got) == [10.0, 20.0, 30.0]
+    else
+        @test_skip false
+    end
+end
+
 @testset "Test prepare_for_serialization_to_file" begin
     sys = create_system_data_shared_time_series()
     directory = joinpath(mktempdir(), "dir2")

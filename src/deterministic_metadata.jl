@@ -6,4 +6,3 @@ function serialize(::Type{T}) where {T <: TimeSeriesData}
     add_serialization_metadata!(data, T)
     return data
 end
-
