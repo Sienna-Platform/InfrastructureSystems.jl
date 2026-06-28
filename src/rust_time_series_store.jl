@@ -1041,6 +1041,203 @@ function _rust_get_forecast(
     throw(RustTimeSeriesNotFound("no forecast for owner=$owner_id name=$name"))
 end
 
+# ---- ForecastReader --------------------------------------------------------
+# A timestamp-oriented reader over the forecasts matching a filter, for the
+# simulation pattern "at each window timestamp, get every component's forecast".
+# It wraps the Rust `ForecastReader`, which deduplicates the physical `.nc` read:
+# components that share a forecast array (and read plan) collapse to one window
+# slot, so the data is read once per timestamp no matter how many components
+# reference it. This wrapper carries that dedup up to Julia — each unique slot's
+# window is materialized (and FunctionData-decoded) at most once per read.
+
+# Owner-category String tag for a `TSS.OwnerCategory` enum (the inverse of
+# `_tss_category`), used to resolve a reader entry back to its owner object.
+_owner_category_string(c::TSS.OwnerCategory) =
+    c == TSS.Component ? "Component" : "SupplementalAttribute"
+
+# Map an IS forecast type to the `TimeSeriesStore` reader type. A `Deterministic`
+# (or the `AbstractDeterministic` abstraction) reader is abstract and also
+# includes `DeterministicSingleTimeSeries`; a DST query is exact.
+_tss_forecast_type(::Type{<:DeterministicSingleTimeSeries}) =
+    TSS.DeterministicSingleTimeSeries
+_tss_forecast_type(::Type{<:AbstractDeterministic}) = TSS.Deterministic
+_tss_forecast_type(::Type{<:Probabilistic}) = TSS.Probabilistic
+_tss_forecast_type(::Type{<:Scenarios}) = TSS.Scenarios
+
+# Decode a single `(horizon, k)` FunctionData window matrix (the per-window analog
+# of `_decode_forecast_window`, which slices a `(horizon, count, k)` array).
+function _decode_forecast_window_matrix(mat::AbstractMatrix{<:Real}, logical_type)
+    horizon = size(mat, 1)
+    if logical_type == "LinearFunctionData"
+        return [LinearFunctionData(mat[h, 1], mat[h, 2]) for h in 1:horizon]
+    elseif logical_type == "QuadraticFunctionData"
+        return [QuadraticFunctionData(mat[h, 1], mat[h, 2], mat[h, 3]) for h in 1:horizon]
+    elseif logical_type == "PiecewiseLinearData"
+        out = Vector{PiecewiseLinearData}(undef, horizon)
+        for h in 1:horizon
+            n = Int(round(mat[h, 1]))
+            out[h] = PiecewiseLinearData([(mat[h, 2j], mat[h, 2j + 1]) for j in 1:n])
+        end
+        return out
+    end
+    error("Rust backend cannot decode forecast logical_type $logical_type")
+end
+
+# The `logical_type` tags that mean a window is FunctionData (stored as a
+# `(horizon, k)` matrix). Any other tag (`nothing`, or a scalar dtype string like
+# "Float64" carried by a SingleTimeSeries-backed DST) is a plain scalar window.
+const _RUST_FUNCTIONDATA_LOGICAL =
+    ("LinearFunctionData", "QuadraticFunctionData", "PiecewiseLinearData")
+
+# Orient + decode one raw window into IS's canonical per-window value (matching a
+# single `get_time_series(...).data[timestamp]`): Probabilistic/Scenarios windows
+# are stored `(count_member, horizon)` and transposed to `(horizon, member)`;
+# Deterministic/DST windows are a horizon vector, or a FunctionData column decoded
+# via `logical_type`.
+function _decode_forecast_reader_window(
+    ::Type{T},
+    raw,
+    logical_type,
+) where {T <: Forecast}
+    if T <: Probabilistic || T <: Scenarios
+        return permutedims(raw)
+    end
+    (logical_type in _RUST_FUNCTIONDATA_LOGICAL) || return raw
+    return _decode_forecast_window_matrix(raw, logical_type)
+end
+
+"""
+One forecast in a [`ForecastReader`], bound to its owner. `slot` is the 1-based
+index of the deduplicated window read backing this entry; entries that share a
+forecast array (and read plan) report the same `slot`.
+"""
+struct ForecastReaderEntry
+    owner::TimeSeriesOwners
+    key::TimeSeriesKey
+    slot::Int
+end
+
+"""
+A timestamp-oriented reader over every forecast matching a build filter. Drive it
+with [`read_forecast_window!`](@ref), then pull each entry's window with
+[`get_forecast_window`](@ref). Build one with `build_forecast_reader(data, T; ...)`.
+
+Forecasts that share an underlying array read the `.nc` file once per timestamp
+(and materialize once in Julia); inspect the sharing via the entries' `slot`
+field or [`get_num_forecast_slots`](@ref).
+"""
+mutable struct ForecastReader
+    inner::TSS.ForecastReader
+    store::RustTimeSeriesStore
+    entries::Vector{ForecastReaderEntry}
+    "logical_type for each entry (parallel to `entries`); `nothing` for scalars."
+    logical_types::Vector{Union{Nothing, String}}
+    "The IS forecast type the reader was built for (drives window orientation)."
+    reported_type::Type
+    "Per-slot materialized window cache; reset on each read."
+    windows::Vector{Any}
+    has_read::Bool
+end
+
+# Build a reader from the store. `id_to_owner(owner_id::Int, category::String)`
+# resolves each entry's owner object (the system holds the owner maps). Per-entry
+# metadata (owner, key, logical_type) is resolved once here, off the read path.
+function _rust_build_forecast_reader(
+    store::RustTimeSeriesStore,
+    id_to_owner,
+    ::Type{T};
+    resolution::Dates.Period,
+    name::Union{Nothing, AbstractString} = nothing,
+    features = Dict{String, Any}(),
+) where {T <: Forecast}
+    inner = TSS.build_forecast_reader(store.inner, _tss_forecast_type(T);
+        resolution = resolution, name = name, features = features)
+    tss_entries = TSS.forecast_entries(inner)
+    n = length(tss_entries)
+    entries = Vector{ForecastReaderEntry}(undef, n)
+    logical_types = Vector{Union{Nothing, String}}(undef, n)
+    for (i, e) in enumerate(tss_entries)
+        info = TSS.key_info(e.key)
+        owner = id_to_owner(Int(info.owner_id), _owner_category_string(info.owner_category))
+        is_type = _rust_is_type(nameof(info.time_series_type))
+        feats = Dict{String, Any}(info.features)
+        fmeta = TSS.get_forecast_metadata(store.inner, info.owner_id,
+            info.owner_category, info.name, _rust_ts_code(is_type);
+            resolution = info.resolution, features = feats)
+        logical_types[i] = fmeta.logical_type
+        key = ForecastKey(;
+            time_series_type = is_type,
+            name = info.name,
+            initial_timestamp = fmeta.initial_timestamp,
+            resolution = fmeta.resolution,
+            horizon = fmeta.horizon,
+            interval = fmeta.interval,
+            count = fmeta.count,
+            features = feats,
+        )
+        # `e.slot` is 0-based in the Rust store; carry it 1-based for Julia.
+        entries[i] = ForecastReaderEntry(owner, key, e.slot + 1)
+    end
+    windows = Vector{Any}(nothing, TSS.forecast_num_slots(inner))
+    return ForecastReader(inner, store, entries, logical_types, T, windows, false)
+end
+
+"""
+$(TYPEDSIGNATURES)
+The reader's window timeline as `(; initial_timestamp, resolution, interval,
+count)`. Valid read timestamps are `initial_timestamp + k·interval` for
+`k in 0:count-1`.
+"""
+get_forecast_reader_timeline(reader::ForecastReader) = TSS.forecast_timeline(reader.inner)
+
+"""
+$(TYPEDSIGNATURES)
+The reader's entries, one per matching forecast, each bound to its owner.
+"""
+get_forecast_reader_entries(reader::ForecastReader) = reader.entries
+
+"""
+$(TYPEDSIGNATURES)
+The number of deduplicated window slots — the count of physical `.nc` reads
+[`read_forecast_window!`](@ref) performs per timestamp. Entries that share a
+forecast array collapse to one slot, so this is `≤ length(get_forecast_reader_entries(reader))`.
+"""
+get_num_forecast_slots(reader::ForecastReader) = length(reader.windows)
+
+Base.length(reader::ForecastReader) = length(reader.entries)
+
+"""
+$(TYPEDSIGNATURES)
+Read the forecast window at `timestamp` for every entry, performing one `.nc`
+read per unique slot. Follow with [`get_forecast_window`](@ref). Throws if
+`timestamp` is off the window timeline.
+"""
+function read_forecast_window!(reader::ForecastReader, timestamp::Dates.DateTime)
+    TSS.forecast_read!(reader.inner, timestamp)
+    fill!(reader.windows, nothing)
+    reader.has_read = true
+    return reader
+end
+
+"""
+$(TYPEDSIGNATURES)
+The decoded window for entry `entry_index` (1-based) from the most recent
+[`read_forecast_window!`](@ref). Entries that share a slot return the same
+materialized array (read once per timestamp); treat it as read-only.
+"""
+function get_forecast_window(reader::ForecastReader, entry_index::Integer)
+    reader.has_read || throw(
+        ArgumentError("call read_forecast_window! before reading window values"))
+    entry = reader.entries[entry_index]
+    cached = reader.windows[entry.slot]
+    cached === nothing || return cached
+    raw = TSS.forecast_values(reader.inner, entry_index)
+    window = _decode_forecast_reader_window(
+        reader.reported_type, raw, reader.logical_types[entry_index])
+    reader.windows[entry.slot] = window
+    return window
+end
+
 """Route `has_time_series(owner, T, name; ...)` to the Rust store. Honors partial
 (subset) feature / resolution queries: matches if any stored series of type `T`
 contains at least the requested features."""

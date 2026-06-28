@@ -5046,3 +5046,139 @@ end
     IS.add_component!(sys, c4)
     @test_throws IS.RustTimeSeriesNotFound IS.get_time_series_hash(c4, k1)
 end
+
+@testset "Test ForecastReader with shared forecasts" begin
+    sys = IS.SystemData()
+    comps = [IS.TestComponent("c$i", 5) for i in 1:4]
+    foreach(c -> IS.add_component!(sys, c), comps)
+
+    t0 = Dates.DateTime("2020-01-01")
+    res = Dates.Hour(1)
+    # Two windows (interval 1h), horizon 2. c1-c3 add identical data (deduped to one
+    # array); c4 is distinct.
+    shared = SortedDict(t0 => [10.0, 11.0], t0 + res => [20.0, 21.0])
+    other = SortedDict(t0 => [110.0, 111.0], t0 + res => [120.0, 121.0])
+    for i in 1:3
+        IS.add_time_series!(sys, comps[i],
+            IS.Deterministic(; data = deepcopy(shared), name = "load", resolution = res))
+    end
+    IS.add_time_series!(sys, comps[4],
+        IS.Deterministic(; data = deepcopy(other), name = "load", resolution = res))
+
+    reader = IS.build_forecast_reader(sys, IS.Deterministic; resolution = res)
+
+    tl = IS.get_forecast_reader_timeline(reader)
+    @test tl.initial_timestamp == t0
+    @test tl.interval == Dates.Millisecond(res)
+    @test tl.count == 2
+
+    entries = IS.get_forecast_reader_entries(reader)
+    # Four components, two unique arrays: four entries, two physical reads.
+    @test length(entries) == 4
+    @test length(reader) == 4
+    @test IS.get_num_forecast_slots(reader) == 2
+    # Entries are bound to their owner objects.
+    @test Set(IS.get_name(e.owner) for e in entries) == Set(["c1", "c2", "c3", "c4"])
+    @test all(e.key isa IS.ForecastKey for e in entries)
+
+    # Reading window values requires a prior read.
+    @test_throws ArgumentError IS.get_forecast_window(reader, 1)
+
+    # c1-c3 share one slot; c4 is its own.
+    by_name = Dict(IS.get_name(e.owner) => i for (i, e) in enumerate(entries))
+    s1, s2, s3, s4 = (entries[by_name["c$i"]].slot for i in 1:4)
+    @test s1 == s2 == s3
+    @test s4 != s1
+
+    # Window 0 (t0): shared components agree; c4 differs.
+    IS.read_forecast_window!(reader, t0)
+    @test IS.get_forecast_window(reader, by_name["c1"]) == [10.0, 11.0]
+    @test IS.get_forecast_window(reader, by_name["c1"]) ==
+          IS.get_forecast_window(reader, by_name["c2"]) ==
+          IS.get_forecast_window(reader, by_name["c3"])
+    @test IS.get_forecast_window(reader, by_name["c4"]) == [110.0, 111.0]
+
+    # Window 1 (t0 + interval): buffers refilled in place.
+    IS.read_forecast_window!(reader, t0 + res)
+    @test IS.get_forecast_window(reader, by_name["c1"]) == [20.0, 21.0]
+    @test IS.get_forecast_window(reader, by_name["c4"]) == [120.0, 121.0]
+
+    # Off-timeline timestamps are a hard error.
+    @test_throws Exception IS.read_forecast_window!(reader, t0 + Dates.Minute(30))
+
+    # Each reader window equals the corresponding get_time_series window (oracle).
+    for (i, e) in enumerate(entries)
+        IS.read_forecast_window!(reader, t0)
+        full = IS.get_time_series(IS.Deterministic, e.owner, "load")
+        @test IS.get_forecast_window(reader, i) ==
+              TimeSeries.values(IS.get_window(full, t0))
+    end
+end
+
+@testset "Test ForecastReader includes DeterministicSingleTimeSeries sharing" begin
+    sys = IS.SystemData()
+    comps = [IS.TestComponent("c$i", 5) for i in 1:3]
+    foreach(c -> IS.add_component!(sys, c), comps)
+
+    t0 = Dates.DateTime("2020-01-01")
+    res = Dates.Hour(1)
+    sts_vals = collect(1.0:12.0)
+    mk(vals) = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(t0; length = length(vals), step = res), vals),
+        name = "load")
+    # c1, c2 share identical SingleTimeSeries data; c3 is distinct.
+    IS.add_time_series!(sys, comps[1], mk(copy(sts_vals)))
+    IS.add_time_series!(sys, comps[2], mk(copy(sts_vals)))
+    IS.add_time_series!(sys, comps[3], mk(collect(101.0:112.0)))
+    # Derive a DeterministicSingleTimeSeries view over each shared array.
+    IS.transform_single_time_series!(
+        sys, IS.DeterministicSingleTimeSeries, Dates.Hour(3), Dates.Hour(3))
+
+    reader = IS.build_forecast_reader(sys, IS.Deterministic; resolution = res)
+    entries = IS.get_forecast_reader_entries(reader)
+    # Three DST entries (one per component), but c1/c2 share the underlying array,
+    # so only two physical slots.
+    @test length(entries) == 3
+    @test all(
+        IS.get_time_series_type(e.key) == IS.DeterministicSingleTimeSeries
+        for e in entries
+    )
+    @test IS.get_num_forecast_slots(reader) == 2
+
+    by_name = Dict(IS.get_name(e.owner) => i for (i, e) in enumerate(entries))
+    @test entries[by_name["c1"]].slot == entries[by_name["c2"]].slot
+    @test entries[by_name["c3"]].slot != entries[by_name["c1"]].slot
+
+    IS.read_forecast_window!(reader, t0)
+    # Window 0 of a DST(horizon 3) over 1:12 is [1, 2, 3]; the shared pair matches.
+    @test IS.get_forecast_window(reader, by_name["c1"]) == [1.0, 2.0, 3.0]
+    @test IS.get_forecast_window(reader, by_name["c1"]) ==
+          IS.get_forecast_window(reader, by_name["c2"])
+    @test IS.get_forecast_window(reader, by_name["c3"]) == [101.0, 102.0, 103.0]
+end
+
+@testset "Test ForecastReader Probabilistic window orientation" begin
+    sys = IS.SystemData()
+    c = IS.TestComponent("c1", 5)
+    IS.add_component!(sys, c)
+
+    t0 = Dates.DateTime("2020-01-01")
+    res = Dates.Hour(1)
+    horizon, percentiles = 2, [0.1, 0.5, 0.9]
+    # Per-window matrices are (horizon, percentile).
+    w0 = Float64[h * 10 + p for h in 1:horizon, p in 1:length(percentiles)]
+    data = SortedDict(t0 => w0, t0 + res => w0 .+ 100)
+    IS.add_time_series!(sys, c, IS.Probabilistic("load", data, percentiles, res))
+
+    reader = IS.build_forecast_reader(sys, IS.Probabilistic; resolution = res)
+    @test length(IS.get_forecast_reader_entries(reader)) == 1
+
+    IS.read_forecast_window!(reader, t0)
+    window = IS.get_forecast_window(reader, 1)
+    # Oriented (horizon, percentile), matching get_window.
+    @test size(window) == (horizon, length(percentiles))
+    @test window == w0
+    full = IS.get_time_series(IS.Probabilistic, c, "load")
+    @test window == TimeSeries.values(IS.get_window(full, t0))
+end

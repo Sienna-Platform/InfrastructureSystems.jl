@@ -1329,6 +1329,46 @@ function get_shared_time_series(data::SystemData)
     return _rust_group_by_hash(store, id_to_owner)
 end
 
+"""
+$(TYPEDSIGNATURES)
+Build a [`ForecastReader`](@ref) over every forecast in `data` of
+`time_series_type` (`Deterministic`, `Probabilistic`, `Scenarios`, or
+`DeterministicSingleTimeSeries`; a `Deterministic` reader also includes any
+`DeterministicSingleTimeSeries`). `resolution` is required and pins the reader to
+one forecast resolution; `name` and `features` further narrow the match. All
+matched forecasts must share one window timeline.
+
+The reader serves the simulation pattern "at each window timestamp, get every
+component's forecast": drive it with [`read_forecast_window!`](@ref) and read each
+entry with [`get_forecast_window`](@ref). Forecasts that share an underlying array
+(deduplicated data, or a `DeterministicSingleTimeSeries` over its
+`SingleTimeSeries`) are read from disk once per timestamp regardless of how many
+components reference them — see [`get_shared_time_series`](@ref).
+"""
+function build_forecast_reader(
+    data::SystemData,
+    ::Type{T};
+    resolution::Dates.Period,
+    name::Union{Nothing, AbstractString} = nothing,
+    features...,
+) where {T <: Forecast}
+    store = data.time_series_manager.data_store::RustTimeSeriesStore
+    id_to_owner =
+        (id, category) -> if category == "Component"
+            get_component(data, id)
+        else
+            get_supplemental_attribute(data, id)
+        end
+    return _rust_build_forecast_reader(
+        store,
+        id_to_owner,
+        T;
+        resolution = resolution,
+        name = name,
+        features = Dict{String, Any}(string(k) => v for (k, v) in features),
+    )
+end
+
 function get_forecast_total_period(
     data::SystemData;
     resolution::Union{Nothing, Dates.Period} = nothing,
