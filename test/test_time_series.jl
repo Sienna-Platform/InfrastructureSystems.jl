@@ -1182,13 +1182,18 @@ end
             name;
             start_time = dates[2],
         )
-        # Must pass a full horizon.
-        @test_throws ArgumentError IS.get_time_series(
+        # A partial horizon is now supported for a DST-backed read: each window is
+        # truncated to its first `len` steps (this was previously rejected because a
+        # DST was returned as a non-truncatable view).
+        truncated = IS.get_time_series(
             IS.Deterministic,
             component,
             name;
             len = horizon_count - 1,
         )
+        trunc_window = IS.get_window(truncated, dates[1])
+        @test length(TimeSeries.values(trunc_window)) == horizon_count - 1
+        @test TimeSeries.values(trunc_window) == data[1:(horizon_count - 1)]
         # Already stored.
         @test IS.transform_single_time_series!(
             sys,
@@ -1689,6 +1694,9 @@ end
     @test initial_times == [Dates.DateTime("2020-01-01T00:00:00")]
     forecast = IS.get_time_series(IS.DeterministicSingleTimeSeries, component, name)
     @test IS.get_interval(forecast) == Dates.Second(0)
+    # The single window materializes to the full underlying series.
+    @test IS.get_count(forecast) == 1
+    @test TimeSeries.values(IS.get_window(forecast, dates[1])) == data
 end
 
 @testset "Test DeterministicSingleTimeSeries with interval = resolution" begin
@@ -2630,6 +2638,111 @@ end
                 ) for
                 (i, it) in enumerate(default_time_params.initial_times)
             ), in_memory, true)
+    end
+end
+
+# DST analog of `_test_get_time_series_option_type`: build a long SingleTimeSeries,
+# transform it into a DeterministicSingleTimeSeries (an internal storage type), and
+# verify that sliced reads — which now materialize into a regular Deterministic —
+# return the correct overlapping-window values for scalar and FunctionData data.
+# `make_value(i)` returns the underlying value at 1-based index `i`; each forecast
+# window is a contiguous `horizon_count`-length slice of those values.
+function _test_dst_get_time_series_slices(in_memory, make_value)
+    sys = IS.SystemData(; time_series_in_memory = in_memory)
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    resolution = Dates.Hour(1)
+    total = 24
+    horizon_count = 6
+    interval = resolution  # a window starts at every timestamp (interval_steps == 1)
+    name = "val"
+    dates =
+        collect(range(Dates.DateTime("2020-01-01"); length = total, step = resolution))
+    data = [make_value(i) for i in 1:total]
+    sts = IS.SingleTimeSeries(; data = TimeSeries.TimeArray(dates, data), name = name)
+    IS.add_time_series!(sys, component, sts)
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        horizon_count * resolution,
+        interval,
+    )
+
+    window_count = total - horizon_count + 1
+    # Window `w` (1-based) starts at `dates[w]` and spans `horizon_count` values.
+    expected(w) = data[w:(w + horizon_count - 1)]
+
+    # A DST read returns a materialized Deterministic covering every window.
+    full = IS.get_time_series(IS.Deterministic, component, name)
+    @test full isa IS.Deterministic
+    @test IS.get_count(full) == window_count
+    @test IS.get_initial_timestamp(full) == dates[1]
+    @test IS.get_horizon_count(full) == horizon_count
+    for (i, window) in enumerate(IS.iterate_windows(full))
+        @test TimeSeries.values(window) == expected(i)
+    end
+
+    # start_time at a non-first window boundary + a strict count sub-range.
+    offset = 5
+    count = 4
+    it = dates[offset]
+    sub = IS.get_time_series(
+        IS.Deterministic, component, name; start_time = it, count = count)
+    @test IS.get_initial_timestamp(sub) == it
+    @test IS.get_count(sub) == count
+    @test IS.get_horizon_count(sub) == horizon_count
+    for (i, window) in enumerate(IS.iterate_windows(sub))
+        @test TimeSeries.values(window) == expected(offset + i - 1)
+    end
+
+    # Same sub-range, truncated to the first `len` horizon steps per window.
+    len = horizon_count - 1
+    trunc = IS.get_time_series(
+        IS.Deterministic, component, name; start_time = it, count = count, len = len)
+    @test IS.get_count(trunc) == count
+    @test IS.get_horizon_count(trunc) == len
+    for (i, window) in enumerate(IS.iterate_windows(trunc))
+        @test TimeSeries.values(window) == expected(offset + i - 1)[1:len]
+    end
+
+    # A single-window slice (count == 1).
+    one = IS.get_time_series(
+        IS.Deterministic, component, name; start_time = it, count = 1)
+    @test IS.get_count(one) == 1
+    @test TimeSeries.values(IS.get_window(one, it)) == expected(offset)
+
+    # A non-boundary start_time and an over-range count both error.
+    @test_throws ArgumentError IS.get_time_series(
+        IS.Deterministic, component, name; start_time = it + Dates.Minute(1))
+    @test_throws ArgumentError IS.get_time_series(
+        IS.Deterministic, component, name; start_time = it, count = window_count)
+end
+
+@testset "Test DeterministicSingleTimeSeries sliced reads" begin
+    for in_memory in (true, false)
+        _test_dst_get_time_series_slices(in_memory, i -> 1.0 * i)
+    end
+end
+
+@testset "Test DeterministicSingleTimeSeries sliced reads LinearFunctionData" begin
+    for in_memory in (true, false)
+        _test_dst_get_time_series_slices(
+            in_memory, i -> IS.LinearFunctionData(3.14 * i, 1.23 * i))
+    end
+end
+
+@testset "Test DeterministicSingleTimeSeries sliced reads QuadraticFunctionData" begin
+    for in_memory in (true, false)
+        _test_dst_get_time_series_slices(
+            in_memory, i -> IS.QuadraticFunctionData(999.0, 1.0 * i, 1.23))
+    end
+end
+
+@testset "Test DeterministicSingleTimeSeries sliced reads PiecewiseLinearData" begin
+    for in_memory in (true, false)
+        _test_dst_get_time_series_slices(
+            in_memory, i -> IS.PiecewiseLinearData(repeat([(999.0, 1.0 * i)], 5)))
     end
 end
 
