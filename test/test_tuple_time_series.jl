@@ -157,6 +157,29 @@
         data2 = IS.serialize_struct(tts2)
         tts2_rt = IS.deserialize(IS.get_type_from_serialization_data(data2), data2)
         @test tts2_rt isa IS.TupleTimeSeries{MinMax}
+
+        # Round-trip through a JSON string to mimic the on-disk format: the
+        # NamedTuple field names ride PARAMETERS_KEY as a JSON array of strings
+        # and must survive a JSON encode/parse cycle (which retypes the Dict to
+        # Dict{String, Any} and strings to plain `String`).
+        for (T, key) in ((StartUpStages, static_key), (MinMax, static_key))
+            tts = IS.TupleTimeSeries{T}(key)
+            json_data = JSON.parse(
+                JSON.json(IS.serialize_struct(tts));
+                dicttype = Dict{String, Any},
+            )
+            @test IS.get_type_from_serialization_data(json_data) ===
+                  IS.TupleTimeSeries{T}
+            json_rt = IS.deserialize(
+                IS.get_type_from_serialization_data(json_data), json_data,
+            )
+            @test json_rt isa IS.TupleTimeSeries{T}
+            @test IS.get_underlying_namedtuple_type(json_rt) === T
+            json_rt_key = IS.get_time_series_key(json_rt)
+            @test IS.get_name(json_rt_key) == IS.get_name(key)
+            @test IS.get_time_series_type(json_rt_key) ===
+                  IS.get_time_series_type(key)
+        end
     end
 
     @testset "build_static_tuple round-trip (HDF5)" begin
