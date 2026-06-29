@@ -324,35 +324,6 @@ get_array_by_hash(
     TSS.get_array_by_hash(store.inner, data_hash, T)
 
 """
-    get_single(store, owner_id, owner_category, name; resolution, features=Dict()) -> SingleTimeSeries
-
-Reconstruct a `SingleTimeSeries` (metadata + array) from the Rust store.
-"""
-function get_single(
-    store::RustTimeSeriesStore,
-    owner_id::Integer,
-    owner_category::TSS.OwnerCategory,
-    name::AbstractString;
-    resolution::Union{Nothing, Dates.Period} = nothing,
-    features = Dict{String, Any}(),
-)
-    meta =
-        get_metadata(store, owner_id, owner_category, name;
-            resolution = resolution, features = features)
-    values = _read_values(store, meta.data_hash, meta.logical_type, meta.dtype, meta.length)
-    # Construct directly from the decoded array (no TimeArray hop). `{T, N}` is
-    # recovered from the array's eltype/ndims; `logical_type` already drove the
-    # domain-type decode in `_read_values`.
-    sts = SingleTimeSeries(
-        String(name),
-        meta.initial_timestamp,
-        meta.resolution,
-        values,
-    )
-    return sts
-end
-
-"""
     serialize_non_sequential!(store, owner_id, owner_type, owner_category, name, nts;
                               features=Dict(), units=nothing)
 
@@ -642,8 +613,9 @@ _rust_get_time_series(
     )
 
 # Forecasts reconstruct from the stored forecast type, honoring `start_time` /
-# `count` slicing on the forecast window axis. `len` applies only to static
-# series (a forecast always returns full horizon windows), so it is rejected.
+# `count` slicing on the forecast window axis. `len`, when given, truncates each
+# window to its first `len` horizon steps. A forecast stored as a
+# DeterministicSingleTimeSeries is materialized into a regular `Deterministic`.
 _rust_get_time_series(
     ::Type{<:Forecast},
     owner::TimeSeriesOwners,
@@ -990,36 +962,43 @@ function _rust_get_forecast(
         return result
     elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_DETERMINISTIC_SINGLE;
         resolution = resolution, features = feats)
-        # A DST shares the underlying SingleTimeSeries array; rebuild that series
-        # and wrap it with the DST windowing parameters (read as a Deterministic).
+        # A DeterministicSingleTimeSeries is an internal storage optimization: it
+        # shares the underlying SingleTimeSeries array instead of materializing the
+        # overlapping windows. On read it is always returned as a regular
+        # `Deterministic` — the Rust store expands the shared array into the
+        # canonical (horizon_count, count) window matrix (honoring `time_range`),
+        # so the reconstruction below is identical to the `Deterministic` branch.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
         d = TSS.get_time_series(TSS.DeterministicSingleTimeSeries, store.inner, owner_id,
             category, name;
             resolution = resolution, features = feats, time_range = tr)
-        # A DST is a view over the shared SingleTimeSeries array; its windows
-        # cannot be truncated, so a partial `len` is rejected.
-        if !isnothing(len)
-            horizon_count = Int(d.horizon ÷ d.resolution)
-            len == horizon_count || throw(
-                ArgumentError(
-                    "len=$len is not supported for DeterministicSingleTimeSeries; " *
-                    "windows must be the full horizon ($horizon_count)"),
-            )
-        end
-        sts = get_single(store, owner_id, category, name;
-            resolution = resolution, features = feats)
-        # `d` is already sliced: its `initial_timestamp` / `count` describe the
-        # requested window range over the (full) shared SingleTimeSeries array.
-        # When a single window spans the whole series (count == 1 and the interval
-        # equals the horizon), IS represents the interval as `Second(0)`; otherwise
-        # the stored interval is kept.
+        fmeta = TSS.get_forecast_metadata(store.inner, owner_id, category, name,
+            TSS.TS_TYPE_DETERMINISTIC_SINGLE; resolution = resolution, features = feats,
+        )
+        logical = fmeta.logical_type
+        # Scalar windows come back as a 2D `(horizon_count, count)` array; encoded
+        # FunctionData windows carry trailing coefficient dims (3D). A DST inherits
+        # the shared SingleTimeSeries metadata, whose `logical_type` may be set even
+        # for scalar data, so key the decode on the array rank rather than `logical`.
+        dst_window(i) = _truncate(
+            if ndims(d.data) == 3
+                _decode_forecast_window(d.data, logical, i)
+            else
+                d.data[:, i]
+            end,
+        )
+        # A single window has no step between window starts, so IS represents that
+        # interval as `Second(0)`; otherwise the stored window interval is kept.
         result_interval =
             (d.count == 1 && d.interval == d.horizon) ? Dates.Second(0) : d.interval
-        # DeterministicSingleTimeSeries has no internal UUID, so none is assigned.
-        return DeterministicSingleTimeSeries(; single_time_series = sts,
-            initial_timestamp = d.initial_timestamp,
-            interval = result_interval, count = d.count, horizon = d.horizon)
+        # `d` is already sliced to the requested window range by the store.
+        data = SortedDict(
+            d.initial_timestamp + d.interval * (i - 1) => dst_window(i)
+            for i in 1:(d.count)
+        )
+        return Deterministic(; name = String(name), data = data,
+            resolution = d.resolution, interval = result_interval)
     elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_SCENARIOS;
         resolution = resolution, features = feats)
         # `.data` is the canonical (scenario_count, horizon_count, count) array.

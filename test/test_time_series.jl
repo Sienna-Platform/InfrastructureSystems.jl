@@ -1171,7 +1171,9 @@ end
                 ),
             )
         @test length(forecasts) == 1
-        @test forecasts[1] isa IS.DeterministicSingleTimeSeries
+        # A DeterministicSingleTimeSeries is an internal storage type; reads
+        # materialize it into a regular Deterministic.
+        @test forecasts[1] isa IS.Deterministic
 
         # Must start on a window.
         @test_throws ArgumentError IS.get_time_series(
@@ -1609,7 +1611,9 @@ end
 
     for name in ts_names
         forecast = IS.get_time_series(IS.Deterministic, component, name)
-        @test forecast isa IS.DeterministicSingleTimeSeries
+        # Stored as a DeterministicSingleTimeSeries, but reads materialize it
+        # into a regular Deterministic.
+        @test forecast isa IS.Deterministic
     end
 end
 
@@ -2265,7 +2269,7 @@ end
     @test IS.get_name(time_series) == name
 
     time_series = IS.get_time_series(IS.DeterministicSingleTimeSeries, component2, name)
-    @test time_series isa IS.DeterministicSingleTimeSeries
+    @test time_series isa IS.Deterministic
     @test IS.get_initial_timestamp(time_series) == dates[1]
     @test IS.get_name(time_series) == name
 end
@@ -4384,7 +4388,7 @@ end
             params.component,
             params.sts_name;
             resolution = params.resolution1,
-        ) isa IS.DeterministicSingleTimeSeries
+        ) isa IS.Deterministic
 
         # The original should still be readable.
         @test IS.has_time_series(
