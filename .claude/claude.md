@@ -27,7 +27,15 @@ Key files:
 - `production_variable_cost_curve.jl` — `CostCurve{T,U}` / `FuelCurve{T,U}` (units in the type parameter)
 - `relative_units.jl` — `RelativeUnits` submodule: unit-system markers and `RelativeQuantity`
 - `outputs.jl` — abstract `Outputs` interface (not-implemented stubs for downstream packages)
-- `serialization.jl` — JSON-based serialization (stdlib-adjacent `JSON`; JSON3/StructTypes were removed)
+- `geographic_supplemental_attribute.jl` — `GeographicInfo` supplemental attribute (hand-written template)
+- `data_source_supplemental_attribute.jl` — `DataSource` supplemental attribute: data-provenance record
+  (organization, dataset, url, version, retrieved/published timestamps, confidence, recorded_by, covered
+  fields, `extra`). Mutable with `get_*`/`set_*!`; `published_at`/`recorded_by` are `Union{Nothing,_}` with
+  dispatch-based `has_*`/`get_*` predicate accessors. Shared across components via the association store
+  (create-once / link-many). Hand-written, not exported.
+- `serialization.jl` — JSON-based serialization (stdlib-adjacent `JSON`; JSON3/StructTypes were removed).
+  Per-type deserialize methods narrow JSON's loose types to declared field types: optional `DateTime`
+  (`Union{Nothing, Dates.DateTime}`) and `Vector{String}` (JSON arrays parse to `Vector{Any}`).
 
 Subdirectories:
 - `function_data/` — `FunctionData` hierarchy, time-series-backed function data, convexity/validity checks
