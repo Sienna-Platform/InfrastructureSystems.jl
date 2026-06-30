@@ -283,11 +283,15 @@ end
 
 deserialize(::Type{Dates.DateTime}, val::AbstractString) = Dates.DateTime(val)
 
-# An optional DateTime field serializes its value to a JSON string; the plain-DateTime
-# method above does not cover the Union, so the raw string would otherwise reach the
-# constructor untyped. The `nothing` case is handled generically.
-deserialize(::Type{Union{Nothing, Dates.DateTime}}, val::AbstractString) =
-    Dates.DateTime(val)
+# Mirror of the `deserialize(T::Union, data::Dict)` dispatcher above for string-valued data:
+# an optional field like `Union{Nothing, Dates.DateTime}` serializes to a JSON string, which
+# the concrete-type methods do not match. Drop `Nothing` and recurse to the remaining type's
+# string deserializer. The `nothing` case is handled by the generic path.
+function deserialize(T::Union, data::AbstractString)
+    non_nothing = filter(x -> x !== Nothing, Base.uniontypes(T))
+    length(non_nothing) == 1 && return deserialize(only(non_nothing), data)
+    throw(ArgumentError("Cannot pick which type of union $T to deserialize from a string"))
+end
 
 # The next methods fix serialization of UUIDs. The underlying type of a UUID is a UInt128.
 # JSON tries to encode this as a number in JSON. Encoding integers greater than can
