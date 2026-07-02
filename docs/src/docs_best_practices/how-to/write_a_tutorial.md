@@ -56,7 +56,7 @@ code blocks.
 !!! tip "Do"
     
     Display all code, starting from `using SomeSiennaPackage`. Example: See
-    [Working with Time Series](@extref tutorial_time_series).
+    [Working with Time Series](@extref PowerSystems Working-with-Time-Series-Data).
 
 !!! warning "Don't"
     

@@ -288,3 +288,8 @@ end
     _, result = validate_serialization(sys2)
     @test result
 end
+
+@testset "Deserialize optional DateTime field" begin
+    @test IS.deserialize(Union{Nothing, Dates.DateTime}, "2024-09-01T00:00:00") ==
+          Dates.DateTime("2024-09-01T00:00:00")
+end

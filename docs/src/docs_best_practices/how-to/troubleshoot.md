@@ -82,7 +82,7 @@ Pkg.add(["PowerSystems"]);
      2. Run the formatter once to format the rest of the file
      3. Add the text back in
      4. Add the `ignore` keyword argument with the file name to
-        [`JuliaFormatter.format`](@extref `JuliaFormatter.format-Tuple{Any}`) in `scripts/formatter/formatter_code.jl`
+        [`JuliaFormatter.format`](@extref) in `scripts/formatter/formatter_code.jl`
         to skip the file in the future:
 
 ```julia
