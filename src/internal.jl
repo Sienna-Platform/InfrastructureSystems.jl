@@ -15,7 +15,7 @@ Unit system for component data values.
 """ UnitSystem
 
 @kwdef mutable struct SystemUnitsSettings <: UnitsData
-    base_value::Float64
+    const base_value::Float64
     unit_system::UnitSystem
 end
 
