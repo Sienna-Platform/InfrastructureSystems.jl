@@ -353,6 +353,13 @@ function get_num_components(components::Components)
     return get_num_members(components)
 end
 
+"""
+Iterate `(type, name_dict)` pairs over every concrete component type stored.
+"""
+function iterate_components_by_type(components::Components)
+    return pairs(components.data)
+end
+
 function is_attached(component::InfrastructureSystemsComponent, components::Components)
     T = typeof(component)
     !haskey(components.data, T) && return false

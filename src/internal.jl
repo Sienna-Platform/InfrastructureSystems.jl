@@ -23,8 +23,9 @@ serialize(val::SystemUnitsSettings) = serialize_struct(val)
 deserialize(T::Type{<:SystemUnitsSettings}, val::Dict) = deserialize_struct(T, val)
 
 @kwdef struct SharedSystemReferences <: InfrastructureSystemsType
-    supplemental_attribute_manager::Any = nothing
-    time_series_manager::Any = nothing
+    supplemental_attribute_manager::Union{Nothing, AbstractSupplementalAttributeManager} =
+        nothing
+    time_series_manager::Union{Nothing, AbstractTimeSeriesManager} = nothing
 end
 
 """

@@ -339,3 +339,41 @@ end
     attr = IS.TestSupplemental(; value = 42.0)
     @test IS.get_attr_value(attr) == 42.0
 end
+
+@testset "supplemental attribute transaction rolls back in-place mutations" begin
+    mgr = IS.SupplementalAttributeManager()
+    attr = IS.GeographicInfo(; geo_json = Dict{String, Any}("x" => 1.0))
+    component = IS.TestComponent("component1", 1)
+    IS.add_supplemental_attribute!(mgr, component, attr)
+
+    @test_throws ErrorException IS.begin_supplemental_attributes_update(mgr) do
+        stored = IS.get_supplemental_attribute(mgr, IS.get_uuid(attr))
+        IS.get_geo_json(stored)["x"] = 999.0
+        error("boom")
+    end
+
+    stored = IS.get_supplemental_attribute(mgr, IS.get_uuid(attr))
+    @test IS.get_geo_json(stored)["x"] == 1.0
+end
+
+@testset "supplemental attribute rollback does not clone the manager" begin
+    data = IS.SystemData()
+    mgr = data.supplemental_attribute_manager
+    attr = IS.GeographicInfo(; geo_json = Dict{String, Any}("x" => 1.0))
+    component = IS.TestComponent("component1", 1)
+    IS.add_component!(data, component)
+    IS.add_supplemental_attribute!(data, component, attr)
+
+    stored_before = IS.get_supplemental_attribute(mgr, IS.get_uuid(attr))
+    original_refs = IS.get_shared_system_references(stored_before)
+
+    @test_throws ErrorException IS.begin_supplemental_attributes_update(mgr) do
+        error("boom")
+    end
+
+    stored = IS.get_supplemental_attribute(mgr, IS.get_uuid(attr))
+    refs = IS.get_shared_system_references(stored)
+    @test refs === original_refs
+    @test refs.supplemental_attribute_manager === mgr
+    @test refs.time_series_manager === data.time_series_manager
+end

@@ -38,12 +38,13 @@ end
 
 function show_container_table(io::IO, container::InfrastructureSystemsContainer; kwargs...)
     column_labels = ["Type", "Count", "Has Static Time Series", "Has Forecasts"]
-    data = Array{Any, 2}(undef, length(container.data), length(column_labels))
+    members_by_type = get_members_by_type(container)
+    data = Array{Any, 2}(undef, length(members_by_type), length(column_labels))
 
-    type_names = [(strip_module_name(x), x) for x in keys(container.data)]
+    type_names = [(strip_module_name(x), x) for x in keys(members_by_type)]
     sort!(type_names; by = x -> x[1])
     for (i, (type_name, type)) in enumerate(type_names)
-        vals = container.data[type]
+        vals = members_by_type[type]
         has_sts = false
         has_forecasts = false
         for val in values(vals)

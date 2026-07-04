@@ -1,19 +1,27 @@
 """
-Assign a new UUID to the component.
+Assign a new UUID to a detached component.
+
+Do not call this directly on a component attached to a `SystemData` — the UUID index and
+the time-series / supplemental-attribute mappings would become stale. Use
+`assign_new_uuid!(data, component)` instead, which keeps all three in sync.
 """
 function assign_new_uuid_internal!(component::InfrastructureSystemsComponent)
+    if !isnothing(get_shared_system_references(component))
+        error(
+            "Cannot call assign_new_uuid_internal! on $(summary(component)) while it is " *
+            "attached to a system. Use assign_new_uuid!(data, component) instead.",
+        )
+    end
     old_uuid = get_uuid(component)
     new_uuid = make_uuid()
     mgr = get_time_series_manager(component)
     if !isnothing(mgr)
         replace_component_uuid!(mgr.metadata_store, old_uuid, new_uuid)
     end
-
     associations = _get_supplemental_attribute_associations(component)
     if !isnothing(associations)
         replace_component_uuid!(associations, old_uuid, new_uuid)
     end
-
     set_uuid!(get_internal(component), new_uuid)
     return
 end

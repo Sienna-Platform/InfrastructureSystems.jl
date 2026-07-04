@@ -3102,7 +3102,7 @@ end
               IS.SingleTimeSeries
 
         old_uuid = IS.get_uuid(component)
-        IS.assign_new_uuid_internal!(component)
+        IS.assign_new_uuid!(sys, component)
         new_uuid = IS.get_uuid(component)
         @test old_uuid != new_uuid
 
@@ -5474,4 +5474,18 @@ end
     end
     @test err isa ArgumentError
     @test occursin("no method for units", err.msg)
+end
+
+@testset "nested bulk time series updates are rejected" begin
+    sys = IS.SystemData()
+    name = "Component1"
+    component = IS.TestComponent(name, 5)
+    IS.add_component!(sys, component)
+    mgr = sys.time_series_manager
+    IS.begin_time_series_update(mgr) do
+        @test_throws ErrorException IS.begin_time_series_update(mgr) do
+        end
+    end
+    # cache cleared after the outer update completes
+    @test isnothing(mgr.bulk_update_cache)
 end

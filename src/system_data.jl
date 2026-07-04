@@ -97,6 +97,8 @@ function SystemData(
     )
 end
 
+get_time_series_manager(data::SystemData) = data.time_series_manager
+
 function open_time_series_store!(
     func::Function,
     data::SystemData,
@@ -106,7 +108,7 @@ function open_time_series_store!(
 )
     open_store!(
         func,
-        data.time_series_manager.data_store,
+        get_data_store(get_time_series_manager(data)),
         mode,
         args...;
         kwargs...,
@@ -470,7 +472,7 @@ function iterate_components_with_time_series(
     return (
         get_component(data, x) for
         x in list_owner_uuids_with_time_series(
-            data.time_series_manager.metadata_store,
+            get_metadata_store(get_time_series_manager(data)),
             InfrastructureSystemsComponent;
             time_series_type = time_series_type,
             resolution = resolution,
@@ -485,7 +487,7 @@ function iterate_supplemental_attributes_with_time_series(
     return (
         get_supplemental_attribute(data, x) for
         x in list_owner_uuids_with_time_series(
-            data.time_series_manager.metadata_store,
+            get_metadata_store(get_time_series_manager(data)),
             SupplementalAttribute;
             time_series_type = time_series_type,
         )
@@ -531,7 +533,7 @@ function get_time_series_multiple(
 end
 
 check_time_series_consistency(data::SystemData, ts_type) =
-    check_consistency(data.time_series_manager.metadata_store, ts_type)
+    check_consistency(get_metadata_store(get_time_series_manager(data)), ts_type)
 
 """
 Transform all instances of SingleTimeSeries to DeterministicSingleTimeSeries.
@@ -671,7 +673,11 @@ function _transform_single_time_series!(
     try
         begin_time_series_update(data.time_series_manager) do
             for (component, metadata) in zip(components, all_metadata)
-                add_metadata!(data.time_series_manager.metadata_store, component, metadata)
+                add_metadata!(
+                    get_metadata_store(get_time_series_manager(data)),
+                    component,
+                    metadata,
+                )
             end
         end
     catch
@@ -680,7 +686,7 @@ function _transform_single_time_series!(
         for (component, metadata) in zip(components, all_metadata)
             try
                 remove_metadata!(
-                    data.time_series_manager.metadata_store,
+                    get_metadata_store(get_time_series_manager(data)),
                     component,
                     metadata,
                 )
@@ -712,7 +718,7 @@ function _check_transform_single_time_series(
     skip_existing::Bool = false,
 )
     items = list_metadata_with_owner_uuid(
-        data.time_series_manager.metadata_store,
+        get_metadata_store(get_time_series_manager(data)),
         InfrastructureSystemsComponent;
         time_series_type = SingleTimeSeries,
         resolution = resolution,
@@ -726,7 +732,7 @@ function _check_transform_single_time_series(
             interval,
         )
         system_params = get_forecast_parameters(
-            data.time_series_manager.metadata_store;
+            get_metadata_store(get_time_series_manager(data));
             resolution = params.resolution,
             interval = params.interval,
         )
@@ -747,7 +753,7 @@ function _check_transform_single_time_series(
         ts_features = get_features(item.metadata)
         ts_features_symbols = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in ts_features)
         existing_det = list_metadata(
-            data.time_series_manager.metadata_store,
+            get_metadata_store(get_time_series_manager(data)),
             component;
             time_series_type = Deterministic,
             name = ts_name,
@@ -769,7 +775,7 @@ function _check_transform_single_time_series(
         # horizon, and interval.
         if skip_existing
             existing = list_metadata(
-                data.time_series_manager.metadata_store,
+                get_metadata_store(get_time_series_manager(data)),
                 component;
                 time_series_type = DeterministicSingleTimeSeries,
                 name = ts_name,
@@ -960,23 +966,23 @@ function serialize(data::SystemData)
             directory = metadata["serialization_directory"]
             base = metadata["basename"]
 
-            if isempty(data.time_series_manager.data_store)
+            _ds = get_data_store(get_time_series_manager(data))
+            if isempty(_ds)
                 json_data["time_series_compression_enabled"] =
-                    get_compression_settings(data.time_series_manager.data_store).enabled
+                    get_compression_settings(_ds).enabled
                 json_data["time_series_in_memory"] =
-                    data.time_series_manager.data_store isa InMemoryTimeSeriesStorage
+                    _ds isa InMemoryTimeSeriesStorage
             else
                 time_series_base_name =
                     _get_secondary_basename(base, TIME_SERIES_STORAGE_FILE)
                 time_series_storage_file = joinpath(directory, time_series_base_name)
-                serialize(data.time_series_manager.data_store, time_series_storage_file)
+                serialize(_ds, time_series_storage_file)
                 to_h5_file(
-                    data.time_series_manager.metadata_store,
+                    get_metadata_store(get_time_series_manager(data)),
                     time_series_storage_file,
                 )
                 json_data["time_series_storage_file"] = time_series_base_name
-                json_data["time_series_storage_type"] =
-                    string(typeof(data.time_series_manager.data_store))
+                json_data["time_series_storage_type"] = string(typeof(_ds))
             end
         end
         pop!(json_data["internal"]["ext"], SERIALIZATION_METADATA_KEY, nothing)
@@ -1056,7 +1062,7 @@ function deserialize(
         internal,
     )
     attributes_by_uuid = Dict{Base.UUID, SupplementalAttribute}()
-    for attr_dict in values(supplemental_attribute_manager.data)
+    for attr_dict in iterate_supplemental_attribute_dicts(supplemental_attribute_manager)
         for attr in values(attr_dict)
             uuid = get_uuid(attr)
             if haskey(attributes_by_uuid, uuid)
@@ -1167,7 +1173,17 @@ function assign_new_uuid!(data::SystemData, component::InfrastructureSystemsComp
         throw(ArgumentError("component with uuid = $orig_uuid is not stored."))
     end
 
-    assign_new_uuid_internal!(component)
+    new_uuid = make_uuid()
+    mgr = get_time_series_manager(component)
+    if !isnothing(mgr)
+        replace_component_uuid!(mgr.metadata_store, orig_uuid, new_uuid)
+    end
+    associations = _get_supplemental_attribute_associations(component)
+    if !isnothing(associations)
+        replace_component_uuid!(associations, orig_uuid, new_uuid)
+    end
+    set_uuid!(get_internal(component), new_uuid)
+
     data.component_uuids[get_uuid(component)] = component
     return
 end
@@ -1329,21 +1345,24 @@ function get_masked_component(data::SystemData, uuid::Base.UUID)
 end
 
 get_forecast_initial_times(data::SystemData; kwargs...) =
-    get_forecast_initial_times(data.time_series_manager.metadata_store; kwargs...)
+    get_forecast_initial_times(get_metadata_store(get_time_series_manager(data)); kwargs...)
 get_forecast_window_count(data::SystemData; kwargs...) =
-    get_forecast_window_count(data.time_series_manager.metadata_store; kwargs...)
+    get_forecast_window_count(get_metadata_store(get_time_series_manager(data)); kwargs...)
 get_forecast_horizon(data::SystemData; kwargs...) =
-    get_forecast_horizon(data.time_series_manager.metadata_store; kwargs...)
+    get_forecast_horizon(get_metadata_store(get_time_series_manager(data)); kwargs...)
 get_forecast_initial_timestamp(data::SystemData; kwargs...) =
-    get_forecast_initial_timestamp(data.time_series_manager.metadata_store; kwargs...)
+    get_forecast_initial_timestamp(
+        get_metadata_store(get_time_series_manager(data));
+        kwargs...,
+    )
 get_forecast_interval(data::SystemData; kwargs...) =
-    get_forecast_interval(data.time_series_manager.metadata_store; kwargs...)
+    get_forecast_interval(get_metadata_store(get_time_series_manager(data)); kwargs...)
 
 get_time_series_resolutions(
     data::SystemData;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
 ) = get_time_series_resolutions(
-    data.time_series_manager.metadata_store;
+    get_metadata_store(get_time_series_manager(data));
     time_series_type = time_series_type,
 )
 
@@ -1353,7 +1372,7 @@ function get_forecast_total_period(
     interval::Union{Nothing, Dates.Period} = nothing,
 )
     params = get_forecast_parameters(
-        data.time_series_manager.metadata_store;
+        get_metadata_store(get_time_series_manager(data));
         resolution = resolution,
         interval = interval,
     )
@@ -1378,13 +1397,13 @@ end
 check_component(data::SystemData, component) = check_component(data.components, component)
 
 get_compression_settings(data::SystemData) =
-    get_compression_settings(data.time_series_manager.data_store)
+    get_compression_settings(get_data_store(get_time_series_manager(data)))
 
 set_name!(data::SystemData, component, name) = set_name!(data.components, component, name)
 
 function get_component_counts_by_type(data::SystemData)
     counts = Dict{String, Int}()
-    for (component_type, components) in data.components.data
+    for (component_type, components) in iterate_components_by_type(data.components)
         counts[strip_module_name(component_type)] = length(components)
     end
 
@@ -1403,15 +1422,15 @@ get_num_components_with_supplemental_attributes(data::SystemData) =
     get_num_components_with_attributes(data.supplemental_attribute_manager.associations)
 
 get_num_time_series(data::SystemData) =
-    get_num_time_series(data.time_series_manager.metadata_store)
+    get_num_time_series(get_metadata_store(get_time_series_manager(data)))
 get_time_series_counts(data::SystemData) =
-    get_time_series_counts(data.time_series_manager.metadata_store)
+    get_time_series_counts(get_metadata_store(get_time_series_manager(data)))
 get_time_series_counts_by_type(data::SystemData) =
-    get_time_series_counts_by_type(data.time_series_manager.metadata_store)
+    get_time_series_counts_by_type(get_metadata_store(get_time_series_manager(data)))
 get_static_time_series_summary_table(data::SystemData) =
-    get_static_time_series_summary_table(data.time_series_manager.metadata_store)
+    get_static_time_series_summary_table(get_metadata_store(get_time_series_manager(data)))
 get_forecast_summary_table(data::SystemData) =
-    get_forecast_summary_table(data.time_series_manager.metadata_store)
+    get_forecast_summary_table(get_metadata_store(get_time_series_manager(data)))
 
 _get_system_basename(system_file) = splitext(basename(system_file))[1]
 _get_secondary_basename(system_basename, name) = system_basename * "_" * name
@@ -1481,7 +1500,7 @@ clear_supplemental_attributes!(data::SystemData) =
     clear_supplemental_attributes!(data.supplemental_attribute_manager)
 
 stores_time_series_in_memory(data::SystemData) =
-    data.time_series_manager.data_store isa InMemoryTimeSeriesStorage
+    get_data_store(get_time_series_manager(data)) isa InMemoryTimeSeriesStorage
 
 """
 Make a `deepcopy` of a [`SystemData`](@ref) more quickly by skipping the copying of time

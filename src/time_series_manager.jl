@@ -6,7 +6,7 @@ mutable struct BulkUpdateTSCache
     forecast_params::Dict{Tuple{Dates.Period, Dates.Period}, ForecastParameters}
 end
 
-mutable struct TimeSeriesManager <: InfrastructureSystemsType
+mutable struct TimeSeriesManager <: AbstractTimeSeriesManager
     data_store::TimeSeriesStorage
     metadata_store::TimeSeriesMetadataStore
     read_only::Bool
@@ -38,6 +38,9 @@ function TimeSeriesManager(;
     end
     return TimeSeriesManager(data_store, metadata_store, read_only, nothing)
 end
+
+get_metadata_store(mgr::TimeSeriesManager) = mgr.metadata_store
+get_data_store(mgr::TimeSeriesManager) = mgr.data_store
 
 _get_forecast_params(ts::Forecast) = make_time_series_parameters(ts)
 _get_forecast_params(::StaticTimeSeries) = nothing
@@ -84,6 +87,12 @@ function begin_time_series_update(
     func::Function,
     mgr::TimeSeriesManager,
 )
+    if !isnothing(mgr.bulk_update_cache)
+        error(
+            "A bulk time series update is already in progress; " *
+            "nested or concurrent begin_time_series_update calls are not supported.",
+        )
+    end
     open_store!(mgr.data_store, "r+") do
         original_ts_uuids = Set(list_existing_time_series_uuids(mgr.metadata_store))
         mgr.bulk_update_cache =

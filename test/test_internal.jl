@@ -5,6 +5,15 @@
     @test uuid1 != IS.get_uuid(component)
 end
 
+@testset "SharedSystemReferences field types" begin
+    @test IS.TimeSeriesManager <: IS.AbstractTimeSeriesManager
+    @test IS.SupplementalAttributeManager <: IS.AbstractSupplementalAttributeManager
+    @test IS.AbstractTimeSeriesManager <: IS.InfrastructureSystemsType
+    @test IS.AbstractSupplementalAttributeManager <: IS.InfrastructureSystemsType
+    @test_throws MethodError IS.SharedSystemReferences(time_series_manager = 1)
+    @test_throws MethodError IS.SharedSystemReferences(supplemental_attribute_manager = 1)
+end
+
 @testset "Test ext" begin
     internal = IS.InfrastructureSystemsInternal()
     @test isnothing(internal.ext)

@@ -1,7 +1,7 @@
 const SupplementalAttributesByType =
     Dict{DataType, Dict{Base.UUID, <:SupplementalAttribute}}
 
-mutable struct SupplementalAttributeManager <: InfrastructureSystemsContainer
+mutable struct SupplementalAttributeManager <: AbstractSupplementalAttributeManager
     data::SupplementalAttributesByType
     associations::SupplementalAttributeAssociations
 end
@@ -25,10 +25,7 @@ function begin_supplemental_attributes_update(
     func::Function,
     mgr::SupplementalAttributeManager,
 )
-    orig_data = SupplementalAttributesByType()
-    for (key, val) in mgr.data
-        orig_data[key] = copy(val)
-    end
+    orig_data = _snapshot_attribute_data(mgr)
 
     try
         SQLite.transaction(mgr.associations.db) do
@@ -39,6 +36,23 @@ function begin_supplemental_attributes_update(
         mgr.data = orig_data
         rethrow()
     end
+end
+
+function _snapshot_attribute_data(mgr::SupplementalAttributeManager)
+    stackdict = IdDict{Any, Any}()
+    for attr_dict in values(mgr.data), attr in values(attr_dict)
+        refs = get_shared_system_references(attr)
+        if !isnothing(refs)
+            # SharedSystemReferences is immutable, so deepcopy ignores an entry for
+            # it and recurses into its fields; pin the mutable managers it points
+            # back to instead so deepcopy stops at the reference-graph boundary
+            # rather than cloning the whole system.
+            stackdict[refs.supplemental_attribute_manager] =
+                refs.supplemental_attribute_manager
+            stackdict[refs.time_series_manager] = refs.time_series_manager
+        end
+    end
+    return Base.deepcopy_internal(mgr.data, stackdict)::SupplementalAttributesByType
 end
 
 function add_supplemental_attribute!(
@@ -123,6 +137,14 @@ end
 """
 function iterate_supplemental_attributes(mgr::SupplementalAttributeManager)
     return iterate_container(mgr)
+end
+
+"""
+Iterate the per-type attribute dicts stored in the manager.
+Each element is a `Dict{UUID, <:SupplementalAttribute}` for one concrete type.
+"""
+function iterate_supplemental_attribute_dicts(mgr::SupplementalAttributeManager)
+    return values(mgr.data)
 end
 
 """
