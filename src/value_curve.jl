@@ -58,6 +58,11 @@ InputOutputCurve{T}(
 ) where {(T <: Union{QuadraticFunctionData, LinearFunctionData, PiecewiseLinearData})} =
     InputOutputCurve{T}(function_data, nothing)
 
+# An `InputOutputCurve` is a thin wrapper whose `function_data` directly represents the
+# input-output function, so it converts to that `FunctionData` when assigned to a
+# `FunctionData` field (e.g. `HydroReservoir.head_to_volume_factor`).
+Base.convert(::Type{<:FunctionData}, curve::InputOutputCurve) = get_function_data(curve)
+
 """
 Evaluate the `InputOutputCurve` at a given input value `x`.
 """
