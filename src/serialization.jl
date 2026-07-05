@@ -126,6 +126,21 @@ function add_serialization_metadata!(data::Dict, ::Type{T}) where {T}
     return
 end
 
+# TimeSeriesFunctionData{T} is parametric — ensure the type parameter is reconstructed
+# during deserialization by setting CONSTRUCT_WITH_PARAMETERS_KEY.
+function add_serialization_metadata!(
+    data::Dict,
+    ::Type{TimeSeriesFunctionData{T}},
+) where {T <: StaticFunctionData}
+    data[METADATA_KEY] = Dict{String, Any}(
+        TYPE_KEY => string(nameof(TimeSeriesFunctionData)),
+        MODULE_KEY => string(parentmodule(TimeSeriesFunctionData)),
+        PARAMETERS_KEY => [string(nameof(T))],
+        CONSTRUCT_WITH_PARAMETERS_KEY => true,
+    )
+    return
+end
+
 """
 Return the type information for the serialized struct.
 """
@@ -142,12 +157,27 @@ function get_type_from_serialization_metadata(metadata::Dict)
         return base_type
     end
 
-    # This has several limitations and is only a workaround for PSY.Reserve subtypes.
-    # - each parameter must be in _module
-    # - does not support nested parametrics.
-    # Reserves should be fixed and then we can remove this hack.
-    parameters = [getproperty(_module, Symbol(x)) for x in metadata[PARAMETERS_KEY]]
+    parameters =
+        [_resolve_serialized_type_parameter(_module, x) for x in metadata[PARAMETERS_KEY]]
     return base_type{parameters...}
+end
+
+# A plain string names a type in the metadata's module.
+# This has several limitations and is only a workaround for PSY.Reserve subtypes.
+# - each parameter must be in _module
+# - does not support nested parametrics.
+# Reserves should be fixed and then we can remove this hack.
+_resolve_serialized_type_parameter(_module::Module, x::AbstractString) =
+    getproperty(_module, Symbol(x))
+
+# A structured entry encodes a parameter that is not a named type; currently a
+# `NamedTuple{names, NTuple{N, Float64}}` shape (used by `TupleTimeSeries`).
+function _resolve_serialized_type_parameter(::Module, x::AbstractDict)
+    haskey(x, "namedtuple_names") || throw(
+        ArgumentError("unrecognized serialized type parameter encoding: $x"),
+    )
+    names = Tuple(Symbol.(x["namedtuple_names"]))
+    return NamedTuple{names, NTuple{length(names), Float64}}
 end
 
 serialize(val::Base.RefValue{T}) where {T} = serialize(val[])
@@ -295,24 +325,46 @@ function serialize_julia_info()
 end
 
 """
-Perform a test to see if JSON3 can convert this value so that the code can give the user a
+Perform a test to see if JSON can convert this value so that the code can give the user a
 a comprehensible corrective action.
 """
 function is_ext_valid_for_serialization(value)
-    isnothing(value) && return true
-    is_valid = true
-    try
-        JSON3.write(value)
-    catch
-        is_valid = false
-    end
-
+    is_valid = _is_ext_value_basic(value)
     if !is_valid
         @error "Failed to serialize an 'ext' value. Please ensure that the " *
                "contents follow the rules provided in the documentation. Generally, only " *
                "basic types are allowed - strings and numbers and arrays, dictionaries, and " *
                "structs of those." value
+        return false
     end
+    try
+        JSON3.write(value)
+    catch
+        @error "Failed to serialize an 'ext' value. Please ensure that the " *
+               "contents follow the rules provided in the documentation. Generally, only " *
+               "basic types are allowed - strings and numbers and arrays, dictionaries, and " *
+               "structs of those." value
+        return false
+    end
+    return true
+end
 
-    return is_valid
+# JSON.jl will happily serialize Functions, Modules, Tasks, IO handles, etc. by
+# introspecting their fields, but those values are not meaningful JSON content and
+# cannot be reliably deserialized. Restrict 'ext' values to genuine data types.
+_is_ext_value_basic(
+    ::Union{Nothing, Missing, Number, AbstractString, Symbol, Bool, Char, Enum},
+) = true
+_is_ext_value_basic(x::AbstractArray) = all(_is_ext_value_basic, x)
+_is_ext_value_basic(x::Tuple) = all(_is_ext_value_basic, x)
+_is_ext_value_basic(x::AbstractDict) =
+    all(_is_ext_value_basic, keys(x)) && all(_is_ext_value_basic, values(x))
+_is_ext_value_basic(::Union{Function, Module, Task, IO, Ptr, Base.RefValue}) = false
+function _is_ext_value_basic(x::T) where {T}
+    isstructtype(T) || return false
+    for name in fieldnames(T)
+        isdefined(x, name) || return false
+        _is_ext_value_basic(getfield(x, name)) || return false
+    end
+    return true
 end

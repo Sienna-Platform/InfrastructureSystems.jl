@@ -4,7 +4,7 @@ function validate_serialization(sys::IS.SystemData; time_series_read_only = fals
     IS.prepare_for_serialization_to_file!(sys, filename; force = true)
     data = IS.serialize(sys)
     open(filename, "w") do io
-        JSON3.write(io, data)
+        JSON.json(io, data)
     end
 
     # Make sure the code supports the files changing directories.
@@ -24,7 +24,7 @@ function validate_serialization(sys::IS.SystemData; time_series_read_only = fals
     end
 
     data = open(path) do io
-        return JSON3.read(io, Dict)
+        return JSON.parse(io; dicttype = Dict{String, Any})
     end
 
     orig = pwd()
@@ -82,7 +82,7 @@ end
     @test deserialized isa Vector{Base.UUID}
     @test deserialized == uuids
     # Round-trip through JSON to mimic on-disk format.
-    json_round_trip = JSON3.read(JSON3.write(serialized), Vector{Dict})
+    json_round_trip = JSON.parse(JSON.json(serialized); dicttype = Dict{String, Any})
     @test IS.deserialize(Vector{Base.UUID}, json_round_trip) == uuids
 end
 
@@ -95,7 +95,7 @@ end
     @test deserialized isa Set{Base.UUID}
     @test deserialized == uuids
     # Round-trip through JSON to mimic on-disk format.
-    json_round_trip = JSON3.read(JSON3.write(serialized), Vector{Dict})
+    json_round_trip = JSON.parse(JSON.json(serialized); dicttype = Dict{String, Any})
     @test IS.deserialize(Set{Base.UUID}, json_round_trip) == uuids
 end
 
@@ -275,7 +275,10 @@ end
 @testset "Test JSON string" begin
     component = IS.SimpleTestComponent("Component1", 1)
     text = IS.to_json(component)
-    IS.deserialize(IS.SimpleTestComponent, JSON3.read(text, Dict)) == component
+    IS.deserialize(
+        IS.SimpleTestComponent,
+        JSON.parse(text; dicttype = Dict{String, Any}),
+    ) == component
 end
 
 @testset "Test pretty-print JSON IO" begin
@@ -284,13 +287,40 @@ end
     IS.to_json(io, component; pretty = false)
     text = String(take!(io))
     @test !occursin(" ", text)
-    IS.deserialize(IS.SimpleTestComponent, JSON3.read(text, Dict)) == component
+    IS.deserialize(
+        IS.SimpleTestComponent,
+        JSON.parse(text; dicttype = Dict{String, Any}),
+    ) == component
 
     io = IOBuffer()
     IS.to_json(io, component; pretty = true)
     text = String(take!(io))
     @test occursin(" ", text)
-    IS.deserialize(IS.SimpleTestComponent, JSON3.read(text, Dict)) == component
+    IS.deserialize(
+        IS.SimpleTestComponent,
+        JSON.parse(text; dicttype = Dict{String, Any}),
+    ) == component
+end
+
+@enum TestExtEnum TEST_EXT_A TEST_EXT_B
+
+mutable struct PartiallyInitializedExt
+    x::Int
+    y::Vector{Int}
+    PartiallyInitializedExt(x) = new(x)
+end
+
+@testset "Test ext serialization of Char, Enum, and partially initialized structs" begin
+    @test IS.is_ext_valid_for_serialization('a')
+    @test IS.is_ext_valid_for_serialization(TEST_EXT_A)
+    @test IS.is_ext_valid_for_serialization(Dict("c" => 'x', "e" => TEST_EXT_B))
+    @test(
+        @test_logs(
+            (:error, r"only basic types are allowed"),
+            match_mode = :any,
+            !IS.is_ext_valid_for_serialization(PartiallyInitializedExt(1))
+        )
+    )
 end
 
 @testset "Test ext serialization" begin

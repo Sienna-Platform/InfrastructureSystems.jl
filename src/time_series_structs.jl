@@ -106,6 +106,11 @@ get_horizon_count(key::ForecastKey) =
     get_horizon_count(get_horizon(key), get_resolution(key))
 Base.length(key::ForecastKey) = get_horizon_count(key)
 
+# All concrete key types, for use in struct fields: a `Union` of concrete types
+# union-splits (no boxing / dynamic dispatch in per-timestep paths), unlike the
+# abstract `TimeSeriesKey`.
+const ConcreteTimeSeriesKey = Union{StaticTimeSeriesKey, ForecastKey}
+
 """
 Provides counts of time series including attachments to components and supplemental
 attributes.

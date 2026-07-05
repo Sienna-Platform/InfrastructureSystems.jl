@@ -9,7 +9,6 @@ import UUIDs
 import JSON3
 using DataStructures: SortedDict
 using DataFrames
-using DataFramesMeta
 using Random
 using ProgressLogging
 import SQLite
@@ -18,11 +17,7 @@ import InfrastructureSystems
 import InfrastructureSystems as IS
 
 import Aqua
-Aqua.test_unbound_args(InfrastructureSystems)
-Aqua.test_undefined_exports(InfrastructureSystems)
-Aqua.test_ambiguities(InfrastructureSystems)
-Aqua.test_stale_deps(InfrastructureSystems)
-Aqua.test_deps_compat(InfrastructureSystems)
+Aqua.test_all(InfrastructureSystems)
 
 const BASE_DIR =
     abspath(joinpath(dirname(Base.find_package("InfrastructureSystems")), ".."))

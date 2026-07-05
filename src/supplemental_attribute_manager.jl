@@ -11,7 +11,7 @@ directly.
 
 See also: [`SupplementalAttribute`](@ref), [`iterate_supplemental_attributes`](@ref)
 """
-mutable struct SupplementalAttributeManager <: InfrastructureSystemsContainer
+mutable struct SupplementalAttributeManager <: AbstractSupplementalAttributeManager
     data::SupplementalAttributesByType
     associations::SupplementalAttributeAssociations
 end

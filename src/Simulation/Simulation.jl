@@ -9,6 +9,7 @@ import ..InfrastructureSystems:
     @scoped_enum
 
 include("enums.jl")
+include("simulation_info.jl")
 
 using DocStringExtensions
 

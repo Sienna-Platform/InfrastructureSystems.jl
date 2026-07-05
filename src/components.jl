@@ -67,8 +67,7 @@ function add_component!(
     component::T;
     kwargs...,
 ) where {T <: InfrastructureSystemsComponent}
-    kw = _add_component_kwarg_deprecation(kwargs)
-    _add_component!(components, component; kw...)
+    _add_component!(components, component; kwargs...)
     return
 end
 
@@ -352,6 +351,13 @@ Return the total number of components stored.
 """
 function get_num_components(components::Components)
     return get_num_members(components)
+end
+
+"""
+Iterate `(type, name_dict)` pairs over every concrete component type stored.
+"""
+function iterate_components_by_type(components::Components)
+    return pairs(components.data)
 end
 
 function is_attached(component::InfrastructureSystemsComponent, components::Components)

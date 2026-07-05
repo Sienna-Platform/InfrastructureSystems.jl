@@ -11,16 +11,16 @@ public or internal API. There may be multiple issues to iterate through:
 
  2. Identify the `*.jl` file for one of your missing docstrings. Are other docstrings in that file
     visible in the compiled API .html?
-    
+
       + **YES**: Check whether those other docstrings are listed in the Public API .md file in a
         [`@docs` block](@extref). Either:
-        
+
           * Add the missing struct/function names to an appropriate `@docs` block in the
             API .md if it is manually organized. See below if this creates a
             [`no docs found`](@ref no_docs) error.
           * Preferrably, [switch to `@autodocs`](@ref use_autodocs) with the `*.jl` file
             as one of its `Pages` instead.
-    
+
       + **No**: add a new [`@autodocs` block](@extref) in the Public API .md file with that
         `*.jl` file as one of its `Pages`.
  3. Are these docstrings from `InfrastructureSystems.jl`? Follow how-to
@@ -33,21 +33,21 @@ Find the `*.jl` file containing `SomeFunction` and add a docstring.
 
 ## `Error: duplicate docs found`
 
-> **Example**: `Error: duplicate docs found for 'PowerSimulations.SimulationProblemResults' in src\reference\PowerSimulations.md`
+> **Example**: `Error: duplicate docs found for 'PowerSimulations.SimulationProblemOutputs' in src\reference\PowerSimulations.md`
 
 **Problem**: The same `.jl` file has been found more than once by `Documenter.jl`, which matches
 based on the end of a file path.
 
  1. Determine which file the function is located in
-    
-    > **Example**: `simulation_problem_results.jl` for `PowerSimulations.SimulationProblemResults`
+
+    > **Example**: `simulation_problem_outputs.jl` for `PowerSimulations.SimulationProblemOutputs`
 
  2. Check whether that file is listed more than once in an `@autodocs` `Pages` list in the
     API markdown file (e.g., `PowerSimulations.md` or `public.md`). Remove duplicates.
  3. Also check for other files with the same partial ending in the `@autodocs` `Pages` lists
     in the API .md file. Specify more of that file path to distinguish it.
-    
-    > **Example**: Change `Pages = ["problem_results.jl"]` to `Pages = ["operation/problem_results.jl"]`
+
+    > **Example**: Change `Pages = ["problem_outputs.jl"]` to `Pages = ["operation/problem_outputs.jl"]`
 
 ## `Parsing error for input` from `JuliaFormatter`
 
@@ -77,7 +77,7 @@ Pkg.add(["PowerSystems"]);
 ```
 
   - If you can't avoid it:
-    
+
      1. Remove the text with single bracket (or other problem) temporarily
      2. Run the formatter once to format the rest of the file
      3. Add the text back in
@@ -99,4 +99,4 @@ By setting `warnonly=true` in [`makedocs`](@extref Documenter.makedocs) at `make
 *temporarily* disable errors and build regardless. This makes it easy to track down
 cross-reference errors by clicking a link and seeing what fails.
 
-We do not allow `warnonly=true` to be used in production, so if used, this **must be removed** before a pull request is submitted. 
+We do not allow `warnonly=true` to be used in production, so if used, this **must be removed** before a pull request is submitted.

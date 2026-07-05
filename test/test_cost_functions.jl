@@ -278,6 +278,24 @@ end
     @test IS.deserialize(IS.CostCurve, IS.serialize(cc)) == cc
     @test IS.deserialize(IS.FuelCurve, IS.serialize(fc)) == fc
 
+    # FuelCurve whose fuel_cost is a TimeSeriesKey must round-trip to the
+    # concrete key subtype (regression: previously dispatched on the abstract
+    # `TimeSeriesKey` and crashed in `fieldnames`).
+    fc_ts = IS.FuelCurve(
+        IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3)),
+        IS.ForecastKey(;
+            time_series_type = IS.Deterministic,
+            name = "fuel_price",
+            initial_timestamp = Dates.DateTime("2020-01-01"),
+            resolution = Dates.Hour(1),
+            horizon = Dates.Hour(24),
+            interval = Dates.Hour(24),
+            count = 1,
+            features = Dict{String, Any}(),
+        ),
+    )
+    @test IS.compare_values(IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts)), fc_ts)
+
     @test zero(cc) == IS.CostCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)))
     @test zero(IS.CostCurve) ==
           IS.CostCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)))
@@ -286,31 +304,35 @@ end
     @test zero(IS.FuelCurve) ==
           IS.FuelCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)), 0.0)
 
-    @test repr(cc) == sprint(show, cc) ==
-          "InfrastructureSystems.CostCurve{QuadraticCurve}(QuadraticCurve(1.0, 2.0, 3.0), InfrastructureSystems.UnitSystemModule.UnitSystem.NATURAL_UNITS = 2, LinearCurve(0.0, 0.0))"
-    @test repr(fc) == sprint(show, fc) ==
-          "InfrastructureSystems.FuelCurve{QuadraticCurve}(QuadraticCurve(1.0, 2.0, 3.0), InfrastructureSystems.UnitSystemModule.UnitSystem.NATURAL_UNITS = 2, 4.0, LinearCurve(0.0, 0.0), LinearCurve(0.0, 0.0))"
+    # repr and sprint(show, ...) must agree; the type parameter may or may not
+    # be module-qualified depending on what's in scope, so check key content.
+    @test repr(cc) == sprint(show, cc)
+    @test occursin("CostCurve", repr(cc))
+    @test occursin("QuadraticCurve(1.0, 2.0, 3.0)", repr(cc))
+    @test occursin("LinearCurve(0.0, 0.0)", repr(cc))
+    @test repr(fc) == sprint(show, fc)
+    @test occursin("FuelCurve", repr(fc))
+    @test occursin("QuadraticCurve(1.0, 2.0, 3.0)", repr(fc))
+    @test occursin("4.0", repr(fc))
     @test sprint(show, "text/plain", cc) ==
           sprint(show, "text/plain", cc; context = :compact => false) ==
-          "CostCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  power_units: InfrastructureSystems.UnitSystemModule.UnitSystem.NATURAL_UNITS = 2\n  vom_cost: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0"
+          "CostCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  vom_cost: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  power_units: NU"
     @test sprint(show, "text/plain", fc) ==
           sprint(show, "text/plain", fc; context = :compact => false) ==
-          "FuelCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  power_units: InfrastructureSystems.UnitSystemModule.UnitSystem.NATURAL_UNITS = 2\n  fuel_cost: 4.0\n  startup_fuel_offtake: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  vom_cost: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0"
+          "FuelCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  fuel_cost: 4.0\n  startup_fuel_offtake: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  vom_cost: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  power_units: NU"
     @test sprint(show, "text/plain", cc; context = :compact => true) ==
-          "CostCurve with power_units InfrastructureSystems.UnitSystemModule.UnitSystem.NATURAL_UNITS = 2, vom_cost LinearCurve(0.0, 0.0), and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
+          "CostCurve with power_units NU, vom_cost LinearCurve(0.0, 0.0), and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
     @test sprint(show, "text/plain", fc; context = :compact => true) ==
-          "FuelCurve with power_units InfrastructureSystems.UnitSystemModule.UnitSystem.NATURAL_UNITS = 2, fuel_cost 4.0, startup_fuel_offtake LinearCurve(0.0, 0.0), vom_cost LinearCurve(0.0, 0.0), and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
+          "FuelCurve with power_units NU, fuel_cost 4.0, startup_fuel_offtake LinearCurve(0.0, 0.0), vom_cost LinearCurve(0.0, 0.0), and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
 
-    @test IS.get_power_units(cc) == IS.UnitSystem.NATURAL_UNITS
-    @test IS.get_power_units(fc) == IS.UnitSystem.NATURAL_UNITS
+    @test IS.get_power_units(cc) == IS.NaturalUnit()
+    @test IS.get_power_units(fc) == IS.NaturalUnit()
     @test IS.get_power_units(
-        IS.CostCurve(zero(IS.InputOutputCurve), IS.UnitSystem.SYSTEM_BASE),
-    ) ==
-          IS.UnitSystem.SYSTEM_BASE
+        IS.CostCurve(zero(IS.InputOutputCurve), IS.SystemBaseUnit()),
+    ) == IS.SystemBaseUnit()
     @test IS.get_power_units(
-        IS.FuelCurve(zero(IS.InputOutputCurve), IS.UnitSystem.DEVICE_BASE, 1.0),
-    ) ==
-          IS.UnitSystem.DEVICE_BASE
+        IS.FuelCurve(zero(IS.InputOutputCurve), IS.DeviceBaseUnit(), 1.0),
+    ) == IS.DeviceBaseUnit()
 
     @test IS.get_vom_cost(cc) == IS.LinearCurve(0.0)
     @test IS.get_vom_cost(fc) == IS.LinearCurve(0.0)
@@ -338,6 +360,59 @@ end
           IS.LinearCurve(10.0, 7.0)
 end
 
+@testset "is_time_series_backed for CostCurve and FuelCurve" begin
+    forecast_key = IS.ForecastKey(;
+        time_series_type = IS.Deterministic,
+        name = "fuel_price",
+        initial_timestamp = Dates.DateTime("2020-01-01"),
+        resolution = Dates.Hour(1),
+        horizon = Dates.Hour(24),
+        interval = Dates.Hour(24),
+        count = 1,
+        features = Dict{String, Any}(),
+    )
+
+    # Scalar dispatches
+    @test IS.is_time_series_backed(forecast_key) == true
+    @test IS.is_time_series_backed(nothing) == false
+
+    static_vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3))
+    ts_vc = IS.TimeSeriesInputOutputCurve(IS.TimeSeriesQuadraticFunctionData(forecast_key))
+
+    # CostCurve: only time-series-backed when its value curve is
+    @test IS.is_time_series_backed(IS.CostCurve(static_vc)) == false
+    @test IS.is_time_series_backed(IS.CostCurve(ts_vc)) == true
+
+    # FuelCurve 2x2: fuel_cost ∈ {Float64, TimeSeriesKey} × value_curve ∈ {static, time-varying}
+    @test IS.is_time_series_backed(IS.FuelCurve(static_vc, 4.0)) == false
+    @test IS.is_time_series_backed(IS.FuelCurve(ts_vc, 4.0)) == true
+    @test IS.is_time_series_backed(IS.FuelCurve(static_vc, forecast_key)) == true
+    @test IS.is_time_series_backed(IS.FuelCurve(ts_vc, forecast_key)) == true
+
+    # CostCurve with TS value curve → returns the value-curve key
+    @test IS.get_time_series_key(IS.CostCurve(ts_vc)) ===
+          IS.get_time_series_key(ts_vc)
+
+    # get_time_series_key is intentionally undefined for FuelCurve (its value curve and
+    # fuel_cost are independently TS-backed). Callers resolve explicitly via
+    # get_time_series_key(get_value_curve(c)) or get_fuel_cost(c); the accessor itself
+    # throws an ArgumentError for every FuelCurve combination.
+    @test_throws ArgumentError IS.get_time_series_key(IS.FuelCurve(ts_vc, 4.0))
+    @test_throws ArgumentError IS.get_time_series_key(
+        IS.FuelCurve(static_vc, forecast_key),
+    )
+    @test_throws ArgumentError IS.get_time_series_key(IS.FuelCurve(ts_vc, forecast_key))
+end
+
+@testset "get_time_series_key fallback for non-TS-backed curves (PVC-E)" begin
+    # Previously CostCurve gave a bare MethodError; now a clear ArgumentError
+    @test_throws ArgumentError IS.get_time_series_key(IS.CostCurve(IS.LinearCurve(5.0)))
+    # FuelCurve static value_curve + Float64 fuel_cost — previously also a MethodError
+    @test_throws ArgumentError IS.get_time_series_key(
+        IS.FuelCurve(IS.LinearCurve(5.0), 4.0),
+    )
+end
+
 @testset "Test prohibited FunctionData types" begin
     # Incremental and Average Rate curves only support
     # linear and piecewise step function data.
@@ -347,6 +422,51 @@ end
     @test_throws MethodError IS.AverageRateCurve(q_fd, 0.0)
     @test_throws MethodError IS.IncrementalCurve(pwl_fd, 0.0)
     @test_throws MethodError IS.AverageRateCurve(pwl_fd, 0.0)
+end
+
+@testset "CostCurve/FuelCurve serialize round-trip all unit systems" begin
+    vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1.0, 2.0, 3.0))
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+        cc = IS.CostCurve(vc, U)
+        cc_rt = IS.deserialize(IS.CostCurve, IS.serialize(cc))
+        @test cc_rt == cc
+        @test IS.get_power_units(cc_rt) == U
+
+        fc = IS.FuelCurve(vc, U, 5.0)
+        fc_rt = IS.deserialize(IS.FuelCurve, IS.serialize(fc))
+        @test fc_rt == fc
+        @test IS.get_power_units(fc_rt) == U
+    end
+end
+
+@testset "unit-system string decode" begin
+    @test IS._unit_system_instance("SystemBaseUnit") == IS.SystemBaseUnit()
+    @test IS._unit_system_instance("DeviceBaseUnit") == IS.DeviceBaseUnit()
+    @test IS._unit_system_instance("NaturalUnit") == IS.NaturalUnit()
+    @test_throws ArgumentError IS._unit_system_instance("bogus")
+    # Legacy IS3 `UnitSystem` enum value-names are no longer accepted.
+    @test_throws ArgumentError IS._unit_system_instance("SYSTEM_BASE")
+    @test_throws ArgumentError IS._unit_system_instance("NATURAL_UNITS")
+end
+
+@testset "zero preserves unit system (PVC-002)" begin
+    vc = IS.InputOutputCurve(IS.LinearFunctionData(1.0, 1.0))
+    # Full 6-combo matrix: 3 unit systems × {CostCurve, FuelCurve}
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+        c = IS.CostCurve(vc, U)
+        @test IS.get_power_units(zero(c)) == U
+        f = IS.FuelCurve(vc, U, 3.0)
+        @test IS.get_power_units(zero(f)) == U
+    end
+    # Type-form behavior unchanged: always NaturalUnit
+    @test IS.get_power_units(zero(IS.CostCurve)) == IS.NaturalUnit()
+    @test IS.get_power_units(zero(IS.FuelCurve)) == IS.NaturalUnit()
+end
+
+@testset "FuelCurve deserialize garbage fuel_cost (PVC-003)" begin
+    fc_example = IS.FuelCurve(IS.InputOutputCurve(IS.LinearFunctionData(1.0, 0.0)), 2.5)
+    bad_dict = merge(IS.serialize(fc_example), Dict("fuel_cost" => "oops"))
+    @test_throws ArgumentError IS.deserialize(IS.FuelCurve, bad_dict)
 end
 
 @testset "Test InputOutputCurve evaluation" begin

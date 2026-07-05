@@ -12,7 +12,7 @@
         @test isfile(filename)
         lines = readlines(filename)
         @test length(lines) == 1
-        data = JSON3.read(lines[1], Dict)
+        data = JSON.parse(lines[1]; dicttype = Dict{String, Any})
         @test data["name"] == "TestEvent"
         @test data["val1"] == "a"
         @test data["val2"] == 1

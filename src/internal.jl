@@ -15,7 +15,7 @@ Unit system for component data values.
 """ UnitSystem
 
 @kwdef mutable struct SystemUnitsSettings <: UnitsData
-    base_value::Float64
+    const base_value::Float64
     unit_system::UnitSystem
 end
 
@@ -23,8 +23,9 @@ serialize(val::SystemUnitsSettings) = serialize_struct(val)
 deserialize(T::Type{<:SystemUnitsSettings}, val::Dict) = deserialize_struct(T, val)
 
 @kwdef struct SharedSystemReferences <: InfrastructureSystemsType
-    supplemental_attribute_manager::Any = nothing
-    time_series_manager::Any = nothing
+    supplemental_attribute_manager::Union{Nothing, AbstractSupplementalAttributeManager} =
+        nothing
+    time_series_manager::Union{Nothing, AbstractTimeSeriesManager} = nothing
 end
 
 """

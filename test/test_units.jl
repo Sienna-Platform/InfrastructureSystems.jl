@@ -28,3 +28,10 @@ end
         @test typeof(time_period) == Dates.Millisecond
     end
 end
+
+@testset "SystemUnitsSettings base_value is immutable" begin
+    settings = IS.SystemUnitsSettings(100.0, IS.UnitSystem.SYSTEM_BASE)
+    @test_throws ErrorException settings.base_value = 50.0
+    settings.unit_system = IS.UnitSystem.NATURAL_UNITS
+    @test settings.unit_system == IS.UnitSystem.NATURAL_UNITS
+end

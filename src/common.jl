@@ -47,3 +47,11 @@ const COMPONENT_NAME_DELIMITER = "__"
 # See https://github.com/JuliaLang/julia/issues/18485
 "An equality predicate that is `true` for `NaN, NaN` (unlike `==`) and for `-0.0, 0.0` (unlike `isequal`)"
 isequivalent(x, y) = isequal(x, y) || (x == y)
+
+abstract type InfrastructureSystemsContainer <: InfrastructureSystemsType end
+
+"Abstract supertype for time-series manager implementations."
+abstract type AbstractTimeSeriesManager <: InfrastructureSystemsType end
+
+"Abstract supertype for supplemental-attribute manager implementations."
+abstract type AbstractSupplementalAttributeManager <: InfrastructureSystemsContainer end

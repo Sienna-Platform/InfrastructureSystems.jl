@@ -3,7 +3,6 @@ import SHA
 import JSON3
 
 const HASH_FILENAME = "check.sha256"
-const COMPARE_VALUES_SENTINEL = :(!NOUPGRADE)  # A Symbol that can't be a field name
 
 # Supported element types for transform_array_for_hdf Vector inputs
 const TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES = [
@@ -192,11 +191,18 @@ julia> strip_module_name(VariableReserve{PowerSystems.ReserveUp})
         # Fall back to string method for Union types
         return :(strip_module_name(string(T)))
     end
-    name = string(nameof(T))
-    if isempty(T.parameters)
+    # A partially-applied parameterized type (e.g. `ReserveDemandCurve{ReserveUp}` when the
+    # type carries a further free parameter such as a unit system) is a `UnionAll` and has
+    # no `.parameters`. Unwrap it and drop the free `TypeVar`s, keeping the bound parameters
+    # so the stripped name stays unique on those (e.g. "ReserveDemandCurve{ReserveUp}").
+    base = T isa UnionAll ? Base.unwrap_unionall(T) : T
+    name = string(nameof(base))
+    params = filter(p -> !(p isa TypeVar), collect(base.parameters))
+    if isempty(params)
         return name
     else # I believe there's only 2 parameters, so slightly overkill.
-        param_names = join([string(nameof(p)) for p in T.parameters], ", ")
+        param_names =
+            join([p isa Type ? string(nameof(p)) : string(p) for p in params], ", ")
         return name * "{" * param_names * "}"
     end
 end
@@ -243,15 +249,6 @@ Recursively compares struct values. Prints all mismatched values to stdout.
 """
 function compare_values(match_fn::Union{Function, Nothing}, x::T, y::U;
     compare_uuids = false, exclude = Set{Symbol}()) where {T, U}
-    # Special case: if match_fn is nothing, try calling the two-argument version to maintain
-    # backwards compatibility with packages that only implement that. Keep track of this to
-    # avoid infinite recursion. TODO remove in next major version
-    if isnothing(match_fn) && !(COMPARE_VALUES_SENTINEL in exclude)
-        return compare_values(x, y; compare_uuids = compare_uuids,
-            exclude = union(exclude, [COMPARE_VALUES_SENTINEL]))
-    end
-    exclude = setdiff(exclude, [COMPARE_VALUES_SENTINEL])
-
     _is_compare_directly(x, y) && (return _fetch_match_fn(match_fn)(x, y))
 
     match = true
@@ -369,7 +366,6 @@ macro scoped_enum(T, args...)
     blk = esc(
         :(
             module $(Symbol("$(T)Module"))
-            using JSON3
             import InfrastructureSystems
             export $T
             struct $T
@@ -398,11 +394,13 @@ macro scoped_enum(T, args...)
             Base.show(io::IO, e::$T) =
                 print(io, string($T, ".", string(e), " = ", e.value))
             Base.propertynames(::Type{$T}) = _ALL_NAMES
-            JSON3.StructType(::Type{$T}) = JSON3.StructTypes.StringType()
 
             InfrastructureSystems.serialize(val::$T) = Base.string(val)
-            InfrastructureSystems.deserialize(::Type{$T}, val) =
-                JSON3.StructTypes.constructfrom($T, val)
+            InfrastructureSystems.serialize(vals::Vector{$T}) =
+                InfrastructureSystems.serialize.(vals)
+            InfrastructureSystems.deserialize(::Type{$T}, val) = $T(val)
+            InfrastructureSystems.deserialize(::Type{Vector{$T}}, vals::Vector) =
+                [InfrastructureSystems.deserialize($T, v) for v in vals]
 
             Base.convert(::Type{$T}, val::Integer) = $T(val)
             Base.isless(val::$T, other::$T) = isless(val.value, other.value)

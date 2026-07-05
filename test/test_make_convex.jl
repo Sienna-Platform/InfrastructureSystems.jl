@@ -198,14 +198,14 @@
         vom_cost = IS.LinearCurve(0.5)
         cost_curve_convex = IS.CostCurve(;
             value_curve = ioc_convex,
-            power_units = IS.UnitSystem.NATURAL_UNITS,
+            power_units = IS.NaturalUnit(),
             vom_cost = vom_cost,
         )
 
         result = IS.increasing_curve_convex_approximation(cost_curve_convex)
         @test result isa IS.CostCurve
         @test IS.is_convex(result)
-        @test IS.get_power_units(result) == IS.UnitSystem.NATURAL_UNITS
+        @test IS.get_power_units(result) == IS.NaturalUnit()
         @test IS.get_vom_cost(result) == vom_cost
 
         # Non-convex CostCurve - should be convexified
@@ -218,14 +218,14 @@
         vom_cost_2 = IS.LinearCurve(1.0)
         cost_curve_concave = IS.CostCurve(;
             value_curve = ioc_concave,
-            power_units = IS.UnitSystem.SYSTEM_BASE,
+            power_units = IS.SystemBaseUnit(),
             vom_cost = vom_cost_2,
         )
 
         result_concave = IS.increasing_curve_convex_approximation(cost_curve_concave)
         @test result_concave isa IS.CostCurve
         @test IS.is_convex(result_concave)
-        @test IS.get_power_units(result_concave) == IS.UnitSystem.SYSTEM_BASE
+        @test IS.get_power_units(result_concave) == IS.SystemBaseUnit()
         @test IS.get_vom_cost(result_concave) == vom_cost_2
 
         # Invalid CostCurve (not strictly increasing) - should throw error
@@ -256,7 +256,7 @@
         vom_cost = IS.LinearCurve(0.5)
         fuel_curve_convex = IS.FuelCurve(;
             value_curve = ioc_convex,
-            power_units = IS.UnitSystem.NATURAL_UNITS,
+            power_units = IS.NaturalUnit(),
             fuel_cost = 25.0,
             vom_cost = vom_cost,
         )
@@ -264,7 +264,7 @@
         result = IS.increasing_curve_convex_approximation(fuel_curve_convex)
         @test result isa IS.FuelCurve
         @test IS.is_convex(result)
-        @test IS.get_power_units(result) == IS.UnitSystem.NATURAL_UNITS
+        @test IS.get_power_units(result) == IS.NaturalUnit()
         @test result.fuel_cost == 25.0
         @test IS.get_vom_cost(result) == vom_cost
 
@@ -278,7 +278,7 @@
         vom_cost_2 = IS.LinearCurve(1.0)
         fuel_curve_concave = IS.FuelCurve(;
             value_curve = ioc_concave,
-            power_units = IS.UnitSystem.SYSTEM_BASE,
+            power_units = IS.SystemBaseUnit(),
             fuel_cost = 30.0,
             vom_cost = vom_cost_2,
         )
@@ -286,7 +286,7 @@
         result_concave = IS.increasing_curve_convex_approximation(fuel_curve_concave)
         @test result_concave isa IS.FuelCurve
         @test IS.is_convex(result_concave)
-        @test IS.get_power_units(result_concave) == IS.UnitSystem.SYSTEM_BASE
+        @test IS.get_power_units(result_concave) == IS.SystemBaseUnit()
         @test result_concave.fuel_cost == 30.0
         @test IS.get_vom_cost(result_concave) == vom_cost_2
 
@@ -295,7 +295,7 @@
         inc_convex = IS.IncrementalCurve(psd_convex, 0.0)
         fuel_curve_inc = IS.FuelCurve(;
             value_curve = inc_convex,
-            power_units = IS.UnitSystem.NATURAL_UNITS,
+            power_units = IS.NaturalUnit(),
             fuel_cost = 20.0,
         )
 
@@ -315,7 +315,7 @@
             ioc_invalid = IS.InputOutputCurve(pld_invalid)
             fuel_curve_invalid = IS.FuelCurve(;
                 value_curve = ioc_invalid,
-                power_units = IS.UnitSystem.NATURAL_UNITS,
+                power_units = IS.NaturalUnit(),
                 fuel_cost = 25.0,
             )
 

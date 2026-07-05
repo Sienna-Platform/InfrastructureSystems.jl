@@ -1,7 +1,7 @@
 # Adds can be batched through `begin_time_series_update` to amortize store flushes.
 const ADD_TIME_SERIES_BATCH_SIZE = 100
 
-mutable struct TimeSeriesManager <: InfrastructureSystemsType
+mutable struct TimeSeriesManager <: AbstractTimeSeriesManager
     data_store::TimeSeriesStorage
     read_only::Bool
 end

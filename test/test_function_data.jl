@@ -613,7 +613,11 @@ end
     for fd in get_test_function_data()
         for do_jsonify in (false, true)
             serialized = IS.serialize(fd)
-            do_jsonify && (serialized = JSON3.read(JSON3.write(serialized), Dict))
+            do_jsonify &&
+                (
+                    serialized =
+                        JSON.parse(JSON.json(serialized); dicttype = Dict{String, Any})
+                )
             @test typeof(serialized) <: AbstractDict
             deserialized = IS.deserialize(typeof(fd), serialized)
             @test deserialized == fd
@@ -643,7 +647,7 @@ end
     # Value-equal function data should be == except when containing NaN since NaN != NaN;
     # value-equal function data should be isequal even when containing NaN; hash equality
     # should correspond with isequal
-    for my_type in IS.get_all_concrete_subtypes(IS.FunctionData)
+    for my_type in IS.get_all_concrete_subtypes(IS.StaticFunctionData)
         @test examples_1[(my_type, false)] == examples_2[(my_type, false)]
         @test examples_1[(my_type, true)] != examples_2[(my_type, true)]
         @test examples_1[(my_type, false)] != examples_2[(my_type, true)]

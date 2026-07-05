@@ -195,15 +195,13 @@ end
     @test IS.compare_values(my_match_fn_2, data3, data4)
 
     special1 = SpecialComparable(1)
+    # A 2-arg `compare_values(::T, ::T)` override is still dispatched directly.
     @test !(@test_logs (:info, "reached custom compare_values") IS.compare_values(
         special1,
         special1,
     ))
-    @test !(@test_logs (:info, "reached custom compare_values") IS.compare_values(
-        nothing,
-        special1,
-        special1,
-    ))
+    # IS4 no longer redispatches the 3-arg `nothing` form to 2-arg overrides, so the
+    # custom method is NOT reached here — it recurses into fields instead.
     @test IS.compare_values(==, special1, special1)
 
     # https://github.com/Sienna-Platform/InfrastructureSystems.jl/issues/407
@@ -610,6 +608,25 @@ end
         IS.get_id.(IS.get_supplemental_attributes(IS.TestSupplemental, data)),
     )
     @test length(attribute_ids) == length(unique(attribute_ids))
+end
+
+@testset "Test assign_new_uuid! keeps uuid index consistent" begin
+    data = IS.SystemData()
+    component = IS.TestComponent("comp_uuid_idx", 5)
+    IS.add_component!(data, component)
+    old_uuid = IS.get_uuid(component)
+    IS.assign_new_uuid!(data, component)
+    new_uuid = IS.get_uuid(component)
+    @test new_uuid != old_uuid
+    @test IS.get_component(data, new_uuid) === component
+    @test_throws ArgumentError IS.get_component(data, old_uuid)
+end
+
+@testset "Test assign_new_uuid_internal! errors on attached component" begin
+    data = IS.SystemData()
+    component = IS.TestComponent("comp_guard", 5)
+    IS.add_component!(data, component)
+    @test_throws ErrorException IS.assign_new_uuid_internal!(component)
 end
 
 @testset "Test bulk add of time series" begin

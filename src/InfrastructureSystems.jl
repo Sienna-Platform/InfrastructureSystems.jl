@@ -5,6 +5,17 @@ module InfrastructureSystems
 # Cost aliases don't display properly unless they are exported from IS
 export LinearCurve, QuadraticCurve
 export PiecewisePointCurve, PiecewiseIncrementalCurve, PiecewiseAverageCurve
+export TimeSeriesLinearCurve, TimeSeriesQuadraticCurve, TimeSeriesPiecewisePointCurve
+export TimeSeriesPiecewiseIncrementalCurve, TimeSeriesPiecewiseAverageCurve
+
+# Units interface: declared here, methods implemented by domain packages
+# (e.g., PowerSystems.jl provides power-domain `get_value`/`set_value` methods).
+# Domain packages must EXTEND (add methods to), not own/redefine, these generics.
+"Get a field value with optional unit conversion. Methods are provided by domain packages. Domain packages must EXTEND (add methods to), not own/redefine, this generic."
+function get_value end
+"Set a field value with optional unit conversion. Methods are provided by domain packages. Domain packages must EXTEND (add methods to), not own/redefine, this generic."
+function set_value end
+export get_value, set_value
 
 import Base: @kwdef
 import DataFrames
@@ -17,8 +28,8 @@ import Pkg
 import PrettyTables
 import Printf: @sprintf
 import SHA
-import StringTemplates
 import StructTypes
+import StringTemplates
 import TerminalLoggers: TerminalLogger, ProgressLevel
 import TimeSeries
 import TimeSeriesStore
@@ -36,8 +47,11 @@ using DocStringExtensions
                                  $(DOCSTRING)
                                  """
 
-# IS should not export any function since it can have name clashes with other packages.
-# Do not add export statements.
+# Policy: IS generally does NOT export functions, to avoid name clashes with
+# downstream packages. The single sanctioned exception is the units-interface
+# generics `get_value`/`set_value` (exported above): the struct-generator template
+# emits methods that extend `IS.get_value`/`IS.set_value`, and cost-alias display
+# relies on their export. Do not add other exports.
 
 """
 Base type for any struct in the Sienna packages.
@@ -129,6 +143,21 @@ end
 get_internal(value::InfrastructureSystemsComponent) = value.internal
 
 include("common.jl")
+include("relative_units.jl")
+using .RelativeUnits:
+    AbstractUnitSystem,
+    AbstractRelativeUnit,
+    DeviceBaseUnit,
+    SystemBaseUnit,
+    NaturalUnit,
+    RelativeQuantity,
+    DU,
+    SU,
+    NU,
+    display_units_arg
+# Names not exported from the submodule are pulled in explicitly so the
+# `IS._strip_units(...)` / `IS.convert_cost_coefficient(...)` call sites work.
+using .RelativeUnits: _strip_units, convert_cost_coefficient
 include("random_seed.jl")
 include("utils/timers.jl")
 include("utils/assert_op.jl")
@@ -178,6 +207,8 @@ include("probabilistic.jl")
 include("scenarios.jl")
 include("deterministic_metadata.jl")
 include("time_series_structs.jl")
+include("function_data/time_series_function_data.jl")
+include("tuple_time_series.jl")
 include("time_series_manager.jl")
 include("time_series_interface.jl")
 include("rust_time_series_store.jl")
@@ -193,24 +224,19 @@ include("system_data.jl")
 include("subsystems.jl")
 include("validation.jl")
 include("component_selector.jl")
-include("results.jl")
+include("outputs.jl")
 include("utils/print.jl")
-@static if pkgversion(PrettyTables).major == 2
-    # When PrettyTables v2 is more widely adopted in the ecosystem, we can remove this file.
-    # In this case, we should also update the compat bounds in Project.toml to list only
-    # PrettyTables v3.
-    include("utils/print_pt_v2.jl")
-else
-    include("utils/print_pt_v3.jl")
-end
+include("utils/print_pt.jl")
 include("utils/test.jl")
 include("units.jl")
 include("value_curve.jl")
+include("time_series_value_curve.jl")
 include("cost_aliases.jl")
 include("function_data/convexity_checks.jl")
 include("production_variable_cost_curve.jl")
 include("function_data/make_convex.jl")
-include("deprecated.jl")
 include("Optimization/Optimization.jl")
 include("Simulation/Simulation.jl")
+include("InfrastructureMatrices/InfrastructureMatrices.jl")
+
 end # module

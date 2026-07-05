@@ -63,13 +63,29 @@ end
 
 {{/has_null_values}}
 {{#accessors}}
+{{#needs_conversion}}
+{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}` as a bare number in the requested `units` (e.g. `SU`, `DU`; domain-provided units such as `MW` are also accepted when the owning domain package has registered a `_strip_units` method for the returned quantity type). Returns a bare number only when such a method is registered; otherwise returns the quantity wrapper. For the unit-bearing value see [`{{accessor}}_unitful`](@ref).\"\"\"{{/create_docstring}}
+{{accessor}}(value::{{struct_name}}, units) = InfrastructureSystems._strip_units(get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units))
+{{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}` as a unit-bearing quantity in the requested `units` (e.g. `SU`, `DU`, `MW`). For a bare number see [`{{accessor}}`](@ref).\"\"\"{{/create_docstring}}
+{{accessor}}_unitful(value::{{struct_name}}, units) = get_value(value, Val(:{{name}}), Val({{conversion_unit}}), units)
+InfrastructureSystems.display_units_arg(::typeof({{accessor}}), ::{{units_type_sig}}){{#units_bound}} where {T <: {{units_bound}}}{{/units_bound}} = InfrastructureSystems.{{display_units}}
+InfrastructureSystems.display_units_arg(::typeof({{accessor}}_unitful), ::{{units_type_sig}}){{#units_bound}} where {T <: {{units_bound}}}{{/units_bound}} = InfrastructureSystems.{{display_units}}
+{{/needs_conversion}}
+{{^needs_conversion}}
 {{#create_docstring}}\"\"\"Get [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
-{{accessor}}(value::{{struct_name}}) = {{#needs_conversion}}get_value(value, Val(:{{name}}), Val({{conversion_unit}})){{/needs_conversion}}{{^needs_conversion}}value.{{name}}{{/needs_conversion}}
+{{accessor}}(value::{{struct_name}}) = value.{{name}}
+{{/needs_conversion}}
 {{/accessors}}
 
 {{#setters}}
+{{#needs_conversion}}
 {{#create_docstring}}\"\"\"Set [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
-{{setter}}(value::{{struct_name}}, val) = value.{{name}} = {{#needs_conversion}}set_value(value, Val(:{{name}}), val, Val({{conversion_unit}})){{/needs_conversion}}{{^needs_conversion}}val{{/needs_conversion}}
+{{setter}}(value::{{struct_name}}, val) = value.{{name}} = set_value(value, Val(:{{name}}), val, Val({{conversion_unit}}))
+{{/needs_conversion}}
+{{^needs_conversion}}
+{{#create_docstring}}\"\"\"Set [`{{struct_name}}`](@ref) `{{name}}`.\"\"\"{{/create_docstring}}
+{{setter}}(value::{{struct_name}}, val) = value.{{name}} = val
+{{/needs_conversion}}
 {{/setters}}
 
 {{#custom_code}}
@@ -140,16 +156,47 @@ function generate_structs(directory, data::Vector; print_results = true)
             end
             accessor_name = accessor_module * "get_" * param["name"]
             setter_name = accessor_module * "set_" * param["name"] * "!"
-            push!(
-                accessors,
-                Dict(
-                    "name" => param["name"],
-                    "accessor" => accessor_name,
-                    "create_docstring" => create_docstring,
-                    "needs_conversion" => get(param, "needs_conversion", false),
-                    "conversion_unit" => get(param, "conversion_unit", "nothing"),
-                ),
-            )
+            conversion_unit = get(param, "conversion_unit", "nothing")
+            include_getter = !get(param, "exclude_getter", false)
+            if include_getter
+                push!(
+                    accessors,
+                    Dict(
+                        "name" => param["name"],
+                        "accessor" => accessor_name,
+                        "create_docstring" => create_docstring,
+                        "needs_conversion" => get(param, "needs_conversion", false),
+                        "conversion_unit" => conversion_unit,
+                        # Units argument used when displaying the field (tables, REPL);
+                        # override per field in the descriptor with "display_units".
+                        "display_units" => get(param, "display_units", "SU"),
+                        # The units trait dispatches on the component's concrete
+                        # type, so parametric structs need the `Type{Name{T}} where`
+                        # form (`Type{Name}` is the UnionAll and never matches a
+                        # concrete `Name{...}`); concrete structs use the exact form.
+                        "units_type_sig" => if haskey(item, "parametric")
+                            "Type{$(item["struct_name"]){T}}"
+                        else
+                            "Type{$(item["struct_name"])}"
+                        end,
+                        # The bound is substituted inside a literal `where {T <: …}`
+                        # template fragment (values get HTML-escaped; literals don't).
+                        "units_bound" => get(item, "parametric", false),
+                    ),
+                )
+            else
+                internal_name = "_get_" * param["name"]
+                push!(
+                    accessors,
+                    Dict(
+                        "name" => param["name"],
+                        "accessor" => internal_name,
+                        "create_docstring" => false,
+                        "needs_conversion" => false,
+                        "conversion_unit" => "nothing",
+                    ),
+                )
+            end
             include_setter = !get(param, "exclude_setter", false)
             if include_setter
                 push!(
@@ -160,13 +207,27 @@ function generate_structs(directory, data::Vector; print_results = true)
                         "data_type" => param["data_type"],
                         "create_docstring" => create_docstring,
                         "needs_conversion" => get(param, "needs_conversion", false),
-                        "conversion_unit" => get(param, "conversion_unit", "nothing"),
+                        "conversion_unit" => conversion_unit,
                     ),
                 )
             end
             if field["name"] != "internal" && accessor_module == ""
+                # exclude_getter/exclude_setter mean "hand-written elsewhere" (e.g.
+                # unit-aware accessors with different signatures), not "nonexistent" —
+                # always export the public name.
                 push!(unique_accessor_functions, accessor_name)
                 push!(unique_setter_functions, setter_name)
+                # The `_unitful` companion is exported only when the getter is
+                # actually generated. For exclude_getter fields we emit just the
+                # private `_get_X` (needs_conversion forced false), so `_get_X_unitful`
+                # is never generated — PowerSystems hand-writes both `get_X` and
+                # `get_X_unitful` for those fields itself. Gating this export on
+                # needs_conversion alone would make IS export a `_unitful` symbol it
+                # never defined, colliding with PSY's hand-written one — coordinate
+                # with PSY before widening.
+                if include_getter && get(param, "needs_conversion", false)
+                    push!(unique_accessor_functions, accessor_name * "_unitful")
+                end
             end
 
             param["kwarg_value"] = ""

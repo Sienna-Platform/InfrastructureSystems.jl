@@ -51,7 +51,11 @@ set_available!(::TestComponent, val) = nothing
 set_available!(::AdditionalTestComponent, val) = nothing
 set_available!(::SimpleTestComponent, val) = nothing
 get_val(component::TestComponent) = component.val
+# 2-arg form so this getter can be used as a `scaling_factor_multiplier`
+# (which `_make_time_array` invokes with a units marker).
+get_val(component::TestComponent, _) = component.val
 get_val2(component::TestComponent) = component.val2
+get_val2(component::TestComponent, _) = component.val2
 supports_time_series(::TestComponent) = true
 supports_time_series(::AdditionalTestComponent) = true
 supports_time_series(::SimpleTestComponent) = false
@@ -83,6 +87,6 @@ function TestSupplemental(;
 end
 
 supports_time_series(::TestSupplemental) = true
-get_value(attr::TestSupplemental) = attr.attr_json
+get_attr_value(attr::TestSupplemental) = attr.value
 get_internal(attr::TestSupplemental) = attr.internal
 get_uuid(attr::TestSupplemental) = get_uuid(get_internal(attr))
