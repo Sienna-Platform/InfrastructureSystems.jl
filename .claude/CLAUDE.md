@@ -1,16 +1,24 @@
-# InfrastructureSystems.jl
+# InfrastructureSystems.jl (IS) — IS4 branch
 
-**Package role:** Utility foundation library
-**Julia compat:** ^1.10
+**Package role:** Utility foundation library — Layer 0 of the psy6 stack.
+**Julia compat:** ^1.10. Version stays 3.6.0 until release (this *is* the 4.0 line; never bump — bumps have reappeared spontaneously mid-session, revert them).
 
 ## Overview
 
-Foundational library for performance-critical simulation packages. For general Sienna coding practices, conventions, and performance guidelines, see [.claude/Sienna.md](.claude/Sienna.md).
-
-This document covers InfrastructureSystems-specific aspects.
+Foundational library for performance-critical simulation packages: SystemData, component containers, time series (HDF5/in-memory + SQLite metadata), serialization, struct codegen, and the `RelativeUnits` layer. For general Sienna coding practices see [.claude/Sienna.md](Sienna.md); for workspace wiring see `/home/jdlara/Sienna_work/psy6/CLAUDE.md`.
 
 > **Maintenance note:** Update this file whenever files, directories, or architectural
 > patterns change so it stays accurate.
+
+## Downstream blast radius
+
+**Every psy6 package sits on IS**: PowerSystems, PowerNetworkMatrices, PowerFlows, PowerFlowFileParser, InfrastructureOptimizationModels, PowerOperationsModels, PowerSystemCaseBuilder. Any signature/behavior change ripples platform-wide; time-series, serialization, and units changes are the highest-risk classes — extend serialization round-trip tests when touching them. After an IS change, smoke the stack:
+
+```sh
+julia --project=/home/jdlara/Sienna_work/psy6 -e 'using PowerSystems, PowerNetworkMatrices, PowerFlows, PowerOperationsModels, PowerSystemCaseBuilder'
+```
+
+(The psy5 line's PowerSimulations/PSID consume the *top-level* IS checkout on `main`, not this one.)
 
 ## File Structure
 
@@ -37,14 +45,16 @@ Subdirectories:
 - `Optimization/` — abstract types only (~185 lines): container/key abstract types
   (`VariableType`, `ConstraintType`, `ParameterType`, …), formulation abstract types,
   construct stages, and enums. The concrete results/container machinery was removed in
-  IS4; consumers (PowerSimulations/IOM) define their own concrete types on these parents.
+  IS4; the consumer defining concretes in this line is **InfrastructureOptimizationModels (IOM)**.
 - `Simulation/` — simulation utilities
 
 ## Units Layer (RelativeUnits)
 
 IS provides unit-system *plumbing* only — SU/DU/NU acquire domain meaning in PowerSystems.jl.
 IS itself performs no domain conversions; only the plumbing and `convert_cost_coefficient`
-math are testable here.
+math are testable here. IS exports the markers and `RelativeQuantity` only — there is **no
+unit-string vocabulary in IS**; that vocabulary lives in `SiennaSchemas/Core/units.json` for
+the data pipeline.
 
 ```
 RelativeUnits submodule (src/relative_units.jl)
@@ -95,7 +105,8 @@ only `(owner)` — user closures, pre-IS4 multipliers). `_apply_multiplier`
   `(owner)`.
 
 Do not remove or weaken the `units` kwarg API, the `default_units` trait, or the
-no-silent-units-drop guarantee.
+no-silent-units-drop guarantee. (The IS/PSY units-gaps plan of 2026-07-04 is executed —
+IS commits `a1fa162f` + `abae2e30`; only the full-suite verification gate remains.)
 
 ## Time-Varying Cost Curve Type Hierarchy
 
@@ -186,12 +197,13 @@ The sanctioned exceptions, all in `src/InfrastructureSystems.jl`:
 
 Do not add other exports.
 
-## Consumed By
+## Known audit items (2026-07-02) — treat as landmines, don't extend
 
-- PowerSystems.jl
-- PowerSimulations.jl
-- PowerSimulationsDynamics.jl
-- PowerNetworkMatrices.jl
+- Supplemental-attribute removal rollback is a **shallow copy** (`supplemental_attribute_manager.jl:~29`) — partial-failure rollback can alias state.
+- Component UUID index can desync from the name index (`component.jl` vs `system_data.jl` add/remove paths).
+- `bulk_update_cache` can leak when an update errors mid-flight (`time_series_manager.jl:~89,109`).
+- **Missing validation descriptor → validation silently passes** (`validation.jl:~74`) — a named silent-failure pattern; new validation code must error loudly instead.
+- Containers expose `.data` and ~29 cross-file bare accesses exist — prefer accessor functions; do not add new direct reaches.
 
 ## Core Abstractions
 
@@ -217,6 +229,7 @@ Do not add other exports.
 - **Single testset** (regex on testset names):
   `julia --project=test -e 'include("test/InfrastructureSystemsTests.jl"); run_tests("<name>")'`
 - If the package registry is unreachable (HTTP 403), prefix commands with `JULIA_PKG_SERVER=`.
+- Full-suite baseline (2026-07-05): 8,635 passing.
 
 ## Common Tasks
 
@@ -226,14 +239,14 @@ Do not add other exports.
 | Run one testset | `julia --project=test -e 'include("test/InfrastructureSystemsTests.jl"); run_tests("<name>")'` |
 | Compile check | `julia --project -e 'using InfrastructureSystems'` |
 | Build docs | `julia --project=docs docs/make.jl` |
-| Format code | `julia -e 'include("scripts/formatter/formatter_code.jl")'` |
+| Format code | `julia --project=scripts/formatter -e 'include("scripts/formatter/formatter_code.jl")'` |
 | Check format | `git diff --exit-code` |
 | Instantiate test env | `julia --project=test -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'` |
 | Generate structs | `julia bin/generate_structs.jl src/descriptors/structs.json src/generated/` |
 
 ## AI Agent Guidance
 
-**IMPORTANT:** Review [.claude/Sienna.md](.claude/Sienna.md) for general Sienna coding practices, performance requirements, and conventions.
+**IMPORTANT:** Review [.claude/Sienna.md](Sienna.md) for general Sienna coding practices, performance requirements, and conventions.
 
 ### InfrastructureSystems-Specific Priorities
 
@@ -241,9 +254,9 @@ Do not add other exports.
 2. **Performance is critical** — This is a foundational library. Apply performance best practices rigorously in hot paths.
 3. **Type stability** — Use `@code_warntype` to verify performance-critical functions.
 4. **No `isa`/`<:` branching in function logic** — use multiple dispatch (function barriers for heterogeneous input). Sanctioned exceptions: `serialize`/`deserialize` bodies (cold path, heterogeneous JSON) and exception inspection inside `catch` blocks.
-5. **Avoid kwargs as much as possible** — Since InfrastructureSystems is a utility library consumed by other applications, avoid using `kwargs...` especially in functions that may be called in hot loops. Use explicit keyword arguments instead for better performance and type stability or avoid keyword arguments all together.
+5. **Avoid kwargs as much as possible** — IS is consumed in hot loops; use explicit keyword arguments or none.
 6. **Public API documentation** — Add docstrings to all public interface elements using `DocStringExtensions.TYPEDSIGNATURES`.
-7. **Formatter** — Run `julia -e 'include("scripts/formatter/formatter_code.jl")'` on all changes.
+7. **Formatter** — run it before reporting any task done.
 8. **Actionable errors** — Prefer erroring dispatch methods (`ArgumentError` naming the offending types/units) over letting calls fall into Base promotion machinery or bare `MethodError`s.
 
 ### When Modifying Code
@@ -251,4 +264,4 @@ Do not add other exports.
 - Read existing code patterns before making changes
 - Maintain consistency with existing style
 - Prefer failing fast with clear errors over silent failures
-- Consider impact on downstream packages (PowerSystems.jl, PowerSimulations.jl, etc.)
+- Consider downstream impact across the whole psy6 stack (see blast radius above)
