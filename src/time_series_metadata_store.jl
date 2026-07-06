@@ -532,8 +532,8 @@ entries because it issues one `executemany` INSERT instead of one INSERT per ent
 """
 function add_metadata!(
     store::TimeSeriesMetadataStore,
-    owners::Vector{<:TimeSeriesOwners},
-    all_metadata::Vector{<:TimeSeriesMetadata},
+    owners::AbstractVector{<:TimeSeriesOwners},
+    all_metadata::AbstractVector{<:TimeSeriesMetadata},
 )
     @assert_op length(owners) == length(all_metadata)
     isempty(all_metadata) && return
