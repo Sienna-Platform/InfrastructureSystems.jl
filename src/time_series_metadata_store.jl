@@ -1,6 +1,26 @@
 const ASSOCIATIONS_TABLE_NAME = "time_series_associations"
 const METADATA_TABLE_NAME = "time_series_metadata"
 const KEY_VALUE_TABLE_NAME = "key_value_store"
+# Column order must match the tuple returned by _create_row and the associations schema.
+const ASSOCIATIONS_TABLE_COLUMNS = (
+    "id",
+    "time_series_uuid",
+    "time_series_type",
+    "initial_timestamp",
+    "resolution",
+    "horizon",
+    "interval",
+    "window_count",
+    "length",
+    "name",
+    "owner_uuid",
+    "owner_type",
+    "owner_category",
+    "features",
+    "scaling_factor_multiplier",
+    "metadata_uuid",
+    "units",
+)
 const DB_FILENAME = "time_series_metadata.db"
 # This version is also used in the Python package infrasys.
 const TS_METADATA_FORMAT_VERSION = "1.1.0"
@@ -328,25 +348,7 @@ function _add_migrated_rows!(store::TimeSeriesMetadataStore, rows)
     _add_rows!(
         store.db,
         rows,
-        (
-            "id",
-            "time_series_uuid",
-            "time_series_type",
-            "initial_timestamp",
-            "resolution",
-            "horizon",
-            "interval",
-            "window_count",
-            "length",
-            "name",
-            "owner_uuid",
-            "owner_type",
-            "owner_category",
-            "features",
-            "scaling_factor_multiplier",
-            "metadata_uuid",
-            "units",
-        ),
+        ASSOCIATIONS_TABLE_COLUMNS,
         ASSOCIATIONS_TABLE_NAME,
     )
     _create_key_value_table!(store)
@@ -517,6 +519,57 @@ function add_metadata!(
     end
     @debug "Added metadata = $metadata to $(summary(owner))" _group =
         LOG_GROUP_TIME_SERIES
+    return
+end
+
+"""
+Add many metadata entries to the store with a single batched insert. `owners` and
+`all_metadata` must be parallel vectors of equal length. The caller must check for
+duplicates.
+
+This is much faster than calling `add_metadata!` in a loop when adding a large number of
+entries because it issues one `executemany` INSERT instead of one INSERT per entry.
+"""
+function add_metadata!(
+    store::TimeSeriesMetadataStore,
+    owners::Vector{<:TimeSeriesOwners},
+    all_metadata::Vector{<:TimeSeriesMetadata},
+)
+    @assert_op length(owners) == length(all_metadata)
+    isempty(all_metadata) && return
+    rows = Vector{Any}(undef, length(all_metadata))
+    for i in eachindex(all_metadata)
+        owner = owners[i]
+        metadata = all_metadata[i]
+        internal = get_internal(metadata)
+        if !isnothing(internal.ext) && !isempty(internal.ext)
+            error("ext cannot be set on a time series metadata instance: $(internal.ext)")
+        end
+        if !isnothing(internal.units_info)
+            error(
+                "units_info cannot be set on a time series metadata instance: $(internal.units_info)",
+            )
+        end
+        sfm = get_scaling_factor_multiplier(metadata)
+        rows[i] = _create_row(
+            metadata,
+            owner,
+            _get_owner_category(owner),
+            _convert_ts_type_to_string(time_series_metadata_to_data(metadata)),
+            make_features_string(metadata.features),
+            isnothing(sfm) ? missing : JSON3.write(serialize(sfm)),
+        )
+    end
+
+    _add_rows!(store.db, rows, ASSOCIATIONS_TABLE_COLUMNS, ASSOCIATIONS_TABLE_NAME)
+
+    for metadata in all_metadata
+        metadata_uuid = get_uuid(metadata)
+        if !haskey(store.metadata_uuids, metadata_uuid)
+            store.metadata_uuids[metadata_uuid] = metadata
+        end
+    end
+    @debug "Added $(length(all_metadata)) metadata entries" _group = LOG_GROUP_TIME_SERIES
     return
 end
 
