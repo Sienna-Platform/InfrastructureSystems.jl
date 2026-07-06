@@ -417,12 +417,9 @@ Persist the store's two artifacts to `file_path` (the NetCDF arrays) and
 `file_path * ".sqlite"` (the metadata). No HDF5 is produced.
 """
 function serialize(store::RustTimeSeriesStore, file_path::AbstractString)
-    isnothing(store.path) && error(
-        "cannot serialize an in-memory RustTimeSeriesStore; create the System " *
-        "with time_series_in_memory=false")
-    flush!(store)
-    cp(store.path, file_path; force = true)
-    cp(store.path * ".sqlite", file_path * ".sqlite"; force = true)
+    # `persist!` copies the two artifacts for an on-disk store and materializes an
+    # in-memory store to disk, so either kind of System can be serialized.
+    TSS.persist!(store.inner, file_path)
     @info "Serialized Rust time series store to $file_path (+ .sqlite)"
     return
 end
