@@ -84,7 +84,11 @@ end
 # trait fields, e.g. `get_name`, are left as plain 1-arg calls).
 _resolve_column_accessors(::Type, ::Dict; units = nothing) = nothing
 
-function _resolve_column_accessors(component_type::Type, additional_columns::Vector; units = nothing)
+function _resolve_column_accessors(
+    component_type::Type,
+    additional_columns::Vector;
+    units = nothing,
+)
     parent = parentmodule(component_type)
     return map(additional_columns) do column
         getter_name = Symbol("get_$column")
