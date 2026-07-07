@@ -79,9 +79,12 @@ end
 # of `(column, getter_func, arg)` tuples. The getter logic enables application of system
 # units in PowerSystems through its getter functions. Dict-form `additional_columns`
 # carry their own accessor closures, so there is nothing to resolve (returns `nothing`).
-_resolve_column_accessors(::Type, ::Dict) = nothing
+# `units`, when given, overrides every column's own `display_units_arg` trait — but
+# never forces a units argument onto a getter that doesn't accept one (`ismissing`
+# trait fields, e.g. `get_name`, are left as plain 1-arg calls).
+_resolve_column_accessors(::Type, ::Dict; units = nothing) = nothing
 
-function _resolve_column_accessors(component_type::Type, additional_columns::Vector)
+function _resolve_column_accessors(component_type::Type, additional_columns::Vector; units = nothing)
     parent = parentmodule(component_type)
     return map(additional_columns) do column
         getter_name = Symbol("get_$column")
@@ -90,12 +93,16 @@ function _resolve_column_accessors(component_type::Type, additional_columns::Vec
         else
             nothing
         end
-        arg = if getter_func === nothing
-            missing
-        else
-            display_units_arg(getter_func, component_type)
+        if getter_func === nothing
+            return (column, nothing, missing)
         end
-        (column, getter_func, arg)
+        trait_arg = display_units_arg(getter_func, component_type)
+        ismissing(trait_arg) && return (column, getter_func, missing)
+        arg = units === nothing ? trait_arg : units
+        # Route through the unit-tagged companion (e.g. `get_rating_unitful`)
+        # so unit-converted columns print with an explicit unit suffix, not a
+        # bare number.
+        (column, unitful_variant(getter_func), arg)
     end
 end
 
@@ -117,11 +124,21 @@ function _populate_column_value(component, column, getter_func, arg)
     return val
 end
 
+"""
+    show_components(io, components, component_type, additional_columns = []; units = nothing, kwargs...)
+
+Vector-form `additional_columns` accepts `units` (e.g. `SU`, `DU`, or a
+domain-provided unit like `MW`) to force every unit-converted column to
+display in that unit system instead of each column's own `display_units_arg`
+default. Ignored for `Dict`-form `additional_columns`, whose closures compute
+their own values.
+"""
 function show_components(
     io::IO,
     components::Components,
     component_type::Type{<:InfrastructureSystemsComponent},
     additional_columns::Union{Dict, Vector} = [];
+    units = nothing,
     kwargs...,
 )
     if !isconcretetype(component_type)
@@ -150,7 +167,8 @@ function show_components(
     data = Array{Any, 2}(undef, length(comps), length(column_labels))
 
     # Resolve each column's getter and units argument once, not per cell.
-    column_accessors = _resolve_column_accessors(component_type, additional_columns)
+    column_accessors =
+        _resolve_column_accessors(component_type, additional_columns; units = units)
 
     for (i, component) in enumerate(comps)
         data[i, 1] = get_name(component)
