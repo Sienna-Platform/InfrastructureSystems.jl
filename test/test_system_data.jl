@@ -610,25 +610,6 @@ end
     @test length(attribute_ids) == length(unique(attribute_ids))
 end
 
-@testset "Test assign_new_uuid! keeps uuid index consistent" begin
-    data = IS.SystemData()
-    component = IS.TestComponent("comp_uuid_idx", 5)
-    IS.add_component!(data, component)
-    old_uuid = IS.get_uuid(component)
-    IS.assign_new_uuid!(data, component)
-    new_uuid = IS.get_uuid(component)
-    @test new_uuid != old_uuid
-    @test IS.get_component(data, new_uuid) === component
-    @test_throws ArgumentError IS.get_component(data, old_uuid)
-end
-
-@testset "Test assign_new_uuid_internal! errors on attached component" begin
-    data = IS.SystemData()
-    component = IS.TestComponent("comp_guard", 5)
-    IS.add_component!(data, component)
-    @test_throws ErrorException IS.assign_new_uuid_internal!(component)
-end
-
 @testset "Test bulk add of time series" begin
     for in_memory in (false, true)
         sys = IS.SystemData(; time_series_in_memory = in_memory)

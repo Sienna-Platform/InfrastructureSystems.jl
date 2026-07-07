@@ -23,7 +23,6 @@ end
     @test IS.get_ext(internal)["my_value"] == 1
 
     internal2 = IS.deserialize(IS.InfrastructureSystemsInternal, IS.serialize(internal))
-    @test internal.uuid == internal2.uuid
     @test internal.id == internal2.id
     @test internal.ext == internal2.ext
 

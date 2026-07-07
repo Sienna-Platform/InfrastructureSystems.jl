@@ -61,13 +61,3 @@ Get the internal infrastructure systems data from a [`GeographicInfo`](@ref) att
  - `geo::GeographicInfo`: the [`GeographicInfo`](@ref) attribute
 """
 get_internal(geo::GeographicInfo) = geo.internal
-
-"""
-    get_uuid(geo::GeographicInfo)
-
-Get the UUID from a [`GeographicInfo`](@ref) attribute.
-
-# Arguments
- - `geo::GeographicInfo`: the [`GeographicInfo`](@ref) attribute
-"""
-get_uuid(geo::GeographicInfo) = get_uuid(get_internal(geo))

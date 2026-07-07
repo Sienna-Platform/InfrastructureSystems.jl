@@ -142,7 +142,7 @@ _decrement_iterations_remaining!(c::TimeSeriesCache) = c.common.iterations_remai
 _get_resolution(cache::TimeSeriesCache) = get_resolution(_get_time_series(cache))
 
 struct TimeSeriesCacheKey
-    component_uuid::Base.UUID
+    component_id::Int
     time_series_type::Type{<:TimeSeriesData}
     name::String
     resolution::Dates.Period

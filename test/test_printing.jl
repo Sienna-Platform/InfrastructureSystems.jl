@@ -70,6 +70,6 @@ end
     show(io, "text/plain", internal)
     text = String(take!(io))
     @test occursin("InfrastructureSystemsInternal", text)
-    @test occursin("uuid", text)
+    @test occursin("id", text)
     @test !occursin("shared_system_references", text)
 end

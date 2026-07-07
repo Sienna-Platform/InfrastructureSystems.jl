@@ -48,7 +48,7 @@ end
 
 make_label(type::Type{<:InfrastructureSystemsType}, name) = "$(nameof(type)): $name"
 Base.summary(x::InfrastructureSystemsComponent) = make_label(typeof(x), get_name(x))
-Base.summary(x::SupplementalAttribute) = make_label(typeof(x), get_uuid(x))
+Base.summary(x::SupplementalAttribute) = make_label(typeof(x), get_id(x))
 Base.summary(x::TimeSeriesData) = make_label(typeof(x), get_name(x))
 Base.summary(x::TimeSeriesKey) = make_label(typeof(x), get_name(x))
 
