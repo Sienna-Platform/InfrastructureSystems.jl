@@ -56,6 +56,14 @@ get_val(component::TestComponent) = component.val
 get_val(component::TestComponent, _) = component.val
 get_val2(component::TestComponent) = component.val2
 get_val2(component::TestComponent, _) = component.val2
+
+# Exercises the `display_units_arg`/`unitful_variant` machinery in
+# `show_components` tests without needing a domain-specific unit system:
+# `get_val_unitful` tags the bare `Int` with whatever units argument it was
+# called with instead of returning a bare number.
+InfrastructureSystems.display_units_arg(::typeof(get_val), ::Type{TestComponent}) = SU
+get_val_unitful(component::TestComponent, units) = "$(component.val) $(units)"
+export get_val, get_val_unitful
 supports_time_series(::TestComponent) = true
 supports_time_series(::AdditionalTestComponent) = true
 supports_time_series(::SimpleTestComponent) = false

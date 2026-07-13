@@ -19,6 +19,7 @@ export DeviceBaseUnit, SystemBaseUnit, NaturalUnit
 export RelativeQuantity
 export DU, SU, NU
 export display_units_arg
+export unitful_variant
 
 """
 Supertype for all unit-system markers (relative and natural). Used as the
@@ -345,5 +346,26 @@ like `show_components` dispatch on the result to avoid runtime method
 introspection.
 """
 display_units_arg(_, ::Type) = missing
+
+"""
+    unitful_variant(f::Function)
+
+Resolve the unit-bearing companion of getter `f` — a function returning the
+same value but unit-tagged (a `RelativeQuantity` or a domain `Unitful.Quantity`)
+instead of a bare number — following the `\$(f)_unitful` naming convention the
+struct-generator template emits alongside every converted getter (see
+`generate_structs.jl`). Falls back to `f` itself when no such companion exists
+(hand-written getters that don't provide one). Display/tabular code should
+resolve through this trait rather than re-deriving the naming convention.
+"""
+function unitful_variant(f::Function)
+    name = Symbol(string(nameof(f)), "_unitful")
+    mod = parentmodule(f)
+    # `isdefined`, not `hasproperty`: the latter is backed by `propertynames`,
+    # which for a `Module` defaults to only its *exported* names, and a
+    # `_unitful` companion need not be exported to be a valid resolution
+    # target.
+    return isdefined(mod, name) ? getproperty(mod, name) : f
+end
 
 end # module RelativeUnits

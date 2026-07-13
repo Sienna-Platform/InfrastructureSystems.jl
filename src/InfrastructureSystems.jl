@@ -154,7 +154,8 @@ using .RelativeUnits:
     DU,
     SU,
     NU,
-    display_units_arg
+    display_units_arg,
+    unitful_variant
 # Names not exported from the submodule are pulled in explicitly so the
 # `IS._strip_units(...)` / `IS.convert_cost_coefficient(...)` call sites work.
 using .RelativeUnits: _strip_units, convert_cost_coefficient

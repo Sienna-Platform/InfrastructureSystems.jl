@@ -60,6 +60,44 @@ end
     @test occursin("GeographicInfo", text)
 end
 
+@testset "Test show_components units resolution for Vector columns" begin
+    sys = create_system_data(; with_time_series = true, time_series_in_memory = true)
+    io = IOBuffer()
+
+    # No override: resolves the column's own `display_units_arg` trait (SU)
+    # through its `_unitful` companion, so the cell prints a unit suffix
+    # rather than a bare number.
+    IS.show_components(io, sys.components, IS.TestComponent, [:val])
+    text = String(take!(io))
+    @test occursin("SU", text)
+
+    # An explicit `units` override wins over the trait default.
+    IS.show_components(io, sys.components, IS.TestComponent, [:val]; units = IS.DU)
+    text = String(take!(io))
+    @test occursin("DU", text)
+    @test !occursin(r"\bSU\b", text)
+
+    # Column order is preserved (not alphabetized) for Vector-form columns,
+    # and `val2` (no units trait) is left as a bare, unsuffixed value.
+    IS.show_components(io, sys.components, IS.TestComponent, [:val2, :val])
+    text = String(take!(io))
+    val2_pos = findfirst("val2", text)
+    val_pos = findfirst(r"\bval\b", text)
+    @test !isnothing(val2_pos) && !isnothing(val_pos)
+    @test first(val2_pos) < first(val_pos)
+
+    # `units` is ignored (not an error) for Dict-form additional_columns.
+    IS.show_components(
+        io,
+        sys.components,
+        IS.TestComponent,
+        Dict("val" => x -> x.val * 10);
+        units = IS.DU,
+    )
+    text = String(take!(io))
+    @test occursin("val", text)
+end
+
 @testset "Test printing of internal" begin
     sys = create_system_data(;
         time_series_in_memory = true,
