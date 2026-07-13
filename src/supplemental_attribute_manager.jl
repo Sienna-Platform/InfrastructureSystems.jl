@@ -35,9 +35,17 @@ function begin_supplemental_attributes_update(
     func::Function,
     mgr::SupplementalAttributeManager,
 )
+    # Snapshot the attributes so a failed update reverts to the pre-update state,
+    # INCLUDING in-place mutations of attribute data (e.g. a `geo_json` Dict). A
+    # shallow `copy` of the inner dicts aliases the attribute objects, so such
+    # mutations would leak through the rollback. Deep-copy each attribute instead.
     orig_data = SupplementalAttributesByType()
-    for (key, val) in mgr.data
-        orig_data[key] = copy(val)
+    for (key, inner) in mgr.data
+        snapshot = empty(inner)
+        for (id, attr) in inner
+            snapshot[id] = _snapshot_supplemental_attribute(attr)
+        end
+        orig_data[key] = snapshot
     end
 
     try
@@ -48,6 +56,24 @@ function begin_supplemental_attributes_update(
     catch
         mgr.data = orig_data
         rethrow()
+    end
+end
+
+# Deep-copy an attribute for the rollback snapshot WITHOUT following its
+# `shared_system_references` back-reference: that field links the attribute to the
+# live managers, so `deepcopy` would otherwise drag the whole system (SQLite handle
+# included) into the copy. The snapshot shares the original references object, so a
+# rollback leaves those references identical — matching how `serialize` and
+# `compare_values` treat this field.
+function _snapshot_supplemental_attribute(attr::SupplementalAttribute)
+    refs = get_shared_system_references(attr)
+    set_shared_system_references!(attr, nothing)
+    try
+        snapshot = deepcopy(attr)
+        set_shared_system_references!(snapshot, refs)
+        return snapshot
+    finally
+        set_shared_system_references!(attr, refs)
     end
 end
 

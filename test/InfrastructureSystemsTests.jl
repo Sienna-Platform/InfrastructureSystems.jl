@@ -6,18 +6,21 @@ using Dates
 import TerminalLoggers: TerminalLogger
 import TimeSeries
 import UUIDs
-import JSON3
 using DataStructures: SortedDict
 using DataFrames
 using Random
 using ProgressLogging
 import SQLite
+import JSON
 
 import InfrastructureSystems
 import InfrastructureSystems as IS
 
 import Aqua
-Aqua.test_all(InfrastructureSystems)
+# Aqua's piracy check crashes on Julia 1.12+ (`Core.TypeName.mt` was removed) and the
+# fix is unreleased as of Aqua 0.8.11, the latest registered version. Skip only that
+# check on 1.12+; every other Aqua check still runs. Revert once Aqua ships the fix.
+Aqua.test_all(InfrastructureSystems; piracies = VERSION < v"1.12")
 
 const BASE_DIR =
     abspath(joinpath(dirname(Base.find_package("InfrastructureSystems")), ".."))

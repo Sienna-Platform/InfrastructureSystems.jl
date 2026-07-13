@@ -346,18 +346,23 @@ end
 end
 
 @testset "supplemental attribute transaction rolls back in-place mutations" begin
-    mgr = IS.SupplementalAttributeManager()
+    # IDs are assigned at the `SystemData` level, so populate the manager through a
+    # `SystemData` rather than constructing a bare manager (whose `add` requires an
+    # already-assigned ID).
+    data = IS.SystemData()
+    mgr = data.supplemental_attribute_manager
     attr = IS.GeographicInfo(; geo_json = Dict{String, Any}("x" => 1.0))
     component = IS.TestComponent("component1", 1)
-    IS.add_supplemental_attribute!(mgr, component, attr)
+    IS.add_component!(data, component)
+    IS.add_supplemental_attribute!(data, component, attr)
 
     @test_throws ErrorException IS.begin_supplemental_attributes_update(mgr) do
-        stored = IS.get_supplemental_attribute(mgr, IS.get_uuid(attr))
+        stored = IS.get_supplemental_attribute(mgr, IS.get_id(attr))
         IS.get_geo_json(stored)["x"] = 999.0
         error("boom")
     end
 
-    stored = IS.get_supplemental_attribute(mgr, IS.get_uuid(attr))
+    stored = IS.get_supplemental_attribute(mgr, IS.get_id(attr))
     @test IS.get_geo_json(stored)["x"] == 1.0
 end
 
@@ -369,14 +374,14 @@ end
     IS.add_component!(data, component)
     IS.add_supplemental_attribute!(data, component, attr)
 
-    stored_before = IS.get_supplemental_attribute(mgr, IS.get_uuid(attr))
+    stored_before = IS.get_supplemental_attribute(mgr, IS.get_id(attr))
     original_refs = IS.get_shared_system_references(stored_before)
 
     @test_throws ErrorException IS.begin_supplemental_attributes_update(mgr) do
         error("boom")
     end
 
-    stored = IS.get_supplemental_attribute(mgr, IS.get_uuid(attr))
+    stored = IS.get_supplemental_attribute(mgr, IS.get_id(attr))
     refs = IS.get_shared_system_references(stored)
     @test refs === original_refs
     @test refs.supplemental_attribute_manager === mgr

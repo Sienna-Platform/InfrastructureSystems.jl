@@ -16,7 +16,7 @@ function read_validation_descriptor(filename::AbstractString)
         end
     elseif occursin(r"(\.json)"i, filename)
         data = open(filename) do file
-            return JSON3.read(file, Dict)
+            return JSON.parse(file; dicttype = Dict{String, Any})
         end
     else
         error("Filename is not a YAML or JSON file.")

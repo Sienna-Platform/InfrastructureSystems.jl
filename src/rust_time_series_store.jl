@@ -74,12 +74,16 @@ end
 Open an existing on-disk Rust store from its `.nc` base path.
 """
 function open_rust_store(path::AbstractString; read_only::Bool = false)
-    inner = TSS.open_store(String(path); read_only = read_only)
-    # Store an absolute path so the handle survives later `cd`s (e.g. a
-    # deserialize that opens a relative basename, then a re-serialize elsewhere).
+    # Open with an absolute path so BOTH the Rust handle's own backing path and the
+    # wrapper's `path` field survive later `cd`s (e.g. a deserialize that opens a
+    # relative basename, then a re-serialize elsewhere). Absolutizing only the
+    # wrapper field leaves the handle resolving its source relative to the cwd at
+    # open time, so a later `persist!` fails once the cwd changes.
+    abs_path = abspath(String(path))
+    inner = TSS.open_store(abs_path; read_only = read_only)
     return RustTimeSeriesStore(
         inner,
-        abspath(String(path)),
+        abs_path,
         _compression_settings(TSS.get_compression(inner)),
     )
 end
@@ -96,7 +100,49 @@ function _compression_settings(c)
     )
 end
 
+"""
+    open_deserialized_rust_store(source, directory, read_only)
+
+Open the Rust store for a deserialized system. In read-only mode the source
+artifacts are opened in place. Otherwise the `.nc` (+ sidecar `.sqlite`) are
+copied to an isolated working location under `directory` (or `tempdir()`) and the
+copy is opened writable, so mutating the deserialized system cannot corrupt the
+source file (e.g. a cached system shared by later builds).
+"""
+function open_deserialized_rust_store(
+    source::AbstractString,
+    directory::Union{Nothing, AbstractString},
+    read_only::Bool,
+)
+    read_only && return open_rust_store(source; read_only = true)
+    dir = isnothing(directory) ? tempdir() : String(directory)
+    mkpath(dir)
+    dst = joinpath(dir, string(UUIDs.uuid4()) * "_time_series.nc")
+    cp(source, dst; force = true)
+    src_sqlite = source * ".sqlite"
+    isfile(src_sqlite) && cp(src_sqlite, dst * ".sqlite"; force = true)
+    return open_rust_store(dst; read_only = false)
+end
+
 close!(store::RustTimeSeriesStore) = TSS.close!(store.inner)
+
+# The store is an opaque handle onto its backing artifacts, so the default field-wise
+# `deepcopy` would hand the copy the SAME handle: mutating the copy (e.g.
+# `clear_time_series!`) would then mutate the original. The backend exposes no clone API,
+# so round-trip through `persist!` + `open_store` to give the copy its own artifacts.
+function Base.deepcopy_internal(store::RustTimeSeriesStore, dict::IdDict)
+    haskey(dict, store) && return dict[store]
+
+    # `persist!` copies an on-disk store's artifacts and materializes an in-memory one.
+    # An in-memory store has no `path`, so its copy lands in `tempdir()` and is therefore
+    # disk-backed: the backend gives us no way to clone in-memory state in place.
+    directory = isnothing(store.path) ? tempdir() : dirname(store.path)
+    dst = joinpath(directory, string(UUIDs.uuid4()) * "_time_series.nc")
+    TSS.persist!(store.inner, dst)
+    new_store = open_rust_store(dst; read_only = false)
+    dict[store] = new_store
+    return new_store
+end
 
 # ---- Conversions -----------------------------------------------------------
 
@@ -162,8 +208,72 @@ function _storage_array(v::AbstractVector{PiecewiseLinearData})
     return (mat, "PiecewiseLinearData")
 end
 
+# Ragged like PiecewiseLinearData, but the x- and y-coordinates have different
+# lengths (`n` x-coords, `n - 1` y-coords/slopes). Store as a `(len, 2*max_n)`
+# matrix: column 1 of each row is the x-coord count `n`, then the `n` x-coords,
+# then the `n - 1` y-coords. Each row is self-describing, so decode needs no
+# global width.
+function _storage_array(v::AbstractVector{PiecewiseStepData})
+    len = length(v)
+    max_n = maximum(length(get_x_coords(fd)) for fd in v; init = 0)
+    mat = zeros(Float64, len, max_n == 0 ? 1 : 2 * max_n)
+    for (i, fd) in enumerate(v)
+        xs = get_x_coords(fd)
+        ys = get_y_coords(fd)
+        n = length(xs)
+        mat[i, 1] = n
+        for (j, x) in enumerate(xs)
+            mat[i, 1 + j] = x
+        end
+        for (j, y) in enumerate(ys)
+            mat[i, 1 + n + j] = y
+        end
+    end
+    return (mat, "PiecewiseStepData")
+end
+
+# Fixed-arity `NTuple{N, Float64}` values — the storage form behind `TupleTimeSeries`
+# (e.g. the hot/warm/cold start-up stages of a market bid). Dense, so unlike the ragged
+# piecewise encodings every row is full width; the arity travels in the logical type so
+# decode rebuilds the tuple without inferring it from the array shape.
+function _storage_array(v::AbstractVector{NTuple{N, Float64}}) where {N}
+    mat = Matrix{Float64}(undef, length(v), N)
+    for (i, tup) in enumerate(v)
+        for j in 1:N
+            mat[i, j] = tup[j]
+        end
+    end
+    return (mat, "NTuple{$N}")
+end
+
 _storage_array(v::AbstractVector) =
     error("Rust backend does not support time series element type $(eltype(v)) yet")
+
+# Arity of an `NTuple{N}` logical-type tag, or `nothing` when the tag is something else.
+function _ntuple_arity(logical_type)
+    logical_type isa AbstractString || return nothing
+    m = match(r"^NTuple\{(\d+)\}$", logical_type)
+    return isnothing(m) ? nothing : parse(Int, m.captures[1])
+end
+
+# Rebuild the `NTuple{N, Float64}` vector from rows of a stored/materialized `(len, N)`
+# matrix. Shared by every decode path.
+function _decode_ntuples(mat, len::Integer, n::Integer)
+    out = Vector{NTuple{n, Float64}}(undef, len)
+    for i in 1:len
+        out[i] = ntuple(j -> mat[i, j], n)
+    end
+    return out
+end
+
+# Reconstruct a single `PiecewiseStepData` from row `i` of a stored/materialized
+# `(len, k)` matrix (see `_storage_array`). Shared by every decode path.
+function _decode_pwl_step_row(mat, i::Integer)
+    n = Int(round(mat[i, 1]))
+    xs = [mat[i, 1 + j] for j in 1:n]
+    ys = [mat[i, 1 + n + j] for j in 1:(n - 1)]
+    return PiecewiseStepData(xs, ys)
+end
 
 # Reconstruct the full value vector from the stored array, keyed on logical_type.
 function _read_values(
@@ -189,6 +299,15 @@ function _read_values(
             out[i] = PiecewiseLinearData([(mat[i, 2j], mat[i, 2j + 1]) for j in 1:n])
         end
         return out
+    elseif logical_type == "PiecewiseStepData"
+        flat = get_array_by_hash(store, hash, Float64)
+        k = div(length(flat), len)
+        mat = TSS.get_array_nd(store.inner, hash, Float64, (len, k))
+        return [_decode_pwl_step_row(mat, i) for i in 1:len]
+    elseif !isnothing(_ntuple_arity(logical_type))
+        n = _ntuple_arity(logical_type)
+        mat = TSS.get_array_nd(store.inner, hash, Float64, (len, n))
+        return _decode_ntuples(mat, len, n)
     else
         return get_array_by_hash(store, hash, dtype)  # scalar
     end
@@ -210,6 +329,10 @@ function _decode_static_values(arr, logical_type, len::Integer)
             out[i] = PiecewiseLinearData([(arr[i, 2j], arr[i, 2j + 1]) for j in 1:n])
         end
         return out
+    elseif logical_type == "PiecewiseStepData"
+        return [_decode_pwl_step_row(arr, i) for i in 1:len]
+    elseif !isnothing(_ntuple_arity(logical_type))
+        return _decode_ntuples(arr, len, _ntuple_arity(logical_type))
     else
         return arr  # scalar (1-D vector, or an N-D per-step array)
     end
@@ -256,6 +379,9 @@ function _decode_forecast_window(arr::AbstractArray{<:Real, 3}, logical_type, c:
             out[h] = PiecewiseLinearData([(arr[h, c, 2j], arr[h, c, 2j + 1]) for j in 1:n])
         end
         return out
+    elseif logical_type == "PiecewiseStepData"
+        slice = @view arr[:, c, :]  # (horizon, k) matrix for this window
+        return [_decode_pwl_step_row(slice, h) for h in 1:horizon]
     end
     error("Rust backend cannot decode forecast logical_type $logical_type")
 end
@@ -460,9 +586,11 @@ function _rust_remove_row!(store::RustTimeSeriesStore, row)
         remove_single!(store, row.owner_id, category, row.name;
             resolution = row.resolution, features = feats)
     else
+        # Pin the row's own interval: one name can carry several forecasts differing only
+        # by interval, and the removal must hit exactly the row described.
         remove_typed!(store, row.owner_id, category, row.name,
             _rust_ts_code(_rust_is_type(row.time_series_type));
-            resolution = row.resolution, features = feats)
+            resolution = row.resolution, interval = row.interval, features = feats)
     end
     return
 end
@@ -621,10 +749,11 @@ _rust_get_time_series(
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) = _rust_get_forecast(owner, name;
     start_time = start_time, len = len, count = count, resolution = resolution,
-    features...)
+    interval = interval, features...)
 
 """
 Route a public `get_time_series(SingleTimeSeries, owner, name; ...)` to the Rust
@@ -723,16 +852,48 @@ end
 has_typed(store::RustTimeSeriesStore, owner_id::Integer,
     owner_category::TSS.OwnerCategory, name::AbstractString,
     ts_type::Integer; resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features = Dict{String, Any}()) =
     TSS.has_typed(store.inner, owner_id, owner_category, name, ts_type;
-        resolution = resolution, features = features)
+        resolution = resolution, interval = interval, features = features)
 
 remove_typed!(store::RustTimeSeriesStore, owner_id::Integer,
     owner_category::TSS.OwnerCategory, name::AbstractString,
     ts_type::Integer; resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features = Dict{String, Any}()) =
     TSS.remove_typed!(store.inner, owner_id, owner_category, name, ts_type;
-        resolution = resolution, features = features)
+        resolution = resolution, interval = interval, features = features)
+
+# Copy an association onto another owner (optionally renaming) entirely inside the
+# store. Arrays are content-addressed, so no data is duplicated and the stored type
+# is preserved exactly — notably a DeterministicSingleTimeSeries stays one, whereas
+# a get_time_series/add_time_series! round-trip through Julia would materialize it
+# into a dense Deterministic.
+copy_typed!(store::RustTimeSeriesStore, owner_id::Integer,
+    owner_category::TSS.OwnerCategory, name::AbstractString, ts_type::Integer,
+    dst_owner_id::Integer, dst_owner_type::AbstractString;
+    new_name::Union{Nothing, AbstractString} = nothing,
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features = Dict{String, Any}()) =
+    TSS.copy_time_series!(store.inner, owner_id, owner_category, name, ts_type,
+        dst_owner_id, dst_owner_type; new_name = new_name,
+        resolution = resolution, interval = interval, features = features)
+
+# IS encodes a single-window forecast (count == 1) with `interval = Second(0)`,
+# since there is no second window to step to. The Rust store, however, requires a
+# strictly-positive interval. Store such a forecast with `interval = horizon` (the
+# DeterministicSingleTimeSeries convention) so it validates, and map it back to
+# `Second(0)` on read via `_forecast_display_interval`. `Dates.value` reads the raw
+# count without unit conversion, so this is safe for calendar intervals too.
+_storage_forecast_interval(interval::Dates.Period, horizon::Dates.Period) =
+    Dates.value(interval) == 0 ? horizon : interval
+
+# Inverse of `_storage_forecast_interval`: a stored single-window forecast carries
+# `interval == horizon`; present it to IS as `Second(0)`.
+_forecast_display_interval(count::Integer, interval::Dates.Period, horizon::Dates.Period) =
+    (count == 1 && interval == horizon) ? Dates.Second(0) : interval
 
 """Add a Deterministic or DeterministicSingleTimeSeries via the Rust store."""
 function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
@@ -762,7 +923,8 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
         end
         arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
         prob = TSS.Probabilistic(get_initial_timestamp(ts), resolution, get_horizon(ts),
-            interval, get_count(ts), Float64.(get_percentiles(ts)), arr, name)
+            _storage_forecast_interval(interval, get_horizon(ts)), get_count(ts),
+            Float64.(get_percentiles(ts)), arr, name)
         TSS.add_time_series!(store.inner, owner_id, owner_type,
             category, prob; features = feats)
         return ForecastKey(;
@@ -832,12 +994,13 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
             ArgumentError("Time series data with duplicate attributes are already stored"),
         )
     end
+    storage_interval = _storage_forecast_interval(interval, get_horizon(ts))
     tss_ts = if ts_type == TSS.TS_TYPE_DETERMINISTIC
         TSS.Deterministic(get_initial_timestamp(ts), resolution, get_horizon(ts),
-            interval, count, arr, name; logical_type = logical)
+            storage_interval, count, arr, name; logical_type = logical)
     else
         TSS.Scenarios(get_initial_timestamp(ts), resolution, get_horizon(ts),
-            interval, count, arr, name; logical_type = logical)
+            storage_interval, count, arr, name; logical_type = logical)
     end
     TSS.add_time_series!(store.inner, owner_id, owner_type,
         category, tss_ts; features = feats)
@@ -886,9 +1049,30 @@ function _forecast_time_range(initial_timestamp, interval, total_count, start_ti
         )
     end
 
+    # A zero interval is IS's single-window sentinel (count == 1): window
+    # arithmetic below collapses to a zero-width `[initial, initial)` range that
+    # selects nothing. The request has already been validated against
+    # `total_count`, so read the whole (single-window) series instead of slicing.
+    Dates.value(interval) == 0 && return nothing
+
     start_ts = initial_timestamp + interval * (start_idx - 1)
     end_ts = initial_timestamp + interval * (start_idx - 1 + n)  # exclusive
     return (start_ts, end_ts)
+end
+
+# Assemble forecast windows into a `SortedDict` with a concrete value type.
+# Building it from a generator yields `SortedDict{Any, Any}`, which
+# `Deterministic`'s `convert_data` then coerces to `Vector{Float64}` — corrupting
+# FunctionData windows. Materializing first pins the value type to the actual
+# window vector type (`Vector{Float64}` or `Vector{<:FunctionData}`).
+function _assemble_forecast_windows(initial_timestamp, interval, count, window)
+    windows = [window(i) for i in 1:count]
+    V = isempty(windows) ? Vector{Float64} : typeof(windows[1])
+    data = SortedDict{Dates.DateTime, V}()
+    for i in 1:count
+        data[initial_timestamp + interval * (i - 1)] = windows[i]
+    end
+    return data
 end
 
 """Reconstruct a forecast from the Rust store (matches the STORED type),
@@ -899,6 +1083,7 @@ function _rust_get_forecast(
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 )
     mgr = get_time_series_manager(owner)
@@ -906,22 +1091,32 @@ function _rust_get_forecast(
     owner_id, _, owner_category = _rust_owner_args(owner)
     category = _tss_category(owner_category)
     # Resolve the unique forecast matching a possibly-partial (subset) feature /
-    # resolution query, then read it by its exact stored attributes.
-    matched =
-        _rust_get_metadata(owner, Forecast, name; resolution = resolution, features...)
+    # resolution / interval query, then read it by its exact stored attributes.
+    # `interval` matters when one series name carries several forecasts that differ only
+    # by interval (`transform_single_time_series!` with `delete_existing = false`);
+    # without it the lookup is ambiguous.
+    matched = _rust_get_metadata(
+        owner, Forecast, name;
+        resolution = resolution, interval = interval, features...,
+    )
     feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
     resolution = get_resolution(matched)
+    # Pin every store lookup below to the resolved forecast's exact (stored) interval.
+    # One name can carry several forecasts differing only by interval, and the typed
+    # lookups match on attributes, so without this they would match more than one.
+    matched_interval = get_interval(matched)
     # `len`, when given, truncates each window to its first `len` horizon steps
     # (the horizon is the leading axis of a window vector or matrix).
     _truncate(w) = isnothing(len) ? w : (ndims(w) == 1 ? w[1:len] : w[1:len, :])
 
     if has_typed(store, owner_id, category, name, TSS.TS_TYPE_PROBABILISTIC;
-        resolution = resolution, features = feats)
+        resolution = resolution, interval = matched_interval, features = feats)
         # `.data` is the canonical (percentile_count, horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
         p = TSS.get_time_series(TSS.Probabilistic, store.inner, owner_id, category, name;
-            resolution = resolution, features = feats, time_range = tr)
+            resolution = resolution, interval = matched_interval, features = feats,
+            time_range = tr)
         # `p` is already sliced to the requested window range by the store.
         data = SortedDict{Dates.DateTime, Matrix{Float64}}()
         for i in 1:(p.count)
@@ -930,17 +1125,19 @@ function _rust_get_forecast(
         end
         result = Probabilistic(; name = String(name), data = data,
             percentiles = p.percentiles, resolution = p.resolution,
-            interval = p.interval)
+            interval = _forecast_display_interval(p.count, p.interval, p.horizon))
         return result
     elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_DETERMINISTIC;
-        resolution = resolution, features = feats)
+        resolution = resolution, interval = matched_interval, features = feats)
         # `.data` is the canonical (horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
         d = TSS.get_time_series(TSS.Deterministic, store.inner, owner_id, category, name;
-            resolution = resolution, features = feats, time_range = tr)
+            resolution = resolution, interval = matched_interval, features = feats,
+            time_range = tr)
         fmeta = TSS.get_forecast_metadata(store.inner, owner_id, category, name,
-            TSS.TS_TYPE_DETERMINISTIC; resolution = resolution, features = feats)
+            TSS.TS_TYPE_DETERMINISTIC; resolution = resolution,
+            interval = matched_interval, features = feats)
         logical = fmeta.logical_type  # `nothing` for scalar windows
         window(i) = _truncate(
             if isnothing(logical)
@@ -950,28 +1147,33 @@ function _rust_get_forecast(
             end,
         )
         # `d` is already sliced to the requested window range by the store.
-        data = SortedDict(
-            d.initial_timestamp + d.interval * (i - 1) => window(i)
-            for i in 1:(d.count)
-        )
+        data = _assemble_forecast_windows(
+            d.initial_timestamp, d.interval, d.count, window)
         result = Deterministic(; name = String(name), data = data,
-            resolution = d.resolution, interval = d.interval)
+            resolution = d.resolution,
+            interval = _forecast_display_interval(d.count, d.interval, d.horizon))
         return result
     elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_DETERMINISTIC_SINGLE;
-        resolution = resolution, features = feats)
+        resolution = resolution, interval = matched_interval, features = feats)
         # A DeterministicSingleTimeSeries is an internal storage optimization: it
         # shares the underlying SingleTimeSeries array instead of materializing the
         # overlapping windows. On read it is always returned as a regular
         # `Deterministic` — the Rust store expands the shared array into the
         # canonical (horizon_count, count) window matrix (honoring `time_range`),
         # so the reconstruction below is identical to the `Deterministic` branch.
+        #
+        # This does NOT cost the storage optimization on a copy: `copy_time_series!`
+        # clones the association row inside the store, so the stored type survives
+        # without ever round-tripping through these Julia objects.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
         d = TSS.get_time_series(TSS.DeterministicSingleTimeSeries, store.inner, owner_id,
             category, name;
-            resolution = resolution, features = feats, time_range = tr)
+            resolution = resolution, interval = matched_interval, features = feats,
+            time_range = tr)
         fmeta = TSS.get_forecast_metadata(store.inner, owner_id, category, name,
-            TSS.TS_TYPE_DETERMINISTIC_SINGLE; resolution = resolution, features = feats,
+            TSS.TS_TYPE_DETERMINISTIC_SINGLE; resolution = resolution,
+            interval = matched_interval, features = feats,
         )
         logical = fmeta.logical_type
         # Scalar windows come back as a 2D `(horizon_count, count)` array; encoded
@@ -987,22 +1189,20 @@ function _rust_get_forecast(
         )
         # A single window has no step between window starts, so IS represents that
         # interval as `Second(0)`; otherwise the stored window interval is kept.
-        result_interval =
-            (d.count == 1 && d.interval == d.horizon) ? Dates.Second(0) : d.interval
         # `d` is already sliced to the requested window range by the store.
-        data = SortedDict(
-            d.initial_timestamp + d.interval * (i - 1) => dst_window(i)
-            for i in 1:(d.count)
-        )
+        data = _assemble_forecast_windows(
+            d.initial_timestamp, d.interval, d.count, dst_window)
         return Deterministic(; name = String(name), data = data,
-            resolution = d.resolution, interval = result_interval)
+            resolution = d.resolution,
+            interval = _forecast_display_interval(d.count, d.interval, d.horizon))
     elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_SCENARIOS;
-        resolution = resolution, features = feats)
+        resolution = resolution, interval = matched_interval, features = feats)
         # `.data` is the canonical (scenario_count, horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
         s_ts = TSS.get_time_series(TSS.Scenarios, store.inner, owner_id, category, name;
-            resolution = resolution, features = feats, time_range = tr)
+            resolution = resolution, interval = matched_interval, features = feats,
+            time_range = tr)
         # `s_ts` is already sliced to the requested window range by the store.
         data = SortedDict{Dates.DateTime, Matrix{Float64}}()
         for i in 1:(s_ts.count)
@@ -1010,8 +1210,8 @@ function _rust_get_forecast(
                 _truncate(permutedims(s_ts.data[:, :, i]))
         end
         result = Scenarios(; name = String(name), data = data,
-            scenario_count = s_ts.scenario_count,
-            resolution = s_ts.resolution, interval = s_ts.interval)
+            scenario_count = s_ts.scenario_count, resolution = s_ts.resolution,
+            interval = _forecast_display_interval(s_ts.count, s_ts.interval, s_ts.horizon))
         return result
     end
     throw(RustTimeSeriesNotFound("no forecast for owner=$owner_id name=$name"))
@@ -1222,11 +1422,13 @@ function _rust_has_time_series(
     owner::TimeSeriesOwners,
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) where {T <: TimeSeriesData}
     return !isempty(
         _rust_owner_list_metadata(owner;
-            time_series_type = T, name = name, resolution = resolution, features...),
+            time_series_type = T, name = name, resolution = resolution,
+            interval = interval, features...),
     )
 end
 
@@ -1510,7 +1712,12 @@ function _rust_get_time_series_multiple(
         for m in metas
             feats = (Symbol(k) => v for (k, v) in get_features(m))
             ts = if m isa ForecastKey
-                _rust_get_forecast(owner, get_name(m); resolution = get_resolution(m), feats...)
+                # Pin the read to this key's own interval: a name may carry several
+                # forecasts differing only by interval, which would otherwise be
+                # ambiguous here.
+                _rust_get_forecast(owner, get_name(m);
+                    resolution = get_resolution(m), interval = get_interval(m), feats...,
+                )
             elseif m isa NonSequentialTimeSeriesKey
                 _rust_get_time_series(NonSequentialTimeSeries, owner, get_name(m); feats...)
             else

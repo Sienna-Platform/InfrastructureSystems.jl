@@ -147,10 +147,6 @@ function StructDefinition(;
     return StructDefinition(struct_name, fields, supertype, docstring)
 end
 
-# These allow JSON3 serialization of the structs.
-StructTypes.StructType(::Type{StructDefinition}) = StructTypes.Struct()
-StructTypes.StructType(::Type{StructField}) = StructTypes.Struct()
-
 """
 Generate a Julia source code file for one struct from a `StructDefinition`.
 
@@ -204,7 +200,7 @@ function generate_struct_files(definitions; filename = nothing, output_directory
     end
 
     data = open(filename, "r") do io
-        JSON3.read(io, Dict)
+        JSON.parse(io; dicttype = Dict{String, Any})
     end
 
     # The user might run this multiple times and so we need to remove existing entries.
@@ -224,7 +220,7 @@ function generate_struct_files(definitions; filename = nothing, output_directory
     end
 
     open(filename, "w") do io
-        JSON3.pretty(io, data, JSON3.AlignmentContext(; indent = 2))
+        JSON.json(io, data; pretty = 2)
     end
 
     @info "Added $(length(definitions)) structs to $filename"

@@ -132,13 +132,26 @@ end
     component1 = IS.TestComponent("a", 5)
     component2 = IS.TestComponent("a", 5)
     @test IS.compare_values(component1, component2)
-    @test(
-        @test_logs(
-            (:error, r"not match"),
-            match_mode = :any,
-            !IS.compare_values(component1, component2; compare_uuids = true)
+
+    # `compare_uuids` now governs the integer `id` (components are no longer identified
+    # by a UUID). Two unattached components both carry `UNASSIGNED_ID` and so compare
+    # equal; use throwaway components with explicit ids to exercise both arms, leaving
+    # component1/component2 unassigned for the `add_component!` calls below.
+    let a = IS.TestComponent("a", 5), b = IS.TestComponent("a", 5)
+        IS.set_id!(IS.get_internal(a), 1)
+        IS.set_id!(IS.get_internal(b), 2)
+        @test(
+            @test_logs(
+                (:error, r"not match"),
+                match_mode = :any,
+                !IS.compare_values(a, b; compare_uuids = true)
+            )
         )
-    )
+        # Matching ids compare equal even with `compare_uuids`.
+        IS.set_id!(IS.get_internal(b), 1)
+        @test IS.compare_values(a, b; compare_uuids = true)
+    end
+
     component2.name = "b"
     @test(
         @test_logs(

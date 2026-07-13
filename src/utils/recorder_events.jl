@@ -34,9 +34,9 @@ function serialize(event::T) where {T <: AbstractRecorderEvent}
     return data
 end
 
-to_json(event::AbstractRecorderEvent) = JSON3.write(serialize(event))
+to_json(event::AbstractRecorderEvent) = JSON.json(serialize(event))
 from_json(::Type{T}, text::AbstractString) where {T <: AbstractRecorderEvent} =
-    deserialize(T, JSON3.read(text, Dict))
+    deserialize(T, JSON.parse(text; dicttype = Dict{String, Any}))
 
 function deserialize(::Type{T}, data::Dict) where {T <: AbstractRecorderEvent}
     name = pop!(data, "name")
@@ -151,7 +151,7 @@ end
 function _record_event(name::Symbol, event::AbstractRecorderEvent)
     # Key is not checked. Callers must use @record and not call this directly.
     recorder = g_recorders[name]
-    write(recorder.io, JSON3.write(serialize(event)))
+    write(recorder.io, JSON.json(serialize(event)))
     return write(recorder.io, "\n")
 end
 

@@ -432,11 +432,16 @@ function list_associated_component_ids(
     ::Nothing,
 )
     if isconcretetype(attribute_type)
-        return _list_associated_component_ids(associations, (attribute_type,))
+        return _list_associated_component_ids(
+            associations,
+            (string(nameof(attribute_type)),),
+        )
     end
 
-    subtypes = get_all_concrete_subtypes(attribute_type)
-    return _list_associated_component_ids(associations, subtypes)
+    return _list_associated_component_ids(
+        associations,
+        get_all_subtype_names(attribute_type),
+    )
 end
 
 # attribute ids from component type driver function
@@ -451,12 +456,14 @@ function list_associated_supplemental_attribute_ids(
     if isconcretetype(component_type)
         return _list_associated_supplemental_attribute_ids(
             associations,
-            (component_type,),
+            (string(nameof(component_type)),),
         )
     end
 
-    subtypes = get_all_concrete_subtypes(component_type)
-    return _list_associated_supplemental_attribute_ids(associations, subtypes)
+    return _list_associated_supplemental_attribute_ids(
+        associations,
+        get_all_subtype_names(component_type),
+    )
 end
 
 # component ids from attribute type plus component type
@@ -551,7 +558,7 @@ function _get_type_clause!(
     column::String,
 )
     if isabstracttype(type)
-        subtypes = [string(nameof(x)) for x in get_all_concrete_subtypes(type)]
+        subtypes = get_all_subtype_names(type)
         type_clause = if length(subtypes) == 1
             "$column = ?"
         else
@@ -584,18 +591,18 @@ const _QUERY_LIST_ASSOCIATED_COMP_IDS_BY_MULTIPLE_TYPES = StringTemplates.@templ
 
 function _list_associated_component_ids(
     associations::SupplementalAttributeAssociations,
-    attribute_types,
+    attribute_type_names,
 )
-    len = length(attribute_types)
+    len = length(attribute_type_names)
     if len == 0
         # This would require an abstract type with no subtypes. Just here for completeness.
         return Int[]
     elseif len == 1
         query = _QUERY_LIST_ASSOCIATED_COMP_IDS_BY_ONE_TYPE
-        params = (string(nameof(first(attribute_types))),)
+        params = (first(attribute_type_names),)
     else
-        placeholder = chop(repeat("?,", length(attribute_types)))
-        params = Tuple(string(nameof(type)) for type in attribute_types)
+        placeholder = chop(repeat("?,", len))
+        params = Tuple(attribute_type_names)
         query = StringTemplates.render(
             _QUERY_LIST_ASSOCIATED_COMP_IDS_BY_MULTIPLE_TYPES;
             table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
@@ -623,18 +630,18 @@ const _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_IDS_BY_MULTIPLE_TYPES =
 
 function _list_associated_supplemental_attribute_ids(
     associations::SupplementalAttributeAssociations,
-    component_types,
+    component_type_names,
 )
-    len = length(component_types)
+    len = length(component_type_names)
     if len == 0
         # This would require an abstract type with no subtypes. Just here for completeness.
         return Int[]
     elseif len == 1
         query = _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_IDS_BY_ONE_TYPE
-        params = (string(nameof(first(component_types))),)
+        params = (first(component_type_names),)
     else
-        placeholder = chop(repeat("?,", length(component_types)))
-        params = Tuple(string(nameof(type)) for type in component_types)
+        placeholder = chop(repeat("?,", len))
+        params = Tuple(component_type_names)
         query = StringTemplates.render(
             _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_IDS_BY_MULTIPLE_TYPES;
             table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
@@ -833,12 +840,9 @@ function _get_attribute_type_string!(
     val = if isnothing(attribute_type)
         ""
     elseif isabstracttype(attribute_type)
-        count = 0
-        for type in get_all_concrete_subtypes(attribute_type)
-            push!(params, string(nameof(type)))
-            count += 1
-        end
-        placeholder = chop(repeat("?,", count))
+        names = get_all_subtype_names(attribute_type)
+        append!(params, names)
+        placeholder = chop(repeat("?,", length(names)))
         "attribute_type in ($placeholder)"
     else
         push!(params, string(nameof(attribute_type)))

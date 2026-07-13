@@ -33,10 +33,10 @@ function to_json(obj::T; pretty = false, indent = 2) where {T <: InfrastructureS
     try
         if pretty
             io = IOBuffer()
-            JSON3.pretty(io, serialize(obj), JSON3.AlignmentContext(; indent = indent))
+            JSON.json(io, serialize(obj); pretty = indent)
             return take!(io)
         else
-            return JSON3.write(serialize(obj))
+            return JSON.json(serialize(obj))
         end
     catch e
         @error "Failed to serialize $(summary(obj))"
@@ -52,9 +52,9 @@ function to_json(
 ) where {T <: InfrastructureSystemsType}
     data = serialize(obj)
     if pretty
-        res = JSON3.pretty(io, data, JSON3.AlignmentContext(; indent = indent))
+        res = JSON.json(io, data; pretty = indent)
     else
-        res = JSON3.write(io, data)
+        res = JSON.json(io, data)
     end
 
     return res
@@ -73,7 +73,7 @@ end
 Deserializes a InfrastructureSystemsType from String or IO.
 """
 function from_json(io::Union{IO, String}, ::Type{T}) where {T <: InfrastructureSystemsType}
-    return deserialize(T, JSON3.read(io, Dict))
+    return deserialize(T, JSON.parse(io; dicttype = Dict{String, Any}))
 end
 
 """
@@ -288,7 +288,7 @@ deserialize(::Type{Dates.DateTime}, val::AbstractString) = Dates.DateTime(val)
 # The next methods fix serialization of UUIDs. The underlying type of a UUID is a UInt128.
 # JSON tries to encode this as a number in JSON. Encoding integers greater than can
 # be stored in a signed 64-bit integer sometimes does not work - at least when using
-# JSON3. The number gets converted to a float in scientific notation, and so
+# JSON. The number gets converted to a float in scientific notation, and so
 # the UUID is truncated and essentially lost. These functions cause JSON to encode UUIDs as
 # strings and then convert them back during deserialization.
 
@@ -338,7 +338,7 @@ function is_ext_valid_for_serialization(value)
         return false
     end
     try
-        JSON3.write(value)
+        JSON.json(value)
     catch
         @error "Failed to serialize an 'ext' value. Please ensure that the " *
                "contents follow the rules provided in the documentation. Generally, only " *

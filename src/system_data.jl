@@ -334,6 +334,14 @@ function compare_values(
             # the components.
             continue
         end
+        if !compare_uuids && name in (:next_component_id, :next_supplemental_attribute_id)
+            # These counters are derived from the identities they hand out, so they only
+            # mean anything when the identities themselves are being compared. Reassigning
+            # ids (`assign_new_ids`) advances them past the originals while leaving the
+            # data identical — the same reason `id` itself is skipped unless
+            # `compare_uuids`.
+            continue
+        end
         val_x = getproperty(x, name)
         val_y = getproperty(y, name)
         if !compare_values(
@@ -894,10 +902,15 @@ function deserialize(
         if !isfile(raw["time_series_storage_file"])
             error("time series file $(raw["time_series_storage_file"]) does not exist")
         end
-        # Rust backend: open the .nc + sidecar .sqlite directly.
+        # Rust backend: open the .nc + sidecar .sqlite. When the system is not
+        # read-only, isolate it from the source file by opening a working copy so
+        # that adding/removing time series cannot corrupt a shared/cached store.
         time_series_manager = TimeSeriesManager(;
-            data_store = open_rust_store(raw["time_series_storage_file"];
-                read_only = time_series_read_only),
+            data_store = open_deserialized_rust_store(
+                raw["time_series_storage_file"],
+                time_series_directory,
+                time_series_read_only,
+            ),
             read_only = time_series_read_only,
         )
     elseif haskey(raw, "time_series_storage_file")

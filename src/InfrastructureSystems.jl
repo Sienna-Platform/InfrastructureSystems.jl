@@ -21,14 +21,13 @@ import Base: @kwdef
 import DataFrames
 import DataFrames: DataFrame
 import Dates
-import JSON3
+import JSON
 import Logging
 import Random
 import Pkg
 import PrettyTables
 import Printf: @sprintf
 import SHA
-import StructTypes
 import StringTemplates
 import TerminalLoggers: TerminalLogger, ProgressLevel
 import TimeSeries

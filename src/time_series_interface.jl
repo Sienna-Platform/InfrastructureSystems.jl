@@ -69,7 +69,7 @@ function get_time_series(
         return _rust_get_time_series(
             T, owner, name;
             start_time = start_time, len = len, count = count,
-            resolution = resolution, features...,
+            resolution = resolution, interval = interval, features...,
         )
     end
 end
@@ -881,7 +881,10 @@ function has_time_series(
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(val)
     isnothing(mgr) && return false
-    return _rust_has_time_series(T, val, name; resolution = resolution, features...)
+    return _rust_has_time_series(
+        T, val, name;
+        resolution = resolution, interval = interval, features...,
+    )
 end
 
 has_time_series(
@@ -932,17 +935,7 @@ function copy_time_series!(
     end
 end
 
-# Return a copy of `ts` carrying `new_name`. `SingleTimeSeries` is immutable, so it
-# is rebuilt through its copy constructor (the content-addressed array is reused);
-# the still-mutable forecast types are deep-copied and renamed in place.
-_copy_time_series_with_name(ts::SingleTimeSeries, new_name) = SingleTimeSeries(ts, new_name)
-
-function _copy_time_series_with_name(ts, new_name)
-    ts = deepcopy(ts)
-    set_name!(ts, new_name)
-    return ts
-end
-
+# Return a copy of `ts` carrying `new_name`. Every time-series type is immutable, so a
 function _copy_time_series!(
     dst::TimeSeriesOwners,
     src::TimeSeriesOwners;
@@ -958,8 +951,17 @@ function _copy_time_series!(
         )
     end
 
-    # The Rust store is content-addressed, so re-adding a reconstructed series to
-    # `dst` only creates a new association row; the underlying array is shared.
+    store = mgr.data_store::RustTimeSeriesStore
+    dst_id, dst_type, _ = _rust_owner_args(dst)
+    src_id, _, src_category = _rust_owner_args(src)
+    category = _tss_category(src_category)
+
+    # The copy happens entirely inside the store: it clones the association row
+    # against the same content-addressed array. Nothing is read into Julia, so no
+    # array is duplicated and the stored type survives verbatim — a
+    # DeterministicSingleTimeSeries stays one instead of being materialized into a
+    # dense Deterministic, which is what a get/add round-trip through the Julia
+    # types would produce.
     for ts_key in get_time_series_keys(src)
         name = get_name(ts_key)
         new_name = name
@@ -971,18 +973,18 @@ function _copy_time_series!(
             end
             @debug "Copy ts_key with" _group = LOG_GROUP_TIME_SERIES new_name
         end
-        feats = Dict(Symbol(k) => v for (k, v) in get_features(ts_key))
-        ts = get_time_series(
-            get_time_series_type(ts_key),
-            src,
-            name;
+        copy_typed!(
+            store,
+            src_id,
+            category,
+            name,
+            _rust_ts_code(get_time_series_type(ts_key)),
+            dst_id,
+            dst_type;
+            new_name = new_name,
             resolution = get_resolution(ts_key),
-            feats...,
+            features = Dict{String, Any}(get_features(ts_key)),
         )
-        if new_name != name
-            ts = _copy_time_series_with_name(ts, new_name)
-        end
-        add_time_series!(mgr, dst, ts; feats...)
     end
 end
 

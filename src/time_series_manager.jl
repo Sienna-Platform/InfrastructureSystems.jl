@@ -197,7 +197,7 @@ function remove_time_series!(
     # type `time_series_type` that contains at least the requested features.
     for key in _rust_owner_list_metadata(owner;
         time_series_type = time_series_type, name = name, resolution = resolution,
-        features...)
+        interval = interval, features...)
         mt = get_time_series_type(key)
         res = get_resolution(key)
         feats = _rust_features((Symbol(k) => v for (k, v) in get_features(key)))
@@ -226,8 +226,11 @@ function remove_time_series!(
                 features = feats,
             )
         else
+            # Pin this key's own interval: a name can carry several forecasts differing
+            # only by interval, so removing by (type, name, resolution) alone would be
+            # ambiguous.
             remove_typed!(store, owner_id, category, name, _rust_ts_code(mt);
-                resolution = res, features = feats)
+                resolution = res, interval = get_interval(key), features = feats)
         end
     end
     return

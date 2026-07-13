@@ -1,6 +1,6 @@
 import InteractiveUtils
 import SHA
-import JSON3
+import JSON
 
 const HASH_FILENAME = "check.sha256"
 
@@ -107,11 +107,35 @@ function _get_all_concrete_subtypes(::Type{T}, sub_types::Vector{DataType}) wher
             push!(sub_types, sub_type)
         elseif isabstracttype(sub_type)
             _get_all_concrete_subtypes(sub_type, sub_types)
-        elseif sub_type isa UnionAll
-            # Parametric leaf type (e.g. `SingleTimeSeries{T}`): record its body so
-            # `nameof()` still yields the type name used by callers.
-            body = Base.unwrap_unionall(sub_type)
-            body isa DataType && push!(sub_types, body)
+        end
+    end
+
+    return nothing
+end
+
+"""
+Returns the names of all leaf subtypes of T, as Strings.
+
+Unlike [`get_all_concrete_subtypes`](@ref), this includes *parametric* leaf types
+(e.g. `SingleTimeSeries`, `ConstantReserveGroup`), which have no concrete `DataType` of
+their own but are persisted under their base name. Use this when building type-name
+clauses for SQL queries; use `get_all_concrete_subtypes` when the types will be
+instantiated, since a parametric type has no instantiable concrete form.
+"""
+function get_all_subtype_names(::Type{T}) where {T}
+    names = Vector{String}()
+    _get_all_subtype_names(T, names)
+    return names
+end
+
+function _get_all_subtype_names(::Type{T}, names::Vector{String}) where {T}
+    for sub_type in InteractiveUtils.subtypes(T)
+        if isabstracttype(sub_type)
+            _get_all_subtype_names(sub_type, names)
+        else
+            # Concrete types and parametric leaves (`UnionAll`) alike are stored under
+            # their base name.
+            push!(names, string(nameof(sub_type)))
         end
     end
 
@@ -229,8 +253,13 @@ compare_values(x, y; kwargs...) = compare_values(nothing, x, y; kwargs...)
 _fetch_match_fn(match_fn::Function) = match_fn
 _fetch_match_fn(::Nothing) = isequivalent
 
-# Whether to stop recursing and apply the match_fn
+# Whether to stop recursing and apply the match_fn. Type-valued fields (e.g.
+# `ForecastKey.time_series_type`) are leaves: compare them directly rather than
+# recursing into type internals. A concrete type is a `DataType`; an
+# unparametrized parametric type (e.g. `Deterministic`) is a `UnionAll` whose
+# `fieldnames` (`:var`, `:body`) would otherwise drive a recursion that crashes.
 _is_compare_directly(::DataType, ::DataType) = true
+_is_compare_directly(::UnionAll, ::UnionAll) = true
 _is_compare_directly(::T, ::U) where {T, U} = true
 _is_compare_directly(::T, ::T) where {T} = isempty(fieldnames(T))
 
@@ -729,7 +758,7 @@ function compute_file_hash(path::String, files::Vector{String})
     end
 
     open(joinpath(path, HASH_FILENAME), "w") do io
-        JSON3.write(io, data)
+        JSON.json(io, data)
     end
 end
 

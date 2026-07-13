@@ -2276,6 +2276,9 @@ end
     @test IS.get_initial_timestamp(time_series) == dates[1]
     @test IS.get_name(time_series) == name
 
+    # The copy is performed inside the store against the same content-addressed array, so
+    # the transformed forecast is still stored as a DeterministicSingleTimeSeries; reads
+    # materialize it into a regular Deterministic like any other DST-backed read.
     time_series = IS.get_time_series(IS.DeterministicSingleTimeSeries, component2, name)
     @test time_series isa IS.Deterministic
     @test IS.get_initial_timestamp(time_series) == dates[1]
