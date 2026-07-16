@@ -29,9 +29,11 @@ end
     end
 end
 
-@testset "SystemUnitsSettings base_value is immutable" begin
-    settings = IS.SystemUnitsSettings(100.0, IS.UnitSystem.SYSTEM_BASE)
-    @test_throws ErrorException settings.base_value = 50.0
-    settings.unit_system = IS.UnitSystem.NATURAL_UNITS
-    @test settings.unit_system == IS.UnitSystem.NATURAL_UNITS
+@testset "InfrastructureSystemsInternal units-anchor accessors" begin
+    internal = IS.InfrastructureSystemsInternal()
+    @test IS.get_base_value(internal) === nothing
+    IS.set_base_value!(internal, 100.0)
+    @test IS.get_base_value(internal) === 100.0
+    IS.set_base_value!(internal, nothing)
+    @test IS.get_base_value(internal) === nothing
 end
