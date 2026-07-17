@@ -24,7 +24,7 @@ Internal storage common to InfrastructureSystems types.
 mutable struct InfrastructureSystemsInternal <: InfrastructureSystemsType
     uuid::Base.UUID
     shared_system_references::Union{Nothing, SharedSystemReferences}
-    units_info::Union{Nothing, Float64}
+    base_value::Union{Nothing, Float64}
     ext::Union{Nothing, Dict{String, Any}}
 end
 
@@ -34,10 +34,10 @@ Creates InfrastructureSystemsInternal with a new UUID.
 InfrastructureSystemsInternal(;
     uuid = make_uuid(),
     shared_system_references = nothing,
-    units_info = nothing,
+    base_value = nothing,
     ext = nothing,
 ) =
-    InfrastructureSystemsInternal(uuid, shared_system_references, units_info, ext)
+    InfrastructureSystemsInternal(uuid, shared_system_references, base_value, ext)
 
 """
 Creates InfrastructureSystemsInternal with an existing UUID.
@@ -75,8 +75,8 @@ function set_shared_system_references!(
     return
 end
 
-get_base_value(internal::InfrastructureSystemsInternal) = internal.units_info
-set_base_value!(internal::InfrastructureSystemsInternal, val) = internal.units_info = val
+get_base_value(internal::InfrastructureSystemsInternal) = internal.base_value
+set_base_value!(internal::InfrastructureSystemsInternal, val) = internal.base_value = val
 
 """
 Generic accessor for the base-value units anchor: works for anything implementing
@@ -106,9 +106,9 @@ function serialize(internal::InfrastructureSystemsInternal)
 
     for field in fieldnames(InfrastructureSystemsInternal)
         val = getproperty(internal, field)
-        # units_info is resolved against the system the component is added to, later, at
+        # base_value is resolved against the system the component is added to, later, at
         # deserialization time - never serialize the live value.
-        if field == :units_info
+        if field == :base_value
             val = nothing
         elseif field == :shared_system_references
             continue
