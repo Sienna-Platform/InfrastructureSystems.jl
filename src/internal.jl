@@ -83,8 +83,8 @@ Generic accessor for the base-value units anchor: works for anything implementin
 `get_internal`. Types that store their own anchor directly (rather than through an
 `InfrastructureSystemsInternal`) should add a concrete method instead.
 """
-get_base_value(x) = get_base_value(get_internal(x))
-set_base_value!(x, val) = set_base_value!(get_internal(x), val)
+get_base_value(x::InfrastructureSystemsType) = get_base_value(get_internal(x))
+set_base_value!(x::InfrastructureSystemsType, val) = set_base_value!(get_internal(x), val)
 
 """
 Gets the UUID for any InfrastructureSystemsType.

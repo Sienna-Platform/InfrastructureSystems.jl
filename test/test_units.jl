@@ -37,3 +37,17 @@ end
     IS.set_base_value!(internal, nothing)
     @test IS.get_base_value(internal) === nothing
 end
+
+struct MockUnitsAnchorHolder <: IS.InfrastructureSystemsType
+    internal::IS.InfrastructureSystemsInternal
+end
+IS.get_internal(x::MockUnitsAnchorHolder) = x.internal
+
+@testset "get_base_value/set_base_value! generic forwarding via get_internal" begin
+    mock = MockUnitsAnchorHolder(IS.InfrastructureSystemsInternal())
+    @test IS.get_base_value(mock) === nothing
+    IS.set_base_value!(mock, 100.0)
+    @test IS.get_base_value(mock) === 100.0
+    IS.set_base_value!(mock, nothing)
+    @test IS.get_base_value(mock) === nothing
+end
