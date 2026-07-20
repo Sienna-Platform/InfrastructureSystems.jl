@@ -232,10 +232,10 @@ function _storage_array(v::AbstractVector{PiecewiseStepData})
     return (mat, "PiecewiseStepData")
 end
 
-# Fixed-arity `NTuple{N, Float64}` values — the storage form behind `TupleTimeSeries`
-# (e.g. the hot/warm/cold start-up stages of a market bid). Dense, so unlike the ragged
-# piecewise encodings every row is full width; the arity travels in the logical type so
-# decode rebuilds the tuple without inferring it from the array shape.
+# Fixed-arity `NTuple{N, Float64}` values — the storage form for tuple-shaped
+# quantities (e.g. the hot/warm/cold start-up stages of a market bid). Dense, so unlike
+# the ragged piecewise encodings every row is full width; the arity travels in the
+# logical type so decode rebuilds the tuple without inferring it from the array shape.
 function _storage_array(v::AbstractVector{NTuple{N, Float64}}) where {N}
     mat = Matrix{Float64}(undef, length(v), N)
     for (i, tup) in enumerate(v)

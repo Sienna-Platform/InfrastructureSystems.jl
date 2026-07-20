@@ -170,16 +170,6 @@ end
 _resolve_serialized_type_parameter(_module::Module, x::AbstractString) =
     getproperty(_module, Symbol(x))
 
-# A structured entry encodes a parameter that is not a named type; currently a
-# `NamedTuple{names, NTuple{N, Float64}}` shape (used by `TupleTimeSeries`).
-function _resolve_serialized_type_parameter(::Module, x::AbstractDict)
-    haskey(x, "namedtuple_names") || throw(
-        ArgumentError("unrecognized serialized type parameter encoding: $x"),
-    )
-    names = Tuple(Symbol.(x["namedtuple_names"]))
-    return NamedTuple{names, NTuple{length(names), Float64}}
-end
-
 serialize(val::Base.RefValue{T}) where {T} = serialize(val[])
 
 # The default implementation allows any scalar type (or collection of scalar types) to
