@@ -489,8 +489,21 @@ function get_time_series_multiple(
     end
 end
 
-check_time_series_consistency(data::SystemData, ts_type) =
-    _rust_check_consistency(data.time_series_manager.data_store, ts_type)
+"""
+Verify that, per resolution, all time series of `ts_type` share one
+`(initial_timestamp, length)` grid, and return that pair. Time series at
+different resolutions have legitimately different grids; when more than one
+resolution is present, pass `resolution` to name the grid to check and return.
+"""
+check_time_series_consistency(
+    data::SystemData,
+    ts_type;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+) = _rust_check_consistency(
+    data.time_series_manager.data_store,
+    ts_type;
+    resolution = resolution,
+)
 
 """
 Transform all instances of SingleTimeSeries to DeterministicSingleTimeSeries.

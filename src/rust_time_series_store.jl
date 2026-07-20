@@ -1889,18 +1889,41 @@ function _rust_list_metadata_with_owner(
     return out
 end
 
-# Verify all SingleTimeSeries share an initial timestamp and length; return
-# `(initial_timestamp, length)` (parity with the metadata-store check). Resolved
-# by a single DISTINCT query in the core.
-function _rust_check_consistency(store::RustTimeSeriesStore, ::Type{<:SingleTimeSeries})
-    result = try
-        TSS.check_static_consistency(store.inner)
+# Verify that, per resolution, all SingleTimeSeries share an initial timestamp
+# and length; return `(initial_timestamp, length)` (parity with the
+# metadata-store check). SingleTimeSeries at different resolutions have
+# legitimately different grids, so with more than one resolution present the
+# caller must pass `resolution` to name the grid it wants. Resolved by a single
+# DISTINCT query in the core.
+function _rust_check_consistency(
+    store::RustTimeSeriesStore,
+    ::Type{<:SingleTimeSeries};
+    resolution::Union{Nothing, Dates.Period} = nothing,
+)
+    grids = try
+        TSS.check_static_consistency(store.inner; resolution = resolution)
     catch e
         e isa TSS.IntegrityError || rethrow()
         throw(InvalidValue(e.msg))
     end
-    isnothing(result) && return (Dates.DateTime(Dates.Minute(0)), 0)
-    return (result.initial_timestamp, result.length)
+    isempty(grids) && return (Dates.DateTime(Dates.Minute(0)), 0)
+    if length(grids) > 1
+        resolutions =
+            join([string(Dates.canonicalize(g.resolution)) for g in grids], ", ")
+        throw(
+            InvalidValue(
+                "SingleTimeSeries exist at multiple resolutions ($resolutions); " *
+                "pass `resolution` to check one grid",
+            ),
+        )
+    end
+    return (grids[1].initial_timestamp, grids[1].length)
 end
 
-_rust_check_consistency(::RustTimeSeriesStore, ::Type{<:Forecast}) = nothing
+function _rust_check_consistency(
+    ::RustTimeSeriesStore,
+    ::Type{<:Forecast};
+    resolution::Union{Nothing, Dates.Period} = nothing,
+)
+    return nothing
+end
