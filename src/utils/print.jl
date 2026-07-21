@@ -91,14 +91,6 @@ function Base.show(io::IO, ::MIME"text/html", data::SystemData)
     show_supplemental_attributes_data(io, data; backend = :html, stand_alone = false)
 end
 
-function Base.show(io::IO, ::MIME"text/plain", system_units::SystemUnitsSettings)
-    print(io, summary(system_units), ":")
-    for name in fieldnames(typeof(system_units))
-        val = getproperty(system_units, name)
-        print(io, "\n      ", name, ": ", val)
-    end
-end
-
 function Base.show(io::IO, ::MIME"text/plain", ist::TimeSeriesOwners)
     print(io, summary(ist), ":")
     for name in fieldnames(typeof(ist))
