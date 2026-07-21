@@ -1,8 +1,6 @@
 
 import UUIDs
 
-abstract type UnitsData end
-
 @scoped_enum(UnitSystem, SYSTEM_BASE = 0, DEVICE_BASE = 1, NATURAL_UNITS = 2,)
 
 @doc """
@@ -13,14 +11,6 @@ Unit system for component data values.
 - `DEVICE_BASE`: Per-unit values on the device base power
 - `NATURAL_UNITS`: Values in natural units (e.g., MW, MVAR)
 """ UnitSystem
-
-@kwdef mutable struct SystemUnitsSettings <: UnitsData
-    const base_value::Float64
-    unit_system::UnitSystem
-end
-
-serialize(val::SystemUnitsSettings) = serialize_struct(val)
-deserialize(T::Type{<:SystemUnitsSettings}, val::Dict) = deserialize_struct(T, val)
 
 @kwdef struct SharedSystemReferences <: InfrastructureSystemsType
     supplemental_attribute_manager::Union{Nothing, AbstractSupplementalAttributeManager} =
@@ -34,7 +24,7 @@ Internal storage common to InfrastructureSystems types.
 mutable struct InfrastructureSystemsInternal <: InfrastructureSystemsType
     uuid::Base.UUID
     shared_system_references::Union{Nothing, SharedSystemReferences}
-    units_info::Union{Nothing, SystemUnitsSettings}
+    base_value::Union{Nothing, Float64}
     ext::Union{Nothing, Dict{String, Any}}
 end
 
@@ -44,10 +34,10 @@ Creates InfrastructureSystemsInternal with a new UUID.
 InfrastructureSystemsInternal(;
     uuid = make_uuid(),
     shared_system_references = nothing,
-    units_info = nothing,
+    base_value = nothing,
     ext = nothing,
 ) =
-    InfrastructureSystemsInternal(uuid, shared_system_references, units_info, ext)
+    InfrastructureSystemsInternal(uuid, shared_system_references, base_value, ext)
 
 """
 Creates InfrastructureSystemsInternal with an existing UUID.
@@ -85,8 +75,16 @@ function set_shared_system_references!(
     return
 end
 
-get_units_info(internal::InfrastructureSystemsInternal) = internal.units_info
-set_units_info!(internal::InfrastructureSystemsInternal, val) = internal.units_info = val
+get_base_value(internal::InfrastructureSystemsInternal) = internal.base_value
+set_base_value!(internal::InfrastructureSystemsInternal, val) = internal.base_value = val
+
+"""
+Generic accessor for the base-value units anchor: works for anything implementing
+`get_internal`. Types that store their own anchor directly (rather than through an
+`InfrastructureSystemsInternal`) should add a concrete method instead.
+"""
+get_base_value(x::InfrastructureSystemsType) = get_base_value(get_internal(x))
+set_base_value!(x::InfrastructureSystemsType, val) = set_base_value!(get_internal(x), val)
 
 """
 Gets the UUID for any InfrastructureSystemsType.
@@ -108,9 +106,9 @@ function serialize(internal::InfrastructureSystemsInternal)
 
     for field in fieldnames(InfrastructureSystemsInternal)
         val = getproperty(internal, field)
-        # reset the units data since this is a struct related to the system the components is
-        # added which is resolved later in the de-serialization.
-        if val isa UnitsData
+        # base_value is resolved against the system the component is added to, later, at
+        # deserialization time - never serialize the live value.
+        if field == :base_value
             val = nothing
         elseif field == :shared_system_references
             continue

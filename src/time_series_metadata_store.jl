@@ -157,8 +157,8 @@ function _load_metadata_into_memory_legacy!(store::TimeSeriesMetadataStore)
         if !isnothing(internal.ext) && !isempty(internal.ext)
             @warn "ext is no longer supported on a time series metadata instance and will be dropped: $(internal.ext)"
         end
-        if !isnothing(internal.units_info)
-            @warn "units_info is no longer supported on a time series metadata instance and will be dropped: $(internal.units_info)"
+        if !isnothing(internal.base_value)
+            @warn "base_value is no longer supported on a time series metadata instance and will be dropped: $(internal.base_value)"
         end
         uuid = get_uuid(metadata)
         if haskey(store.metadata_uuids, uuid)
@@ -492,9 +492,9 @@ function add_metadata!(
     if !isnothing(internal.ext) && !isempty(internal.ext)
         error("ext cannot be set on a time series metadata instance: $(internal.ext)")
     end
-    if !isnothing(internal.units_info)
+    if !isnothing(internal.base_value)
         error(
-            "units_info cannot be set on a time series metadata instance: $(internal.units_info)",
+            "base_value cannot be set on a time series metadata instance: $(internal.base_value)",
         )
     end
     vals = _create_row(
