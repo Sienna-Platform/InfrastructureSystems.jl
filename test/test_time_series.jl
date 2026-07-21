@@ -5146,20 +5146,34 @@ end
         IS.get_time_series_keys(c1; time_series_type = IS.DeterministicSingleTimeSeries))
     @test IS.get_time_series_hash(c1, dst_key) == h1
 
-    # System-wide grouping: one entry per stored array, listing every (owner, key).
-    groups = IS.get_shared_time_series(sys)
+    # System-wide grouping, default: only the arrays referenced more than once.
+    # Array A is shared by c1 and c2; array B is c3's alone and so is excluded.
+    # The derived DeterministicSingleTimeSeries are excluded everywhere.
+    groups = IS.get_time_series_array_groups(sys)
     @test groups isa Dict
-    @test Set(keys(groups)) == Set([h1, h3])
-    # Array A is referenced by c1 and c2, each via an STS and a derived DST (4 pairs).
+    @test Set(keys(groups)) == Set([h1])
     @test Set(IS.get_name(o) for (o, _) in groups[h1]) == Set(["c1", "c2"])
-    @test length(groups[h1]) == 4
-    # Array B is c3's STS plus its derived DST.
-    @test Set(IS.get_name(o) for (o, _) in groups[h3]) == Set(["c3"])
-    @test length(groups[h3]) == 2
+    @test length(groups[h1]) == 2
     for (o, k) in groups[h1]
         @test k isa IS.TimeSeriesKey
+        @test IS.get_time_series_type(k) === IS.SingleTimeSeries
         @test IS.get_time_series_hash(o, k) == h1
     end
+
+    # only_shared = false adds the arrays with a single reference.
+    ids(pairs) = Set(
+        (IS.get_name(o), IS.get_name(k), IS.get_time_series_type(k))
+        for (o, k) in pairs
+    )
+    all_groups = IS.get_time_series_array_groups(sys; only_shared = false)
+    @test Set(keys(all_groups)) == Set([h1, h3])
+    @test ids(all_groups[h1]) == ids(groups[h1])
+    @test Set(IS.get_name(o) for (o, _) in all_groups[h3]) == Set(["c3"])
+    @test length(all_groups[h3]) == 1
+    @test all(
+        IS.get_time_series_type(k) !== IS.DeterministicSingleTimeSeries
+        for pairs in values(all_groups) for (_, k) in pairs
+    )
 
     # A key with no matching stored array (an owner that has none) raises.
     c4 = IS.TestComponent("c4", 5)

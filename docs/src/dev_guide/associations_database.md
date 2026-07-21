@@ -36,8 +36,8 @@ file-format reference. The IS.jl glue lives in
 !!! note "Component and time series identifiers"
     
     Components and supplemental attributes are identified by integer IDs, and time series data
-    is identified by its array content hash. There is no `time_series_uuid` — to address a
-    specific time series use its [`TimeSeriesKey`](@ref) (see [Time Series Data](@ref)).
+    is identified by its array content hash. Use a [`TimeSeriesKey`](@ref) to address a specific
+    time series (see [Time Series Data](@ref)).
 
 ## Supplemental Attribute Associations
 

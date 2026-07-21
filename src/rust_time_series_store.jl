@@ -146,7 +146,7 @@ end
 
 # ---- Conversions -----------------------------------------------------------
 
-_tss_category(category::String) =
+tss_category(category::String) =
     if category == "Component"
         TSS.Component
     elseif category == "SupplementalAttribute"
@@ -157,10 +157,10 @@ _tss_category(category::String) =
 
 # Owner-category tag stored alongside each association ("Component" /
 # "SupplementalAttribute"). Accepts an owner instance or its type.
-_get_owner_category(
+get_owner_category(
     ::Union{InfrastructureSystemsComponent, Type{<:InfrastructureSystemsComponent}},
 ) = "Component"
-_get_owner_category(
+get_owner_category(
     ::Union{SupplementalAttribute, Type{<:SupplementalAttribute}},
 ) = "SupplementalAttribute"
 
@@ -419,7 +419,7 @@ function serialize_single!(
         name;
         logical_type = logical,
     )
-    TSS.add_time_series!(store.inner, owner_id, owner_type, _tss_category(owner_category),
+    TSS.add_time_series!(store.inner, owner_id, owner_type, tss_category(owner_category),
         tss_ts; features = features, units = units)
     return
 end
@@ -478,7 +478,7 @@ function serialize_non_sequential!(
         name;
         logical_type = logical,
     )
-    TSS.add_time_series!(store.inner, owner_id, owner_type, _tss_category(owner_category),
+    TSS.add_time_series!(store.inner, owner_id, owner_type, tss_category(owner_category),
         tss_ts; features = features, units = units)
     return
 end
@@ -555,13 +555,13 @@ clear_time_series!(store::RustTimeSeriesStore) = TSS.clear!(store.inner)
 
 # Remove every time series owned by `(owner_id, owner_category)` in one shot
 # (order-independent, so it is not blocked by the SingleTimeSeries/DST removal guard).
-_rust_clear_owner!(store::RustTimeSeriesStore, owner_id::Integer,
+rust_clear_owner!(store::RustTimeSeriesStore, owner_id::Integer,
     owner_category::TSS.OwnerCategory) =
     TSS.clear!(store.inner; owner_id = owner_id, owner_category = owner_category)
 
 # A hashable identity for one stored association (a `TSS.list_keys` row),
 # used to diff the store before/after a batch update for rollback.
-_rust_row_identity(row) = (
+rust_row_identity(row) = (
     row.owner_id,
     row.owner_category,
     nameof(row.time_series_type),
@@ -575,13 +575,13 @@ _rust_row_identity(row) = (
 # SingleTimeSeries can be removed without orphaning a DST that shares its array.
 # Resolved by a single catalog query in the Rust core rather than scanning every
 # association here.
-_rust_array_sts_dst_counts(store::RustTimeSeriesStore, hash::Vector{UInt8}) =
+rust_array_sts_dst_counts(store::RustTimeSeriesStore, hash::Vector{UInt8}) =
     TSS.count_array_references(store.inner, hash)
 
 # Remove the single association described by a `TSS.list_keys` row.
-function _rust_remove_row!(store::RustTimeSeriesStore, row)
+function rust_remove_row!(store::RustTimeSeriesStore, row)
     feats = Dict{String, Any}(row.features)
-    category = _tss_category(row.owner_category)
+    category = tss_category(row.owner_category)
     if _rust_is_type(row.time_series_type) <: SingleTimeSeries
         remove_single!(store, row.owner_id, category, row.name;
             resolution = row.resolution, features = feats)
@@ -589,7 +589,7 @@ function _rust_remove_row!(store::RustTimeSeriesStore, row)
         # Pin the row's own interval: one name can carry several forecasts differing only
         # by interval, and the removal must hit exactly the row described.
         remove_typed!(store, row.owner_id, category, row.name,
-            _rust_ts_code(_rust_is_type(row.time_series_type));
+            rust_ts_code(_rust_is_type(row.time_series_type));
             resolution = row.resolution, interval = row.interval, features = feats)
     end
     return
@@ -618,10 +618,9 @@ _rust_check_time_series_data(::DeterministicSingleTimeSeries) = nothing
 
 """
 Route a manager-level `add_time_series!` to the Rust store, dispatching on the
-concrete time series type. Data identity is the array content hash (no
-`time_series_uuid`).
+concrete time series type. Data identity is the array content hash.
 """
-function _rust_add_time_series!(
+function rust_add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
@@ -661,7 +660,7 @@ function _rust_add!(
 )
     store = mgr.data_store::RustTimeSeriesStore
     owner_id, owner_type, owner_category = _rust_owner_args(owner)
-    category = _tss_category(owner_category)
+    category = tss_category(owner_category)
     name = get_name(time_series)
     resolution = get_resolution(time_series)
     feats = _rust_features(features)
@@ -700,7 +699,7 @@ function _rust_add_non_sequential!(
 )
     store = mgr.data_store::RustTimeSeriesStore
     owner_id, owner_type, owner_category = _rust_owner_args(owner)
-    category = _tss_category(owner_category)
+    category = tss_category(owner_category)
     name = get_name(time_series)
     feats = _rust_features(features)
 
@@ -725,7 +724,7 @@ end
 
 # Anything other than SingleTimeSeries / NonSequentialTimeSeries / Forecast is
 # unsupported on the Rust backend.
-_rust_get_time_series(
+rust_get_time_series(
     ::Type{T},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -741,7 +740,7 @@ _rust_get_time_series(
 # `count` slicing on the forecast window axis. `len`, when given, truncates each
 # window to its first `len` horizon steps. A forecast stored as a
 # DeterministicSingleTimeSeries is materialized into a regular `Deterministic`.
-_rust_get_time_series(
+rust_get_time_series(
     ::Type{<:Forecast},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -759,7 +758,7 @@ _rust_get_time_series(
 Route a public `get_time_series(SingleTimeSeries, owner, name; ...)` to the Rust
 store, honoring `start_time` / `len` slicing on the time axis.
 """
-function _rust_get_time_series(
+function rust_get_time_series(
     ::Type{<:SingleTimeSeries},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -772,10 +771,10 @@ function _rust_get_time_series(
     mgr = get_time_series_manager(owner)
     store = mgr.data_store::RustTimeSeriesStore
     owner_id, _, owner_category = _rust_owner_args(owner)
-    category = _tss_category(owner_category)
+    category = tss_category(owner_category)
     # Resolve the unique series matching a possibly-partial (subset) feature /
     # resolution query, then read it by its exact stored attributes.
-    matched = _rust_get_metadata(
+    matched = rust_get_metadata(
         owner,
         SingleTimeSeries,
         name;
@@ -808,7 +807,7 @@ end
 Route a public `get_time_series(NonSequentialTimeSeries, owner, name; ...)` to the
 Rust store, honoring `start_time` / `len` slicing on the (irregular) time axis.
 """
-function _rust_get_time_series(
+function rust_get_time_series(
     ::Type{<:NonSequentialTimeSeries},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -821,10 +820,10 @@ function _rust_get_time_series(
     mgr = get_time_series_manager(owner)
     store = mgr.data_store::RustTimeSeriesStore
     owner_id, _, owner_category = _rust_owner_args(owner)
-    category = _tss_category(owner_category)
+    category = tss_category(owner_category)
     # Resolve the unique series matching a possibly-partial (subset) feature query,
     # then read it by its exact stored attributes.
-    matched = _rust_get_metadata(owner, NonSequentialTimeSeries, name; features...)
+    matched = rust_get_metadata(owner, NonSequentialTimeSeries, name; features...)
     feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
     nts = get_non_sequential(store, owner_id, category, name; features = feats)
     (isnothing(start_time) && isnothing(len)) && return nts
@@ -899,7 +898,7 @@ _forecast_display_interval(count::Integer, interval::Dates.Period, horizon::Date
 function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
     store = mgr.data_store::RustTimeSeriesStore
     owner_id, owner_type, owner_category = _rust_owner_args(owner)
-    category = _tss_category(owner_category)
+    category = tss_category(owner_category)
     name = get_name(ts)
     resolution = get_resolution(ts)
     interval = get_interval(ts)
@@ -908,7 +907,7 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
     # All forecasts that share a (resolution, interval) group must agree on the
     # window parameters (count, horizon, initial timestamp).
     check_params_compatibility(
-        _rust_forecast_parameters(store; resolution = resolution, interval = interval),
+        rust_forecast_parameters(store; resolution = resolution, interval = interval),
         make_time_series_parameters(ts),
     )
 
@@ -1089,13 +1088,13 @@ function _rust_get_forecast(
     mgr = get_time_series_manager(owner)
     store = mgr.data_store::RustTimeSeriesStore
     owner_id, _, owner_category = _rust_owner_args(owner)
-    category = _tss_category(owner_category)
+    category = tss_category(owner_category)
     # Resolve the unique forecast matching a possibly-partial (subset) feature /
     # resolution / interval query, then read it by its exact stored attributes.
     # `interval` matters when one series name carries several forecasts that differ only
     # by interval (`transform_single_time_series!` with `delete_existing = false`);
     # without it the lookup is ambiguous.
-    matched = _rust_get_metadata(
+    matched = rust_get_metadata(
         owner, Forecast, name;
         resolution = resolution, interval = interval, features...,
     )
@@ -1227,7 +1226,7 @@ end
 # window is materialized (and FunctionData-decoded) at most once per read.
 
 # Owner-category String tag for a `TSS.OwnerCategory` enum (the inverse of
-# `_tss_category`), used to resolve a reader entry back to its owner object.
+# `tss_category`), used to resolve a reader entry back to its owner object.
 _owner_category_string(c::TSS.OwnerCategory) =
     c == TSS.Component ? "Component" : "SupplementalAttribute"
 
@@ -1318,7 +1317,7 @@ end
 # Build a reader from the store. `id_to_owner(owner_id::Int, category::String)`
 # resolves each entry's owner object (the system holds the owner maps). Per-entry
 # metadata (owner, key, logical_type) is resolved once here, off the read path.
-function _rust_build_forecast_reader(
+function rust_build_forecast_reader(
     store::RustTimeSeriesStore,
     id_to_owner,
     ::Type{T};
@@ -1338,7 +1337,7 @@ function _rust_build_forecast_reader(
         is_type = _rust_is_type(nameof(info.time_series_type))
         feats = Dict{String, Any}(info.features)
         fmeta = TSS.get_forecast_metadata(store.inner, info.owner_id,
-            info.owner_category, info.name, _rust_ts_code(is_type);
+            info.owner_category, info.name, rust_ts_code(is_type);
             resolution = info.resolution, features = feats)
         logical_types[i] = fmeta.logical_type
         key = ForecastKey(;
@@ -1417,7 +1416,7 @@ end
 """Route `has_time_series(owner, T, name; ...)` to the Rust store. Honors partial
 (subset) feature / resolution queries: matches if any stored series of type `T`
 contains at least the requested features."""
-function _rust_has_time_series(
+function rust_has_time_series(
     ::Type{T},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -1426,19 +1425,19 @@ function _rust_has_time_series(
     features...,
 ) where {T <: TimeSeriesData}
     return !isempty(
-        _rust_owner_list_metadata(owner;
+        rust_owner_list_metadata(owner;
             time_series_type = T, name = name, resolution = resolution,
             interval = interval, features...),
     )
 end
 
 # The single stored TimeSeriesType code for a concrete IS time series type.
-_rust_ts_code(::Type{<:SingleTimeSeries}) = TSS.TS_TYPE_SINGLE
-_rust_ts_code(::Type{<:NonSequentialTimeSeries}) = TSS.TS_TYPE_NON_SEQUENTIAL
-_rust_ts_code(::Type{<:DeterministicSingleTimeSeries}) = TSS.TS_TYPE_DETERMINISTIC_SINGLE
-_rust_ts_code(::Type{<:Deterministic}) = TSS.TS_TYPE_DETERMINISTIC
-_rust_ts_code(::Type{<:Probabilistic}) = TSS.TS_TYPE_PROBABILISTIC
-_rust_ts_code(::Type{<:Scenarios}) = TSS.TS_TYPE_SCENARIOS
+rust_ts_code(::Type{<:SingleTimeSeries}) = TSS.TS_TYPE_SINGLE
+rust_ts_code(::Type{<:NonSequentialTimeSeries}) = TSS.TS_TYPE_NON_SEQUENTIAL
+rust_ts_code(::Type{<:DeterministicSingleTimeSeries}) = TSS.TS_TYPE_DETERMINISTIC_SINGLE
+rust_ts_code(::Type{<:Deterministic}) = TSS.TS_TYPE_DETERMINISTIC
+rust_ts_code(::Type{<:Probabilistic}) = TSS.TS_TYPE_PROBABILISTIC
+rust_ts_code(::Type{<:Scenarios}) = TSS.TS_TYPE_SCENARIOS
 
 # Name-less existence queries. `_rust_query_codes(T)` maps a query type to the
 # stored TimeSeriesType codes to match (empty tuple = any type).
@@ -1486,11 +1485,11 @@ _rust_subtype_codes(::Type{T}) where {T <: TimeSeriesData} =
     Tuple(c for (c, k) in _RUST_CODE_TYPES if k <: T)
 
 # True iff `owner` has any time series, optionally restricted to type `T`.
-function _rust_has_any(owner; time_series_type::Union{Nothing, Type} = nothing)
+function rust_has_any(owner; time_series_type::Union{Nothing, Type} = nothing)
     mgr = get_time_series_manager(owner)
     store = mgr.data_store::RustTimeSeriesStore
     owner_id, _, owner_category = _rust_owner_args(owner)
-    category = _tss_category(owner_category)
+    category = tss_category(owner_category)
     codes = time_series_type === nothing ? () : _rust_query_codes(time_series_type)
     isempty(codes) && return TSS.has_for_owner(store.inner, owner_id, category)
     return any(
@@ -1613,7 +1612,7 @@ _rust_all_metadata(store::RustTimeSeriesStore) =
     [_key_from_row(row) for row in TSS.list_keys(store.inner)]
 
 # Owner-level `list_metadata` entry point (mirrors the metadata-store signature).
-function _rust_owner_list_metadata(
+function rust_owner_list_metadata(
     owner::TimeSeriesOwners;
     time_series_type = nothing,
     name = nothing,
@@ -1624,14 +1623,14 @@ function _rust_owner_list_metadata(
     mgr = get_time_series_manager(owner)
     store = mgr.data_store::RustTimeSeriesStore
     owner_id, _, owner_category = _rust_owner_args(owner)
-    return _rust_list_metadata(store, owner_id, _tss_category(owner_category);
+    return _rust_list_metadata(store, owner_id, tss_category(owner_category);
         time_series_type = time_series_type, name = name, resolution = resolution,
         interval = interval, features = _rust_features(features))
 end
 
 # Single matching metadata; throws when zero or more than one match (parity with
 # `TimeSeriesMetadataStore.get_metadata`).
-function _rust_get_metadata(
+function rust_get_metadata(
     owner::TimeSeriesOwners,
     ::Type{T},
     name::AbstractString;
@@ -1639,7 +1638,7 @@ function _rust_get_metadata(
     interval = nothing,
     features...,
 ) where {T <: TimeSeriesData}
-    items = _rust_owner_list_metadata(owner; time_series_type = T, name = name,
+    items = rust_owner_list_metadata(owner; time_series_type = T, name = name,
         resolution = resolution, interval = interval, features...)
     if isempty(items)
         throw(ArgumentError("No matching metadata is stored."))
@@ -1655,13 +1654,10 @@ function _rust_get_metadata(
     return items[1]
 end
 
-# `get_time_series_keys` for an owner. `_rust_owner_list_metadata` already returns keys.
-_rust_get_time_series_keys(owner::TimeSeriesOwners) = _rust_owner_list_metadata(owner)
-
 # Content hash (hex) of the array `key` resolves to under `owner`. Narrows the
 # catalog to the owner + the key's type/name in one query, then matches the exact
 # resolution + features in-memory (Period equality, as in `_rust_list_metadata`).
-function _rust_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
+function rust_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
     mgr = get_time_series_manager(owner)
     isnothing(mgr) &&
         throw(RustTimeSeriesNotFound("owner has no time series to hash"))
@@ -1669,7 +1665,7 @@ function _rust_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
     owner_id, _, owner_category = _rust_owner_args(owner)
     T = get_time_series_type(key)
     rows = TSS.list_array_groups(store.inner; owner_id = owner_id,
-        owner_category = _tss_category(owner_category),
+        owner_category = tss_category(owner_category),
         time_series_type = _rust_pushable_code(T), name = get_name(key))
     target_res = get_resolution(key)
     target_feats = get_features(key)
@@ -1686,19 +1682,25 @@ end
 # `id_to_owner` callback resolves an `(owner_id, owner_category)` row back to the
 # owner object (the system holds the component / supplemental-attribute maps).
 # One catalog query returns the hash on every row, so no per-row metadata fetch.
-function _rust_group_by_hash(store::RustTimeSeriesStore, id_to_owner)
+#
+# `DeterministicSingleTimeSeries` rows are excluded: such a forecast is a view of
+# its own `SingleTimeSeries` and so always reports that array's hash, which is an
+# artifact of the transformation rather than data shared between time series.
+function rust_group_by_hash(store::RustTimeSeriesStore, id_to_owner; only_shared = true)
     groups = Dict{String, Vector{Tuple{TimeSeriesOwners, TimeSeriesKey}}}()
     for row in TSS.list_array_groups(store.inner)
+        _rust_is_type(row.time_series_type) <: DeterministicSingleTimeSeries && continue
         owner = id_to_owner(Int(row.owner_id), row.owner_category)
         pairs = get!(
             () -> Tuple{TimeSeriesOwners, TimeSeriesKey}[], groups, row.data_hash)
         push!(pairs, (owner, _key_from_row(row)))
     end
+    only_shared && filter!(x -> length(x.second) > 1, groups)
     return groups
 end
 
 # Reconstruct each matching time series for an owner; applies `filter_func`.
-function _rust_get_time_series_multiple(
+function rust_get_time_series_multiple(
     owner::TimeSeriesOwners,
     filter_func;
     type = nothing,
@@ -1706,7 +1708,7 @@ function _rust_get_time_series_multiple(
     resolution = nothing,
     interval = nothing,
 )
-    metas = _rust_owner_list_metadata(owner; time_series_type = type, name = name,
+    metas = rust_owner_list_metadata(owner; time_series_type = type, name = name,
         resolution = resolution, interval = interval)
     Channel() do channel
         for m in metas
@@ -1719,9 +1721,9 @@ function _rust_get_time_series_multiple(
                     resolution = get_resolution(m), interval = get_interval(m), feats...,
                 )
             elseif m isa NonSequentialTimeSeriesKey
-                _rust_get_time_series(NonSequentialTimeSeries, owner, get_name(m); feats...)
+                rust_get_time_series(NonSequentialTimeSeries, owner, get_name(m); feats...)
             else
-                _rust_get_time_series(SingleTimeSeries, owner, get_name(m);
+                rust_get_time_series(SingleTimeSeries, owner, get_name(m);
                     resolution = get_resolution(m), feats...)
             end
             (isnothing(filter_func) || filter_func(ts)) && put!(channel, ts)
@@ -1731,7 +1733,7 @@ end
 
 # Reassign every time series from `old_id` to `new_id` (component re-id). Components
 # are always the Component owner category.
-function _rust_replace_component_id!(
+function rust_replace_component_id!(
     store::RustTimeSeriesStore,
     old_id::Int,
     new_id::Int,
@@ -1744,7 +1746,7 @@ end
 
 # Distinct, sorted resolutions across the store, optionally restricted to a type
 # (strict subtype). One DISTINCT query per concrete subtype code, in the core.
-function _rust_get_time_series_resolutions(
+function rust_get_time_series_resolutions(
     store::RustTimeSeriesStore;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
 )
@@ -1758,7 +1760,7 @@ function _rust_get_time_series_resolutions(
 end
 
 # Counts of time series grouped by type name (parity with counts_by_type).
-function _rust_get_time_series_counts_by_type(store::RustTimeSeriesStore)
+function rust_get_time_series_counts_by_type(store::RustTimeSeriesStore)
     counts = OrderedDict{String, Int}()
     for r in TSS.counts_by_type(store.inner)
         counts[string(nameof(r.time_series_type))] = r.count
@@ -1767,15 +1769,15 @@ function _rust_get_time_series_counts_by_type(store::RustTimeSeriesStore)
 end
 
 # Number of distinct stored arrays (parity with get_num_time_series).
-_rust_get_num_time_series(store::RustTimeSeriesStore) = TSS.num_distinct_arrays(store.inner)
+rust_get_num_time_series(store::RustTimeSeriesStore) = TSS.num_distinct_arrays(store.inner)
 
 # Counts of distinct stored arrays (shared series count once) and owners by
 # category, matching the metadata-store's `get_time_series_counts`.
-_rust_time_series_counts(store::RustTimeSeriesStore) = TSS.time_series_counts(store.inner)
+rust_time_series_counts(store::RustTimeSeriesStore) = TSS.time_series_counts(store.inner)
 
 # Static-time-series summary DataFrame (parity with the metadata-store version).
 # The core groups the rows; we shape them into the DataFrame.
-function _rust_static_summary_table(store::RustTimeSeriesStore)
+function rust_static_summary_table(store::RustTimeSeriesStore)
     rows = TSS.static_summary(store.inner)
     return DataFrames.DataFrame(;
         owner_type = [r.owner_type for r in rows],
@@ -1790,7 +1792,7 @@ function _rust_static_summary_table(store::RustTimeSeriesStore)
 end
 
 # Forecast summary DataFrame (parity with the metadata-store version).
-function _rust_forecast_summary_table(store::RustTimeSeriesStore)
+function rust_forecast_summary_table(store::RustTimeSeriesStore)
     rows = TSS.forecast_summary(store.inner)
     return DataFrames.DataFrame(;
         owner_type = [r.owner_type for r in rows],
@@ -1809,7 +1811,7 @@ end
 # First forecast's parameters, optionally filtered by resolution/interval. The
 # store keeps a single forecast window configuration, mirroring the legacy
 # `get_forecast_parameters`.
-function _rust_forecast_parameters(
+function rust_forecast_parameters(
     store::RustTimeSeriesStore;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
@@ -1837,13 +1839,13 @@ end
 
 # Distinct owner ids of the given category that have time series, optionally
 # restricted by time series type (strict subtype) and resolution.
-function _rust_list_owner_ids(
+function rust_list_owner_ids(
     store::RustTimeSeriesStore,
     owner_type::Type;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
-    category = _tss_category(_get_owner_category(owner_type))
+    category = tss_category(get_owner_category(owner_type))
     # Without a resolution filter, enumerate owner ids in the core (optionally per
     # concrete subtype code). With one, scan the category's keys so `Period`
     # equality is used for the resolution match (see `_rust_list_metadata`).
@@ -1870,13 +1872,13 @@ end
 # restricted by time series type (strict subtype) and resolution. Owner category
 # and resolution are pushed into the core query; the strict type filter is applied
 # on the returned keys.
-function _rust_list_metadata_with_owner(
+function rust_list_metadata_with_owner(
     store::RustTimeSeriesStore,
     owner_type::Type;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
-    category = _tss_category(_get_owner_category(owner_type))
+    category = tss_category(get_owner_category(owner_type))
     rows = TSS.list_keys(store.inner; owner_category = category)
     out = NamedTuple[]
     for row in rows
@@ -1895,7 +1897,7 @@ end
 # legitimately different grids, so with more than one resolution present the
 # caller must pass `resolution` to name the grid it wants. Resolved by a single
 # DISTINCT query in the core.
-function _rust_check_consistency(
+function rust_check_consistency(
     store::RustTimeSeriesStore,
     ::Type{<:SingleTimeSeries};
     resolution::Union{Nothing, Dates.Period} = nothing,
@@ -1920,7 +1922,7 @@ function _rust_check_consistency(
     return (grids[1].initial_timestamp, grids[1].length)
 end
 
-function _rust_check_consistency(
+function rust_check_consistency(
     ::RustTimeSeriesStore,
     ::Type{<:Forecast};
     resolution::Union{Nothing, Dates.Period} = nothing,

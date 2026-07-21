@@ -428,7 +428,7 @@ function iterate_components_with_time_series(
 )
     return (
         get_component(data, x) for
-        x in _rust_list_owner_ids(
+        x in rust_list_owner_ids(
             data.time_series_manager.data_store,
             InfrastructureSystemsComponent;
             time_series_type = time_series_type,
@@ -443,7 +443,7 @@ function iterate_supplemental_attributes_with_time_series(
 )
     return (
         get_supplemental_attribute(data, x) for
-        x in _rust_list_owner_ids(
+        x in rust_list_owner_ids(
             data.time_series_manager.data_store,
             SupplementalAttribute;
             time_series_type = time_series_type,
@@ -499,7 +499,7 @@ check_time_series_consistency(
     data::SystemData,
     ts_type;
     resolution::Union{Nothing, Dates.Period} = nothing,
-) = _rust_check_consistency(
+) = rust_check_consistency(
     data.time_series_manager.data_store,
     ts_type;
     resolution = resolution,
@@ -654,7 +654,7 @@ function _check_transform_single_time_series(
     resolution::Union{Nothing, Dates.Period};
     skip_existing::Bool = false,
 )
-    items = _rust_list_metadata_with_owner(
+    items = rust_list_metadata_with_owner(
         data.time_series_manager.data_store,
         InfrastructureSystemsComponent;
         time_series_type = SingleTimeSeries,
@@ -1294,7 +1294,7 @@ get_forecast_parameters(
     data::SystemData;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-) = _rust_forecast_parameters(
+) = rust_forecast_parameters(
     data.time_series_manager.data_store;
     resolution = resolution,
     interval = interval,
@@ -1305,18 +1305,22 @@ function get_forecast_initial_times(data::SystemData; kwargs...)
     isnothing(params) && return []
     return get_initial_times(params.initial_timestamp, params.count, params.interval)
 end
+
 function get_forecast_window_count(data::SystemData; kwargs...)
     params = get_forecast_parameters(data; kwargs...)
     return isnothing(params) ? nothing : params.count
 end
+
 function get_forecast_horizon(data::SystemData; kwargs...)
     params = get_forecast_parameters(data; kwargs...)
     return isnothing(params) ? nothing : params.horizon
 end
+
 function get_forecast_initial_timestamp(data::SystemData; kwargs...)
     params = get_forecast_parameters(data; kwargs...)
     return isnothing(params) ? nothing : params.initial_timestamp
 end
+
 function get_forecast_interval(data::SystemData; kwargs...)
     params = get_forecast_parameters(data; kwargs...)
     return isnothing(params) ? nothing : params.interval
@@ -1325,26 +1329,31 @@ end
 get_time_series_resolutions(
     data::SystemData;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
-) = _rust_get_time_series_resolutions(
+) = rust_get_time_series_resolutions(
     data.time_series_manager.data_store;
     time_series_type = time_series_type,
 )
 
 """
 $(TYPEDSIGNATURES)
-Group every time series in `data` by the array it is stored in. Returns a
+Group the time series in `data` by the array they are stored in. Returns a
 `Dict` mapping each content hash (a 64-character lowercase hex string) to the
-`(owner, key)` pairs that resolve to that one shared array.
+`(owner, key)` pairs that resolve to that one array.
 
-Time series that share their underlying data appear together: identical data
-that was deduplicated, and a `SingleTimeSeries` together with any
-`DeterministicSingleTimeSeries` derived from it. A group with more than one
-`(owner, key)` pair is therefore a set of time series that share data — across
-owners. Resolved by a single catalog query (no per-series reads).
+With `only_shared = true` (the default) the result contains only the groups with
+more than one `(owner, key)` pair — the time series that actually share data,
+whether across owners or within one owner. Pass `only_shared = false` to get
+every stored array, including the arrays referenced exactly once.
+
+`DeterministicSingleTimeSeries` is excluded: it is a view of its own
+`SingleTimeSeries` and always reports that array's hash, which says nothing about
+data being shared between time series.
+
+Resolved by a single catalog query (no per-series reads).
 
 See also [`get_time_series_hash`](@ref) for the hash of one `(owner, key)`.
 """
-function get_shared_time_series(data::SystemData)
+function get_time_series_array_groups(data::SystemData; only_shared = true)
     store = data.time_series_manager.data_store::RustTimeSeriesStore
     id_to_owner =
         (id, category) -> if category == "Component"
@@ -1352,7 +1361,7 @@ function get_shared_time_series(data::SystemData)
         else
             get_supplemental_attribute(data, id)
         end
-    return _rust_group_by_hash(store, id_to_owner)
+    return rust_group_by_hash(store, id_to_owner; only_shared = only_shared)
 end
 
 """
@@ -1369,7 +1378,7 @@ component's forecast": drive it with [`read_forecast_window!`](@ref) and read ea
 entry with [`get_forecast_window`](@ref). Forecasts that share an underlying array
 (deduplicated data, or a `DeterministicSingleTimeSeries` over its
 `SingleTimeSeries`) are read from disk once per timestamp regardless of how many
-components reference them — see [`get_shared_time_series`](@ref).
+components reference them — see [`get_time_series_array_groups`](@ref).
 """
 function build_forecast_reader(
     data::SystemData,
@@ -1385,7 +1394,7 @@ function build_forecast_reader(
         else
             get_supplemental_attribute(data, id)
         end
-    return _rust_build_forecast_reader(
+    return rust_build_forecast_reader(
         store,
         id_to_owner,
         T;
@@ -1447,9 +1456,9 @@ get_num_components_with_supplemental_attributes(data::SystemData) =
     get_num_components_with_attributes(data.supplemental_attribute_manager.associations)
 
 get_num_time_series(data::SystemData) =
-    _rust_get_num_time_series(data.time_series_manager.data_store)
+    rust_get_num_time_series(data.time_series_manager.data_store)
 function get_time_series_counts(data::SystemData)
-    c = _rust_time_series_counts(data.time_series_manager.data_store)
+    c = rust_time_series_counts(data.time_series_manager.data_store)
     return TimeSeriesCounts(;
         components_with_time_series = c.components_with_time_series,
         supplemental_attributes_with_time_series = c.supplemental_attributes_with_time_series,
@@ -1458,11 +1467,11 @@ function get_time_series_counts(data::SystemData)
     )
 end
 get_time_series_counts_by_type(data::SystemData) =
-    _rust_get_time_series_counts_by_type(data.time_series_manager.data_store)
+    rust_get_time_series_counts_by_type(data.time_series_manager.data_store)
 get_static_time_series_summary_table(data::SystemData) =
-    _rust_static_summary_table(data.time_series_manager.data_store)
+    rust_static_summary_table(data.time_series_manager.data_store)
 get_forecast_summary_table(data::SystemData) =
-    _rust_forecast_summary_table(data.time_series_manager.data_store)
+    rust_forecast_summary_table(data.time_series_manager.data_store)
 
 _get_system_basename(system_file) = splitext(basename(system_file))[1]
 _get_secondary_basename(system_basename, name) = system_basename * "_" * name

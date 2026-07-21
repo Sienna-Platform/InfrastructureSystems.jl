@@ -43,12 +43,12 @@ end
 # (owner_id::Int, owner_type::String, owner_category::String) for the Rust FFI.
 # The owner is identified by its integer id; `owner_category` is the String tag
 # ("Component" / "SupplementalAttribute"), converted to a `TSS.OwnerCategory`
-# enum via `_tss_category` at the call sites that need it.
+# enum via `tss_category` at the call sites that need it.
 function _rust_owner_args(owner::TimeSeriesOwners)
     return (
         get_id(owner),
         string(nameof(typeof(owner))),
-        _get_owner_category(owner),
+        get_owner_category(owner),
     )
 end
 
@@ -76,7 +76,7 @@ function begin_time_series_update(
     mgr::TimeSeriesManager,
 )
     store = mgr.data_store
-    before = Set(_rust_row_identity(r) for r in TSS.list_keys(store.inner))
+    before = Set(rust_row_identity(r) for r in TSS.list_keys(store.inner))
     try
         open_store!(store, "r+") do
             func()
@@ -86,9 +86,9 @@ function begin_time_series_update(
         # Roll back: remove associations added during this update so the store is
         # left consistent with its pre-update state.
         for row in TSS.list_keys(store.inner)
-            _rust_row_identity(row) in before && continue
+            rust_row_identity(row) in before && continue
             try
-                _rust_remove_row!(store, row)
+                rust_remove_row!(store, row)
             catch
                 # Best-effort cleanup; ignore rows already gone.
             end
@@ -125,7 +125,7 @@ function add_time_series!(
     features...,
 )
     _throw_if_read_only(mgr)
-    return _rust_add_time_series!(mgr, owner, time_series; features...)
+    return rust_add_time_series!(mgr, owner, time_series; features...)
 end
 
 function clear_time_series!(mgr::TimeSeriesManager)
@@ -137,7 +137,7 @@ end
 function clear_time_series!(mgr::TimeSeriesManager, component::TimeSeriesOwners)
     _throw_if_read_only(mgr)
     owner_id, _, owner_category = _rust_owner_args(component)
-    _rust_clear_owner!(mgr.data_store, owner_id, _tss_category(owner_category))
+    rust_clear_owner!(mgr.data_store, owner_id, tss_category(owner_category))
     @debug "Cleared time_series in $(summary(component))." _group =
         LOG_GROUP_TIME_SERIES
     return
@@ -151,7 +151,7 @@ get_metadata(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = _rust_get_metadata(
+) = rust_get_metadata(
     component,
     time_series_type,
     name;
@@ -168,7 +168,7 @@ list_metadata(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = _rust_owner_list_metadata(
+) = rust_owner_list_metadata(
     component;
     time_series_type = time_series_type,
     name = name,
@@ -192,10 +192,10 @@ function remove_time_series!(
     _throw_if_read_only(mgr)
     store = mgr.data_store
     owner_id, _, owner_category = _rust_owner_args(owner)
-    category = _tss_category(owner_category)
+    category = tss_category(owner_category)
     # Subset (partial) feature/resolution matching: remove every stored series of
     # type `time_series_type` that contains at least the requested features.
-    for key in _rust_owner_list_metadata(owner;
+    for key in rust_owner_list_metadata(owner;
         time_series_type = time_series_type, name = name, resolution = resolution,
         interval = interval, features...)
         mt = get_time_series_type(key)
@@ -209,7 +209,7 @@ function remove_time_series!(
             hash =
                 get_metadata(store, owner_id, category, name;
                     resolution = res, features = feats).data_hash
-            c = _rust_array_sts_dst_counts(store, hash)
+            c = rust_array_sts_dst_counts(store, hash)
             if c.dst >= 1 && c.sts <= 1
                 throw(
                     ArgumentError(
@@ -229,7 +229,7 @@ function remove_time_series!(
             # Pin this key's own interval: a name can carry several forecasts differing
             # only by interval, so removing by (type, name, resolution) alone would be
             # ambiguous.
-            remove_typed!(store, owner_id, category, name, _rust_ts_code(mt);
+            remove_typed!(store, owner_id, category, name, rust_ts_code(mt);
                 resolution = res, interval = get_interval(key), features = feats)
         end
     end

@@ -95,9 +95,6 @@ InfrastructureSystems.display_units_arg(::typeof({{accessor}}_unitful), ::{{unit
 
 function read_json_data(filename::String)
     return open(filename) do io
-        # JSON, not JSON3: JSON3 narrows integral floats (`100.0` -> `Int 100`), which
-        # would emit `base_power=100` and `validation range: (eps(), 100)` for Float64
-        # fields and churn every regenerated struct.
         data = JSON.parse(io; dicttype = Dict{String, Any})
         if data isa Array
             return data
