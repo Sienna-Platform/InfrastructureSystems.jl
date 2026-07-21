@@ -6,7 +6,7 @@ Current concrete subtypes are:
 
 See also: [`Forecast`](@ref)
 """
-abstract type StaticTimeSeries <: TimeSeriesData end
+abstract type StaticTimeSeries{T} <: TimeSeriesData{T} end
 
 Base.length(ts::StaticTimeSeries) = length(get_data(ts))
 get_initial_timestamp(ts::StaticTimeSeries) = TimeSeries.timestamp(get_data(ts))[1]

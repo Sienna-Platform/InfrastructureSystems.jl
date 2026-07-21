@@ -21,26 +21,26 @@ Check if the element type T is supported by transform_array_for_hdf.
 Returns true if supported, false otherwise.
 Uses multiple dispatch for a more Julian approach.
 """
-is_transform_array_for_hdf_supported(::Type{T}) where {T <: Real} = true
-is_transform_array_for_hdf_supported(::Type{T}) where {T <: Tuple} = isconcretetype(T)
-is_transform_array_for_hdf_supported(::Type{T}) where {T <: Vector{<:Tuple}} =
+is_array_type_supported(::Type{T}) where {T <: Real} = true
+is_array_type_supported(::Type{T}) where {T <: Tuple} = isconcretetype(T)
+is_array_type_supported(::Type{T}) where {T <: Vector{<:Tuple}} =
     isconcretetype(T)
-is_transform_array_for_hdf_supported(::Type{T}) where {T <: Matrix} = true
-is_transform_array_for_hdf_supported(::Type{T}) where {T <: LinearFunctionData} = true
-is_transform_array_for_hdf_supported(::Type{T}) where {T <: QuadraticFunctionData} = true
-is_transform_array_for_hdf_supported(::Type{T}) where {T <: PiecewiseLinearData} = true
-is_transform_array_for_hdf_supported(::Type{T}) where {T <: PiecewiseStepData} = true
+is_array_type_supported(::Type{T}) where {T <: Matrix} = true
+is_array_type_supported(::Type{T}) where {T <: LinearFunctionData} = true
+is_array_type_supported(::Type{T}) where {T <: QuadraticFunctionData} = true
+is_array_type_supported(::Type{T}) where {T <: PiecewiseLinearData} = true
+is_array_type_supported(::Type{T}) where {T <: PiecewiseStepData} = true
 # Catchall for unsupported types
-is_transform_array_for_hdf_supported(::Type{T}) where {T} = false
+is_array_type_supported(::Type{T}) where {T} = false
 
 """
 Validate that data in a SortedDict has supported element types for transform_array_for_hdf.
 Throws an ArgumentError if any vector has an unsupported element type.
 """
-function validate_time_series_data_for_hdf(
+function validate_time_series_data_for_backend(
     ::SortedDict{Dates.DateTime, Vector{T}},
 ) where {T}
-    if !is_transform_array_for_hdf_supported(T)
+    if !is_array_type_supported(T)
         supported = join(TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES, ", ")
         if !isconcretetype(T)
             throw(
@@ -66,7 +66,7 @@ end
 
 # Fallback for other SortedDict types - throw error since Deterministic only supports
 # SortedDict{Dates.DateTime, Vector{T}} where T is a supported type
-function validate_time_series_data_for_hdf(data::SortedDict)
+function validate_time_series_data_for_backend(data::SortedDict)
     supported = join(TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES, ", ")
     throw(
         ArgumentError(

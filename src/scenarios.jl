@@ -19,7 +19,7 @@ A Discrete Scenario Based time series for a particular data field in a Component
   - `data::SortedDict`: timestamp - scalingfactor
   - `internal::InfrastructureSystemsInternal`
 """
-struct Scenarios{T, N} <: Forecast
+struct Scenarios{T, N} <: Forecast{T}
     "user-defined name"
     name::String
     "timestamp - scalingfactor (per-window arrays of rank `N`)"
@@ -210,8 +210,6 @@ Get [`Scenarios`](@ref) `data`.
 """
 get_data(value::Scenarios) = value.data
 
-# TODO see Deterministic
-eltype_data(forecast::Scenarios) = eltype_data_common(forecast)
 get_initial_times(forecast::Scenarios) = get_initial_times_common(forecast)
 get_initial_timestamp(forecast::Scenarios) = get_initial_timestamp_common(forecast)
 get_window(f::Scenarios, initial_time::Dates.DateTime; len = nothing) =

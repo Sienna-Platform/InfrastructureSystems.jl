@@ -25,7 +25,7 @@ is unavailable.
   - `count::Int`: number of forecast windows
   - `horizon::Int`: length of this time series
 """
-struct DeterministicSingleTimeSeries{T, N} <: AbstractDeterministic
+struct DeterministicSingleTimeSeries{T, N} <: AbstractDeterministic{T}
     "wrapped SingleTimeSeries object"
     single_time_series::SingleTimeSeries{T, N}
     "time series availability time"
@@ -92,8 +92,6 @@ get_count(value::DeterministicSingleTimeSeries) = value.count
 Get [`DeterministicSingleTimeSeries`](@ref) `horizon`.
 """
 get_horizon(value::DeterministicSingleTimeSeries) = value.horizon
-
-eltype_data(ts::DeterministicSingleTimeSeries) = eltype_data(ts.single_time_series)
 
 function get_array_for_hdf(forecast::DeterministicSingleTimeSeries)
     return get_array_for_hdf(forecast.single_time_series)

@@ -14,7 +14,7 @@ Subtypes of Forecast must implement:
 - `get_window`
 - `iterate_windows`
 """
-abstract type Forecast <: TimeSeriesData end
+abstract type Forecast{T} <: TimeSeriesData{T} end
 
 Base.length(ts::Forecast) = get_count(ts)
 
@@ -24,7 +24,7 @@ Supertype for all deterministic forecast time series.
 Concrete subtypes include [`Deterministic`](@ref) and
 [`DeterministicSingleTimeSeries`](@ref).
 """
-abstract type AbstractDeterministic <: Forecast end
+abstract type AbstractDeterministic{T} <: Forecast{T} end
 
 function check_time_series_data(forecast::Forecast)
     _check_forecast_data(forecast)
@@ -62,12 +62,6 @@ function _check_forecast_interval(forecast::Forecast)
         end
         rethrow()
     end
-end
-
-# This method requires that the forecast type implement a `get_data` method like
-# Deterministic.
-function eltype_data_common(forecast::Forecast)
-    return eltype(first(values(get_data(forecast))))
 end
 
 # Element type and per-window array rank of a forecast's window dict, used to infer

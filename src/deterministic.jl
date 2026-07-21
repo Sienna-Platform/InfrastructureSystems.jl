@@ -17,17 +17,17 @@ A deterministic forecast for a particular data field in a Component.
   - `interval::Dates.Period`: forecast interval
   - `internal::InfrastructureSystemsInternal`
 """
-struct Deterministic{T, N} <: AbstractDeterministic
+struct Deterministic{T, N} <: AbstractDeterministic{T}
     "user-defined name"
     name::String
-    "timestamp - scalingfactor (per-window arrays of rank `N`)"
+    "timestamp => values (per-window arrays of rank `N`)"
     data::SortedDict{Dates.DateTime, Array{T, N}}
     "forecast resolution"
     resolution::Dates.Period
     "forecast interval"
     interval::Dates.Period
 
-    # Inner constructor validates HDF-storability on every construction (including
+    # Inner constructor validates NetCDF-storability on every construction (including
     # the inferring outer constructor below), so unsupported element types are
     # rejected early.
     function Deterministic{T, N}(
@@ -36,7 +36,7 @@ struct Deterministic{T, N} <: AbstractDeterministic
         resolution::Dates.Period,
         interval::Dates.Period,
     ) where {T, N}
-        validate_time_series_data_for_hdf(data)
+        validate_time_series_data_for_backend(data)
         return new{T, N}(String(name), data, resolution, interval)
     end
 end
@@ -180,8 +180,6 @@ function Deterministic(
     src::Deterministic,
     name::AbstractString,
 )
-    # units and ext are not copied. Under the key-centric model there is no shared
-    # UUID; the content-addressed data is simply reused with a different name.
     return Deterministic(
         name,
         src.data,
@@ -232,8 +230,6 @@ Get [`Deterministic`](@ref) `interval`.
 """
 get_interval(value::Deterministic) = value.interval
 
-# TODO handle typing here in a more principled fashion
-eltype_data(forecast::Deterministic) = eltype_data_common(forecast)
 get_initial_times(forecast::Deterministic) = get_initial_times_common(forecast)
 get_initial_timestamp(forecast::Deterministic) = get_initial_timestamp_common(forecast)
 

@@ -80,13 +80,6 @@ keys = get_time_series_keys(owner)      # enumerate the owner's associations
 ts = get_time_series(owner, keys[1])    # retrieve one by its key
 ```
 
-> **Migration note.** The former `get_time_series_uuid` function and the `time_series_uuid`
-> metadata field have been removed. That UUID was derived from the array's content hash, so it
-> was *not* unique per association — two associations that happened to share identical data
-> shared a single UUID, making it unsuitable as a handle. Use [`TimeSeriesKey`](@ref) (above)
-> to address a specific time series. If you need *data* identity ("is this the same underlying
-> array?"), that is the array's SHA-256 content hash held by the store.
-
 ## Debugging
 
 Inspect the artifacts with standard NetCDF and SQLite tools. For example, `ncdump -h <path>.nc`

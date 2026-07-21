@@ -1,5 +1,5 @@
 """
-    struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries
+    struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
         name::String
         timestamps::Vector{Dates.DateTime}
         data::Array{T, N}
@@ -27,7 +27,7 @@ scalar-per-step case, `N >= 2` is multidimensional per-step values).
   - `timestamps::Vector{Dates.DateTime}`: strictly-increasing timestamps, one per value
   - `data::Array{T, N}`: value array (dimension 1 is time)
 """
-struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries
+struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
     "user-defined name"
     name::String
     "strictly-increasing timestamps; one per value (`length == size(data, 1)`)."
@@ -226,8 +226,6 @@ Get [`NonSequentialTimeSeries`](@ref) `resolution`. A non-sequential series is
 irregular, so this is always `nothing`.
 """
 get_resolution(::NonSequentialTimeSeries) = nothing
-
-eltype_data(ts::NonSequentialTimeSeries) = eltype(get_array(ts))
 
 get_initial_timestamp(time_series::NonSequentialTimeSeries) = time_series.timestamps[1]
 

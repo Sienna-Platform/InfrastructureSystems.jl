@@ -2847,7 +2847,8 @@ end
     @test IS.length(ts) == 4
     @test IS.get_timestamps(ts) == timestamps
     @test IS.get_array(ts) == values
-    @test IS.eltype_data(ts) == Float64
+    @test eltype(ts) == Float64
+    @test ts isa IS.TimeSeriesData{Float64}
     IS.add_time_series!(sys, component, ts)
 
     got = IS.get_time_series(IS.NonSequentialTimeSeries, component, name)

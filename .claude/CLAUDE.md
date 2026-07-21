@@ -205,13 +205,43 @@ Do not add other exports.
 - **Missing validation descriptor → validation silently passes** (`validation.jl:~74`) — a named silent-failure pattern; new validation code must error loudly instead.
 - Containers expose `.data` and ~29 cross-file bare accesses exist — prefer accessor functions; do not add new direct reaches.
 
+## Time Series Type Hierarchy
+
+The whole hierarchy is parameterized on the value element type `T`, so callers dispatch on
+the payload instead of querying it:
+
+```
+TimeSeriesData{T}
+├─ StaticTimeSeries{T} ⊃ SingleTimeSeries{T, N}, NonSequentialTimeSeries{T, N}
+└─ Forecast{T} ⊃ Probabilistic{T, N}, Scenarios{T, N},
+   └─ AbstractDeterministic{T} ⊃ Deterministic{T, N}, DeterministicSingleTimeSeries{T, N}
+```
+
+`T` is the value element type (`Float64` or a domain type such as `LinearFunctionData`);
+`N` is the array rank — per-window for forecasts, per-series for static — and is
+deliberately NOT lifted to the abstract parents, since its meaning varies by subtype.
+
+`Base.eltype(::TimeSeriesData{T}) = T` is the only accessor (it replaced the removed
+`eltype_data`/`eltype_data_common` pair, which read `T` back out of the stored data).
+Prefer a signature constraint over a runtime check:
+
+```julia
+f(ts::TimeSeriesData{<:PiecewiseStepData}) = ...            # good — dispatch
+f(ts::TimeSeriesData) = throw(TypeError(...eltype(ts)))     # explicit mismatch method
+```
+
+Because the abstract types are `UnionAll`s, plain `::TimeSeriesData` annotations,
+`Type{<:TimeSeriesData}` and `where {T <: TimeSeriesData}` bounds all still work
+unchanged. What does NOT work is subtyping without a parameter — `struct Foo <:
+TimeSeriesData end` must become `<: TimeSeriesData{Float64}`.
+
 ## Core Abstractions
 
 - `InfrastructureSystemsComponent`
 - `InfrastructureSystemsType`
 - `InfrastructureSystemsContainer`
 - `SystemData`
-- `TimeSeriesData`
+- `TimeSeriesData{T}` (see Time Series Type Hierarchy)
 - `ValueCurve` (static and `TimeSeries*` curves)
 - `ProductionVariableCostCurve` (`CostCurve{T,U}`, `FuelCurve{T,U}`)
 - `FunctionData` (`StaticFunctionData`, `TimeSeriesFunctionData`)

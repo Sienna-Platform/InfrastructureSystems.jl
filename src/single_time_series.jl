@@ -1,5 +1,5 @@
 """
-    struct SingleTimeSeries{T, N} <: StaticTimeSeries
+    struct SingleTimeSeries{T, N} <: StaticTimeSeries{T}
         name::String
         initial_timestamp::Dates.DateTime
         resolution::Dates.Period
@@ -28,7 +28,7 @@ scalar-per-step case, `N >= 2` is multidimensional per-step values).
   - `resolution::Dates.Period`: Time duration between steps in the time series. The resolution must be the same throughout the time series
   - `data::Array{T, N}`: value array (dimension 1 is time)
 """
-struct SingleTimeSeries{T, N} <: StaticTimeSeries
+struct SingleTimeSeries{T, N} <: StaticTimeSeries{T}
     "user-defined name"
     name::String
     "timestamp of the first value"
@@ -266,8 +266,6 @@ get_data(value::SingleTimeSeries) = get_time_array(value)
 Get [`SingleTimeSeries`](@ref) `resolution`.
 """
 get_resolution(value::SingleTimeSeries) = value.resolution
-
-eltype_data(ts::SingleTimeSeries) = eltype(get_array(ts))
 
 get_initial_timestamp(time_series::SingleTimeSeries) = time_series.initial_timestamp
 

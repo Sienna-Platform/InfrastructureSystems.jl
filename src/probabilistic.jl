@@ -19,7 +19,7 @@ A Probabilistic forecast for a particular data field in a Component.
   - `data::SortedDict`: timestamp - scalingfactor
   - `internal::InfrastructureSystemsInternal`
 """
-struct Probabilistic{T, N} <: Forecast
+struct Probabilistic{T, N} <: Forecast{T}
     "user-defined name"
     name::String
     "timestamp - scalingfactor (per-window arrays of rank `N`)"
@@ -232,8 +232,6 @@ function get_array_for_hdf(forecast::Probabilistic)
     return data_for_hdf
 end
 
-# TODO see Deterministic
-eltype_data(forecast::Probabilistic) = eltype_data_common(forecast)
 get_initial_times(forecast::Probabilistic) = get_initial_times_common(forecast)
 get_initial_timestamp(forecast::Probabilistic) = get_initial_timestamp_common(forecast)
 get_window(f::Probabilistic, initial_time::Dates.DateTime; len = nothing) =
