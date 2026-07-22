@@ -284,42 +284,56 @@ function replace_component_id!(
     return
 end
 
+# The raw store rows. Used for the rollback snapshot and for comparison; callers that
+# just want a count should use `get_num_associations`.
+_association_rows(associations::SupplementalAttributeAssociations) =
+    TSS.list_supplemental_attribute_associations(_assoc_store(associations))
+
 """
-Return all association rows as a `Vector{NamedTuple}`, in the historical column order.
+Return the total number of association rows.
+
+Distinct from [`get_num_attributes`](@ref), which counts distinct attributes: one
+attribute attached to three components is one attribute but three rows.
 """
-function to_records(associations::SupplementalAttributeAssociations)
-    return [
-        (
-            attribute_id = row.attribute_id,
-            attribute_type = row.attribute_type,
-            component_id = row.component_id,
-            component_type = row.component_type,
-        )
-        for row in TSS.list_supplemental_attribute_associations(_assoc_store(associations))
-    ]
+get_num_associations(associations::SupplementalAttributeAssociations) =
+    TSS.count_supplemental_attribute_associations(_assoc_store(associations))
+
+"""
+Replace every association row with `rows`.
+
+This is the rollback primitive for [`begin_supplemental_attributes_update`](@ref): the
+store has no transaction, so a failed update restores the rows captured on entry.
+Unlike undoing only the newly added rows, this also puts back rows the update removed.
+"""
+function restore_associations!(
+    associations::SupplementalAttributeAssociations,
+    rows::AbstractVector,
+)
+    clear_associations!(associations)
+    isempty(rows) && return
+    TSS.add_supplemental_attribute_associations!(_assoc_store(associations), rows)
+    return
 end
 
-# Records come either as string-keyed dictionaries (deserialized from JSON) or as
-# NamedTuples (directly from `to_records`).
-_record_value(record::AbstractDict, column::AbstractString) = record[column]
-_record_value(record, column::AbstractString) = getproperty(record, Symbol(column))
-
 """
-Load association records into the store.
+Load association records deserialized from a system JSON file.
 
-Used by the deserialization path for systems written before associations moved into the
-store, whose JSON still carries an `associations` array.
+Only systems written before associations moved into the store carry them; the records
+are string-keyed dictionaries straight from JSON.
 """
-function load_records!(associations::SupplementalAttributeAssociations, records)
+function load_legacy_records!(
+    associations::SupplementalAttributeAssociations,
+    records,
+)
     isempty(records) && return
     TSS.add_supplemental_attribute_associations!(
         _assoc_store(associations),
         [
             TSS.SupplementalAttributeAssociation(
-                Int(_record_value(record, "component_id")),
-                String(_record_value(record, "component_type")),
-                Int(_record_value(record, "attribute_id")),
-                String(_record_value(record, "attribute_type")),
+                Int(record["component_id"]),
+                String(record["component_type"]),
+                Int(record["attribute_id"]),
+                String(record["attribute_type"]),
             )
             for record in records
         ],
@@ -357,8 +371,8 @@ function compare_values(
 )
     !compare_uuids && return true
     sort_key = row -> (row.attribute_id, row.component_id)
-    table_x = sort(to_records(x); by = sort_key)
-    table_y = sort(to_records(y); by = sort_key)
+    table_x = sort(_association_rows(x); by = sort_key)
+    table_y = sort(_association_rows(y); by = sort_key)
     match_fn = _fetch_match_fn(match_fn)
     return match_fn(table_x, table_y)
 end

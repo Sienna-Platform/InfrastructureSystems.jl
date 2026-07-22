@@ -340,7 +340,7 @@ end
 
     # 4 association rows over 3 distinct attributes: one attribute is shared by both
     # components.
-    @test length(IS.to_records(data.supplemental_attribute_manager.associations)) == 4
+    @test IS.get_num_associations(data.supplemental_attribute_manager.associations) == 4
 end
 
 @testset "Test many-to-many associations" begin
@@ -357,7 +357,7 @@ end
 
     # Every attribute is attached to both components: 10 distinct attributes, 20 rows.
     @test IS.get_num_attributes(mgr.associations) == 10
-    @test length(IS.to_records(mgr.associations)) == 20
+    @test IS.get_num_associations(mgr.associations) == 20
     @test IS.get_num_components_with_attributes(mgr.associations) == 2
     @test IS.has_association(mgr.associations, component1)
     @test IS.has_association(mgr.associations, component2)

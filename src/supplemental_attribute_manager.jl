@@ -60,14 +60,13 @@ function begin_supplemental_attributes_update(
     # fewer of them than time series, so a full clear-and-reload is cheap — and unlike a
     # diff of newly added rows it also undoes REMOVALS, which is what the SQLite
     # transaction this replaced did.
-    orig_associations = to_records(mgr.associations)
+    orig_associations = _association_rows(mgr.associations)
 
     try
         func()
     catch
         mgr.data = orig_data
-        clear_associations!(mgr.associations)
-        load_records!(mgr.associations, orig_associations)
+        restore_associations!(mgr.associations, orig_associations)
         rethrow()
     end
 end
@@ -339,7 +338,7 @@ function deserialize(
     # JSON; the store they were just opened from has none, so load them here.
     legacy_records = get(data, "associations", nothing)
     if !isnothing(legacy_records)
-        load_records!(mgr.associations, legacy_records)
+        load_legacy_records!(mgr.associations, legacy_records)
     end
     refs = SharedSystemReferences(;
         supplemental_attribute_manager = mgr,
