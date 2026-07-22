@@ -530,7 +530,14 @@ end
 
 flush!(store::RustTimeSeriesStore) = TSS.flush!(store.inner)
 
-Base.isempty(store::RustTimeSeriesStore) = get_num_time_series(store) == 0
+# Association rows count: the store holds supplemental attribute associations as well as
+# time series, and `serialize(::SystemData)` skips writing the artifact entirely for an
+# empty store. Ignoring associations here would silently drop them for a system that has
+# attributes but no time series.
+function Base.isempty(store::RustTimeSeriesStore)
+    return get_num_time_series(store) == 0 &&
+           TSS.count_supplemental_attribute_associations(store.inner) == 0
+end
 
 # Compression is fixed when the store is created/opened (threaded through the FFI
 # via `_rust_compression_kwargs`); report the policy the store carries.

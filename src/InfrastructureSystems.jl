@@ -35,7 +35,6 @@ import TimeSeriesStore
 import TimerOutputs
 import TOML
 using DataStructures: OrderedDict, SortedDict
-import SQLite
 import Tables
 using LinearAlgebra: norm, dot
 
@@ -168,7 +167,6 @@ include("utils/generate_structs.jl")
 include("utils/lazy_dict_from_iterator.jl")
 include("utils/logging.jl")
 include("utils/stdout_redirector.jl")
-include("utils/sqlite.jl")
 include("function_data/function_data.jl")
 include("utils/utils.jl")
 include("definitions.jl")

@@ -1,19 +1,29 @@
 # Associations Database Schema
 
 !!! note "For Maintainers and Contributors"
-    
+
     This page documents the internal databases used by InfrastructureSystems.jl to manage associations between components and their time series data and supplemental attributes. This information is intended for maintainers and contributors working on the codebase. **End users should not need to interact with these databases directly.**
 
 ## Overview
 
-InfrastructureSystems.jl tracks two kinds of associations, each with its own storage:
+InfrastructureSystems.jl tracks two kinds of associations, and **both live in the
+`time-series-store` Rust backend** (wrapped by `TimeSeriesStore.jl`). IS.jl maintains no
+database of its own:
 
- 1. **Components/supplemental attributes ↔ time series data** — managed by the
-    `time-series-store` Rust backend (wrapped by `TimeSeriesStore.jl`). Both the numerical
-    arrays and the association catalog live there; IS.jl does not maintain its own time series
-    metadata database. See [Time Series Data](@ref) for the on-disk artifact and catalog model.
- 2. **Components ↔ supplemental attributes** — managed by IS.jl in an in-memory SQLite
-    database (`SupplementalAttributeAssociations`).
+ 1. **Components/supplemental attributes ↔ time series data** — the backend's time series
+    catalog. Both the numerical arrays and the catalog live there. See
+    [Time Series Data](@ref) for the on-disk artifact and catalog model.
+ 2. **Components ↔ supplemental attributes** — the backend's
+    `supplemental_attribute_associations` table, reached through
+    `SupplementalAttributeAssociations`, which is now a thin adapter rather than a database.
+
+!!! note "This changed"
+
+    Supplemental attribute associations used to live in a separate in-memory SQLite database
+    owned by IS.jl and were serialized into the system JSON. They now share the backend's
+    `.nc` / `.sqlite` artifact with the time series catalog. One consequence: a system with
+    supplemental attributes but no time series now writes a storage artifact where it
+    previously wrote none.
 
 These associations enable fast lookups, efficient filtering, proper lifecycle management
 (add/remove/update), and serialization/deserialization.
@@ -34,68 +44,43 @@ file-format reference. The IS.jl glue lives in
 [`src/rust_time_series_store.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/rust_time_series_store.jl).
 
 !!! note "Component and time series identifiers"
-    
+
     Components and supplemental attributes are identified by integer IDs, and time series data
     is identified by its array content hash. Use a [`TimeSeriesKey`](@ref) to address a specific
     time series (see [Time Series Data](@ref)).
 
 ## Supplemental Attribute Associations
 
-`SupplementalAttributeAssociations` manages associations between supplemental attributes and
-components in an in-memory SQLite database that is always ephemeral (never persisted as a
-database file; associations are serialized to the system JSON instead).
+`SupplementalAttributeAssociations` is the adapter over the backend's
+`supplemental_attribute_associations` table. It keeps the dispatch-based IS.jl API — the
+`Type`-taking overloads of `has_association`, `list_associated_component_ids`, and friends —
+and forwards each call to `TimeSeriesStore.jl`.
 
-### Database Table
+**Row shape:** `component_id`, `component_type`, `attribute_id`, `attribute_type`.
 
-#### `supplemental_attributes` Table
+**Identity** is the `(component_id, attribute_id)` pair. The type columns are denormalized
+labels carried for filtering, so re-attaching the same pair under different type names is a
+duplicate and is rejected by the store. Callers still check `has_association` first so the
+error message can name the objects.
 
-**Schema:**
+The backend indexes the pair for lookups keyed on the component and carries a second index
+for the reverse direction, so both `component → attributes` and `attribute → components` are
+fast.
 
-| Column Name      | Type    | Description                             |
-|:---------------- |:------- |:--------------------------------------- |
-| `attribute_id`   | INTEGER | ID of the supplemental attribute        |
-| `attribute_type` | TEXT    | Type name of the supplemental attribute |
-| `component_id`   | INTEGER | ID of the component                     |
-| `component_type` | TEXT    | Type name of the component              |
+### Abstract-type expansion stays in Julia
 
-**Indexes:**
+The store filters on lists of **concrete** type-name strings and knows nothing about the
+Julia type hierarchy. `_type_names` applies `get_all_subtype_names` before any query is
+issued, so an abstract type is expanded here and handed over as a `Vector{String}`. An
+abstract type with no concrete subtypes expands to an empty vector, which the store treats as
+"match nothing".
 
-  - `by_attribute`: Composite index on `(attribute_id, component_id, component_type)` — optimized for finding components associated with an attribute.
-  - `by_component`: Composite index on `(component_id, attribute_id, attribute_type)` — optimized for finding attributes associated with a component.
+### Rollback
 
-**Design Notes:**
-
-  - Both attribute and component information is stored to enable bidirectional lookups.
-  - The indexes support fast queries in both directions (attribute → components and component → attributes).
-
-### Common Queries
-
- 1. **Find all attributes for a component:**
-    
-    ```sql
-    SELECT DISTINCT attribute_id FROM supplemental_attributes
-    WHERE component_id = ?
-    ```
-
- 2. **Find attributes of a specific type for a component:**
-    
-    ```sql
-    SELECT DISTINCT attribute_id FROM supplemental_attributes
-    WHERE component_id = ? AND attribute_type = ?
-    ```
- 3. **Find all components with an attribute:**
-    
-    ```sql
-    SELECT DISTINCT component_id FROM supplemental_attributes
-    WHERE attribute_id = ?
-    ```
- 4. **Check if an association exists:**
-    
-    ```sql
-    SELECT attribute_id FROM supplemental_attributes
-    WHERE attribute_id = ? AND component_id = ?
-    LIMIT 1
-    ```
+`begin_supplemental_attributes_update` used to wrap a SQLite transaction. The store exposes
+no transaction primitive, so the manager snapshots the association rows on entry and restores
+them wholesale on failure. Rows are small metadata, so a full clear-and-reload is cheap — and
+unlike a diff of newly added rows it also undoes removals, matching the previous semantics.
 
 ## Serialization Behavior
 
@@ -106,23 +91,25 @@ as the `<path>.nc` / `<path>.sqlite` pair described above. See [Time Series Data
 
 ### Supplemental Attribute Associations
 
-The supplemental attribute database is in-memory and ephemeral. During serialization the
-associations are extracted as records and written to the system JSON file; during
-deserialization the records are read back and bulk-inserted into a fresh in-memory database,
-then indexed.
+Associations are persisted by the backend, in the same `.sqlite` sidecar as the time series
+catalog, so `serialize` writes no `associations` key into the system JSON. Systems written
+before this change still carry that key; `deserialize` loads it into the store when present.
+
+Because the artifact now carries associations, `isempty(::RustTimeSeriesStore)` counts
+association rows as well as time series — otherwise `serialize` would skip writing the
+artifact for an attribute-only system and silently drop them.
 
 ## Implementation Files
 
   - **Time Series (Rust backend) glue**: [`src/rust_time_series_store.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/rust_time_series_store.jl)
   - **Supplemental Attribute Associations**: [`src/supplemental_attribute_associations.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/supplemental_attribute_associations.jl)
-  - **SQLite Utilities**: [`src/utils/sqlite.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/utils/sqlite.jl)
 
 ## Best Practices for Developers
 
- 1. **Use transactions** when making multiple related changes, for atomicity and performance.
- 2. **Leverage indexes**: design queries to take advantage of the existing indexes.
- 3. **Cache statements** for frequently-executed queries rather than re-creating them.
- 4. **Maintain consistency**: when adding or removing associations, ensure the database and any
-    in-memory caches are updated together.
- 5. **Test with large datasets**: performance characteristics can change significantly with
+ 1. **Batch related changes** through `begin_supplemental_attributes_update`, for atomicity
+    and performance.
+ 2. **Expand abstract types once**, at the IS.jl boundary, and pass concrete name vectors down.
+ 3. **Maintain consistency**: when adding or removing associations, ensure the store and the
+    manager's in-memory attribute dicts are updated together.
+ 4. **Test with large datasets**: performance characteristics can change significantly with
     large numbers of associations.

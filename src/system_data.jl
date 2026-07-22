@@ -67,7 +67,7 @@ function SystemData(;
         compression = compression,
     )
     components = Components(time_series_mgr, validation_descriptors)
-    supplemental_attribute_mgr = SupplementalAttributeManager()
+    supplemental_attribute_mgr = SupplementalAttributeManager(time_series_mgr.data_store)
     masked_components = Components(time_series_mgr, validation_descriptors)
     return SystemData(
         components,
@@ -722,7 +722,7 @@ function _check_transform_single_time_series(
             if any(
                 m ->
                     get_horizon(m) == params.horizon &&
-                        get_interval(m) == params.interval,
+                    get_interval(m) == params.interval,
                 existing,
             )
                 continue
@@ -1566,6 +1566,19 @@ function fast_deepcopy_system(
     # The approach taken here is to swap out the data we don't want to copy with blank data,
     # then do a deepcopy, then swap it back. We can't just construct a new instance with
     # different fields because we also need to change references within components.
+    #
+    # Both managers share one store, so "skip one, keep the other" cannot be expressed by
+    # swapping in a blank manager alone — the store carries time series AND association
+    # rows. Each combination therefore decides which store the copy should see:
+    #
+    #   * keep both   -> the real store, deep-copied once and shared (no shortcut).
+    #   * skip both   -> a fresh empty store; nothing is copied.
+    #   * skip series -> a fresh store seeded with just the association rows. Copying
+    #                    those is cheap; copying the time series artifacts is what the
+    #                    caller asked to avoid.
+    #   * skip attrs  -> the real store must be copied for its time series, so the
+    #                    association rows ride along and are cleared from the COPY
+    #                    afterwards (clearing the original would corrupt it).
     old_time_series_manager = data.time_series_manager
     old_supplemental_attribute_manager = data.supplemental_attribute_manager
 
@@ -1574,8 +1587,14 @@ function fast_deepcopy_system(
     else
         old_time_series_manager
     end
+    new_store = new_time_series_manager.data_store
     new_supplemental_attribute_manager = if skip_supplemental_attributes
-        SupplementalAttributeManager()
+        SupplementalAttributeManager(new_store)
+    elseif skip_time_series
+        # Keep the attributes, drop the series: seed the fresh store with the rows.
+        associations = SupplementalAttributeAssociations(new_store)
+        copy_associations!(associations, old_supplemental_attribute_manager.associations)
+        SupplementalAttributeManager(old_supplemental_attribute_manager.data, associations)
     else
         old_supplemental_attribute_manager
     end
@@ -1604,6 +1623,12 @@ function fast_deepcopy_system(
             set_shared_system_references!(comp,
                 old_refs[(typeof(comp), get_name(comp))])
         end
+    end
+
+    # The only combination that cannot be arranged before the copy: the real store had to
+    # be copied for its time series, so it brought the association rows with it.
+    if skip_supplemental_attributes && !skip_time_series
+        clear_associations!(new_data.supplemental_attribute_manager.associations)
     end
     return new_data
 end
