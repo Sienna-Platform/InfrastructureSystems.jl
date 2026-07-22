@@ -35,7 +35,6 @@ import TimeSeriesStore
 import TimerOutputs
 import TOML
 using DataStructures: OrderedDict, SortedDict
-import Tables
 using LinearAlgebra: norm, dot
 
 using DocStringExtensions
