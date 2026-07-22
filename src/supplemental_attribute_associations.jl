@@ -12,6 +12,9 @@
 #   - The store enforces uniqueness on the `(component_id, attribute_id)` pair. The old
 #     table had no constraint and relied on callers checking first; callers still check,
 #     so the error message can name the objects, but a missed check is now caught.
+#   - There is no reader for the `associations` key older system JSON carries. A system
+#     serialized before this change does not load, matching the equivalent break in
+#     ../infrasys; regenerate it with a build from before the move if you need the data.
 
 """
 Tracks which supplemental attributes are attached to which components.
@@ -312,32 +315,6 @@ function restore_associations!(
     clear_associations!(associations)
     isempty(rows) && return
     TSS.add_supplemental_attribute_associations!(_assoc_store(associations), rows)
-    return
-end
-
-"""
-Load association records deserialized from a system JSON file.
-
-Only systems written before associations moved into the store carry them; the records
-are string-keyed dictionaries straight from JSON.
-"""
-function load_legacy_records!(
-    associations::SupplementalAttributeAssociations,
-    records,
-)
-    isempty(records) && return
-    TSS.add_supplemental_attribute_associations!(
-        _assoc_store(associations),
-        [
-            TSS.SupplementalAttributeAssociation(
-                Int(record["component_id"]),
-                String(record["component_type"]),
-                Int(record["attribute_id"]),
-                String(record["attribute_type"]),
-            )
-            for record in records
-        ],
-    )
     return
 end
 

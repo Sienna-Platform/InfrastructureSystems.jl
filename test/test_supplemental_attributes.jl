@@ -218,29 +218,6 @@ end
     @test IS.get_num_attributes(mgr.associations) == 1
 end
 
-@testset "Test supplemental_attributes deserialization of legacy associations" begin
-    # Systems written before associations moved into the store carry them in the JSON.
-    data = IS.SystemData()
-    mgr = IS.deserialize(
-        IS.SupplementalAttributeManager,
-        Dict(
-            "attributes" => [],
-            "associations" => [
-                Dict(
-                    "attribute_id" => 2,
-                    "attribute_type" => "GeographicInfo",
-                    "component_id" => 1,
-                    "component_type" => "TestComponent",
-                ),
-            ],
-        ),
-        data.time_series_manager,
-    )
-    @test IS.get_num_attributes(mgr.associations) == 1
-    @test IS.list_associated_component_ids(mgr.associations, IS.GeographicInfo, nothing) ==
-          [1]
-end
-
 @testset "Add time series to supplemental_attribute" begin
     data = IS.SystemData()
     initial_time = Dates.DateTime("2020-09-01")

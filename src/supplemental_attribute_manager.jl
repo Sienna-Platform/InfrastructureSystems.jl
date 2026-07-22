@@ -320,8 +320,7 @@ function list_associated_supplemental_attribute_ids(
 end
 
 # Associations are persisted by the store, in its `.sqlite` sidecar, so they are
-# deliberately absent from this dict. Systems written before that move still carry an
-# "associations" key; `deserialize` below loads it when present.
+# deliberately absent from this dict.
 function serialize(mgr::SupplementalAttributeManager)
     return Dict(
         "attributes" => [serialize(y) for x in values(mgr.data) for y in values(x)],
@@ -333,13 +332,9 @@ function deserialize(
     data::Dict,
     time_series_manager::TimeSeriesManager,
 )
+    # Associations come from the store the system was opened from, not from `data`: an
+    # "associations" key in older system JSON is ignored, not imported.
     mgr = SupplementalAttributeManager(time_series_manager.data_store)
-    # Systems serialized before associations moved into the store carry them in the
-    # JSON; the store they were just opened from has none, so load them here.
-    legacy_records = get(data, "associations", nothing)
-    if !isnothing(legacy_records)
-        load_legacy_records!(mgr.associations, legacy_records)
-    end
     refs = SharedSystemReferences(;
         supplemental_attribute_manager = mgr,
         time_series_manager = time_series_manager,

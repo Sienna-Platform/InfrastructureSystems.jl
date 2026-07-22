@@ -92,8 +92,9 @@ as the `<path>.nc` / `<path>.sqlite` pair described above. See [Time Series Data
 ### Supplemental Attribute Associations
 
 Associations are persisted by the backend, in the same `.sqlite` sidecar as the time series
-catalog, so `serialize` writes no `associations` key into the system JSON. Systems written
-before this change still carry that key; `deserialize` loads it into the store when present.
+catalog, so `serialize` writes no `associations` key into the system JSON, and `deserialize`
+does not read one. A system serialized before this change will not load — the same break
+taken in `infrasys`.
 
 Because the artifact now carries associations, `isempty(::RustTimeSeriesStore)` counts
 association rows as well as time series — otherwise `serialize` would skip writing the
