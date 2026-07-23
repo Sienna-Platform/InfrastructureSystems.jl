@@ -1,19 +1,19 @@
 # Rust-backed time series storage.
 #
 # `RustTimeSeriesStore` delegates BOTH array data and metadata to the external
-# `time-series-store` Rust engine, via the `TimeSeriesStore.jl` binding package.
+# `castore` Rust engine, via the `Castore.jl` binding package.
 # The Rust store owns both: arrays land in a NetCDF4 `.nc` file (content-addressed
 # by SHA-256 hash) and metadata in a sibling `.sqlite` file. Time series *data*
 # identity is the array content hash, not a UUID. Persisting a system writes the
 # `.nc` + `.sqlite` pair directly.
 #
 # This file holds the IS-specific glue (owner/feature conversion, window
-# flatten/reshape, manager routing). All low-level FFI lives in `TimeSeriesStore`.
+# flatten/reshape, manager routing). All low-level FFI lives in `Castore`.
 
-const TSS = TimeSeriesStore
+const TSS = Castore
 
 # Not-found is raised by the binding; alias keeps the IS-facing name + tests stable.
-const RustTimeSeriesNotFound = TimeSeriesStore.NotFoundError
+const RustTimeSeriesNotFound = Castore.NotFoundError
 
 # ---- Store -----------------------------------------------------------------
 
@@ -54,7 +54,7 @@ function RustTimeSeriesStore(;
 end
 
 # Translate a `CompressionSettings` into the keyword arguments accepted by
-# `TimeSeriesStore.Store`. BLOSC is not supported by the Rust backend.
+# `Castore.Store`. BLOSC is not supported by the Rust backend.
 function _rust_compression_kwargs(c::CompressionSettings)
     if !c.enabled
         return (; compression = :none)
@@ -63,7 +63,7 @@ function _rust_compression_kwargs(c::CompressionSettings)
         return (; compression = :deflate, compression_level = c.level, shuffle = c.shuffle)
     end
     error(
-        "The Rust time-series-store backend does not support $(c.type) compression; " *
+        "The Rust castore backend does not support $(c.type) compression; " *
         "use CompressionTypes.DEFLATE or disable compression (enabled=false).",
     )
 end
@@ -88,7 +88,7 @@ function open_rust_store(path::AbstractString; read_only::Bool = false)
     )
 end
 
-# Translate the `TimeSeriesStore.get_compression` NamedTuple back into a
+# Translate the `Castore.get_compression` NamedTuple back into a
 # `CompressionSettings`.
 function _compression_settings(c)
     c.compression == :none && return CompressionSettings(; enabled = false)
@@ -167,7 +167,7 @@ get_owner_category(
 # ---- Element encoding ------------------------------------------------------
 # Scalars store as a 1-D array tagged with their type name. Fixed-size
 # FunctionData tuples store as a `(length, k)` Float64 array; reconstruction keys
-# on the `logical_type` tag returned by `get_metadata`.
+# on the `ext` tag returned by `get_metadata`.
 
 _storage_array(v::AbstractVector{<:Real}) = (collect(v), string(eltype(v)))
 
@@ -250,9 +250,9 @@ _storage_array(v::AbstractVector) =
     error("Rust backend does not support time series element type $(eltype(v)) yet")
 
 # Arity of an `NTuple{N}` logical-type tag, or `nothing` when the tag is something else.
-function _ntuple_arity(logical_type)
-    logical_type isa AbstractString || return nothing
-    m = match(r"^NTuple\{(\d+)\}$", logical_type)
+function _ntuple_arity(ext)
+    ext isa AbstractString || return nothing
+    m = match(r"^NTuple\{(\d+)\}$", ext)
     return isnothing(m) ? nothing : parse(Int, m.captures[1])
 end
 
@@ -275,21 +275,21 @@ function _decode_pwl_step_row(mat, i::Integer)
     return PiecewiseStepData(xs, ys)
 end
 
-# Reconstruct the full value vector from the stored array, keyed on logical_type.
+# Reconstruct the full value vector from the stored array, keyed on ext.
 function _read_values(
     store::RustTimeSeriesStore,
     hash::Vector{UInt8},
-    logical_type,
+    ext,
     dtype,
     len::Integer,
 )
-    if logical_type == "LinearFunctionData"
+    if ext == "LinearFunctionData"
         mat = TSS.get_array_nd(store.inner, hash, Float64, (len, 2))
         return [LinearFunctionData(mat[i, 1], mat[i, 2]) for i in 1:len]
-    elseif logical_type == "QuadraticFunctionData"
+    elseif ext == "QuadraticFunctionData"
         mat = TSS.get_array_nd(store.inner, hash, Float64, (len, 3))
         return [QuadraticFunctionData(mat[i, 1], mat[i, 2], mat[i, 3]) for i in 1:len]
-    elseif logical_type == "PiecewiseLinearData"
+    elseif ext == "PiecewiseLinearData"
         flat = get_array_by_hash(store, hash, Float64)
         k = div(length(flat), len)  # 1 + 2*max_points (derived from the array size)
         mat = TSS.get_array_nd(store.inner, hash, Float64, (len, k))
@@ -299,13 +299,13 @@ function _read_values(
             out[i] = PiecewiseLinearData([(mat[i, 2j], mat[i, 2j + 1]) for j in 1:n])
         end
         return out
-    elseif logical_type == "PiecewiseStepData"
+    elseif ext == "PiecewiseStepData"
         flat = get_array_by_hash(store, hash, Float64)
         k = div(length(flat), len)
         mat = TSS.get_array_nd(store.inner, hash, Float64, (len, k))
         return [_decode_pwl_step_row(mat, i) for i in 1:len]
-    elseif !isnothing(_ntuple_arity(logical_type))
-        n = _ntuple_arity(logical_type)
+    elseif !isnothing(_ntuple_arity(ext))
+        n = _ntuple_arity(ext)
         mat = TSS.get_array_nd(store.inner, hash, Float64, (len, n))
         return _decode_ntuples(mat, len, n)
     else
@@ -314,32 +314,32 @@ function _read_values(
 end
 
 # Decode an already-materialized static value array (the inverse of `_storage_array`),
-# keyed on `logical_type`. Used by the non-sequential read path, where the backend
+# keyed on `ext`. Used by the non-sequential read path, where the backend
 # returns the `(len, k)` FunctionData matrix (or scalar vector) in memory rather than
 # by content hash. `len` is the timestep count (`size(arr, 1)`).
-function _decode_static_values(arr, logical_type, len::Integer)
-    if logical_type == "LinearFunctionData"
+function _decode_static_values(arr, ext, len::Integer)
+    if ext == "LinearFunctionData"
         return [LinearFunctionData(arr[i, 1], arr[i, 2]) for i in 1:len]
-    elseif logical_type == "QuadraticFunctionData"
+    elseif ext == "QuadraticFunctionData"
         return [QuadraticFunctionData(arr[i, 1], arr[i, 2], arr[i, 3]) for i in 1:len]
-    elseif logical_type == "PiecewiseLinearData"
+    elseif ext == "PiecewiseLinearData"
         out = Vector{PiecewiseLinearData}(undef, len)
         for i in 1:len
             n = Int(round(arr[i, 1]))
             out[i] = PiecewiseLinearData([(arr[i, 2j], arr[i, 2j + 1]) for j in 1:n])
         end
         return out
-    elseif logical_type == "PiecewiseStepData"
+    elseif ext == "PiecewiseStepData"
         return [_decode_pwl_step_row(arr, i) for i in 1:len]
-    elseif !isnothing(_ntuple_arity(logical_type))
-        return _decode_ntuples(arr, len, _ntuple_arity(logical_type))
+    elseif !isnothing(_ntuple_arity(ext))
+        return _decode_ntuples(arr, len, _ntuple_arity(ext))
     else
         return arr  # scalar (1-D vector, or an N-D per-step array)
     end
 end
 
 # ---- Forecast element encoding ---------------------------------------------
-# Forecast windows of scalars store as a `(horizon, count)` array (logical_type
+# Forecast windows of scalars store as a `(horizon, count)` array (ext
 # `nothing`). FunctionData windows store as `(horizon, count, k)` tagged with the
 # logical type; each window column is encoded with the same scheme as a
 # SingleTimeSeries via `_storage_array`.
@@ -362,31 +362,31 @@ function _storage_forecast_array(windows::Vector{<:AbstractVector{<:FunctionData
 end
 
 # Decode window `c` (1-based) of a `(horizon, count, k)` forecast array tagged
-# with `logical_type` into a Vector of the corresponding FunctionData.
-function _decode_forecast_window(arr::AbstractArray{<:Real, 3}, logical_type, c::Integer)
+# with `ext` into a Vector of the corresponding FunctionData.
+function _decode_forecast_window(arr::AbstractArray{<:Real, 3}, ext, c::Integer)
     horizon = size(arr, 1)
-    if logical_type == "LinearFunctionData"
+    if ext == "LinearFunctionData"
         return [LinearFunctionData(arr[h, c, 1], arr[h, c, 2]) for h in 1:horizon]
-    elseif logical_type == "QuadraticFunctionData"
+    elseif ext == "QuadraticFunctionData"
         return [
             QuadraticFunctionData(arr[h, c, 1], arr[h, c, 2], arr[h, c, 3]) for
             h in 1:horizon
         ]
-    elseif logical_type == "PiecewiseLinearData"
+    elseif ext == "PiecewiseLinearData"
         out = Vector{PiecewiseLinearData}(undef, horizon)
         for h in 1:horizon
             n = Int(round(arr[h, c, 1]))
             out[h] = PiecewiseLinearData([(arr[h, c, 2j], arr[h, c, 2j + 1]) for j in 1:n])
         end
         return out
-    elseif logical_type == "PiecewiseStepData"
+    elseif ext == "PiecewiseStepData"
         slice = @view arr[:, c, :]  # (horizon, k) matrix for this window
         return [_decode_pwl_step_row(slice, h) for h in 1:horizon]
     end
-    error("Rust backend cannot decode forecast logical_type $logical_type")
+    error("Rust backend cannot decode forecast ext $ext")
 end
 
-# ---- Operations (thin delegations to TimeSeriesStore) ----------------------
+# ---- Operations (thin delegations to Castore) ----------------------
 
 """
     serialize_single!(store, owner_id, owner_type, owner_category, name, sts;
@@ -417,7 +417,7 @@ function serialize_single!(
         get_resolution(sts),
         arr,
         name;
-        logical_type = logical,
+        ext = logical,
     )
     TSS.add_time_series!(store.inner, owner_id, owner_type, tss_category(owner_category),
         tss_ts; features = features, units = units)
@@ -427,7 +427,7 @@ end
 """
     get_metadata(store, owner_id, owner_category, name; resolution, features=Dict())
 
-Return `(; initial_timestamp, resolution, length, data_hash, logical_type, dtype)`
+Return `(; initial_timestamp, resolution, length, data_hash, ext, dtype)`
 for a stored SingleTimeSeries. Throws `RustTimeSeriesNotFound` if absent.
 """
 get_metadata(store::RustTimeSeriesStore, owner_id::Integer,
@@ -476,7 +476,7 @@ function serialize_non_sequential!(
         get_timestamps(nts),
         arr,
         name;
-        logical_type = logical,
+        ext = logical,
     )
     TSS.add_time_series!(store.inner, owner_id, owner_type, tss_category(owner_category),
         tss_ts; features = features, units = units)
@@ -499,7 +499,7 @@ function get_non_sequential(
     nts = TSS.get_time_series(TSS.NonSequentialTimeSeries, store.inner, owner_id,
         owner_category, name; features = features)
     len = length(nts.timestamps)
-    values = _decode_static_values(nts.data, nts.logical_type, len)
+    values = _decode_static_values(nts.data, nts.ext, len)
     return NonSequentialTimeSeries(String(name), nts.timestamps, values)
 end
 
@@ -710,7 +710,7 @@ function _rust_add_non_sequential!(
     name = get_name(time_series)
     feats = _rust_features(features)
 
-    if has_typed(store, owner_id, category, name, TSS.TS_TYPE_NON_SEQUENTIAL;
+    if has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_NON_SEQUENTIAL;
         features = feats)
         throw(
             ArgumentError(
@@ -791,7 +791,7 @@ function rust_get_time_series(
     feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
     meta = get_metadata(store, owner_id, category, name;
         resolution = get_resolution(matched), features = feats)
-    full = _read_values(store, meta.data_hash, meta.logical_type, meta.dtype, meta.length)
+    full = _read_values(store, meta.data_hash, meta.ext, meta.dtype, meta.length)
 
     start = isnothing(start_time) ? meta.initial_timestamp : start_time
     index = compute_time_array_index(meta.initial_timestamp, start, meta.resolution)
@@ -919,7 +919,7 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
     )
 
     if ts isa Probabilistic
-        if has_typed(store, owner_id, category, name, TSS.TS_TYPE_PROBABILISTIC;
+        if has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_PROBABILISTIC;
             resolution = resolution, features = feats)
             throw(
                 ArgumentError(
@@ -944,9 +944,9 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
         # `logical` for FunctionData windows.
         arr, logical = _storage_forecast_array(windows)
         count = length(windows)
-        ts_type = TSS.TS_TYPE_DETERMINISTIC
+        ts_type = TSS.CASTORE_TYPE_DETERMINISTIC
     elseif ts isa DeterministicSingleTimeSeries
-        if has_typed(store, owner_id, category, name, TSS.TS_TYPE_DETERMINISTIC_SINGLE;
+        if has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE;
             resolution = resolution, features = feats)
             throw(
                 ArgumentError(
@@ -982,7 +982,7 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
         arr = Float64.(get_array_for_hdf(ts))  # (scenario_count, horizon_count, count)
         logical = nothing
         count = get_count(ts)
-        ts_type = TSS.TS_TYPE_SCENARIOS
+        ts_type = TSS.CASTORE_TYPE_SCENARIOS
     else
         error("unsupported forecast type $(typeof(ts))")
     end
@@ -1001,12 +1001,12 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
         )
     end
     storage_interval = _storage_forecast_interval(interval, get_horizon(ts))
-    tss_ts = if ts_type == TSS.TS_TYPE_DETERMINISTIC
+    tss_ts = if ts_type == TSS.CASTORE_TYPE_DETERMINISTIC
         TSS.Deterministic(get_initial_timestamp(ts), resolution, get_horizon(ts),
-            storage_interval, count, arr, name; logical_type = logical)
+            storage_interval, count, arr, name; ext = logical)
     else
         TSS.Scenarios(get_initial_timestamp(ts), resolution, get_horizon(ts),
-            storage_interval, count, arr, name; logical_type = logical)
+            storage_interval, count, arr, name; ext = logical)
     end
     TSS.add_time_series!(store.inner, owner_id, owner_type,
         category, tss_ts; features = feats)
@@ -1115,7 +1115,7 @@ function _rust_get_forecast(
     # (the horizon is the leading axis of a window vector or matrix).
     _truncate(w) = isnothing(len) ? w : (ndims(w) == 1 ? w[1:len] : w[1:len, :])
 
-    if has_typed(store, owner_id, category, name, TSS.TS_TYPE_PROBABILISTIC;
+    if has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_PROBABILISTIC;
         resolution = resolution, interval = matched_interval, features = feats)
         # `.data` is the canonical (percentile_count, horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
@@ -1133,7 +1133,7 @@ function _rust_get_forecast(
             percentiles = p.percentiles, resolution = p.resolution,
             interval = _forecast_display_interval(p.count, p.interval, p.horizon))
         return result
-    elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_DETERMINISTIC;
+    elseif has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_DETERMINISTIC;
         resolution = resolution, interval = matched_interval, features = feats)
         # `.data` is the canonical (horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
@@ -1142,9 +1142,9 @@ function _rust_get_forecast(
             resolution = resolution, interval = matched_interval, features = feats,
             time_range = tr)
         fmeta = TSS.get_forecast_metadata(store.inner, owner_id, category, name,
-            TSS.TS_TYPE_DETERMINISTIC; resolution = resolution,
+            TSS.CASTORE_TYPE_DETERMINISTIC; resolution = resolution,
             interval = matched_interval, features = feats)
-        logical = fmeta.logical_type  # `nothing` for scalar windows
+        logical = fmeta.ext  # `nothing` for scalar windows
         window(i) = _truncate(
             if isnothing(logical)
                 d.data[:, i]
@@ -1159,7 +1159,7 @@ function _rust_get_forecast(
             resolution = d.resolution,
             interval = _forecast_display_interval(d.count, d.interval, d.horizon))
         return result
-    elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_DETERMINISTIC_SINGLE;
+    elseif has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE;
         resolution = resolution, interval = matched_interval, features = feats)
         # A DeterministicSingleTimeSeries is an internal storage optimization: it
         # shares the underlying SingleTimeSeries array instead of materializing the
@@ -1178,13 +1178,13 @@ function _rust_get_forecast(
             resolution = resolution, interval = matched_interval, features = feats,
             time_range = tr)
         fmeta = TSS.get_forecast_metadata(store.inner, owner_id, category, name,
-            TSS.TS_TYPE_DETERMINISTIC_SINGLE; resolution = resolution,
+            TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE; resolution = resolution,
             interval = matched_interval, features = feats,
         )
-        logical = fmeta.logical_type
+        logical = fmeta.ext
         # Scalar windows come back as a 2D `(horizon_count, count)` array; encoded
         # FunctionData windows carry trailing coefficient dims (3D). A DST inherits
-        # the shared SingleTimeSeries metadata, whose `logical_type` may be set even
+        # the shared SingleTimeSeries metadata, whose `ext` may be set even
         # for scalar data, so key the decode on the array rank rather than `logical`.
         dst_window(i) = _truncate(
             if ndims(d.data) == 3
@@ -1201,7 +1201,7 @@ function _rust_get_forecast(
         return Deterministic(; name = String(name), data = data,
             resolution = d.resolution,
             interval = _forecast_display_interval(d.count, d.interval, d.horizon))
-    elseif has_typed(store, owner_id, category, name, TSS.TS_TYPE_SCENARIOS;
+    elseif has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_SCENARIOS;
         resolution = resolution, interval = matched_interval, features = feats)
         # `.data` is the canonical (scenario_count, horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
@@ -1237,7 +1237,7 @@ end
 _owner_category_string(c::TSS.OwnerCategory) =
     c == TSS.Component ? "Component" : "SupplementalAttribute"
 
-# Map an IS forecast type to the `TimeSeriesStore` reader type. A `Deterministic`
+# Map an IS forecast type to the `Castore` reader type. A `Deterministic`
 # (or the `AbstractDeterministic` abstraction) reader is abstract and also
 # includes `DeterministicSingleTimeSeries`; a DST query is exact.
 _tss_forecast_type(::Type{<:DeterministicSingleTimeSeries}) =
@@ -1248,13 +1248,13 @@ _tss_forecast_type(::Type{<:Scenarios}) = TSS.Scenarios
 
 # Decode a single `(horizon, k)` FunctionData window matrix (the per-window analog
 # of `_decode_forecast_window`, which slices a `(horizon, count, k)` array).
-function _decode_forecast_window_matrix(mat::AbstractMatrix{<:Real}, logical_type)
+function _decode_forecast_window_matrix(mat::AbstractMatrix{<:Real}, ext)
     horizon = size(mat, 1)
-    if logical_type == "LinearFunctionData"
+    if ext == "LinearFunctionData"
         return [LinearFunctionData(mat[h, 1], mat[h, 2]) for h in 1:horizon]
-    elseif logical_type == "QuadraticFunctionData"
+    elseif ext == "QuadraticFunctionData"
         return [QuadraticFunctionData(mat[h, 1], mat[h, 2], mat[h, 3]) for h in 1:horizon]
-    elseif logical_type == "PiecewiseLinearData"
+    elseif ext == "PiecewiseLinearData"
         out = Vector{PiecewiseLinearData}(undef, horizon)
         for h in 1:horizon
             n = Int(round(mat[h, 1]))
@@ -1262,10 +1262,10 @@ function _decode_forecast_window_matrix(mat::AbstractMatrix{<:Real}, logical_typ
         end
         return out
     end
-    error("Rust backend cannot decode forecast logical_type $logical_type")
+    error("Rust backend cannot decode forecast ext $ext")
 end
 
-# The `logical_type` tags that mean a window is FunctionData (stored as a
+# The `ext` tags that mean a window is FunctionData (stored as a
 # `(horizon, k)` matrix). Any other tag (`nothing`, or a scalar dtype string like
 # "Float64" carried by a SingleTimeSeries-backed DST) is a plain scalar window.
 const _RUST_FUNCTIONDATA_LOGICAL =
@@ -1275,17 +1275,17 @@ const _RUST_FUNCTIONDATA_LOGICAL =
 # single `get_time_series(...).data[timestamp]`): Probabilistic/Scenarios windows
 # are stored `(count_member, horizon)` and transposed to `(horizon, member)`;
 # Deterministic/DST windows are a horizon vector, or a FunctionData column decoded
-# via `logical_type`.
+# via `ext`.
 function _decode_forecast_reader_window(
     ::Type{T},
     raw,
-    logical_type,
+    ext,
 ) where {T <: Forecast}
     if T <: Probabilistic || T <: Scenarios
         return permutedims(raw)
     end
-    (logical_type in _RUST_FUNCTIONDATA_LOGICAL) || return raw
-    return _decode_forecast_window_matrix(raw, logical_type)
+    (ext in _RUST_FUNCTIONDATA_LOGICAL) || return raw
+    return _decode_forecast_window_matrix(raw, ext)
 end
 
 """
@@ -1312,8 +1312,8 @@ mutable struct ForecastReader
     inner::TSS.ForecastReader
     store::RustTimeSeriesStore
     entries::Vector{ForecastReaderEntry}
-    "logical_type for each entry (parallel to `entries`); `nothing` for scalars."
-    logical_types::Vector{Union{Nothing, String}}
+    "ext for each entry (parallel to `entries`); `nothing` for scalars."
+    exts::Vector{Union{Nothing, String}}
     "The IS forecast type the reader was built for (drives window orientation)."
     reported_type::Type
     "Per-slot materialized window cache; reset on each read."
@@ -1323,7 +1323,7 @@ end
 
 # Build a reader from the store. `id_to_owner(owner_id::Int, category::String)`
 # resolves each entry's owner object (the system holds the owner maps). Per-entry
-# metadata (owner, key, logical_type) is resolved once here, off the read path.
+# metadata (owner, key, ext) is resolved once here, off the read path.
 function rust_build_forecast_reader(
     store::RustTimeSeriesStore,
     id_to_owner,
@@ -1337,7 +1337,7 @@ function rust_build_forecast_reader(
     tss_entries = TSS.forecast_entries(inner)
     n = length(tss_entries)
     entries = Vector{ForecastReaderEntry}(undef, n)
-    logical_types = Vector{Union{Nothing, String}}(undef, n)
+    exts = Vector{Union{Nothing, String}}(undef, n)
     for (i, e) in enumerate(tss_entries)
         info = TSS.key_info(e.key)
         owner = id_to_owner(Int(info.owner_id), _owner_category_string(info.owner_category))
@@ -1346,7 +1346,7 @@ function rust_build_forecast_reader(
         fmeta = TSS.get_forecast_metadata(store.inner, info.owner_id,
             info.owner_category, info.name, rust_ts_code(is_type);
             resolution = info.resolution, features = feats)
-        logical_types[i] = fmeta.logical_type
+        exts[i] = fmeta.ext
         key = ForecastKey(;
             time_series_type = is_type,
             name = info.name,
@@ -1361,7 +1361,7 @@ function rust_build_forecast_reader(
         entries[i] = ForecastReaderEntry(owner, key, e.slot + 1)
     end
     windows = Vector{Any}(nothing, TSS.forecast_num_slots(inner))
-    return ForecastReader(inner, store, entries, logical_types, T, windows, false)
+    return ForecastReader(inner, store, entries, exts, T, windows, false)
 end
 
 """
@@ -1415,7 +1415,7 @@ function get_forecast_window(reader::ForecastReader, entry_index::Integer)
     cached === nothing || return cached
     raw = TSS.forecast_values(reader.inner, entry_index)
     window = _decode_forecast_reader_window(
-        reader.reported_type, raw, reader.logical_types[entry_index])
+        reader.reported_type, raw, reader.exts[entry_index])
     reader.windows[entry.slot] = window
     return window
 end
@@ -1439,27 +1439,27 @@ function rust_has_time_series(
 end
 
 # The single stored TimeSeriesType code for a concrete IS time series type.
-rust_ts_code(::Type{<:SingleTimeSeries}) = TSS.TS_TYPE_SINGLE
-rust_ts_code(::Type{<:NonSequentialTimeSeries}) = TSS.TS_TYPE_NON_SEQUENTIAL
-rust_ts_code(::Type{<:DeterministicSingleTimeSeries}) = TSS.TS_TYPE_DETERMINISTIC_SINGLE
-rust_ts_code(::Type{<:Deterministic}) = TSS.TS_TYPE_DETERMINISTIC
-rust_ts_code(::Type{<:Probabilistic}) = TSS.TS_TYPE_PROBABILISTIC
-rust_ts_code(::Type{<:Scenarios}) = TSS.TS_TYPE_SCENARIOS
+rust_ts_code(::Type{<:SingleTimeSeries}) = TSS.CASTORE_TYPE_SINGLE
+rust_ts_code(::Type{<:NonSequentialTimeSeries}) = TSS.CASTORE_TYPE_NON_SEQUENTIAL
+rust_ts_code(::Type{<:DeterministicSingleTimeSeries}) = TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE
+rust_ts_code(::Type{<:Deterministic}) = TSS.CASTORE_TYPE_DETERMINISTIC
+rust_ts_code(::Type{<:Probabilistic}) = TSS.CASTORE_TYPE_PROBABILISTIC
+rust_ts_code(::Type{<:Scenarios}) = TSS.CASTORE_TYPE_SCENARIOS
 
 # Name-less existence queries. `_rust_query_codes(T)` maps a query type to the
 # stored TimeSeriesType codes to match (empty tuple = any type).
-_rust_query_codes(::Type{<:SingleTimeSeries}) = (TSS.TS_TYPE_SINGLE,)
-_rust_query_codes(::Type{<:NonSequentialTimeSeries}) = (TSS.TS_TYPE_NON_SEQUENTIAL,)
+_rust_query_codes(::Type{<:SingleTimeSeries}) = (TSS.CASTORE_TYPE_SINGLE,)
+_rust_query_codes(::Type{<:NonSequentialTimeSeries}) = (TSS.CASTORE_TYPE_NON_SEQUENTIAL,)
 _rust_query_codes(::Type{<:DeterministicSingleTimeSeries}) =
-    (TSS.TS_TYPE_DETERMINISTIC_SINGLE,)
+    (TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE,)
 _rust_query_codes(::Type{<:AbstractDeterministic}) =
-    (TSS.TS_TYPE_DETERMINISTIC, TSS.TS_TYPE_DETERMINISTIC_SINGLE)
-_rust_query_codes(::Type{<:Probabilistic}) = (TSS.TS_TYPE_PROBABILISTIC,)
-_rust_query_codes(::Type{<:Scenarios}) = (TSS.TS_TYPE_SCENARIOS,)
-_rust_query_codes(::Type{<:Forecast}) = (TSS.TS_TYPE_DETERMINISTIC,
-    TSS.TS_TYPE_DETERMINISTIC_SINGLE, TSS.TS_TYPE_PROBABILISTIC, TSS.TS_TYPE_SCENARIOS)
+    (TSS.CASTORE_TYPE_DETERMINISTIC, TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE)
+_rust_query_codes(::Type{<:Probabilistic}) = (TSS.CASTORE_TYPE_PROBABILISTIC,)
+_rust_query_codes(::Type{<:Scenarios}) = (TSS.CASTORE_TYPE_SCENARIOS,)
+_rust_query_codes(::Type{<:Forecast}) = (TSS.CASTORE_TYPE_DETERMINISTIC,
+    TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE, TSS.CASTORE_TYPE_PROBABILISTIC, TSS.CASTORE_TYPE_SCENARIOS)
 _rust_query_codes(::Type{<:StaticTimeSeries}) =
-    (TSS.TS_TYPE_SINGLE, TSS.TS_TYPE_NON_SEQUENTIAL)
+    (TSS.CASTORE_TYPE_SINGLE, TSS.CASTORE_TYPE_NON_SEQUENTIAL)
 _rust_query_codes(::Type{<:TimeSeriesData}) = ()
 
 # The single stored TimeSeriesType code to push into the core `list_keys` filter
@@ -1468,12 +1468,12 @@ _rust_query_codes(::Type{<:TimeSeriesData}) = ()
 # semantics encoded in `_rust_type_matches`, also matches a stored
 # `DeterministicSingleTimeSeries`). When `nothing`, the caller applies the
 # residual `_rust_type_matches` filter on the (already narrowed) rows.
-_rust_pushable_code(::Type{<:SingleTimeSeries}) = TSS.TS_TYPE_SINGLE
-_rust_pushable_code(::Type{<:NonSequentialTimeSeries}) = TSS.TS_TYPE_NON_SEQUENTIAL
+_rust_pushable_code(::Type{<:SingleTimeSeries}) = TSS.CASTORE_TYPE_SINGLE
+_rust_pushable_code(::Type{<:NonSequentialTimeSeries}) = TSS.CASTORE_TYPE_NON_SEQUENTIAL
 _rust_pushable_code(::Type{<:DeterministicSingleTimeSeries}) =
-    TSS.TS_TYPE_DETERMINISTIC_SINGLE
-_rust_pushable_code(::Type{<:Probabilistic}) = TSS.TS_TYPE_PROBABILISTIC
-_rust_pushable_code(::Type{<:Scenarios}) = TSS.TS_TYPE_SCENARIOS
+    TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE
+_rust_pushable_code(::Type{<:Probabilistic}) = TSS.CASTORE_TYPE_PROBABILISTIC
+_rust_pushable_code(::Type{<:Scenarios}) = TSS.CASTORE_TYPE_SCENARIOS
 _rust_pushable_code(::Type{<:TimeSeriesData}) = nothing
 
 # All stored TimeSeriesType codes whose IS type is a subtype of `T` (strict `<:`
@@ -1481,12 +1481,12 @@ _rust_pushable_code(::Type{<:TimeSeriesData}) = nothing
 # query as also matching a `DeterministicSingleTimeSeries`). Used by the
 # store-wide filters (`resolutions`, `list_owner_ids`) that key on subtyping.
 const _RUST_CODE_TYPES = (
-    (TSS.TS_TYPE_SINGLE, SingleTimeSeries),
-    (TSS.TS_TYPE_NON_SEQUENTIAL, NonSequentialTimeSeries),
-    (TSS.TS_TYPE_DETERMINISTIC, Deterministic),
-    (TSS.TS_TYPE_DETERMINISTIC_SINGLE, DeterministicSingleTimeSeries),
-    (TSS.TS_TYPE_PROBABILISTIC, Probabilistic),
-    (TSS.TS_TYPE_SCENARIOS, Scenarios),
+    (TSS.CASTORE_TYPE_SINGLE, SingleTimeSeries),
+    (TSS.CASTORE_TYPE_NON_SEQUENTIAL, NonSequentialTimeSeries),
+    (TSS.CASTORE_TYPE_DETERMINISTIC, Deterministic),
+    (TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE, DeterministicSingleTimeSeries),
+    (TSS.CASTORE_TYPE_PROBABILISTIC, Probabilistic),
+    (TSS.CASTORE_TYPE_SCENARIOS, Scenarios),
 )
 _rust_subtype_codes(::Type{T}) where {T <: TimeSeriesData} =
     Tuple(c for (c, k) in _RUST_CODE_TYPES if k <: T)
@@ -1506,7 +1506,7 @@ function rust_has_any(owner; time_series_type::Union{Nothing, Type} = nothing)
 end
 
 # ---- Metadata reconstruction (parity with the SQLite metadata store) --------
-# IS time series type for a `TimeSeriesStore` metadata-row type (matched by name).
+# IS time series type for a `Castore` metadata-row type (matched by name).
 _rust_is_type(t::Type) = _rust_is_type(nameof(t))
 _rust_is_type(s::Symbol) =
     if s === :SingleTimeSeries

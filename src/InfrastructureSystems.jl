@@ -31,7 +31,7 @@ import SHA
 import StringTemplates
 import TerminalLoggers: TerminalLogger, ProgressLevel
 import TimeSeries
-import TimeSeriesStore
+import Castore
 import TimerOutputs
 import TOML
 using DataStructures: OrderedDict, SortedDict
