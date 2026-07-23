@@ -249,11 +249,25 @@ end
 _storage_array(v::AbstractVector) =
     error("Rust backend does not support time series element type $(eltype(v)) yet")
 
-# Arity of an `NTuple{N}` logical-type tag, or `nothing` when the tag is something else.
+# Arity of an `NTuple{N}` reconstruction tag, or `nothing` when the tag is something else.
 function _ntuple_arity(ext)
     ext isa AbstractString || return nothing
     m = match(r"^NTuple\{(\d+)\}$", ext)
     return isnothing(m) ? nothing : parse(Int, m.captures[1])
+end
+
+# The store's `ext` column is an opaque, package-owned payload it never interprets.
+# IS wraps its reconstruction tag (a scalar eltype name, a FunctionData type name, or
+# `"NTuple{N}"`) in a small JSON object under `function_type`, so more keys can be added
+# later without a storage-format change. A missing tag (scalar forecast windows) stays
+# unset. `_decode_ext` recovers the bare tag the reconstruction paths dispatch on.
+_encode_ext(::Nothing) = nothing
+_encode_ext(tag::AbstractString) = JSON.json(Dict("function_type" => tag))
+
+_decode_ext(::Nothing) = nothing
+function _decode_ext(payload::AbstractString)
+    isempty(payload) && return nothing
+    return get(JSON.parse(payload), "function_type", nothing)
 end
 
 # Rebuild the `NTuple{N, Float64}` vector from rows of a stored/materialized `(len, N)`
@@ -417,7 +431,7 @@ function serialize_single!(
         get_resolution(sts),
         arr,
         name;
-        ext = logical,
+        ext = _encode_ext(logical),
     )
     TSS.add_time_series!(store.inner, owner_id, owner_type, tss_category(owner_category),
         tss_ts; features = features, units = units)
@@ -476,7 +490,7 @@ function serialize_non_sequential!(
         get_timestamps(nts),
         arr,
         name;
-        ext = logical,
+        ext = _encode_ext(logical),
     )
     TSS.add_time_series!(store.inner, owner_id, owner_type, tss_category(owner_category),
         tss_ts; features = features, units = units)
@@ -499,7 +513,7 @@ function get_non_sequential(
     nts = TSS.get_time_series(TSS.NonSequentialTimeSeries, store.inner, owner_id,
         owner_category, name; features = features)
     len = length(nts.timestamps)
-    values = _decode_static_values(nts.data, nts.ext, len)
+    values = _decode_static_values(nts.data, _decode_ext(nts.ext), len)
     return NonSequentialTimeSeries(String(name), nts.timestamps, values)
 end
 
@@ -791,7 +805,7 @@ function rust_get_time_series(
     feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
     meta = get_metadata(store, owner_id, category, name;
         resolution = get_resolution(matched), features = feats)
-    full = _read_values(store, meta.data_hash, meta.ext, meta.dtype, meta.length)
+    full = _read_values(store, meta.data_hash, _decode_ext(meta.ext), meta.dtype, meta.length)
 
     start = isnothing(start_time) ? meta.initial_timestamp : start_time
     index = compute_time_array_index(meta.initial_timestamp, start, meta.resolution)
@@ -1003,10 +1017,10 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
     storage_interval = _storage_forecast_interval(interval, get_horizon(ts))
     tss_ts = if ts_type == TSS.CASTORE_TYPE_DETERMINISTIC
         TSS.Deterministic(get_initial_timestamp(ts), resolution, get_horizon(ts),
-            storage_interval, count, arr, name; ext = logical)
+            storage_interval, count, arr, name; ext = _encode_ext(logical))
     else
         TSS.Scenarios(get_initial_timestamp(ts), resolution, get_horizon(ts),
-            storage_interval, count, arr, name; ext = logical)
+            storage_interval, count, arr, name; ext = _encode_ext(logical))
     end
     TSS.add_time_series!(store.inner, owner_id, owner_type,
         category, tss_ts; features = feats)
@@ -1144,7 +1158,7 @@ function _rust_get_forecast(
         fmeta = TSS.get_forecast_metadata(store.inner, owner_id, category, name,
             TSS.CASTORE_TYPE_DETERMINISTIC; resolution = resolution,
             interval = matched_interval, features = feats)
-        logical = fmeta.ext  # `nothing` for scalar windows
+        logical = _decode_ext(fmeta.ext)  # `nothing` for scalar windows
         window(i) = _truncate(
             if isnothing(logical)
                 d.data[:, i]
@@ -1181,7 +1195,7 @@ function _rust_get_forecast(
             TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE; resolution = resolution,
             interval = matched_interval, features = feats,
         )
-        logical = fmeta.ext
+        logical = _decode_ext(fmeta.ext)
         # Scalar windows come back as a 2D `(horizon_count, count)` array; encoded
         # FunctionData windows carry trailing coefficient dims (3D). A DST inherits
         # the shared SingleTimeSeries metadata, whose `ext` may be set even
@@ -1346,7 +1360,7 @@ function rust_build_forecast_reader(
         fmeta = TSS.get_forecast_metadata(store.inner, info.owner_id,
             info.owner_category, info.name, rust_ts_code(is_type);
             resolution = info.resolution, features = feats)
-        exts[i] = fmeta.ext
+        exts[i] = _decode_ext(fmeta.ext)
         key = ForecastKey(;
             time_series_type = is_type,
             name = info.name,
