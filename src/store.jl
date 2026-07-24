@@ -117,14 +117,3 @@ function open_store!(
 )
     return func(args...; kwargs...)
 end
-
-function make_component_name(component_uuid::UUIDs.UUID, name::AbstractString)
-    return string(component_uuid) * COMPONENT_NAME_DELIMITER * name
-end
-
-function deserialize_component_name(component_name::AbstractString)
-    data = split(component_name, COMPONENT_NAME_DELIMITER)
-    component = UUIDs.UUID(data[1])
-    name = data[2]
-    return component, name
-end
