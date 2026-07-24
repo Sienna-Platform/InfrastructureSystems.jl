@@ -19,15 +19,18 @@
 Open an existing on-disk Castore store from its `.nc` base path.
 """
 function open_castore_store(path::AbstractString; read_only::Bool = false)
-    # Open with an absolute path so BOTH the Castore handle's own backing path and the
-    # wrapper's `path` field survive later `cd`s (e.g. a deserialize that opens a
-    # relative basename, then a re-serialize elsewhere). Absolutizing only the
-    # wrapper field leaves the handle resolving its source relative to the cwd at
-    # open time, so a later `persist!` fails once the cwd changes.
+    # Open with an absolute path so the Castore handle's backing path survives later
+    # `cd`s (e.g. a deserialize that opens a relative basename, then a re-serialize
+    # elsewhere). Opening relative leaves the handle resolving its source relative to
+    # the cwd at open time, so a later `persist!` fails once the cwd changes.
     abs_path = abspath(String(path))
     inner = Castore.open_store(abs_path; read_only = read_only)
-    return Store(inner, abs_path)
+    return Store(inner)
 end
+
+# The store's backing path (nothing for an in-memory store). Castore owns this state
+# now; IS no longer duplicates it.
+_store_path(store::Store) = Castore.get_path(store.inner)
 
 # Translate the `Castore.get_compression` NamedTuple back into a
 # `CompressionSettings`.
@@ -75,9 +78,10 @@ function Base.deepcopy_internal(store::Store, dict::IdDict)
     haskey(dict, store) && return dict[store]
 
     # `persist!` copies an on-disk store's artifacts and materializes an in-memory one.
-    # An in-memory store has no `path`, so its copy lands in `tempdir()` and is therefore
+    # An in-memory store has no path, so its copy lands in `tempdir()` and is therefore
     # disk-backed: the backend gives us no way to clone in-memory state in place.
-    directory = isnothing(store.path) ? tempdir() : dirname(store.path)
+    path = _store_path(store)
+    directory = isnothing(path) ? tempdir() : dirname(path)
     dst = joinpath(directory, string(UUIDs.uuid4()) * "_time_series.nc")
     Castore.persist!(store.inner, dst)
     new_store = open_castore_store(dst; read_only = false)

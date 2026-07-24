@@ -3458,7 +3458,7 @@ end
     ENV[IS.TIME_SERIES_DIRECTORY_ENV_VAR] = path
     try
         sys = IS.SystemData(; time_series_in_memory = false)
-        @test splitpath(sys.time_series_manager.data_store.path)[1] == path
+        @test splitpath(IS._store_path(sys.time_series_manager.data_store))[1] == path
     finally
         pop!(ENV, IS.TIME_SERIES_DIRECTORY_ENV_VAR)
     end

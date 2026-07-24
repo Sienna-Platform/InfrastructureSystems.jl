@@ -883,7 +883,7 @@ function serialize(data::SystemData)
             if isempty(store)
                 json_data["time_series_compression_enabled"] =
                     get_compression_settings(store).enabled
-                json_data["time_series_in_memory"] = isnothing(store.path)
+                json_data["time_series_in_memory"] = isnothing(_store_path(store))
             else
                 # Castore backend: write the .nc arrays + standalone .sqlite metadata.
                 time_series_base_name =
@@ -1547,7 +1547,7 @@ clear_supplemental_attributes!(data::SystemData) =
     clear_supplemental_attributes!(data.supplemental_attribute_manager)
 
 stores_time_series_in_memory(data::SystemData) =
-    isnothing(data.time_series_manager.data_store.path)
+    isnothing(_store_path(data.time_series_manager.data_store))
 
 """
 Make a `deepcopy` of a [`SystemData`](@ref) more quickly by skipping the copying of time

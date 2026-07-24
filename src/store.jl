@@ -54,14 +54,11 @@ end
 
 """
 The store backing a system's time series data and its component /
-supplemental-attribute associations. Wraps a `Castore.Store`; the operations live
-in `castore.jl`.
+supplemental-attribute associations. A thin wrapper over `Castore.Store` that lets IS
+own its `deepcopy`/`isempty`/serialization semantics; the operations live in `castore.jl`.
 """
 mutable struct Store
     inner::Castore.Store
-    "Filesystem base path for the `.nc` / `.sqlite` pair (nothing if in-memory). Tracked
-    here because `Castore.Store` does not expose its backing path or in-memory status."
-    path::Union{Nothing, String}
 end
 
 """
@@ -86,7 +83,7 @@ function Store(;
     else
         Castore.Store(; in_memory = false, path = path, kwargs...)
     end
-    return Store(inner, path === nothing ? nothing : String(path))
+    return Store(inner)
 end
 
 # Translate a `CompressionSettings` into the keyword arguments accepted by
