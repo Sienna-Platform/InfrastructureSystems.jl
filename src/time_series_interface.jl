@@ -66,7 +66,7 @@ function get_time_series(
     features...,
 ) where {T <: TimeSeriesData}
     TimerOutputs.@timeit_debug SYSTEM_TIMERS "get_time_series" begin
-        return rust_get_time_series(
+        return castore_get_time_series(
             T, owner, name;
             start_time = start_time, len = len, count = count,
             resolution = resolution, interval = interval, features...,
@@ -160,7 +160,7 @@ function get_time_series_multiple(
     mgr = get_time_series_manager(owner)
     # This is true when the component or attribute is not part of a system.
     isnothing(mgr) && return ()
-    return rust_get_time_series_multiple(
+    return castore_get_time_series_multiple(
         owner,
         filter_func;
         type = type,
@@ -850,8 +850,8 @@ function has_time_series(owner::TimeSeriesOwners; kwargs...)
     kw = Dict(kwargs)
     name = pop!(kw, :name, nothing)
     T = pop!(kw, :time_series_type, TimeSeriesData)
-    isnothing(name) && return rust_has_any(owner; time_series_type = T)
-    return rust_has_time_series(
+    isnothing(name) && return castore_has_any(owner; time_series_type = T)
+    return castore_has_time_series(
         T === TimeSeriesData ? SingleTimeSeries : T,
         owner,
         name;
@@ -868,7 +868,7 @@ function has_time_series(
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(val)
     isnothing(mgr) && return false
-    return rust_has_any(val; time_series_type = T)
+    return castore_has_any(val; time_series_type = T)
 end
 
 function has_time_series(
@@ -881,7 +881,7 @@ function has_time_series(
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(val)
     isnothing(mgr) && return false
-    return rust_has_time_series(
+    return castore_has_time_series(
         T, val, name;
         resolution = resolution, interval = interval, features...,
     )
@@ -951,10 +951,10 @@ function _copy_time_series!(
         )
     end
 
-    store = mgr.data_store::RustTimeSeriesStore
-    dst_id, dst_type, _ = _rust_owner_args(dst)
-    src_id, _, src_category = _rust_owner_args(src)
-    category = tss_category(src_category)
+    store = mgr.data_store::Store
+    dst_id, dst_type, _ = _castore_owner_args(dst)
+    src_id, _, src_category = _castore_owner_args(src)
+    category = castore_category(src_category)
 
     # The copy happens entirely inside the store: it clones the association row
     # against the same content-addressed array. Nothing is read into Julia, so no
@@ -978,7 +978,7 @@ function _copy_time_series!(
             src_id,
             category,
             name,
-            rust_ts_code(get_time_series_type(ts_key)),
+            castore_ts_code(get_time_series_type(ts_key)),
             dst_id,
             dst_type;
             new_name = new_name,
@@ -1029,7 +1029,7 @@ To enumerate every group of time series that share data across a whole system,
 use [`get_time_series_array_groups`](@ref).
 """
 get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey) =
-    rust_get_time_series_hash(owner, key)
+    castore_get_time_series_hash(owner, key)
 
 function clear_time_series!(owner::TimeSeriesOwners)
     mgr = get_time_series_manager(owner)

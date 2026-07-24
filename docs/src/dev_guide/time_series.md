@@ -4,8 +4,9 @@
 series data. This document contains content for developers of new time series data. For the
 usage please refer to the documentation in [PowerSystems.jl](https://sienna-platform.github.io/PowerSystems.jl/stable).
 
-Time series storage is backed by the `time-series-store` Rust library (wrapped by the
-`TimeSeriesStore.jl` binding). Reasons to consider using it:
+Time series storage is backed by **Castore**, accessed through its `Castore.jl` binding.
+Castore manages both the time series data and the associations between components /
+supplemental attributes and that data. Reasons to consider using it:
 
   - Numerical arrays are stored independently of components in a NetCDF file with a SQLite
     catalog; components store associations to that data rather than copies.
@@ -65,7 +66,7 @@ together with the forecast window parameters (`initial_timestamp`, `horizon`, `i
 `SingleTimeSeries` array and synthesizes its forecast windows on read.
 
 For the authoritative on-disk format — NetCDF dataset layout, hashing, the SQLite schema, and
-the `DATA_FORMAT_VERSION` compatibility contract — see the `time-series-store` repository's
+the `DATA_FORMAT_VERSION` compatibility contract — see the `Castore` repository's
 file-format reference.
 
 ## Identifying and retrieving a time series
@@ -91,4 +92,4 @@ association catalog directly.
 NetCDF files cannot shrink in place: deleting time series frees logical slots for reuse but
 does not immediately reduce the file size. Recovering that space requires an explicit
 compaction — rebuilding the artifact with only the active arrays — which is provided by the
-`time-series-store` backend.
+`Castore` backend.

@@ -1,6 +1,6 @@
 
-# Rust backend: NetCDF arrays; metadata lives beside it as `<file>.sqlite`.
-const RUST_TIME_SERIES_STORAGE_FILE = "time_series_storage.nc"
+# Castore backend: NetCDF arrays; metadata lives beside it as `<file>.sqlite`.
+const CASTORE_TIME_SERIES_STORAGE_FILE = "time_series_storage.nc"
 const TIME_SERIES_DIRECTORY_ENV_VAR = "SIENNA_TIME_SERIES_DIRECTORY"
 const VALIDATION_DESCRIPTOR_FILE = "validation_descriptors.json"
 const SERIALIZATION_METADATA_KEY = "__serialization_metadata__"
@@ -67,7 +67,7 @@ function SystemData(;
         compression = compression,
     )
     components = Components(time_series_mgr, validation_descriptors)
-    supplemental_attribute_mgr = SupplementalAttributeManager()
+    supplemental_attribute_mgr = SupplementalAttributeManager(time_series_mgr.data_store)
     masked_components = Components(time_series_mgr, validation_descriptors)
     return SystemData(
         components,
@@ -428,7 +428,7 @@ function iterate_components_with_time_series(
 )
     return (
         get_component(data, x) for
-        x in rust_list_owner_ids(
+        x in castore_list_owner_ids(
             data.time_series_manager.data_store,
             InfrastructureSystemsComponent;
             time_series_type = time_series_type,
@@ -443,7 +443,7 @@ function iterate_supplemental_attributes_with_time_series(
 )
     return (
         get_supplemental_attribute(data, x) for
-        x in rust_list_owner_ids(
+        x in castore_list_owner_ids(
             data.time_series_manager.data_store,
             SupplementalAttribute;
             time_series_type = time_series_type,
@@ -499,7 +499,7 @@ check_time_series_consistency(
     data::SystemData,
     ts_type;
     resolution::Union{Nothing, Dates.Period} = nothing,
-) = rust_check_consistency(
+) = castore_check_consistency(
     data.time_series_manager.data_store,
     ts_type;
     resolution = resolution,
@@ -623,15 +623,15 @@ function _transform_single_time_series!(
         end
     end
 
-    # The Rust store derives a DeterministicSingleTimeSeries view over every
+    # The Castore store derives a DeterministicSingleTimeSeries view over every
     # stored component SingleTimeSeries that shares the array (no data is copied);
     # the window parameters are recorded in the metadata. Supplemental-attribute
     # series are left untouched, matching the metadata-store behavior.
-    TSS.transform_single_time_series!(
+    Castore.transform_single_time_series!(
         data.time_series_manager.data_store.inner,
         horizon,
         interval;
-        owner_category = TSS.Component,
+        owner_category = Castore.Component,
         resolution = resolution,
     )
     return
@@ -654,7 +654,7 @@ function _check_transform_single_time_series(
     resolution::Union{Nothing, Dates.Period};
     skip_existing::Bool = false,
 )
-    items = rust_list_metadata_with_owner(
+    items = castore_list_metadata_with_owner(
         data.time_series_manager.data_store,
         InfrastructureSystemsComponent;
         time_series_type = SingleTimeSeries,
@@ -810,7 +810,7 @@ function prepare_for_serialization_to_file!(
     sys_base = _get_system_basename(filename)
     ts_base = joinpath(
         directory,
-        _get_secondary_basename(sys_base, RUST_TIME_SERIES_STORAGE_FILE),
+        _get_secondary_basename(sys_base, CASTORE_TIME_SERIES_STORAGE_FILE),
     )
     files = [
         filename,
@@ -883,15 +883,17 @@ function serialize(data::SystemData)
             if isempty(store)
                 json_data["time_series_compression_enabled"] =
                     get_compression_settings(store).enabled
-                json_data["time_series_in_memory"] = isnothing(store.path)
+                json_data["time_series_in_memory"] = isnothing(_store_path(store))
             else
-                # Rust backend: write the .nc arrays + standalone .sqlite metadata.
+                # Castore backend: write the .nc arrays + standalone .sqlite metadata.
                 time_series_base_name =
-                    _get_secondary_basename(base, RUST_TIME_SERIES_STORAGE_FILE)
+                    _get_secondary_basename(base, CASTORE_TIME_SERIES_STORAGE_FILE)
                 time_series_storage_file = joinpath(directory, time_series_base_name)
                 serialize(store, time_series_storage_file)
                 json_data["time_series_storage_file"] = time_series_base_name
-                json_data["time_series_storage_type"] = "RustTimeSeriesStore"
+                # Stable on-disk discriminator for the storage backend, intentionally
+                # decoupled from the `Store` Julia type name.
+                json_data["time_series_storage_type"] = "CastoreStore"
             end
         end
         pop!(json_data["internal"]["ext"], SERIALIZATION_METADATA_KEY, nothing)
@@ -910,16 +912,19 @@ function deserialize(
 )
     @debug "deserialize" raw _group = LOG_GROUP_SERIALIZATION
 
+    # "RustTimeSeriesStore" is the pre-rename name for the same Castore backend; accept
+    # it so systems serialized before the rename still load.
     if haskey(raw, "time_series_storage_file") &&
-       strip_module_name(get(raw, "time_series_storage_type", "")) == "RustTimeSeriesStore"
+       strip_module_name(get(raw, "time_series_storage_type", "")) in
+       ("CastoreStore", "RustTimeSeriesStore")
         if !isfile(raw["time_series_storage_file"])
             error("time series file $(raw["time_series_storage_file"]) does not exist")
         end
-        # Rust backend: open the .nc + sidecar .sqlite. When the system is not
+        # Castore backend: open the .nc + sidecar .sqlite. When the system is not
         # read-only, isolate it from the source file by opening a working copy so
         # that adding/removing time series cannot corrupt a shared/cached store.
         time_series_manager = TimeSeriesManager(;
-            data_store = open_deserialized_rust_store(
+            data_store = open_deserialized_castore_store(
                 raw["time_series_storage_file"],
                 time_series_directory,
                 time_series_read_only,
@@ -930,10 +935,10 @@ function deserialize(
         error(
             "This system was serialized with the legacy HDF5 time series storage " *
             "(type = $(get(raw, "time_series_storage_type", "unknown"))), which is no " *
-            "longer supported. HDF5 storage has been removed in favor of the Rust backend.",
+            "longer supported. HDF5 storage has been removed in favor of the Castore backend.",
         )
     else
-        # The serialized store was empty; create a fresh Rust store honoring the
+        # The serialized store was empty; create a fresh Castore store honoring the
         # recorded in-memory flag and compression setting.
         time_series_manager = TimeSeriesManager(;
             in_memory = get(raw, "time_series_in_memory", true),
@@ -1294,7 +1299,7 @@ get_forecast_parameters(
     data::SystemData;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-) = rust_forecast_parameters(
+) = castore_forecast_parameters(
     data.time_series_manager.data_store;
     resolution = resolution,
     interval = interval,
@@ -1329,7 +1334,7 @@ end
 get_time_series_resolutions(
     data::SystemData;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
-) = rust_get_time_series_resolutions(
+) = castore_get_time_series_resolutions(
     data.time_series_manager.data_store;
     time_series_type = time_series_type,
 )
@@ -1354,14 +1359,14 @@ Resolved by a single catalog query (no per-series reads).
 See also [`get_time_series_hash`](@ref) for the hash of one `(owner, key)`.
 """
 function get_time_series_array_groups(data::SystemData; only_shared = true)
-    store = data.time_series_manager.data_store::RustTimeSeriesStore
+    store = data.time_series_manager.data_store::Store
     id_to_owner =
         (id, category) -> if category == "Component"
             get_component(data, id)
         else
             get_supplemental_attribute(data, id)
         end
-    return rust_group_by_hash(store, id_to_owner; only_shared = only_shared)
+    return castore_group_by_hash(store, id_to_owner; only_shared = only_shared)
 end
 
 """
@@ -1387,14 +1392,14 @@ function build_forecast_reader(
     name::Union{Nothing, AbstractString} = nothing,
     features...,
 ) where {T <: Forecast}
-    store = data.time_series_manager.data_store::RustTimeSeriesStore
+    store = data.time_series_manager.data_store::Store
     id_to_owner =
         (id, category) -> if category == "Component"
             get_component(data, id)
         else
             get_supplemental_attribute(data, id)
         end
-    return rust_build_forecast_reader(
+    return castore_build_forecast_reader(
         store,
         id_to_owner,
         T;
@@ -1456,9 +1461,9 @@ get_num_components_with_supplemental_attributes(data::SystemData) =
     get_num_components_with_attributes(data.supplemental_attribute_manager.associations)
 
 get_num_time_series(data::SystemData) =
-    rust_get_num_time_series(data.time_series_manager.data_store)
+    castore_get_num_time_series(data.time_series_manager.data_store)
 function get_time_series_counts(data::SystemData)
-    c = rust_time_series_counts(data.time_series_manager.data_store)
+    c = castore_time_series_counts(data.time_series_manager.data_store)
     return TimeSeriesCounts(;
         components_with_time_series = c.components_with_time_series,
         supplemental_attributes_with_time_series = c.supplemental_attributes_with_time_series,
@@ -1467,11 +1472,11 @@ function get_time_series_counts(data::SystemData)
     )
 end
 get_time_series_counts_by_type(data::SystemData) =
-    rust_get_time_series_counts_by_type(data.time_series_manager.data_store)
+    castore_get_time_series_counts_by_type(data.time_series_manager.data_store)
 get_static_time_series_summary_table(data::SystemData) =
-    rust_static_summary_table(data.time_series_manager.data_store)
+    castore_static_summary_table(data.time_series_manager.data_store)
 get_forecast_summary_table(data::SystemData) =
-    rust_forecast_summary_table(data.time_series_manager.data_store)
+    castore_forecast_summary_table(data.time_series_manager.data_store)
 
 _get_system_basename(system_file) = splitext(basename(system_file))[1]
 _get_secondary_basename(system_basename, name) = system_basename * "_" * name
@@ -1542,7 +1547,7 @@ clear_supplemental_attributes!(data::SystemData) =
     clear_supplemental_attributes!(data.supplemental_attribute_manager)
 
 stores_time_series_in_memory(data::SystemData) =
-    isnothing(data.time_series_manager.data_store.path)
+    isnothing(_store_path(data.time_series_manager.data_store))
 
 """
 Make a `deepcopy` of a [`SystemData`](@ref) more quickly by skipping the copying of time
@@ -1566,6 +1571,19 @@ function fast_deepcopy_system(
     # The approach taken here is to swap out the data we don't want to copy with blank data,
     # then do a deepcopy, then swap it back. We can't just construct a new instance with
     # different fields because we also need to change references within components.
+    #
+    # Both managers share one store, so "skip one, keep the other" cannot be expressed by
+    # swapping in a blank manager alone — the store carries time series AND association
+    # rows. Each combination therefore decides which store the copy should see:
+    #
+    #   * keep both   -> the real store, deep-copied once and shared (no shortcut).
+    #   * skip both   -> a fresh empty store; nothing is copied.
+    #   * skip series -> a fresh store seeded with just the association rows. Copying
+    #                    those is cheap; copying the time series artifacts is what the
+    #                    caller asked to avoid.
+    #   * skip attrs  -> the real store must be copied for its time series, so the
+    #                    association rows ride along and are cleared from the COPY
+    #                    afterwards (clearing the original would corrupt it).
     old_time_series_manager = data.time_series_manager
     old_supplemental_attribute_manager = data.supplemental_attribute_manager
 
@@ -1574,8 +1592,14 @@ function fast_deepcopy_system(
     else
         old_time_series_manager
     end
+    new_store = new_time_series_manager.data_store
     new_supplemental_attribute_manager = if skip_supplemental_attributes
-        SupplementalAttributeManager()
+        SupplementalAttributeManager(new_store)
+    elseif skip_time_series
+        # Keep the attributes, drop the series: seed the fresh store with the rows.
+        associations = SupplementalAttributeAssociations(new_store)
+        copy_associations!(associations, old_supplemental_attribute_manager.associations)
+        SupplementalAttributeManager(old_supplemental_attribute_manager.data, associations)
     else
         old_supplemental_attribute_manager
     end
@@ -1604,6 +1628,12 @@ function fast_deepcopy_system(
             set_shared_system_references!(comp,
                 old_refs[(typeof(comp), get_name(comp))])
         end
+    end
+
+    # The only combination that cannot be arranged before the copy: the real store had to
+    # be copied for its time series, so it brought the association rows with it.
+    if skip_supplemental_attributes && !skip_time_series
+        clear_associations!(new_data.supplemental_attribute_manager.associations)
     end
     return new_data
 end

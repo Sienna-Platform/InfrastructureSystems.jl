@@ -31,12 +31,10 @@ import SHA
 import StringTemplates
 import TerminalLoggers: TerminalLogger, ProgressLevel
 import TimeSeries
-import TimeSeriesStore
+import Castore
 import TimerOutputs
 import TOML
 using DataStructures: OrderedDict, SortedDict
-import SQLite
-import Tables
 using LinearAlgebra: norm, dot
 
 using DocStringExtensions
@@ -168,12 +166,11 @@ include("utils/generate_structs.jl")
 include("utils/lazy_dict_from_iterator.jl")
 include("utils/logging.jl")
 include("utils/stdout_redirector.jl")
-include("utils/sqlite.jl")
 include("function_data/function_data.jl")
 include("utils/utils.jl")
 include("definitions.jl")
 include("internal.jl")
-include("time_series_storage.jl")
+include("store.jl")
 include("abstract_time_series.jl")
 include("forecasts.jl")
 include("static_time_series.jl")
@@ -210,7 +207,7 @@ include("time_series_structs.jl")
 include("function_data/time_series_function_data.jl")
 include("time_series_manager.jl")
 include("time_series_interface.jl")
-include("rust_time_series_store.jl")
+include("castore.jl")
 include("time_series_cache.jl")
 include("time_series_utils.jl")
 include("supplemental_attribute_associations.jl")

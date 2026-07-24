@@ -2,7 +2,7 @@
 const ADD_TIME_SERIES_BATCH_SIZE = 100
 
 mutable struct TimeSeriesManager <: AbstractTimeSeriesManager
-    data_store::TimeSeriesStorage
+    data_store::Store
     read_only::Bool
 end
 
@@ -18,7 +18,7 @@ function TimeSeriesManager(;
     end
 
     if isnothing(data_store)
-        # The Rust store unifies data + metadata. On-disk artifacts live at
+        # The Castore store unifies data + metadata. On-disk artifacts live at
         # `<dir>/<uuid>_time_series.nc` (+ sidecar `.sqlite`).
         path = if in_memory
             nothing
@@ -31,7 +31,7 @@ function TimeSeriesManager(;
             joinpath(dir, string(UUIDs.uuid4()) * "_time_series.nc")
         end
         data_store =
-            RustTimeSeriesStore(;
+            Store(;
                 in_memory = in_memory,
                 path = path,
                 compression = compression,
@@ -40,11 +40,11 @@ function TimeSeriesManager(;
     return TimeSeriesManager(data_store, read_only)
 end
 
-# (owner_id::Int, owner_type::String, owner_category::String) for the Rust FFI.
+# (owner_id::Int, owner_type::String, owner_category::String) for the Castore FFI.
 # The owner is identified by its integer id; `owner_category` is the String tag
-# ("Component" / "SupplementalAttribute"), converted to a `TSS.OwnerCategory`
-# enum via `tss_category` at the call sites that need it.
-function _rust_owner_args(owner::TimeSeriesOwners)
+# ("Component" / "SupplementalAttribute"), converted to a `Castore.OwnerCategory`
+# enum via `castore_category` at the call sites that need it.
+function _castore_owner_args(owner::TimeSeriesOwners)
     return (
         get_id(owner),
         string(nameof(typeof(owner))),
@@ -52,7 +52,7 @@ function _rust_owner_args(owner::TimeSeriesOwners)
     )
 end
 
-function _rust_features(features)
+function _castore_features(features)
     out = Dict{String, Any}()
     for (k, v) in features
         v isa Union{Bool, Real, AbstractString} || throw(
@@ -76,7 +76,7 @@ function begin_time_series_update(
     mgr::TimeSeriesManager,
 )
     store = mgr.data_store
-    before = Set(rust_row_identity(r) for r in TSS.list_keys(store.inner))
+    before = Set(castore_row_identity(r) for r in Castore.list_keys(store.inner))
     try
         open_store!(store, "r+") do
             func()
@@ -85,10 +85,10 @@ function begin_time_series_update(
     catch
         # Roll back: remove associations added during this update so the store is
         # left consistent with its pre-update state.
-        for row in TSS.list_keys(store.inner)
-            rust_row_identity(row) in before && continue
+        for row in Castore.list_keys(store.inner)
+            castore_row_identity(row) in before && continue
             try
-                rust_remove_row!(store, row)
+                castore_remove_row!(store, row)
             catch
                 # Best-effort cleanup; ignore rows already gone.
             end
@@ -125,7 +125,7 @@ function add_time_series!(
     features...,
 )
     _throw_if_read_only(mgr)
-    return rust_add_time_series!(mgr, owner, time_series; features...)
+    return castore_add_time_series!(mgr, owner, time_series; features...)
 end
 
 function clear_time_series!(mgr::TimeSeriesManager)
@@ -136,8 +136,8 @@ end
 
 function clear_time_series!(mgr::TimeSeriesManager, component::TimeSeriesOwners)
     _throw_if_read_only(mgr)
-    owner_id, _, owner_category = _rust_owner_args(component)
-    rust_clear_owner!(mgr.data_store, owner_id, tss_category(owner_category))
+    owner_id, _, owner_category = _castore_owner_args(component)
+    castore_clear_owner!(mgr.data_store, owner_id, castore_category(owner_category))
     @debug "Cleared time_series in $(summary(component))." _group =
         LOG_GROUP_TIME_SERIES
     return
@@ -151,7 +151,7 @@ get_metadata(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = rust_get_metadata(
+) = castore_get_metadata(
     component,
     time_series_type,
     name;
@@ -168,7 +168,7 @@ list_metadata(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = rust_owner_list_metadata(
+) = castore_owner_list_metadata(
     component;
     time_series_type = time_series_type,
     name = name,
@@ -191,16 +191,16 @@ function remove_time_series!(
 )
     _throw_if_read_only(mgr)
     store = mgr.data_store
-    owner_id, _, owner_category = _rust_owner_args(owner)
-    category = tss_category(owner_category)
+    owner_id, _, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
     # Subset (partial) feature/resolution matching: remove every stored series of
     # type `time_series_type` that contains at least the requested features.
-    for key in rust_owner_list_metadata(owner;
+    for key in castore_owner_list_metadata(owner;
         time_series_type = time_series_type, name = name, resolution = resolution,
         interval = interval, features...)
         mt = get_time_series_type(key)
         res = get_resolution(key)
-        feats = _rust_features((Symbol(k) => v for (k, v) in get_features(key)))
+        feats = _castore_features((Symbol(k) => v for (k, v) in get_features(key)))
         if mt <: SingleTimeSeries
             # A DeterministicSingleTimeSeries shares the underlying SingleTimeSeries
             # array, so the base series cannot be removed if doing so would orphan a
@@ -209,7 +209,7 @@ function remove_time_series!(
             hash =
                 get_metadata(store, owner_id, category, name;
                     resolution = res, features = feats).data_hash
-            c = rust_array_sts_dst_counts(store, hash)
+            c = castore_array_sts_dst_counts(store, hash)
             if c.dst >= 1 && c.sts <= 1
                 throw(
                     ArgumentError(
@@ -229,7 +229,7 @@ function remove_time_series!(
             # Pin this key's own interval: a name can carry several forecasts differing
             # only by interval, so removing by (type, name, resolution) alone would be
             # ambiguous.
-            remove_typed!(store, owner_id, category, name, rust_ts_code(mt);
+            remove_typed!(store, owner_id, category, name, castore_ts_code(mt);
                 resolution = res, interval = get_interval(key), features = feats)
         end
     end

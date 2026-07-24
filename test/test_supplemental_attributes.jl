@@ -3,8 +3,12 @@
 # attachment. Returns the object so it can be used inline.
 _id!(obj, id) = (IS.set_id!(obj, id); obj)
 
+# Associations live in the time series store, which a bare manager has no system to get
+# one from. Give each manager-direct test its own in-memory store.
+_attr_mgr() = IS.SupplementalAttributeManager(IS.Store(; in_memory = true))
+
 @testset "Test add_supplemental_attribute" begin
-    mgr = IS.SupplementalAttributeManager()
+    mgr = _attr_mgr()
     geo_supplemental_attribute = _id!(IS.GeographicInfo(), 2)
     component = _id!(IS.TestComponent("component1", 5), 1)
     IS.add_supplemental_attribute!(mgr, component, geo_supplemental_attribute)
@@ -19,7 +23,7 @@ _id!(obj, id) = (IS.set_id!(obj, id); obj)
 end
 
 @testset "Test bulk addition of supplemental attributes" begin
-    mgr = IS.SupplementalAttributeManager()
+    mgr = _attr_mgr()
     attr1 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 1.0)), 2)
     attr2 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 2.0)), 3)
     component = _id!(IS.TestComponent("component1", 1), 1)
@@ -33,7 +37,7 @@ end
 end
 
 @testset "Test bulk addition of supplemental attributes with error" begin
-    mgr = IS.SupplementalAttributeManager()
+    mgr = _attr_mgr()
     attr1 = _id!(IS.TestSupplemental(; value = 1.0), 2)
     attr2 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 2.0)), 3)
     component = _id!(IS.TestComponent("component1", 1), 1)
@@ -50,7 +54,7 @@ end
 end
 
 @testset "Test bulk addition of supplemental attributes with error, existing attrs" begin
-    mgr = IS.SupplementalAttributeManager()
+    mgr = _attr_mgr()
     attr1 = _id!(IS.TestSupplemental(; value = 1.0), 2)
     attr2 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 2.0)), 3)
     component = _id!(IS.TestComponent("component1", 1), 1)
@@ -76,7 +80,7 @@ end
 end
 
 @testset "Test bulk removal of supplemental attributes with error" begin
-    mgr = IS.SupplementalAttributeManager()
+    mgr = _attr_mgr()
     attr1 = _id!(IS.TestSupplemental(; value = 1.0), 2)
     attr2 = _id!(IS.TestSupplemental(; value = 2.0), 3)
     attr3 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 3.0)), 4)
@@ -143,7 +147,7 @@ end
 end
 
 @testset "Test remove_supplemental_attribute" begin
-    mgr = IS.SupplementalAttributeManager()
+    mgr = _attr_mgr()
     geo_supplemental_attribute = _id!(IS.GeographicInfo(), 2)
     component = _id!(IS.TestComponent("component1", 5), 1)
     IS.add_supplemental_attribute!(mgr, component, geo_supplemental_attribute)
@@ -183,7 +187,7 @@ end
 end
 
 @testset "Test iterate_SupplementalAttributeManager" begin
-    mgr = IS.SupplementalAttributeManager()
+    mgr = _attr_mgr()
     geo_supplemental_attribute = _id!(IS.GeographicInfo(), 2)
     component = _id!(IS.TestComponent("component1", 5), 1)
     IS.add_supplemental_attribute!(mgr, component, geo_supplemental_attribute)
@@ -191,7 +195,7 @@ end
 end
 
 @testset "Summarize SupplementalAttributeManager" begin
-    mgr = IS.SupplementalAttributeManager()
+    mgr = _attr_mgr()
     geo_supplemental_attribute = _id!(IS.GeographicInfo(), 2)
     component = _id!(IS.TestComponent("component1", 5), 1)
     IS.add_supplemental_attribute!(mgr, component, geo_supplemental_attribute)
@@ -204,10 +208,14 @@ end
     component = IS.TestComponent("component1", 5)
     IS.add_component!(data, component)
     IS.add_supplemental_attribute!(data, component, geo_supplemental_attribute)
-    data = IS.serialize(data.supplemental_attribute_manager)
-    @test data isa Dict
-    @test length(data["associations"]) == 1
-    @test length(data["attributes"]) == 1
+    mgr = data.supplemental_attribute_manager
+    serialized = IS.serialize(mgr)
+    @test serialized isa Dict
+    @test length(serialized["attributes"]) == 1
+    # Associations are persisted by the time series store's `.sqlite` sidecar, not by
+    # this dict, so the serialized form deliberately carries no "associations" key.
+    @test !haskey(serialized, "associations")
+    @test IS.get_num_attributes(mgr.associations) == 1
 end
 
 @testset "Add time series to supplemental_attribute" begin
@@ -307,17 +315,13 @@ end
     @test IS.get_num_supplemental_attributes(data) == 3
     @test IS.get_num_members(data.supplemental_attribute_manager) == 3
 
-    table = Tables.rowtable(
-        IS.sql(
-            data.supplemental_attribute_manager.associations,
-            "SELECT * FROM $(IS.SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME)",
-        ),
-    )
-    @test length(table) == 4
+    # 4 association rows over 3 distinct attributes: one attribute is shared by both
+    # components.
+    @test IS.get_num_associations(data.supplemental_attribute_manager.associations) == 4
 end
 
-@testset "Test optimize_database!" begin
-    mgr = IS.SupplementalAttributeManager()
+@testset "Test many-to-many associations" begin
+    mgr = _attr_mgr()
     component1 = _id!(IS.TestComponent("component1", 5), 1)
     component2 = _id!(IS.TestComponent("component2", 7), 2)
 
@@ -328,16 +332,15 @@ end
         IS.add_supplemental_attribute!(mgr, component2, attr)
     end
 
-    # Verify data was added
+    # Every attribute is attached to both components: 10 distinct attributes, 20 rows.
     @test IS.get_num_attributes(mgr.associations) == 10
-
-    # Call optimize_database! - should not throw and data should remain intact
-    IS.optimize_database!(mgr.associations)
-
-    # Verify data is still accessible after optimization
-    @test IS.get_num_attributes(mgr.associations) == 10
+    @test IS.get_num_associations(mgr.associations) == 20
+    @test IS.get_num_components_with_attributes(mgr.associations) == 2
     @test IS.has_association(mgr.associations, component1)
     @test IS.has_association(mgr.associations, component2)
+    @test length(
+        IS.list_associated_supplemental_attribute_ids(mgr.associations, component1),
+    ) == 10
 end
 
 @testset "get_attr_value(::TestSupplemental)" begin

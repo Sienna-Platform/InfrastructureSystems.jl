@@ -16,10 +16,17 @@ mutable struct SupplementalAttributeManager <: AbstractSupplementalAttributeMana
     associations::SupplementalAttributeAssociations
 end
 
-function SupplementalAttributeManager()
+"""
+Construct an empty manager whose associations live in `store`.
+
+The store is shared with the [`TimeSeriesManager`](@ref) of the same system: association
+rows and the time series catalog are two tables in one artifact, so both managers must
+hold the same handle for a system to serialize and deep-copy correctly.
+"""
+function SupplementalAttributeManager(store::Store)
     return SupplementalAttributeManager(
         SupplementalAttributesByType(),
-        SupplementalAttributeAssociations(),
+        SupplementalAttributeAssociations(store),
     )
 end
 
@@ -48,13 +55,18 @@ function begin_supplemental_attributes_update(
         orig_data[key] = snapshot
     end
 
+    # The store exposes no transaction primitive, so snapshot the association rows and
+    # restore them wholesale on failure. Rows are small metadata and a system holds far
+    # fewer of them than time series, so a full clear-and-reload is cheap — and unlike a
+    # diff of newly added rows it also undoes REMOVALS, which is what the SQLite
+    # transaction this replaced did.
+    orig_associations = _association_rows(mgr.associations)
+
     try
-        SQLite.transaction(mgr.associations.db) do
-            func()
-        end
-        optimize_database!(mgr.associations)
+        func()
     catch
         mgr.data = orig_data
+        restore_associations!(mgr.associations, orig_associations)
         rethrow()
     end
 end
@@ -307,9 +319,10 @@ function list_associated_supplemental_attribute_ids(
     )
 end
 
+# Associations are persisted by the store, in its `.sqlite` sidecar, so they are
+# deliberately absent from this dict.
 function serialize(mgr::SupplementalAttributeManager)
     return Dict(
-        "associations" => to_records(mgr.associations),
         "attributes" => [serialize(y) for x in values(mgr.data) for y in values(x)],
     )
 end
@@ -319,10 +332,9 @@ function deserialize(
     data::Dict,
     time_series_manager::TimeSeriesManager,
 )
-    mgr = SupplementalAttributeManager(
-        SupplementalAttributesByType(SupplementalAttributesByType()),
-        from_records(SupplementalAttributeAssociations, data["associations"]),
-    )
+    # Associations come from the store the system was opened from, not from `data`: an
+    # "associations" key in older system JSON is ignored, not imported.
+    mgr = SupplementalAttributeManager(time_series_manager.data_store)
     refs = SharedSystemReferences(;
         supplemental_attribute_manager = mgr,
         time_series_manager = time_series_manager,

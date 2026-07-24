@@ -47,12 +47,11 @@ function create_system_data(;
     return data
 end
 
-# True if the Rust time series backend (the cdylib / TimeSeriesStore_jll) is
-# available, so on-disk serialization tests can run. Set TIME_SERIES_STORE_LIB
-# for a development cdylib.
-function rust_ts_available()
+# True if the Castore native library is available, so on-disk serialization
+# tests can run. Set CASTORE_LIB for a development build of the library.
+function castore_ts_available()
     try
-        store = IS.RustTimeSeriesStore(; in_memory = true)
+        store = IS.Store(; in_memory = true)
         IS.close!(store)
         return true
     catch
