@@ -1,14 +1,13 @@
 # Associations Database Schema
 
 !!! note "For Maintainers and Contributors"
-
+    
     This page documents the internal databases used by InfrastructureSystems.jl to manage associations between components and their time series data and supplemental attributes. This information is intended for maintainers and contributors working on the codebase. **End users should not need to interact with these databases directly.**
 
 ## Overview
 
-InfrastructureSystems.jl tracks two kinds of associations, and **both live in the
-`time-series-store` Rust backend** (wrapped by `TimeSeriesStore.jl`). IS.jl maintains no
-database of its own:
+InfrastructureSystems.jl tracks two kinds of associations, and **both live in Castore**
+(accessed through its `Castore.jl` binding). IS.jl maintains no database of its own:
 
  1. **Components/supplemental attributes ↔ time series data** — the backend's time series
     catalog. Both the numerical arrays and the catalog live there. See
@@ -18,7 +17,7 @@ database of its own:
     `SupplementalAttributeAssociations`, which is now a thin adapter rather than a database.
 
 !!! note "This changed"
-
+    
     Supplemental attribute associations used to live in a separate in-memory SQLite database
     owned by IS.jl and were serialized into the system JSON. They now share the backend's
     `.nc` / `.sqlite` artifact with the time series catalog. One consequence: a system with
@@ -28,9 +27,9 @@ database of its own:
 These associations enable fast lookups, efficient filtering, proper lifecycle management
 (add/remove/update), and serialization/deserialization.
 
-## Time Series Associations (Rust backend)
+## Time Series Associations (Castore backend)
 
-Time series associations are stored by the `time-series-store` backend, not by an
+Time series associations are stored by the `Castore` backend, not by an
 IS.jl-managed SQLite database. The on-disk artifact is a NetCDF file (`<path>.nc`) for the
 arrays plus a sibling SQLite catalog (`<path>.sqlite`) for the associations; the two files are
 one logical unit and must be moved, copied, and deleted together. Each association is
@@ -39,12 +38,12 @@ the concrete `time_series_type`, together with the array's SHA-256 content hash 
 automatic de-duplication).
 
 For the on-disk layout, the catalog columns and indexes, and the `DATA_FORMAT_VERSION`
-compatibility contract, see [Time Series Data](@ref) and the `time-series-store` repository's
+compatibility contract, see [Time Series Data](@ref) and the `Castore` repository's
 file-format reference. The IS.jl glue lives in
-[`src/rust_time_series_store.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/rust_time_series_store.jl).
+[`src/castore.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/castore.jl).
 
 !!! note "Component and time series identifiers"
-
+    
     Components and supplemental attributes are identified by integer IDs, and time series data
     is identified by its array content hash. Use a [`TimeSeriesKey`](@ref) to address a specific
     time series (see [Time Series Data](@ref)).
@@ -54,7 +53,7 @@ file-format reference. The IS.jl glue lives in
 `SupplementalAttributeAssociations` is the adapter over the backend's
 `supplemental_attribute_associations` table. It keeps the dispatch-based IS.jl API — the
 `Type`-taking overloads of `has_association`, `list_associated_component_ids`, and friends —
-and forwards each call to `TimeSeriesStore.jl`.
+and forwards each call to `Castore.jl`.
 
 **Row shape:** `component_id`, `component_type`, `attribute_id`, `attribute_type`.
 
@@ -86,7 +85,7 @@ unlike a diff of newly added rows it also undoes removals, matching the previous
 
 ### Time Series
 
-Time series data and its association catalog are persisted by the `time-series-store` backend
+Time series data and its association catalog are persisted by the `Castore` backend
 as the `<path>.nc` / `<path>.sqlite` pair described above. See [Time Series Data](@ref).
 
 ### Supplemental Attribute Associations
@@ -96,13 +95,13 @@ catalog, so `serialize` writes no `associations` key into the system JSON, and `
 does not read one. A system serialized before this change will not load — the same break
 taken in `infrasys`.
 
-Because the artifact now carries associations, `isempty(::RustTimeSeriesStore)` counts
+Because the artifact now carries associations, `isempty(::Store)` counts
 association rows as well as time series — otherwise `serialize` would skip writing the
 artifact for an attribute-only system and silently drop them.
 
 ## Implementation Files
 
-  - **Time Series (Rust backend) glue**: [`src/rust_time_series_store.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/rust_time_series_store.jl)
+  - **Time Series (Castore backend) glue**: [`src/castore.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/castore.jl)
   - **Supplemental Attribute Associations**: [`src/supplemental_attribute_associations.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/supplemental_attribute_associations.jl)
 
 ## Best Practices for Developers

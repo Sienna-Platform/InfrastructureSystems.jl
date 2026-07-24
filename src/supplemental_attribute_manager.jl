@@ -23,7 +23,7 @@ The store is shared with the [`TimeSeriesManager`](@ref) of the same system: ass
 rows and the time series catalog are two tables in one artifact, so both managers must
 hold the same handle for a system to serialize and deep-copy correctly.
 """
-function SupplementalAttributeManager(store::RustTimeSeriesStore)
+function SupplementalAttributeManager(store::Store)
     return SupplementalAttributeManager(
         SupplementalAttributesByType(),
         SupplementalAttributeAssociations(store),

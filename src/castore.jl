@@ -1,52 +1,41 @@
-# Rust-backed time series storage.
+# Castore-backed time series storage.
 #
-# `RustTimeSeriesStore` delegates BOTH array data and metadata to the external
-# `castore` Rust engine, via the `Castore.jl` binding package.
-# The Rust store owns both: arrays land in a NetCDF4 `.nc` file (content-addressed
-# by SHA-256 hash) and metadata in a sibling `.sqlite` file. Time series *data*
-# identity is the array content hash, not a UUID. Persisting a system writes the
-# `.nc` + `.sqlite` pair directly.
+# Castore manages both the time series data and the associations between components /
+# supplemental attributes and that data. The `Store` type (declared in `store.jl`)
+# delegates BOTH array data and metadata to it, via the `Castore.jl` binding package.
+# Castore owns both: arrays land in a NetCDF4 `.nc` file (content-addressed by SHA-256
+# hash) and metadata in a sibling `.sqlite` file. Time series *data* identity is the
+# array content hash, not a UUID. Persisting a system writes the `.nc` + `.sqlite` pair
+# directly.
 #
 # This file holds the IS-specific glue (owner/feature conversion, window
 # flatten/reshape, manager routing). All low-level FFI lives in `Castore`.
 
-const TSS = Castore
-
-# Not-found is raised by the binding; alias keeps the IS-facing name + tests stable.
-const RustTimeSeriesNotFound = Castore.NotFoundError
-
-# ---- Store -----------------------------------------------------------------
-
-mutable struct RustTimeSeriesStore <: TimeSeriesStorage
-    inner::TSS.Store
-    "Filesystem base path for the `.nc` / `.sqlite` pair (nothing if in-memory)."
-    path::Union{Nothing, String}
-    "Compression policy the store was created/opened with."
-    compression::CompressionSettings
-end
+# ---- Store construction ----------------------------------------------------
 
 """
-    RustTimeSeriesStore(; in_memory=false, path=nothing, compression=CompressionSettings())
+    Store(; in_memory=false, path=nothing, compression=CompressionSettings())
 
-Create a Rust-backed time series store. When `in_memory=false`, `path` is the
-base path for the on-disk artifacts (`<path>.nc` and `<path>.sqlite`).
+Create a Castore-backed store (time series data plus component / supplemental-attribute
+associations). When `in_memory=false`, `path` is the base path for the on-disk artifacts
+(`<path>.nc` and `<path>.sqlite`).
 
-`compression` is a [`CompressionSettings`](@ref). The Rust backend supports
+`compression` is a [`CompressionSettings`](@ref). The Castore backend supports
 `DEFLATE` (with `level` 0-9 and `shuffle`) or no compression (`enabled=false`);
 `BLOSC` is not available and raises an error.
 """
-function RustTimeSeriesStore(;
+function Store(;
     in_memory::Bool = false,
     path = nothing,
     compression::CompressionSettings = CompressionSettings(),
 )
-    kwargs = _rust_compression_kwargs(compression)
+    kwargs = _castore_compression_kwargs(compression)
     store = if in_memory
-        TSS.Store(; in_memory = true, kwargs...)
+        Castore.Store(; in_memory = true, kwargs...)
     else
-        TSS.Store(; in_memory = false, path = path, kwargs...)
+        Castore.Store(; in_memory = false, path = path, kwargs...)
     end
-    return RustTimeSeriesStore(
+    return Store(
         store,
         path === nothing ? nothing : String(path),
         compression,
@@ -54,8 +43,8 @@ function RustTimeSeriesStore(;
 end
 
 # Translate a `CompressionSettings` into the keyword arguments accepted by
-# `Castore.Store`. BLOSC is not supported by the Rust backend.
-function _rust_compression_kwargs(c::CompressionSettings)
+# `Castore.Store`. BLOSC is not supported by the Castore backend.
+function _castore_compression_kwargs(c::CompressionSettings)
     if !c.enabled
         return (; compression = :none)
     end
@@ -63,28 +52,28 @@ function _rust_compression_kwargs(c::CompressionSettings)
         return (; compression = :deflate, compression_level = c.level, shuffle = c.shuffle)
     end
     error(
-        "The Rust castore backend does not support $(c.type) compression; " *
+        "Castore does not support $(c.type) compression; " *
         "use CompressionTypes.DEFLATE or disable compression (enabled=false).",
     )
 end
 
 """
-    open_rust_store(path; read_only=false)
+    open_castore_store(path; read_only=false)
 
-Open an existing on-disk Rust store from its `.nc` base path.
+Open an existing on-disk Castore store from its `.nc` base path.
 """
-function open_rust_store(path::AbstractString; read_only::Bool = false)
-    # Open with an absolute path so BOTH the Rust handle's own backing path and the
+function open_castore_store(path::AbstractString; read_only::Bool = false)
+    # Open with an absolute path so BOTH the Castore handle's own backing path and the
     # wrapper's `path` field survive later `cd`s (e.g. a deserialize that opens a
     # relative basename, then a re-serialize elsewhere). Absolutizing only the
     # wrapper field leaves the handle resolving its source relative to the cwd at
     # open time, so a later `persist!` fails once the cwd changes.
     abs_path = abspath(String(path))
-    inner = TSS.open_store(abs_path; read_only = read_only)
-    return RustTimeSeriesStore(
+    inner = Castore.open_store(abs_path; read_only = read_only)
+    return Store(
         inner,
         abs_path,
-        _compression_settings(TSS.get_compression(inner)),
+        _compression_settings(Castore.get_compression(inner)),
     )
 end
 
@@ -101,36 +90,36 @@ function _compression_settings(c)
 end
 
 """
-    open_deserialized_rust_store(source, directory, read_only)
+    open_deserialized_castore_store(source, directory, read_only)
 
-Open the Rust store for a deserialized system. In read-only mode the source
+Open the Castore store for a deserialized system. In read-only mode the source
 artifacts are opened in place. Otherwise the `.nc` (+ sidecar `.sqlite`) are
 copied to an isolated working location under `directory` (or `tempdir()`) and the
 copy is opened writable, so mutating the deserialized system cannot corrupt the
 source file (e.g. a cached system shared by later builds).
 """
-function open_deserialized_rust_store(
+function open_deserialized_castore_store(
     source::AbstractString,
     directory::Union{Nothing, AbstractString},
     read_only::Bool,
 )
-    read_only && return open_rust_store(source; read_only = true)
+    read_only && return open_castore_store(source; read_only = true)
     dir = isnothing(directory) ? tempdir() : String(directory)
     mkpath(dir)
     dst = joinpath(dir, string(UUIDs.uuid4()) * "_time_series.nc")
     cp(source, dst; force = true)
     src_sqlite = source * ".sqlite"
     isfile(src_sqlite) && cp(src_sqlite, dst * ".sqlite"; force = true)
-    return open_rust_store(dst; read_only = false)
+    return open_castore_store(dst; read_only = false)
 end
 
-close!(store::RustTimeSeriesStore) = TSS.close!(store.inner)
+close!(store::Store) = Castore.close!(store.inner)
 
 # The store is an opaque handle onto its backing artifacts, so the default field-wise
 # `deepcopy` would hand the copy the SAME handle: mutating the copy (e.g.
 # `clear_time_series!`) would then mutate the original. The backend exposes no clone API,
 # so round-trip through `persist!` + `open_store` to give the copy its own artifacts.
-function Base.deepcopy_internal(store::RustTimeSeriesStore, dict::IdDict)
+function Base.deepcopy_internal(store::Store, dict::IdDict)
     haskey(dict, store) && return dict[store]
 
     # `persist!` copies an on-disk store's artifacts and materializes an in-memory one.
@@ -138,19 +127,19 @@ function Base.deepcopy_internal(store::RustTimeSeriesStore, dict::IdDict)
     # disk-backed: the backend gives us no way to clone in-memory state in place.
     directory = isnothing(store.path) ? tempdir() : dirname(store.path)
     dst = joinpath(directory, string(UUIDs.uuid4()) * "_time_series.nc")
-    TSS.persist!(store.inner, dst)
-    new_store = open_rust_store(dst; read_only = false)
+    Castore.persist!(store.inner, dst)
+    new_store = open_castore_store(dst; read_only = false)
     dict[store] = new_store
     return new_store
 end
 
 # ---- Conversions -----------------------------------------------------------
 
-tss_category(category::String) =
+castore_category(category::String) =
     if category == "Component"
-        TSS.Component
+        Castore.Component
     elseif category == "SupplementalAttribute"
-        TSS.SupplementalAttribute
+        Castore.SupplementalAttribute
     else
         error("unknown owner category $category")
     end
@@ -247,7 +236,7 @@ function _storage_array(v::AbstractVector{NTuple{N, Float64}}) where {N}
 end
 
 _storage_array(v::AbstractVector) =
-    error("Rust backend does not support time series element type $(eltype(v)) yet")
+    error("Castore backend does not support time series element type $(eltype(v)) yet")
 
 # Arity of an `NTuple{N}` reconstruction tag, or `nothing` when the tag is something else.
 function _ntuple_arity(ext)
@@ -291,22 +280,22 @@ end
 
 # Reconstruct the full value vector from the stored array, keyed on ext.
 function _read_values(
-    store::RustTimeSeriesStore,
+    store::Store,
     hash::Vector{UInt8},
     ext,
     dtype,
     len::Integer,
 )
     if ext == "LinearFunctionData"
-        mat = TSS.get_array_nd(store.inner, hash, Float64, (len, 2))
+        mat = Castore.get_array_nd(store.inner, hash, Float64, (len, 2))
         return [LinearFunctionData(mat[i, 1], mat[i, 2]) for i in 1:len]
     elseif ext == "QuadraticFunctionData"
-        mat = TSS.get_array_nd(store.inner, hash, Float64, (len, 3))
+        mat = Castore.get_array_nd(store.inner, hash, Float64, (len, 3))
         return [QuadraticFunctionData(mat[i, 1], mat[i, 2], mat[i, 3]) for i in 1:len]
     elseif ext == "PiecewiseLinearData"
         flat = get_array_by_hash(store, hash, Float64)
         k = div(length(flat), len)  # 1 + 2*max_points (derived from the array size)
-        mat = TSS.get_array_nd(store.inner, hash, Float64, (len, k))
+        mat = Castore.get_array_nd(store.inner, hash, Float64, (len, k))
         out = Vector{PiecewiseLinearData}(undef, len)
         for i in 1:len
             n = Int(round(mat[i, 1]))
@@ -316,11 +305,11 @@ function _read_values(
     elseif ext == "PiecewiseStepData"
         flat = get_array_by_hash(store, hash, Float64)
         k = div(length(flat), len)
-        mat = TSS.get_array_nd(store.inner, hash, Float64, (len, k))
+        mat = Castore.get_array_nd(store.inner, hash, Float64, (len, k))
         return [_decode_pwl_step_row(mat, i) for i in 1:len]
     elseif !isnothing(_ntuple_arity(ext))
         n = _ntuple_arity(ext)
-        mat = TSS.get_array_nd(store.inner, hash, Float64, (len, n))
+        mat = Castore.get_array_nd(store.inner, hash, Float64, (len, n))
         return _decode_ntuples(mat, len, n)
     else
         return get_array_by_hash(store, hash, dtype)  # scalar
@@ -397,7 +386,7 @@ function _decode_forecast_window(arr::AbstractArray{<:Real, 3}, ext, c::Integer)
         slice = @view arr[:, c, :]  # (horizon, k) matrix for this window
         return [_decode_pwl_step_row(slice, h) for h in 1:horizon]
     end
-    error("Rust backend cannot decode forecast ext $ext")
+    error("Castore backend cannot decode forecast ext $ext")
 end
 
 # ---- Operations (thin delegations to Castore) ----------------------
@@ -406,12 +395,12 @@ end
     serialize_single!(store, owner_id, owner_type, owner_category, name, sts;
                       features=Dict(), units=nothing)
 
-Add a `SingleTimeSeries` (data + metadata) to the Rust store. The array is
+Add a `SingleTimeSeries` (data + metadata) to the Castore store. The array is
 content-addressed; identical arrays are de-duplicated automatically.
 `owner_category` is the String tag ("Component" / "SupplementalAttribute").
 """
 function serialize_single!(
-    store::RustTimeSeriesStore,
+    store::Store,
     owner_id::Integer,
     owner_type::AbstractString,
     owner_category::AbstractString,
@@ -426,14 +415,15 @@ function serialize_single!(
     arr, logical = _storage_array(get_array(sts))
     # `name` is carried on the binding struct (matching the
     # InfrastructureSystems.jl object shape), not on add_time_series!.
-    tss_ts = TSS.SingleTimeSeries(
+    tss_ts = Castore.SingleTimeSeries(
         get_initial_timestamp(sts),
         get_resolution(sts),
         arr,
         name;
         ext = _encode_ext(logical),
     )
-    TSS.add_time_series!(store.inner, owner_id, owner_type, tss_category(owner_category),
+    Castore.add_time_series!(store.inner, owner_id, owner_type,
+        castore_category(owner_category),
         tss_ts; features = features, units = units)
     return
 end
@@ -442,12 +432,12 @@ end
     get_metadata(store, owner_id, owner_category, name; resolution, features=Dict())
 
 Return `(; initial_timestamp, resolution, length, data_hash, ext, dtype)`
-for a stored SingleTimeSeries. Throws `RustTimeSeriesNotFound` if absent.
+for a stored SingleTimeSeries. Throws `Castore.NotFoundError` if absent.
 """
-get_metadata(store::RustTimeSeriesStore, owner_id::Integer,
-    owner_category::TSS.OwnerCategory, name::AbstractString;
+get_metadata(store::Store, owner_id::Integer,
+    owner_category::Castore.OwnerCategory, name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing, features = Dict{String, Any}()) =
-    TSS.get_metadata(
+    Castore.get_metadata(
         store.inner,
         owner_id,
         owner_category,
@@ -457,23 +447,23 @@ get_metadata(store::RustTimeSeriesStore, owner_id::Integer,
     )
 
 get_array_by_hash(
-    store::RustTimeSeriesStore,
+    store::Store,
     data_hash::Vector{UInt8},
     ::Type{T} = Float64,
 ) where {T} =
-    TSS.get_array_by_hash(store.inner, data_hash, T)
+    Castore.get_array_by_hash(store.inner, data_hash, T)
 
 """
     serialize_non_sequential!(store, owner_id, owner_type, owner_category, name, nts;
                               features=Dict(), units=nothing)
 
-Add a `NonSequentialTimeSeries` (irregular timestamps + data) to the Rust store.
+Add a `NonSequentialTimeSeries` (irregular timestamps + data) to the Castore store.
 The array is content-addressed (and de-duplicated); the explicit timestamps are
 carried on the association. `owner_category` is the String tag ("Component" /
 "SupplementalAttribute").
 """
 function serialize_non_sequential!(
-    store::RustTimeSeriesStore,
+    store::Store,
     owner_id::Integer,
     owner_type::AbstractString,
     owner_category::AbstractString,
@@ -486,13 +476,14 @@ function serialize_non_sequential!(
     # becomes a (length, k) Float64 matrix, with the logical-type tag driving the
     # reconstruction on read.
     arr, logical = _storage_array(get_array(nts))
-    tss_ts = TSS.NonSequentialTimeSeries(
+    tss_ts = Castore.NonSequentialTimeSeries(
         get_timestamps(nts),
         arr,
         name;
         ext = _encode_ext(logical),
     )
-    TSS.add_time_series!(store.inner, owner_id, owner_type, tss_category(owner_category),
+    Castore.add_time_series!(store.inner, owner_id, owner_type,
+        castore_category(owner_category),
         tss_ts; features = features, units = units)
     return
 end
@@ -500,27 +491,27 @@ end
 """
     get_non_sequential(store, owner_id, owner_category, name; features=Dict()) -> NonSequentialTimeSeries
 
-Reconstruct a `NonSequentialTimeSeries` (timestamps + decoded array) from the Rust
+Reconstruct a `NonSequentialTimeSeries` (timestamps + decoded array) from the Castore
 store. A non-sequential series is addressed by name + features (it has no resolution).
 """
 function get_non_sequential(
-    store::RustTimeSeriesStore,
+    store::Store,
     owner_id::Integer,
-    owner_category::TSS.OwnerCategory,
+    owner_category::Castore.OwnerCategory,
     name::AbstractString;
     features = Dict{String, Any}(),
 )
-    nts = TSS.get_time_series(TSS.NonSequentialTimeSeries, store.inner, owner_id,
+    nts = Castore.get_time_series(Castore.NonSequentialTimeSeries, store.inner, owner_id,
         owner_category, name; features = features)
     len = length(nts.timestamps)
     values = _decode_static_values(nts.data, _decode_ext(nts.ext), len)
     return NonSequentialTimeSeries(String(name), nts.timestamps, values)
 end
 
-has_time_series(store::RustTimeSeriesStore, owner_id::Integer,
-    owner_category::TSS.OwnerCategory, name::AbstractString;
+has_time_series(store::Store, owner_id::Integer,
+    owner_category::Castore.OwnerCategory, name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing, features = Dict{String, Any}()) =
-    TSS.has_time_series(
+    Castore.has_time_series(
         store.inner,
         owner_id,
         owner_category,
@@ -529,60 +520,60 @@ has_time_series(store::RustTimeSeriesStore, owner_id::Integer,
         features = features,
     )
 
-remove_single!(store::RustTimeSeriesStore, owner_id::Integer,
-    owner_category::TSS.OwnerCategory, name::AbstractString;
+remove_single!(store::Store, owner_id::Integer,
+    owner_category::Castore.OwnerCategory, name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing, features = Dict{String, Any}()) =
-    TSS.remove_time_series!(store.inner, owner_id, owner_category, name;
+    Castore.remove_time_series!(store.inner, owner_id, owner_category, name;
         resolution = resolution, features = features)
 
-get_counts(store::RustTimeSeriesStore) = TSS.get_counts(store.inner)
+get_counts(store::Store) = Castore.get_counts(store.inner)
 
-function get_num_time_series(store::RustTimeSeriesStore)
+function get_num_time_series(store::Store)
     c = get_counts(store)
     return c.static_time_series + c.forecasts
 end
 
-flush!(store::RustTimeSeriesStore) = TSS.flush!(store.inner)
+flush!(store::Store) = Castore.flush!(store.inner)
 
 # Association rows count: the store holds supplemental attribute associations as well as
 # time series, and `serialize(::SystemData)` skips writing the artifact entirely for an
 # empty store. Ignoring associations here would silently drop them for a system that has
 # attributes but no time series.
-function Base.isempty(store::RustTimeSeriesStore)
+function Base.isempty(store::Store)
     return get_num_time_series(store) == 0 &&
-           TSS.count_supplemental_attribute_associations(store.inner) == 0
+           Castore.count_supplemental_attribute_associations(store.inner) == 0
 end
 
 # Compression is fixed when the store is created/opened (threaded through the FFI
-# via `_rust_compression_kwargs`); report the policy the store carries.
-get_compression_settings(store::RustTimeSeriesStore) = store.compression
+# via `_castore_compression_kwargs`); report the policy the store carries.
+get_compression_settings(store::Store) = store.compression
 
 """
-    serialize(store::RustTimeSeriesStore, file_path)
+    serialize(store::Store, file_path)
 
 Persist the store's two artifacts to `file_path` (the NetCDF arrays) and
 `file_path * ".sqlite"` (the metadata). No HDF5 is produced.
 """
-function serialize(store::RustTimeSeriesStore, file_path::AbstractString)
+function serialize(store::Store, file_path::AbstractString)
     # `persist!` copies the two artifacts for an on-disk store and materializes an
     # in-memory store to disk, so either kind of System can be serialized.
-    TSS.persist!(store.inner, file_path)
-    @info "Serialized Rust time series store to $file_path (+ .sqlite)"
+    Castore.persist!(store.inner, file_path)
+    @info "Serialized Castore store to $file_path (+ .sqlite)"
     return
 end
 
 """Remove all time series (data + metadata) from the store."""
-clear_time_series!(store::RustTimeSeriesStore) = TSS.clear!(store.inner)
+clear_time_series!(store::Store) = Castore.clear!(store.inner)
 
 # Remove every time series owned by `(owner_id, owner_category)` in one shot
 # (order-independent, so it is not blocked by the SingleTimeSeries/DST removal guard).
-rust_clear_owner!(store::RustTimeSeriesStore, owner_id::Integer,
-    owner_category::TSS.OwnerCategory) =
-    TSS.clear!(store.inner; owner_id = owner_id, owner_category = owner_category)
+castore_clear_owner!(store::Store, owner_id::Integer,
+    owner_category::Castore.OwnerCategory) =
+    Castore.clear!(store.inner; owner_id = owner_id, owner_category = owner_category)
 
-# A hashable identity for one stored association (a `TSS.list_keys` row),
+# A hashable identity for one stored association (a `Castore.list_keys` row),
 # used to diff the store before/after a batch update for rollback.
-rust_row_identity(row) = (
+castore_row_identity(row) = (
     row.owner_id,
     row.owner_category,
     nameof(row.time_series_type),
@@ -594,23 +585,23 @@ rust_row_identity(row) = (
 # Counts of SingleTimeSeries and DeterministicSingleTimeSeries associations that
 # reference the given content hash, across all owners. Used to decide whether a
 # SingleTimeSeries can be removed without orphaning a DST that shares its array.
-# Resolved by a single catalog query in the Rust core rather than scanning every
+# Resolved by a single catalog query in the Castore core rather than scanning every
 # association here.
-rust_array_sts_dst_counts(store::RustTimeSeriesStore, hash::Vector{UInt8}) =
-    TSS.count_array_references(store.inner, hash)
+castore_array_sts_dst_counts(store::Store, hash::Vector{UInt8}) =
+    Castore.count_array_references(store.inner, hash)
 
-# Remove the single association described by a `TSS.list_keys` row.
-function rust_remove_row!(store::RustTimeSeriesStore, row)
+# Remove the single association described by a `Castore.list_keys` row.
+function castore_remove_row!(store::Store, row)
     feats = Dict{String, Any}(row.features)
-    category = tss_category(row.owner_category)
-    if _rust_is_type(row.time_series_type) <: SingleTimeSeries
+    category = castore_category(row.owner_category)
+    if _castore_is_type(row.time_series_type) <: SingleTimeSeries
         remove_single!(store, row.owner_id, category, row.name;
             resolution = row.resolution, features = feats)
     else
         # Pin the row's own interval: one name can carry several forecasts differing only
         # by interval, and the removal must hit exactly the row described.
         remove_typed!(store, row.owner_id, category, row.name,
-            rust_ts_code(_rust_is_type(row.time_series_type));
+            castore_ts_code(_castore_is_type(row.time_series_type));
             resolution = row.resolution, interval = row.interval, features = feats)
     end
     return
@@ -618,11 +609,11 @@ end
 
 # The store handle / file path differ across a serialize→deserialize round-trip,
 # so compare structurally by counts. Element-level equality is covered by the
-# Rust integration tests (`test/rust/rust_system_integration.jl`).
+# Castore integration tests.
 function compare_values(
     match_fn::Union{Function, Nothing},
-    x::RustTimeSeriesStore,
-    y::RustTimeSeriesStore;
+    x::Store,
+    y::Store;
     kwargs...,
 )
     return get_counts(x) == get_counts(y)
@@ -633,58 +624,58 @@ end
 # Validate the raw time series array before storing. A DeterministicSingleTimeSeries
 # is a derived view over an already-validated SingleTimeSeries (it has no raw
 # `get_data`), so it skips the check.
-_rust_check_time_series_data(time_series::TimeSeriesData) =
+_castore_check_time_series_data(time_series::TimeSeriesData) =
     check_time_series_data(time_series)
-_rust_check_time_series_data(::DeterministicSingleTimeSeries) = nothing
+_castore_check_time_series_data(::DeterministicSingleTimeSeries) = nothing
 
 """
-Route a manager-level `add_time_series!` to the Rust store, dispatching on the
+Route a manager-level `add_time_series!` to the Castore store, dispatching on the
 concrete time series type. Data identity is the array content hash.
 """
-function rust_add_time_series!(
+function castore_add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
     features...,
 )
     throw_if_does_not_support_time_series(owner)
-    _rust_check_time_series_data(time_series)
-    return _rust_add!(mgr, owner, time_series; features...)
+    _castore_check_time_series_data(time_series)
+    return _castore_add!(mgr, owner, time_series; features...)
 end
 
 # Dispatch on the concrete series type. Forecasts (including
 # DeterministicSingleTimeSeries) and NonSequentialTimeSeries route to their
 # dedicated handlers; SingleTimeSeries is stored below; anything else is
-# unsupported on the Rust backend.
-_rust_add!(mgr::TimeSeriesManager, owner::TimeSeriesOwners, ts::Forecast; features...) =
-    _rust_add_forecast!(mgr, owner, ts; features...)
+# unsupported on the Castore backend.
+_castore_add!(mgr::TimeSeriesManager, owner::TimeSeriesOwners, ts::Forecast; features...) =
+    _castore_add_forecast!(mgr, owner, ts; features...)
 
-_rust_add!(
+_castore_add!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     ts::NonSequentialTimeSeries;
     features...,
-) = _rust_add_non_sequential!(mgr, owner, ts; features...)
+) = _castore_add_non_sequential!(mgr, owner, ts; features...)
 
-_rust_add!(::TimeSeriesManager, ::TimeSeriesOwners, ts::TimeSeriesData; features...) =
+_castore_add!(::TimeSeriesManager, ::TimeSeriesOwners, ts::TimeSeriesData; features...) =
     error(
-        "Rust backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
+        "Castore backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
         "Deterministic, DeterministicSingleTimeSeries, Probabilistic, and Scenarios " *
         "(got $(typeof(ts)))",
     )
 
-function _rust_add!(
+function _castore_add!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::SingleTimeSeries;
     features...,
 )
-    store = mgr.data_store::RustTimeSeriesStore
-    owner_id, owner_type, owner_category = _rust_owner_args(owner)
-    category = tss_category(owner_category)
+    store = mgr.data_store::Store
+    owner_id, owner_type, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
     name = get_name(time_series)
     resolution = get_resolution(time_series)
-    feats = _rust_features(features)
+    feats = _castore_features(features)
 
     if has_time_series(store, owner_id, category, name;
         resolution = resolution, features = feats)
@@ -708,23 +699,23 @@ function _rust_add!(
 end
 
 """
-Route a manager-level `add_time_series!` of a `NonSequentialTimeSeries` to the Rust
+Route a manager-level `add_time_series!` of a `NonSequentialTimeSeries` to the Castore
 store. Addressed by name + features (a non-sequential series has no resolution);
 data identity is the array content hash.
 """
-function _rust_add_non_sequential!(
+function _castore_add_non_sequential!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::NonSequentialTimeSeries;
     features...,
 )
-    store = mgr.data_store::RustTimeSeriesStore
-    owner_id, owner_type, owner_category = _rust_owner_args(owner)
-    category = tss_category(owner_category)
+    store = mgr.data_store::Store
+    owner_id, owner_type, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
     name = get_name(time_series)
-    feats = _rust_features(features)
+    feats = _castore_features(features)
 
-    if has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_NON_SEQUENTIAL;
+    if has_typed(store, owner_id, category, name, Castore.CASTORE_TYPE_NON_SEQUENTIAL;
         features = feats)
         throw(
             ArgumentError(
@@ -744,15 +735,15 @@ function _rust_add_non_sequential!(
 end
 
 # Anything other than SingleTimeSeries / NonSequentialTimeSeries / Forecast is
-# unsupported on the Rust backend.
-rust_get_time_series(
+# unsupported on the Castore backend.
+castore_get_time_series(
     ::Type{T},
     owner::TimeSeriesOwners,
     name::AbstractString;
     kwargs...,
 ) where {T <: TimeSeriesData} =
     error(
-        "Rust backend supports SingleTimeSeries, Deterministic, " *
+        "Castore backend supports SingleTimeSeries, Deterministic, " *
         "DeterministicSingleTimeSeries, Probabilistic, and Scenarios " *
         "(requested $T)",
     )
@@ -761,7 +752,7 @@ rust_get_time_series(
 # `count` slicing on the forecast window axis. `len`, when given, truncates each
 # window to its first `len` horizon steps. A forecast stored as a
 # DeterministicSingleTimeSeries is materialized into a regular `Deterministic`.
-rust_get_time_series(
+castore_get_time_series(
     ::Type{<:Forecast},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -771,15 +762,15 @@ rust_get_time_series(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = _rust_get_forecast(owner, name;
+) = _castore_get_forecast(owner, name;
     start_time = start_time, len = len, count = count, resolution = resolution,
     interval = interval, features...)
 
 """
-Route a public `get_time_series(SingleTimeSeries, owner, name; ...)` to the Rust
+Route a public `get_time_series(SingleTimeSeries, owner, name; ...)` to the Castore
 store, honoring `start_time` / `len` slicing on the time axis.
 """
-function rust_get_time_series(
+function castore_get_time_series(
     ::Type{<:SingleTimeSeries},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -790,12 +781,12 @@ function rust_get_time_series(
     features...,
 )
     mgr = get_time_series_manager(owner)
-    store = mgr.data_store::RustTimeSeriesStore
-    owner_id, _, owner_category = _rust_owner_args(owner)
-    category = tss_category(owner_category)
+    store = mgr.data_store::Store
+    owner_id, _, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
     # Resolve the unique series matching a possibly-partial (subset) feature /
     # resolution query, then read it by its exact stored attributes.
-    matched = rust_get_metadata(
+    matched = castore_get_metadata(
         owner,
         SingleTimeSeries,
         name;
@@ -805,7 +796,8 @@ function rust_get_time_series(
     feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
     meta = get_metadata(store, owner_id, category, name;
         resolution = get_resolution(matched), features = feats)
-    full = _read_values(store, meta.data_hash, _decode_ext(meta.ext), meta.dtype, meta.length)
+    full =
+        _read_values(store, meta.data_hash, _decode_ext(meta.ext), meta.dtype, meta.length)
 
     start = isnothing(start_time) ? meta.initial_timestamp : start_time
     index = compute_time_array_index(meta.initial_timestamp, start, meta.resolution)
@@ -826,9 +818,9 @@ end
 
 """
 Route a public `get_time_series(NonSequentialTimeSeries, owner, name; ...)` to the
-Rust store, honoring `start_time` / `len` slicing on the (irregular) time axis.
+Castore store, honoring `start_time` / `len` slicing on the (irregular) time axis.
 """
-function rust_get_time_series(
+function castore_get_time_series(
     ::Type{<:NonSequentialTimeSeries},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -839,12 +831,12 @@ function rust_get_time_series(
     features...,
 )
     mgr = get_time_series_manager(owner)
-    store = mgr.data_store::RustTimeSeriesStore
-    owner_id, _, owner_category = _rust_owner_args(owner)
-    category = tss_category(owner_category)
+    store = mgr.data_store::Store
+    owner_id, _, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
     # Resolve the unique series matching a possibly-partial (subset) feature query,
     # then read it by its exact stored attributes.
-    matched = rust_get_metadata(owner, NonSequentialTimeSeries, name; features...)
+    matched = castore_get_metadata(owner, NonSequentialTimeSeries, name; features...)
     feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
     nts = get_non_sequential(store, owner_id, category, name; features = feats)
     (isnothing(start_time) && isnothing(len)) && return nts
@@ -869,20 +861,20 @@ end
 
 # ---- Forecasts (Deterministic / DeterministicSingleTimeSeries) -------------
 
-has_typed(store::RustTimeSeriesStore, owner_id::Integer,
-    owner_category::TSS.OwnerCategory, name::AbstractString,
+has_typed(store::Store, owner_id::Integer,
+    owner_category::Castore.OwnerCategory, name::AbstractString,
     ts_type::Integer; resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features = Dict{String, Any}()) =
-    TSS.has_typed(store.inner, owner_id, owner_category, name, ts_type;
+    Castore.has_typed(store.inner, owner_id, owner_category, name, ts_type;
         resolution = resolution, interval = interval, features = features)
 
-remove_typed!(store::RustTimeSeriesStore, owner_id::Integer,
-    owner_category::TSS.OwnerCategory, name::AbstractString,
+remove_typed!(store::Store, owner_id::Integer,
+    owner_category::Castore.OwnerCategory, name::AbstractString,
     ts_type::Integer; resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features = Dict{String, Any}()) =
-    TSS.remove_typed!(store.inner, owner_id, owner_category, name, ts_type;
+    Castore.remove_typed!(store.inner, owner_id, owner_category, name, ts_type;
         resolution = resolution, interval = interval, features = features)
 
 # Copy an association onto another owner (optionally renaming) entirely inside the
@@ -890,19 +882,19 @@ remove_typed!(store::RustTimeSeriesStore, owner_id::Integer,
 # is preserved exactly — notably a DeterministicSingleTimeSeries stays one, whereas
 # a get_time_series/add_time_series! round-trip through Julia would materialize it
 # into a dense Deterministic.
-copy_typed!(store::RustTimeSeriesStore, owner_id::Integer,
-    owner_category::TSS.OwnerCategory, name::AbstractString, ts_type::Integer,
+copy_typed!(store::Store, owner_id::Integer,
+    owner_category::Castore.OwnerCategory, name::AbstractString, ts_type::Integer,
     dst_owner_id::Integer, dst_owner_type::AbstractString;
     new_name::Union{Nothing, AbstractString} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features = Dict{String, Any}()) =
-    TSS.copy_time_series!(store.inner, owner_id, owner_category, name, ts_type,
+    Castore.copy_time_series!(store.inner, owner_id, owner_category, name, ts_type,
         dst_owner_id, dst_owner_type; new_name = new_name,
         resolution = resolution, interval = interval, features = features)
 
 # IS encodes a single-window forecast (count == 1) with `interval = Second(0)`,
-# since there is no second window to step to. The Rust store, however, requires a
+# since there is no second window to step to. The Castore store, however, requires a
 # strictly-positive interval. Store such a forecast with `interval = horizon` (the
 # DeterministicSingleTimeSeries convention) so it validates, and map it back to
 # `Second(0)` on read via `_forecast_display_interval`. `Dates.value` reads the raw
@@ -915,25 +907,25 @@ _storage_forecast_interval(interval::Dates.Period, horizon::Dates.Period) =
 _forecast_display_interval(count::Integer, interval::Dates.Period, horizon::Dates.Period) =
     (count == 1 && interval == horizon) ? Dates.Second(0) : interval
 
-"""Add a Deterministic or DeterministicSingleTimeSeries via the Rust store."""
-function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
-    store = mgr.data_store::RustTimeSeriesStore
-    owner_id, owner_type, owner_category = _rust_owner_args(owner)
-    category = tss_category(owner_category)
+"""Add a Deterministic or DeterministicSingleTimeSeries via the Castore store."""
+function _castore_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
+    store = mgr.data_store::Store
+    owner_id, owner_type, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
     name = get_name(ts)
     resolution = get_resolution(ts)
     interval = get_interval(ts)
-    feats = _rust_features(features)
+    feats = _castore_features(features)
 
     # All forecasts that share a (resolution, interval) group must agree on the
     # window parameters (count, horizon, initial timestamp).
     check_params_compatibility(
-        rust_forecast_parameters(store; resolution = resolution, interval = interval),
+        castore_forecast_parameters(store; resolution = resolution, interval = interval),
         make_time_series_parameters(ts),
     )
 
     if ts isa Probabilistic
-        if has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_PROBABILISTIC;
+        if has_typed(store, owner_id, category, name, Castore.CASTORE_TYPE_PROBABILISTIC;
             resolution = resolution, features = feats)
             throw(
                 ArgumentError(
@@ -942,10 +934,11 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
             )
         end
         arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
-        prob = TSS.Probabilistic(get_initial_timestamp(ts), resolution, get_horizon(ts),
-            _storage_forecast_interval(interval, get_horizon(ts)), get_count(ts),
-            Float64.(get_percentiles(ts)), arr, name)
-        TSS.add_time_series!(store.inner, owner_id, owner_type,
+        prob =
+            Castore.Probabilistic(get_initial_timestamp(ts), resolution, get_horizon(ts),
+                _storage_forecast_interval(interval, get_horizon(ts)), get_count(ts),
+                Float64.(get_percentiles(ts)), arr, name)
+        Castore.add_time_series!(store.inner, owner_id, owner_type,
             category, prob; features = feats)
         return ForecastKey(;
             time_series_type = typeof(ts), name = name,
@@ -958,9 +951,10 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
         # `logical` for FunctionData windows.
         arr, logical = _storage_forecast_array(windows)
         count = length(windows)
-        ts_type = TSS.CASTORE_TYPE_DETERMINISTIC
+        ts_type = Castore.CASTORE_TYPE_DETERMINISTIC
     elseif ts isa DeterministicSingleTimeSeries
-        if has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE;
+        if has_typed(store, owner_id, category, name,
+            Castore.CASTORE_TYPE_DETERMINISTIC_SINGLE;
             resolution = resolution, features = feats)
             throw(
                 ArgumentError(
@@ -968,7 +962,7 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
                 ),
             )
         end
-        # The Rust store derives a DeterministicSingleTimeSeries from a stored
+        # The Castore store derives a DeterministicSingleTimeSeries from a stored
         # SingleTimeSeries (sharing the array) via transform_single_time_series!,
         # rather than persisting a separate forecast array. Ensure the underlying
         # series is present, then derive the DST.
@@ -984,7 +978,7 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
             serialize_single!(store, owner_id, owner_type, owner_category, name,
                 underlying;
                 features = feats)
-        TSS.transform_single_time_series!(store.inner, get_horizon(ts), interval;
+        Castore.transform_single_time_series!(store.inner, get_horizon(ts), interval;
             owner_category = category, resolution = resolution)
         # DeterministicSingleTimeSeries has no internal UUID, so nothing to assign.
         return ForecastKey(;
@@ -996,7 +990,7 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
         arr = Float64.(get_array_for_hdf(ts))  # (scenario_count, horizon_count, count)
         logical = nothing
         count = get_count(ts)
-        ts_type = TSS.CASTORE_TYPE_SCENARIOS
+        ts_type = Castore.CASTORE_TYPE_SCENARIOS
     else
         error("unsupported forecast type $(typeof(ts))")
     end
@@ -1015,14 +1009,14 @@ function _rust_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
         )
     end
     storage_interval = _storage_forecast_interval(interval, get_horizon(ts))
-    tss_ts = if ts_type == TSS.CASTORE_TYPE_DETERMINISTIC
-        TSS.Deterministic(get_initial_timestamp(ts), resolution, get_horizon(ts),
+    tss_ts = if ts_type == Castore.CASTORE_TYPE_DETERMINISTIC
+        Castore.Deterministic(get_initial_timestamp(ts), resolution, get_horizon(ts),
             storage_interval, count, arr, name; ext = _encode_ext(logical))
     else
-        TSS.Scenarios(get_initial_timestamp(ts), resolution, get_horizon(ts),
+        Castore.Scenarios(get_initial_timestamp(ts), resolution, get_horizon(ts),
             storage_interval, count, arr, name; ext = _encode_ext(logical))
     end
-    TSS.add_time_series!(store.inner, owner_id, owner_type,
+    Castore.add_time_series!(store.inner, owner_id, owner_type,
         category, tss_ts; features = feats)
     return ForecastKey(;
         time_series_type = typeof(ts), name = name,
@@ -1095,9 +1089,9 @@ function _assemble_forecast_windows(initial_timestamp, interval, count, window)
     return data
 end
 
-"""Reconstruct a forecast from the Rust store (matches the STORED type),
+"""Reconstruct a forecast from the Castore store (matches the STORED type),
 honoring `start_time` / `count` slicing on the window axis."""
-function _rust_get_forecast(
+function _castore_get_forecast(
     owner, name;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
@@ -1107,15 +1101,15 @@ function _rust_get_forecast(
     features...,
 )
     mgr = get_time_series_manager(owner)
-    store = mgr.data_store::RustTimeSeriesStore
-    owner_id, _, owner_category = _rust_owner_args(owner)
-    category = tss_category(owner_category)
+    store = mgr.data_store::Store
+    owner_id, _, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
     # Resolve the unique forecast matching a possibly-partial (subset) feature /
     # resolution / interval query, then read it by its exact stored attributes.
     # `interval` matters when one series name carries several forecasts that differ only
     # by interval (`transform_single_time_series!` with `delete_existing = false`);
     # without it the lookup is ambiguous.
-    matched = rust_get_metadata(
+    matched = castore_get_metadata(
         owner, Forecast, name;
         resolution = resolution, interval = interval, features...,
     )
@@ -1129,12 +1123,13 @@ function _rust_get_forecast(
     # (the horizon is the leading axis of a window vector or matrix).
     _truncate(w) = isnothing(len) ? w : (ndims(w) == 1 ? w[1:len] : w[1:len, :])
 
-    if has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_PROBABILISTIC;
+    if has_typed(store, owner_id, category, name, Castore.CASTORE_TYPE_PROBABILISTIC;
         resolution = resolution, interval = matched_interval, features = feats)
         # `.data` is the canonical (percentile_count, horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
-        p = TSS.get_time_series(TSS.Probabilistic, store.inner, owner_id, category, name;
+        p = Castore.get_time_series(Castore.Probabilistic, store.inner, owner_id, category,
+            name;
             resolution = resolution, interval = matched_interval, features = feats,
             time_range = tr)
         # `p` is already sliced to the requested window range by the store.
@@ -1147,16 +1142,17 @@ function _rust_get_forecast(
             percentiles = p.percentiles, resolution = p.resolution,
             interval = _forecast_display_interval(p.count, p.interval, p.horizon))
         return result
-    elseif has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_DETERMINISTIC;
+    elseif has_typed(store, owner_id, category, name, Castore.CASTORE_TYPE_DETERMINISTIC;
         resolution = resolution, interval = matched_interval, features = feats)
         # `.data` is the canonical (horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
-        d = TSS.get_time_series(TSS.Deterministic, store.inner, owner_id, category, name;
+        d = Castore.get_time_series(Castore.Deterministic, store.inner, owner_id, category,
+            name;
             resolution = resolution, interval = matched_interval, features = feats,
             time_range = tr)
-        fmeta = TSS.get_forecast_metadata(store.inner, owner_id, category, name,
-            TSS.CASTORE_TYPE_DETERMINISTIC; resolution = resolution,
+        fmeta = Castore.get_forecast_metadata(store.inner, owner_id, category, name,
+            Castore.CASTORE_TYPE_DETERMINISTIC; resolution = resolution,
             interval = matched_interval, features = feats)
         logical = _decode_ext(fmeta.ext)  # `nothing` for scalar windows
         window(i) = _truncate(
@@ -1173,12 +1169,13 @@ function _rust_get_forecast(
             resolution = d.resolution,
             interval = _forecast_display_interval(d.count, d.interval, d.horizon))
         return result
-    elseif has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE;
+    elseif has_typed(store, owner_id, category, name,
+        Castore.CASTORE_TYPE_DETERMINISTIC_SINGLE;
         resolution = resolution, interval = matched_interval, features = feats)
         # A DeterministicSingleTimeSeries is an internal storage optimization: it
         # shares the underlying SingleTimeSeries array instead of materializing the
         # overlapping windows. On read it is always returned as a regular
-        # `Deterministic` — the Rust store expands the shared array into the
+        # `Deterministic` — the Castore store expands the shared array into the
         # canonical (horizon_count, count) window matrix (honoring `time_range`),
         # so the reconstruction below is identical to the `Deterministic` branch.
         #
@@ -1187,12 +1184,13 @@ function _rust_get_forecast(
         # without ever round-tripping through these Julia objects.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
-        d = TSS.get_time_series(TSS.DeterministicSingleTimeSeries, store.inner, owner_id,
+        d = Castore.get_time_series(Castore.DeterministicSingleTimeSeries, store.inner,
+            owner_id,
             category, name;
             resolution = resolution, interval = matched_interval, features = feats,
             time_range = tr)
-        fmeta = TSS.get_forecast_metadata(store.inner, owner_id, category, name,
-            TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE; resolution = resolution,
+        fmeta = Castore.get_forecast_metadata(store.inner, owner_id, category, name,
+            Castore.CASTORE_TYPE_DETERMINISTIC_SINGLE; resolution = resolution,
             interval = matched_interval, features = feats,
         )
         logical = _decode_ext(fmeta.ext)
@@ -1215,12 +1213,13 @@ function _rust_get_forecast(
         return Deterministic(; name = String(name), data = data,
             resolution = d.resolution,
             interval = _forecast_display_interval(d.count, d.interval, d.horizon))
-    elseif has_typed(store, owner_id, category, name, TSS.CASTORE_TYPE_SCENARIOS;
+    elseif has_typed(store, owner_id, category, name, Castore.CASTORE_TYPE_SCENARIOS;
         resolution = resolution, interval = matched_interval, features = feats)
         # `.data` is the canonical (scenario_count, horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
-        s_ts = TSS.get_time_series(TSS.Scenarios, store.inner, owner_id, category, name;
+        s_ts = Castore.get_time_series(Castore.Scenarios, store.inner, owner_id, category,
+            name;
             resolution = resolution, interval = matched_interval, features = feats,
             time_range = tr)
         # `s_ts` is already sliced to the requested window range by the store.
@@ -1234,31 +1233,31 @@ function _rust_get_forecast(
             interval = _forecast_display_interval(s_ts.count, s_ts.interval, s_ts.horizon))
         return result
     end
-    throw(RustTimeSeriesNotFound("no forecast for owner=$owner_id name=$name"))
+    throw(Castore.NotFoundError("no forecast for owner=$owner_id name=$name"))
 end
 
 # ---- ForecastReader --------------------------------------------------------
 # A timestamp-oriented reader over the forecasts matching a filter, for the
 # simulation pattern "at each window timestamp, get every component's forecast".
-# It wraps the Rust `ForecastReader`, which deduplicates the physical `.nc` read:
+# It wraps the Castore `ForecastReader`, which deduplicates the physical `.nc` read:
 # components that share a forecast array (and read plan) collapse to one window
 # slot, so the data is read once per timestamp no matter how many components
 # reference it. This wrapper carries that dedup up to Julia — each unique slot's
 # window is materialized (and FunctionData-decoded) at most once per read.
 
-# Owner-category String tag for a `TSS.OwnerCategory` enum (the inverse of
-# `tss_category`), used to resolve a reader entry back to its owner object.
-_owner_category_string(c::TSS.OwnerCategory) =
-    c == TSS.Component ? "Component" : "SupplementalAttribute"
+# Owner-category String tag for a `Castore.OwnerCategory` enum (the inverse of
+# `castore_category`), used to resolve a reader entry back to its owner object.
+_owner_category_string(c::Castore.OwnerCategory) =
+    c == Castore.Component ? "Component" : "SupplementalAttribute"
 
 # Map an IS forecast type to the `Castore` reader type. A `Deterministic`
 # (or the `AbstractDeterministic` abstraction) reader is abstract and also
 # includes `DeterministicSingleTimeSeries`; a DST query is exact.
 _tss_forecast_type(::Type{<:DeterministicSingleTimeSeries}) =
-    TSS.DeterministicSingleTimeSeries
-_tss_forecast_type(::Type{<:AbstractDeterministic}) = TSS.Deterministic
-_tss_forecast_type(::Type{<:Probabilistic}) = TSS.Probabilistic
-_tss_forecast_type(::Type{<:Scenarios}) = TSS.Scenarios
+    Castore.DeterministicSingleTimeSeries
+_tss_forecast_type(::Type{<:AbstractDeterministic}) = Castore.Deterministic
+_tss_forecast_type(::Type{<:Probabilistic}) = Castore.Probabilistic
+_tss_forecast_type(::Type{<:Scenarios}) = Castore.Scenarios
 
 # Decode a single `(horizon, k)` FunctionData window matrix (the per-window analog
 # of `_decode_forecast_window`, which slices a `(horizon, count, k)` array).
@@ -1276,13 +1275,13 @@ function _decode_forecast_window_matrix(mat::AbstractMatrix{<:Real}, ext)
         end
         return out
     end
-    error("Rust backend cannot decode forecast ext $ext")
+    error("Castore backend cannot decode forecast ext $ext")
 end
 
 # The `ext` tags that mean a window is FunctionData (stored as a
 # `(horizon, k)` matrix). Any other tag (`nothing`, or a scalar dtype string like
 # "Float64" carried by a SingleTimeSeries-backed DST) is a plain scalar window.
-const _RUST_FUNCTIONDATA_LOGICAL =
+const _CASTORE_FUNCTIONDATA_LOGICAL =
     ("LinearFunctionData", "QuadraticFunctionData", "PiecewiseLinearData")
 
 # Orient + decode one raw window into IS's canonical per-window value (matching a
@@ -1298,7 +1297,7 @@ function _decode_forecast_reader_window(
     if T <: Probabilistic || T <: Scenarios
         return permutedims(raw)
     end
-    (ext in _RUST_FUNCTIONDATA_LOGICAL) || return raw
+    (ext in _CASTORE_FUNCTIONDATA_LOGICAL) || return raw
     return _decode_forecast_window_matrix(raw, ext)
 end
 
@@ -1323,8 +1322,8 @@ Forecasts that share an underlying array read the `.nc` file once per timestamp
 field or [`get_num_forecast_slots`](@ref).
 """
 mutable struct ForecastReader
-    inner::TSS.ForecastReader
-    store::RustTimeSeriesStore
+    inner::Castore.ForecastReader
+    store::Store
     entries::Vector{ForecastReaderEntry}
     "ext for each entry (parallel to `entries`); `nothing` for scalars."
     exts::Vector{Union{Nothing, String}}
@@ -1338,27 +1337,27 @@ end
 # Build a reader from the store. `id_to_owner(owner_id::Int, category::String)`
 # resolves each entry's owner object (the system holds the owner maps). Per-entry
 # metadata (owner, key, ext) is resolved once here, off the read path.
-function rust_build_forecast_reader(
-    store::RustTimeSeriesStore,
+function castore_build_forecast_reader(
+    store::Store,
     id_to_owner,
     ::Type{T};
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
     features = Dict{String, Any}(),
 ) where {T <: Forecast}
-    inner = TSS.build_forecast_reader(store.inner, _tss_forecast_type(T);
+    inner = Castore.build_forecast_reader(store.inner, _tss_forecast_type(T);
         resolution = resolution, name = name, features = features)
-    tss_entries = TSS.forecast_entries(inner)
+    tss_entries = Castore.forecast_entries(inner)
     n = length(tss_entries)
     entries = Vector{ForecastReaderEntry}(undef, n)
     exts = Vector{Union{Nothing, String}}(undef, n)
     for (i, e) in enumerate(tss_entries)
-        info = TSS.key_info(e.key)
+        info = Castore.key_info(e.key)
         owner = id_to_owner(Int(info.owner_id), _owner_category_string(info.owner_category))
-        is_type = _rust_is_type(nameof(info.time_series_type))
+        is_type = _castore_is_type(nameof(info.time_series_type))
         feats = Dict{String, Any}(info.features)
-        fmeta = TSS.get_forecast_metadata(store.inner, info.owner_id,
-            info.owner_category, info.name, rust_ts_code(is_type);
+        fmeta = Castore.get_forecast_metadata(store.inner, info.owner_id,
+            info.owner_category, info.name, castore_ts_code(is_type);
             resolution = info.resolution, features = feats)
         exts[i] = _decode_ext(fmeta.ext)
         key = ForecastKey(;
@@ -1371,10 +1370,10 @@ function rust_build_forecast_reader(
             count = fmeta.count,
             features = feats,
         )
-        # `e.slot` is 0-based in the Rust store; carry it 1-based for Julia.
+        # `e.slot` is 0-based in the Castore store; carry it 1-based for Julia.
         entries[i] = ForecastReaderEntry(owner, key, e.slot + 1)
     end
-    windows = Vector{Any}(nothing, TSS.forecast_num_slots(inner))
+    windows = Vector{Any}(nothing, Castore.forecast_num_slots(inner))
     return ForecastReader(inner, store, entries, exts, T, windows, false)
 end
 
@@ -1384,7 +1383,8 @@ The reader's window timeline as `(; initial_timestamp, resolution, interval,
 count)`. Valid read timestamps are `initial_timestamp + k·interval` for
 `k in 0:count-1`.
 """
-get_forecast_reader_timeline(reader::ForecastReader) = TSS.forecast_timeline(reader.inner)
+get_forecast_reader_timeline(reader::ForecastReader) =
+    Castore.forecast_timeline(reader.inner)
 
 """
 $(TYPEDSIGNATURES)
@@ -1409,7 +1409,7 @@ read per unique slot. Follow with [`get_forecast_window`](@ref). Throws if
 `timestamp` is off the window timeline.
 """
 function read_forecast_window!(reader::ForecastReader, timestamp::Dates.DateTime)
-    TSS.forecast_read!(reader.inner, timestamp)
+    Castore.forecast_read!(reader.inner, timestamp)
     fill!(reader.windows, nothing)
     reader.has_read = true
     return reader
@@ -1427,17 +1427,17 @@ function get_forecast_window(reader::ForecastReader, entry_index::Integer)
     entry = reader.entries[entry_index]
     cached = reader.windows[entry.slot]
     cached === nothing || return cached
-    raw = TSS.forecast_values(reader.inner, entry_index)
+    raw = Castore.forecast_values(reader.inner, entry_index)
     window = _decode_forecast_reader_window(
         reader.reported_type, raw, reader.exts[entry_index])
     reader.windows[entry.slot] = window
     return window
 end
 
-"""Route `has_time_series(owner, T, name; ...)` to the Rust store. Honors partial
+"""Route `has_time_series(owner, T, name; ...)` to the Castore store. Honors partial
 (subset) feature / resolution queries: matches if any stored series of type `T`
 contains at least the requested features."""
-function rust_has_time_series(
+function castore_has_time_series(
     ::Type{T},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -1446,83 +1446,87 @@ function rust_has_time_series(
     features...,
 ) where {T <: TimeSeriesData}
     return !isempty(
-        rust_owner_list_metadata(owner;
+        castore_owner_list_metadata(owner;
             time_series_type = T, name = name, resolution = resolution,
             interval = interval, features...),
     )
 end
 
 # The single stored TimeSeriesType code for a concrete IS time series type.
-rust_ts_code(::Type{<:SingleTimeSeries}) = TSS.CASTORE_TYPE_SINGLE
-rust_ts_code(::Type{<:NonSequentialTimeSeries}) = TSS.CASTORE_TYPE_NON_SEQUENTIAL
-rust_ts_code(::Type{<:DeterministicSingleTimeSeries}) = TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE
-rust_ts_code(::Type{<:Deterministic}) = TSS.CASTORE_TYPE_DETERMINISTIC
-rust_ts_code(::Type{<:Probabilistic}) = TSS.CASTORE_TYPE_PROBABILISTIC
-rust_ts_code(::Type{<:Scenarios}) = TSS.CASTORE_TYPE_SCENARIOS
+castore_ts_code(::Type{<:SingleTimeSeries}) = Castore.CASTORE_TYPE_SINGLE
+castore_ts_code(::Type{<:NonSequentialTimeSeries}) = Castore.CASTORE_TYPE_NON_SEQUENTIAL
+castore_ts_code(::Type{<:DeterministicSingleTimeSeries}) =
+    Castore.CASTORE_TYPE_DETERMINISTIC_SINGLE
+castore_ts_code(::Type{<:Deterministic}) = Castore.CASTORE_TYPE_DETERMINISTIC
+castore_ts_code(::Type{<:Probabilistic}) = Castore.CASTORE_TYPE_PROBABILISTIC
+castore_ts_code(::Type{<:Scenarios}) = Castore.CASTORE_TYPE_SCENARIOS
 
-# Name-less existence queries. `_rust_query_codes(T)` maps a query type to the
+# Name-less existence queries. `_castore_query_codes(T)` maps a query type to the
 # stored TimeSeriesType codes to match (empty tuple = any type).
-_rust_query_codes(::Type{<:SingleTimeSeries}) = (TSS.CASTORE_TYPE_SINGLE,)
-_rust_query_codes(::Type{<:NonSequentialTimeSeries}) = (TSS.CASTORE_TYPE_NON_SEQUENTIAL,)
-_rust_query_codes(::Type{<:DeterministicSingleTimeSeries}) =
-    (TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE,)
-_rust_query_codes(::Type{<:AbstractDeterministic}) =
-    (TSS.CASTORE_TYPE_DETERMINISTIC, TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE)
-_rust_query_codes(::Type{<:Probabilistic}) = (TSS.CASTORE_TYPE_PROBABILISTIC,)
-_rust_query_codes(::Type{<:Scenarios}) = (TSS.CASTORE_TYPE_SCENARIOS,)
-_rust_query_codes(::Type{<:Forecast}) = (TSS.CASTORE_TYPE_DETERMINISTIC,
-    TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE, TSS.CASTORE_TYPE_PROBABILISTIC, TSS.CASTORE_TYPE_SCENARIOS)
-_rust_query_codes(::Type{<:StaticTimeSeries}) =
-    (TSS.CASTORE_TYPE_SINGLE, TSS.CASTORE_TYPE_NON_SEQUENTIAL)
-_rust_query_codes(::Type{<:TimeSeriesData}) = ()
+_castore_query_codes(::Type{<:SingleTimeSeries}) = (Castore.CASTORE_TYPE_SINGLE,)
+_castore_query_codes(::Type{<:NonSequentialTimeSeries}) =
+    (Castore.CASTORE_TYPE_NON_SEQUENTIAL,)
+_castore_query_codes(::Type{<:DeterministicSingleTimeSeries}) =
+    (Castore.CASTORE_TYPE_DETERMINISTIC_SINGLE,)
+_castore_query_codes(::Type{<:AbstractDeterministic}) =
+    (Castore.CASTORE_TYPE_DETERMINISTIC, Castore.CASTORE_TYPE_DETERMINISTIC_SINGLE)
+_castore_query_codes(::Type{<:Probabilistic}) = (Castore.CASTORE_TYPE_PROBABILISTIC,)
+_castore_query_codes(::Type{<:Scenarios}) = (Castore.CASTORE_TYPE_SCENARIOS,)
+_castore_query_codes(::Type{<:Forecast}) = (Castore.CASTORE_TYPE_DETERMINISTIC,
+    Castore.CASTORE_TYPE_DETERMINISTIC_SINGLE, Castore.CASTORE_TYPE_PROBABILISTIC,
+    Castore.CASTORE_TYPE_SCENARIOS)
+_castore_query_codes(::Type{<:StaticTimeSeries}) =
+    (Castore.CASTORE_TYPE_SINGLE, Castore.CASTORE_TYPE_NON_SEQUENTIAL)
+_castore_query_codes(::Type{<:TimeSeriesData}) = ()
 
 # The single stored TimeSeriesType code to push into the core `list_keys` filter
 # for a query type, or `nothing` when the type cannot be expressed as one code:
 # an abstract family, or `Deterministic` (which, under the metadata-store
-# semantics encoded in `_rust_type_matches`, also matches a stored
+# semantics encoded in `_castore_type_matches`, also matches a stored
 # `DeterministicSingleTimeSeries`). When `nothing`, the caller applies the
-# residual `_rust_type_matches` filter on the (already narrowed) rows.
-_rust_pushable_code(::Type{<:SingleTimeSeries}) = TSS.CASTORE_TYPE_SINGLE
-_rust_pushable_code(::Type{<:NonSequentialTimeSeries}) = TSS.CASTORE_TYPE_NON_SEQUENTIAL
-_rust_pushable_code(::Type{<:DeterministicSingleTimeSeries}) =
-    TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE
-_rust_pushable_code(::Type{<:Probabilistic}) = TSS.CASTORE_TYPE_PROBABILISTIC
-_rust_pushable_code(::Type{<:Scenarios}) = TSS.CASTORE_TYPE_SCENARIOS
-_rust_pushable_code(::Type{<:TimeSeriesData}) = nothing
+# residual `_castore_type_matches` filter on the (already narrowed) rows.
+_castore_pushable_code(::Type{<:SingleTimeSeries}) = Castore.CASTORE_TYPE_SINGLE
+_castore_pushable_code(::Type{<:NonSequentialTimeSeries}) =
+    Castore.CASTORE_TYPE_NON_SEQUENTIAL
+_castore_pushable_code(::Type{<:DeterministicSingleTimeSeries}) =
+    Castore.CASTORE_TYPE_DETERMINISTIC_SINGLE
+_castore_pushable_code(::Type{<:Probabilistic}) = Castore.CASTORE_TYPE_PROBABILISTIC
+_castore_pushable_code(::Type{<:Scenarios}) = Castore.CASTORE_TYPE_SCENARIOS
+_castore_pushable_code(::Type{<:TimeSeriesData}) = nothing
 
 # All stored TimeSeriesType codes whose IS type is a subtype of `T` (strict `<:`
-# semantics — distinct from `_rust_type_matches`, which treats a `Deterministic`
+# semantics — distinct from `_castore_type_matches`, which treats a `Deterministic`
 # query as also matching a `DeterministicSingleTimeSeries`). Used by the
 # store-wide filters (`resolutions`, `list_owner_ids`) that key on subtyping.
-const _RUST_CODE_TYPES = (
-    (TSS.CASTORE_TYPE_SINGLE, SingleTimeSeries),
-    (TSS.CASTORE_TYPE_NON_SEQUENTIAL, NonSequentialTimeSeries),
-    (TSS.CASTORE_TYPE_DETERMINISTIC, Deterministic),
-    (TSS.CASTORE_TYPE_DETERMINISTIC_SINGLE, DeterministicSingleTimeSeries),
-    (TSS.CASTORE_TYPE_PROBABILISTIC, Probabilistic),
-    (TSS.CASTORE_TYPE_SCENARIOS, Scenarios),
+const _CASTORE_CODE_TYPES = (
+    (Castore.CASTORE_TYPE_SINGLE, SingleTimeSeries),
+    (Castore.CASTORE_TYPE_NON_SEQUENTIAL, NonSequentialTimeSeries),
+    (Castore.CASTORE_TYPE_DETERMINISTIC, Deterministic),
+    (Castore.CASTORE_TYPE_DETERMINISTIC_SINGLE, DeterministicSingleTimeSeries),
+    (Castore.CASTORE_TYPE_PROBABILISTIC, Probabilistic),
+    (Castore.CASTORE_TYPE_SCENARIOS, Scenarios),
 )
-_rust_subtype_codes(::Type{T}) where {T <: TimeSeriesData} =
-    Tuple(c for (c, k) in _RUST_CODE_TYPES if k <: T)
+_castore_subtype_codes(::Type{T}) where {T <: TimeSeriesData} =
+    Tuple(c for (c, k) in _CASTORE_CODE_TYPES if k <: T)
 
 # True iff `owner` has any time series, optionally restricted to type `T`.
-function rust_has_any(owner; time_series_type::Union{Nothing, Type} = nothing)
+function castore_has_any(owner; time_series_type::Union{Nothing, Type} = nothing)
     mgr = get_time_series_manager(owner)
-    store = mgr.data_store::RustTimeSeriesStore
-    owner_id, _, owner_category = _rust_owner_args(owner)
-    category = tss_category(owner_category)
-    codes = time_series_type === nothing ? () : _rust_query_codes(time_series_type)
-    isempty(codes) && return TSS.has_for_owner(store.inner, owner_id, category)
+    store = mgr.data_store::Store
+    owner_id, _, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
+    codes = time_series_type === nothing ? () : _castore_query_codes(time_series_type)
+    isempty(codes) && return Castore.has_for_owner(store.inner, owner_id, category)
     return any(
-        c -> TSS.has_for_owner(store.inner, owner_id, category; time_series_type = c),
+        c -> Castore.has_for_owner(store.inner, owner_id, category; time_series_type = c),
         codes,
     )
 end
 
 # ---- Metadata reconstruction (parity with the SQLite metadata store) --------
 # IS time series type for a `Castore` metadata-row type (matched by name).
-_rust_is_type(t::Type) = _rust_is_type(nameof(t))
-_rust_is_type(s::Symbol) =
+_castore_is_type(t::Type) = _castore_is_type(nameof(t))
+_castore_is_type(s::Symbol) =
     if s === :SingleTimeSeries
         SingleTimeSeries
     elseif s === :NonSequentialTimeSeries
@@ -1536,14 +1540,14 @@ _rust_is_type(s::Symbol) =
     elseif s === :Scenarios
         Scenarios
     else
-        error("Rust backend does not support time series type $s")
+        error("Castore backend does not support time series type $s")
     end
 
 # Whether a stored row of concrete type `row_type` satisfies a query for type `T`.
 # Mirrors the metadata-store semantics: a `Deterministic` (or `AbstractDeterministic`)
 # query also matches a `DeterministicSingleTimeSeries` (which reads as a
 # `Deterministic`), while a `DeterministicSingleTimeSeries` query matches DST only.
-_rust_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
+_castore_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
     if T <: DeterministicSingleTimeSeries
         row_type <: DeterministicSingleTimeSeries
     elseif T <: AbstractDeterministic
@@ -1552,12 +1556,12 @@ _rust_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
         row_type <: T
     end
 
-# Build the matching IS `TimeSeriesKey` from a `TSS.list_keys` row. The key is
+# Build the matching IS `TimeSeriesKey` from a `Castore.list_keys` row. The key is
 # the single descriptor for a stored association; forecast-only fields
 # (percentiles, scenario_count) are not carried — they come from the data on read.
 function _key_from_row(row)
     feats = Dict{String, Any}(string(k) => v for (k, v) in row.features)
-    is_type = _rust_is_type(row.time_series_type)
+    is_type = _castore_is_type(row.time_series_type)
     if is_type <: NonSequentialTimeSeries
         return NonSequentialTimeSeriesKey(;
             time_series_type = is_type,
@@ -1586,7 +1590,7 @@ function _key_from_row(row)
             features = feats,
         )
     end
-    error("Rust backend cannot build a key for $(row.time_series_type)")
+    error("Castore backend cannot build a key for $(row.time_series_type)")
 end
 
 # All matching associations for one owner, as `TimeSeriesKey` objects. The core
@@ -1594,10 +1598,10 @@ end
 # `time_series_type` (or `Deterministic`, which also matches a DST) and `interval`
 # are not catalog filter columns, so they are applied as a residual on the
 # already-narrowed rows.
-function _rust_list_metadata(
-    store::RustTimeSeriesStore,
+function _castore_list_metadata(
+    store::Store,
     owner_id::Integer,
-    owner_category::TSS.OwnerCategory;
+    owner_category::Castore.OwnerCategory;
     time_series_type = nothing,
     name = nothing,
     resolution = nothing,
@@ -1605,20 +1609,24 @@ function _rust_list_metadata(
     features = (),
 )
     type_code =
-        isnothing(time_series_type) ? nothing : _rust_pushable_code(time_series_type)
+        isnothing(time_series_type) ? nothing : _castore_pushable_code(time_series_type)
     feats = Dict{String, Any}(string(k) => v for (k, v) in features)
-    rows = TSS.list_keys(store.inner; owner_id = owner_id, owner_category = owner_category,
-        time_series_type = type_code, name = name, features = feats)
+    rows =
+        Castore.list_keys(store.inner; owner_id = owner_id, owner_category = owner_category,
+            time_series_type = type_code, name = name, features = feats)
     out = TimeSeriesKey[]
     for row in rows
         if !isnothing(time_series_type)
-            _rust_type_matches(_rust_is_type(row.time_series_type), time_series_type) ||
+            _castore_type_matches(
+                _castore_is_type(row.time_series_type),
+                time_series_type,
+            ) ||
                 continue
         end
         # `resolution`/`interval` are matched here, not pushed into the catalog
         # query, so `Period` equality is used (a regular `Hour(1)` equals the
         # stored `Millisecond`, while an irregular `Month`/`Year` does not — the
-        # Rust store keys on milliseconds and cannot represent those exactly).
+        # Castore store keys on milliseconds and cannot represent those exactly).
         isnothing(resolution) || row.resolution == resolution || continue
         if !isnothing(interval)
             (row.interval !== nothing && row.interval == interval) || continue
@@ -1629,11 +1637,11 @@ function _rust_list_metadata(
 end
 
 # A key for every time series in the store (all owners).
-_rust_all_metadata(store::RustTimeSeriesStore) =
-    [_key_from_row(row) for row in TSS.list_keys(store.inner)]
+_castore_all_metadata(store::Store) =
+    [_key_from_row(row) for row in Castore.list_keys(store.inner)]
 
 # Owner-level `list_metadata` entry point (mirrors the metadata-store signature).
-function rust_owner_list_metadata(
+function castore_owner_list_metadata(
     owner::TimeSeriesOwners;
     time_series_type = nothing,
     name = nothing,
@@ -1642,16 +1650,16 @@ function rust_owner_list_metadata(
     features...,
 )
     mgr = get_time_series_manager(owner)
-    store = mgr.data_store::RustTimeSeriesStore
-    owner_id, _, owner_category = _rust_owner_args(owner)
-    return _rust_list_metadata(store, owner_id, tss_category(owner_category);
+    store = mgr.data_store::Store
+    owner_id, _, owner_category = _castore_owner_args(owner)
+    return _castore_list_metadata(store, owner_id, castore_category(owner_category);
         time_series_type = time_series_type, name = name, resolution = resolution,
-        interval = interval, features = _rust_features(features))
+        interval = interval, features = _castore_features(features))
 end
 
 # Single matching metadata; throws when zero or more than one match (parity with
 # `TimeSeriesMetadataStore.get_metadata`).
-function rust_get_metadata(
+function castore_get_metadata(
     owner::TimeSeriesOwners,
     ::Type{T},
     name::AbstractString;
@@ -1659,7 +1667,7 @@ function rust_get_metadata(
     interval = nothing,
     features...,
 ) where {T <: TimeSeriesData}
-    items = rust_owner_list_metadata(owner; time_series_type = T, name = name,
+    items = castore_owner_list_metadata(owner; time_series_type = T, name = name,
         resolution = resolution, interval = interval, features...)
     if isempty(items)
         throw(ArgumentError("No matching metadata is stored."))
@@ -1677,26 +1685,26 @@ end
 
 # Content hash (hex) of the array `key` resolves to under `owner`. Narrows the
 # catalog to the owner + the key's type/name in one query, then matches the exact
-# resolution + features in-memory (Period equality, as in `_rust_list_metadata`).
-function rust_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
+# resolution + features in-memory (Period equality, as in `_castore_list_metadata`).
+function castore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
     mgr = get_time_series_manager(owner)
     isnothing(mgr) &&
-        throw(RustTimeSeriesNotFound("owner has no time series to hash"))
-    store = mgr.data_store::RustTimeSeriesStore
-    owner_id, _, owner_category = _rust_owner_args(owner)
+        throw(Castore.NotFoundError("owner has no time series to hash"))
+    store = mgr.data_store::Store
+    owner_id, _, owner_category = _castore_owner_args(owner)
     T = get_time_series_type(key)
-    rows = TSS.list_array_groups(store.inner; owner_id = owner_id,
-        owner_category = tss_category(owner_category),
-        time_series_type = _rust_pushable_code(T), name = get_name(key))
+    rows = Castore.list_array_groups(store.inner; owner_id = owner_id,
+        owner_category = castore_category(owner_category),
+        time_series_type = _castore_pushable_code(T), name = get_name(key))
     target_res = get_resolution(key)
     target_feats = get_features(key)
     for row in rows
-        _rust_type_matches(_rust_is_type(row.time_series_type), T) || continue
+        _castore_type_matches(_castore_is_type(row.time_series_type), T) || continue
         row.resolution == target_res || continue
         row.features == target_feats || continue
         return row.data_hash
     end
-    throw(RustTimeSeriesNotFound("no stored array matches key name=$(get_name(key))"))
+    throw(Castore.NotFoundError("no stored array matches key name=$(get_name(key))"))
 end
 
 # Group every stored association by content hash, as `(owner, key)` pairs. The
@@ -1707,10 +1715,14 @@ end
 # `DeterministicSingleTimeSeries` rows are excluded: such a forecast is a view of
 # its own `SingleTimeSeries` and so always reports that array's hash, which is an
 # artifact of the transformation rather than data shared between time series.
-function rust_group_by_hash(store::RustTimeSeriesStore, id_to_owner; only_shared = true)
+function castore_group_by_hash(
+    store::Store,
+    id_to_owner;
+    only_shared = true,
+)
     groups = Dict{String, Vector{Tuple{TimeSeriesOwners, TimeSeriesKey}}}()
-    for row in TSS.list_array_groups(store.inner)
-        _rust_is_type(row.time_series_type) <: DeterministicSingleTimeSeries && continue
+    for row in Castore.list_array_groups(store.inner)
+        _castore_is_type(row.time_series_type) <: DeterministicSingleTimeSeries && continue
         owner = id_to_owner(Int(row.owner_id), row.owner_category)
         pairs = get!(
             () -> Tuple{TimeSeriesOwners, TimeSeriesKey}[], groups, row.data_hash)
@@ -1721,7 +1733,7 @@ function rust_group_by_hash(store::RustTimeSeriesStore, id_to_owner; only_shared
 end
 
 # Reconstruct each matching time series for an owner; applies `filter_func`.
-function rust_get_time_series_multiple(
+function castore_get_time_series_multiple(
     owner::TimeSeriesOwners,
     filter_func;
     type = nothing,
@@ -1729,7 +1741,7 @@ function rust_get_time_series_multiple(
     resolution = nothing,
     interval = nothing,
 )
-    metas = rust_owner_list_metadata(owner; time_series_type = type, name = name,
+    metas = castore_owner_list_metadata(owner; time_series_type = type, name = name,
         resolution = resolution, interval = interval)
     Channel() do channel
         for m in metas
@@ -1738,13 +1750,13 @@ function rust_get_time_series_multiple(
                 # Pin the read to this key's own interval: a name may carry several
                 # forecasts differing only by interval, which would otherwise be
                 # ambiguous here.
-                _rust_get_forecast(owner, get_name(m);
+                _castore_get_forecast(owner, get_name(m);
                     resolution = get_resolution(m), interval = get_interval(m), feats...,
                 )
             elseif m isa NonSequentialTimeSeriesKey
-                rust_get_time_series(NonSequentialTimeSeries, owner, get_name(m); feats...)
+                castore_get_time_series(NonSequentialTimeSeries, owner, get_name(m); feats...)
             else
-                rust_get_time_series(SingleTimeSeries, owner, get_name(m);
+                castore_get_time_series(SingleTimeSeries, owner, get_name(m);
                     resolution = get_resolution(m), feats...)
             end
             (isnothing(filter_func) || filter_func(ts)) && put!(channel, ts)
@@ -1754,12 +1766,12 @@ end
 
 # Reassign every time series from `old_id` to `new_id` (component re-id). Components
 # are always the Component owner category.
-function rust_replace_component_id!(
-    store::RustTimeSeriesStore,
+function castore_replace_component_id!(
+    store::Store,
     old_id::Int,
     new_id::Int,
 )
-    TSS.replace_owner!(store.inner, old_id, new_id, TSS.Component)
+    Castore.replace_owner!(store.inner, old_id, new_id, Castore.Component)
     return
 end
 
@@ -1767,39 +1779,41 @@ end
 
 # Distinct, sorted resolutions across the store, optionally restricted to a type
 # (strict subtype). One DISTINCT query per concrete subtype code, in the core.
-function rust_get_time_series_resolutions(
-    store::RustTimeSeriesStore;
+function castore_get_time_series_resolutions(
+    store::Store;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
 )
-    isnothing(time_series_type) && return sort!(TSS.get_resolutions(store.inner))
-    codes = _rust_subtype_codes(time_series_type)
+    isnothing(time_series_type) && return sort!(Castore.get_resolutions(store.inner))
+    codes = _castore_subtype_codes(time_series_type)
     res = Set{Dates.Millisecond}()
     for code in codes
-        union!(res, TSS.get_resolutions(store.inner; time_series_type = code))
+        union!(res, Castore.get_resolutions(store.inner; time_series_type = code))
     end
     return sort!(collect(res))
 end
 
 # Counts of time series grouped by type name (parity with counts_by_type).
-function rust_get_time_series_counts_by_type(store::RustTimeSeriesStore)
+function castore_get_time_series_counts_by_type(store::Store)
     counts = OrderedDict{String, Int}()
-    for r in TSS.counts_by_type(store.inner)
+    for r in Castore.counts_by_type(store.inner)
         counts[string(nameof(r.time_series_type))] = r.count
     end
     return [OrderedDict("type" => k, "count" => v) for (k, v) in sort!(OrderedDict(counts))]
 end
 
 # Number of distinct stored arrays (parity with get_num_time_series).
-rust_get_num_time_series(store::RustTimeSeriesStore) = TSS.num_distinct_arrays(store.inner)
+castore_get_num_time_series(store::Store) =
+    Castore.num_distinct_arrays(store.inner)
 
 # Counts of distinct stored arrays (shared series count once) and owners by
 # category, matching the metadata-store's `get_time_series_counts`.
-rust_time_series_counts(store::RustTimeSeriesStore) = TSS.time_series_counts(store.inner)
+castore_time_series_counts(store::Store) =
+    Castore.time_series_counts(store.inner)
 
 # Static-time-series summary DataFrame (parity with the metadata-store version).
 # The core groups the rows; we shape them into the DataFrame.
-function rust_static_summary_table(store::RustTimeSeriesStore)
-    rows = TSS.static_summary(store.inner)
+function castore_static_summary_table(store::Store)
+    rows = Castore.static_summary(store.inner)
     return DataFrames.DataFrame(;
         owner_type = [r.owner_type for r in rows],
         owner_category = [r.owner_category for r in rows],
@@ -1813,8 +1827,8 @@ function rust_static_summary_table(store::RustTimeSeriesStore)
 end
 
 # Forecast summary DataFrame (parity with the metadata-store version).
-function rust_forecast_summary_table(store::RustTimeSeriesStore)
-    rows = TSS.forecast_summary(store.inner)
+function castore_forecast_summary_table(store::Store)
+    rows = Castore.forecast_summary(store.inner)
     return DataFrames.DataFrame(;
         owner_type = [r.owner_type for r in rows],
         owner_category = [r.owner_category for r in rows],
@@ -1832,8 +1846,8 @@ end
 # First forecast's parameters, optionally filtered by resolution/interval. The
 # store keeps a single forecast window configuration, mirroring the legacy
 # `get_forecast_parameters`.
-function rust_forecast_parameters(
-    store::RustTimeSeriesStore;
+function castore_forecast_parameters(
+    store::Store;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
 )
@@ -1841,8 +1855,8 @@ function rust_forecast_parameters(
     # `Period` equality. The store preserves the calendar-aware `Period` type, so
     # the stored periods are passed through unchanged — converting them to
     # `Millisecond` would throw for irregular `Month`/`Year` resolutions.
-    for row in TSS.list_keys(store.inner)
-        _rust_is_type(row.time_series_type) <: Forecast || continue
+    for row in Castore.list_keys(store.inner)
+        _castore_is_type(row.time_series_type) <: Forecast || continue
         isnothing(resolution) || row.resolution == resolution || continue
         if !isnothing(interval)
             (row.interval !== nothing && row.interval == interval) || continue
@@ -1860,28 +1874,31 @@ end
 
 # Distinct owner ids of the given category that have time series, optionally
 # restricted by time series type (strict subtype) and resolution.
-function rust_list_owner_ids(
-    store::RustTimeSeriesStore,
+function castore_list_owner_ids(
+    store::Store,
     owner_type::Type;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
-    category = tss_category(get_owner_category(owner_type))
+    category = castore_category(get_owner_category(owner_type))
     # Without a resolution filter, enumerate owner ids in the core (optionally per
     # concrete subtype code). With one, scan the category's keys so `Period`
-    # equality is used for the resolution match (see `_rust_list_metadata`).
+    # equality is used for the resolution match (see `_castore_list_metadata`).
     if isnothing(resolution)
-        isnothing(time_series_type) && return TSS.list_owner_ids(store.inner, category)
+        isnothing(time_series_type) && return Castore.list_owner_ids(store.inner, category)
         ids = Set{Int}()
-        for code in _rust_subtype_codes(time_series_type)
-            union!(ids, TSS.list_owner_ids(store.inner, category; time_series_type = code))
+        for code in _castore_subtype_codes(time_series_type)
+            union!(
+                ids,
+                Castore.list_owner_ids(store.inner, category; time_series_type = code),
+            )
         end
         return collect(ids)
     end
     ids = Set{Int}()
-    for row in TSS.list_keys(store.inner; owner_category = category)
+    for row in Castore.list_keys(store.inner; owner_category = category)
         if !isnothing(time_series_type)
-            _rust_is_type(row.time_series_type) <: time_series_type || continue
+            _castore_is_type(row.time_series_type) <: time_series_type || continue
         end
         row.resolution == resolution || continue
         push!(ids, Int(row.owner_id))
@@ -1893,18 +1910,18 @@ end
 # restricted by time series type (strict subtype) and resolution. Owner category
 # and resolution are pushed into the core query; the strict type filter is applied
 # on the returned keys.
-function rust_list_metadata_with_owner(
-    store::RustTimeSeriesStore,
+function castore_list_metadata_with_owner(
+    store::Store,
     owner_type::Type;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
-    category = tss_category(get_owner_category(owner_type))
-    rows = TSS.list_keys(store.inner; owner_category = category)
+    category = castore_category(get_owner_category(owner_type))
+    rows = Castore.list_keys(store.inner; owner_category = category)
     out = NamedTuple[]
     for row in rows
         if !isnothing(time_series_type)
-            _rust_is_type(row.time_series_type) <: time_series_type || continue
+            _castore_is_type(row.time_series_type) <: time_series_type || continue
         end
         isnothing(resolution) || row.resolution == resolution || continue
         push!(out, (owner_id = Int(row.owner_id), metadata = _key_from_row(row)))
@@ -1918,15 +1935,15 @@ end
 # legitimately different grids, so with more than one resolution present the
 # caller must pass `resolution` to name the grid it wants. Resolved by a single
 # DISTINCT query in the core.
-function rust_check_consistency(
-    store::RustTimeSeriesStore,
+function castore_check_consistency(
+    store::Store,
     ::Type{<:SingleTimeSeries};
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
     grids = try
-        TSS.check_static_consistency(store.inner; resolution = resolution)
+        Castore.check_static_consistency(store.inner; resolution = resolution)
     catch e
-        e isa TSS.IntegrityError || rethrow()
+        e isa Castore.IntegrityError || rethrow()
         throw(InvalidValue(e.msg))
     end
     isempty(grids) && return (Dates.DateTime(Dates.Minute(0)), 0)
@@ -1943,8 +1960,8 @@ function rust_check_consistency(
     return (grids[1].initial_timestamp, grids[1].length)
 end
 
-function rust_check_consistency(
-    ::RustTimeSeriesStore,
+function castore_check_consistency(
+    ::Store,
     ::Type{<:Forecast};
     resolution::Union{Nothing, Dates.Period} = nothing,
 )

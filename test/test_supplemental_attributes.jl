@@ -5,7 +5,7 @@ _id!(obj, id) = (IS.set_id!(obj, id); obj)
 
 # Associations live in the time series store, which a bare manager has no system to get
 # one from. Give each manager-direct test its own in-memory store.
-_attr_mgr() = IS.SupplementalAttributeManager(IS.RustTimeSeriesStore(; in_memory = true))
+_attr_mgr() = IS.SupplementalAttributeManager(IS.Store(; in_memory = true))
 
 @testset "Test add_supplemental_attribute" begin
     mgr = _attr_mgr()

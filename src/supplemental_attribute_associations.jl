@@ -1,5 +1,5 @@
 # Design note:
-# Supplemental attribute associations live in the Rust time series store, in its
+# Supplemental attribute associations live in Castore, in its
 # `supplemental_attribute_associations` table, alongside the time series catalog. They
 # used to be kept in a separate in-memory SQLite database owned by this package and
 # serialized into the system JSON; both are gone.
@@ -7,7 +7,7 @@
 # Consequences worth knowing:
 #   - Associations are persisted by the store's `<path>.nc` / `<path>.sqlite` pair, so a
 #     system with supplemental attributes but no time series now produces a storage
-#     artifact where it previously produced none. `isempty(::RustTimeSeriesStore)`
+#     artifact where it previously produced none. `isempty(::Store)`
 #     accounts for association rows so `serialize` writes that artifact.
 #   - The store enforces uniqueness on the `(component_id, attribute_id)` pair. The old
 #     table had no constraint and relied on callers checking first; callers still check,
@@ -19,7 +19,7 @@
 """
 Tracks which supplemental attributes are attached to which components.
 
-This is the adapter over the Rust store: it keeps InfrastructureSystems' dispatch-based
+This is the adapter over the Castore store: it keeps InfrastructureSystems' dispatch-based
 API — the `Type`-taking overloads, and the expansion of an abstract type into the
 concrete subtype names the store filters on — and forwards everything else.
 
@@ -28,7 +28,7 @@ concrete type-name strings and knows nothing about the Julia type hierarchy, so
 `get_all_subtype_names` is applied here before any query is issued.
 """
 struct SupplementalAttributeAssociations
-    store::RustTimeSeriesStore
+    store::Store
 end
 
 # The store handle the queries below run against.
@@ -63,9 +63,9 @@ function add_association!(
         throw(ArgumentError("$(summary(attribute)) does not have an ID assigned"))
     end
 
-    TSS.add_supplemental_attribute_association!(
+    Castore.add_supplemental_attribute_association!(
         _assoc_store(associations),
-        TSS.SupplementalAttributeAssociation(
+        Castore.SupplementalAttributeAssociation(
             component_id,
             string(nameof(typeof(component))),
             attribute_id,
@@ -82,7 +82,7 @@ Return a `Vector{OrderedDict}` of attribute counts by type, with keys `"type"` a
 function get_attribute_counts_by_type(associations::SupplementalAttributeAssociations)
     return [
         OrderedDict{String, Any}("type" => row.type, "count" => row.count)
-        for row in TSS.supplemental_attribute_counts_by_type(_assoc_store(associations))
+        for row in Castore.supplemental_attribute_counts_by_type(_assoc_store(associations))
     ]
 end
 
@@ -90,7 +90,7 @@ end
 Return a `DataFrame` of association counts by attribute type and component type.
 """
 function get_attribute_summary_table(associations::SupplementalAttributeAssociations)
-    rows = TSS.supplemental_attribute_summary(_assoc_store(associations))
+    rows = Castore.supplemental_attribute_summary(_assoc_store(associations))
     return DataFrame(;
         attribute_type = [r.attribute_type for r in rows],
         component_type = [r.component_type for r in rows],
@@ -102,13 +102,13 @@ end
 Return the number of distinct supplemental attributes with associations.
 """
 get_num_attributes(associations::SupplementalAttributeAssociations) =
-    TSS.count_supplemental_attributes(_assoc_store(associations))
+    Castore.count_supplemental_attributes(_assoc_store(associations))
 
 """
 Return the number of distinct components with supplemental attributes.
 """
 get_num_components_with_attributes(associations::SupplementalAttributeAssociations) =
-    TSS.count_components_with_attributes(_assoc_store(associations))
+    Castore.count_components_with_attributes(_assoc_store(associations))
 
 """
 Return true if there is at least one association matching the arguments.
@@ -117,7 +117,7 @@ function has_association(
     associations::SupplementalAttributeAssociations,
     attribute::SupplementalAttribute,
 )
-    return TSS.has_supplemental_attribute_association(
+    return Castore.has_supplemental_attribute_association(
         _assoc_store(associations);
         attribute_id = get_id(attribute),
     )
@@ -128,7 +128,7 @@ function has_association(
     component::InfrastructureSystemsComponent,
     attribute::SupplementalAttribute,
 )
-    return TSS.has_supplemental_attribute_association(
+    return Castore.has_supplemental_attribute_association(
         _assoc_store(associations);
         component_id = get_id(component),
         attribute_id = get_id(attribute),
@@ -139,7 +139,7 @@ function has_association(
     associations::SupplementalAttributeAssociations,
     component::InfrastructureSystemsComponent,
 )
-    return TSS.has_supplemental_attribute_association(
+    return Castore.has_supplemental_attribute_association(
         _assoc_store(associations);
         component_id = get_id(component),
     )
@@ -150,7 +150,7 @@ function has_association(
     component::InfrastructureSystemsComponent,
     attribute_type::Type{<:SupplementalAttribute},
 )
-    return TSS.has_supplemental_attribute_association(
+    return Castore.has_supplemental_attribute_association(
         _assoc_store(associations);
         component_id = get_id(component),
         attribute_types = _type_names(attribute_type),
@@ -166,7 +166,7 @@ function list_associated_component_ids(
     attribute::SupplementalAttribute,
     component_type::Union{Nothing, Type{<:InfrastructureSystemsComponent}},
 )
-    return TSS.list_components_with_attributes(
+    return Castore.list_components_with_attributes(
         _assoc_store(associations);
         attribute_id = get_id(attribute),
         component_types = _type_names(component_type),
@@ -178,7 +178,7 @@ function list_associated_component_ids(
     attribute_type::Type{<:SupplementalAttribute},
     component_type::Union{Nothing, Type{<:InfrastructureSystemsComponent}},
 )
-    return TSS.list_components_with_attributes(
+    return Castore.list_components_with_attributes(
         _assoc_store(associations);
         attribute_types = _type_names(attribute_type),
         component_types = _type_names(component_type),
@@ -194,7 +194,7 @@ function list_associated_supplemental_attribute_ids(
     component::InfrastructureSystemsComponent,
     attribute_type::Union{Nothing, Type{<:SupplementalAttribute}},
 )
-    return TSS.list_supplemental_attribute_ids(
+    return Castore.list_supplemental_attribute_ids(
         _assoc_store(associations);
         component_id = get_id(component),
         attribute_types = _type_names(attribute_type),
@@ -211,7 +211,7 @@ function list_associated_supplemental_attribute_ids(
     component_type::Type{<:InfrastructureSystemsComponent},
     attribute_type::Union{Nothing, Type{<:SupplementalAttribute}},
 )
-    return TSS.list_supplemental_attribute_ids(
+    return Castore.list_supplemental_attribute_ids(
         _assoc_store(associations);
         component_types = _type_names(component_type),
         attribute_types = _type_names(attribute_type),
@@ -227,7 +227,7 @@ function list_associated_pair_ids(
     attribute_type::Type{<:SupplementalAttribute},
     component_type::Type{<:InfrastructureSystemsComponent},
 )
-    rows = TSS.list_supplemental_attribute_associations(
+    rows = Castore.list_supplemental_attribute_associations(
         _assoc_store(associations);
         attribute_types = _type_names(attribute_type),
         component_types = _type_names(component_type),
@@ -243,7 +243,7 @@ function remove_association!(
     component::InfrastructureSystemsComponent,
     attribute::SupplementalAttribute,
 )
-    num_deleted = TSS.remove_supplemental_attribute_associations!(
+    num_deleted = Castore.remove_supplemental_attribute_associations!(
         _assoc_store(associations);
         component_id = get_id(component),
         attribute_id = get_id(attribute),
@@ -262,7 +262,7 @@ function remove_associations!(
     associations::SupplementalAttributeAssociations,
     type::Type{<:SupplementalAttribute},
 )
-    num_deleted = TSS.remove_supplemental_attribute_associations!(
+    num_deleted = Castore.remove_supplemental_attribute_associations!(
         _assoc_store(associations);
         attribute_types = _type_names(type),
     )
@@ -279,7 +279,7 @@ function replace_component_id!(
     old_id::Int,
     new_id::Int,
 )
-    TSS.replace_supplemental_attribute_component_id!(
+    Castore.replace_supplemental_attribute_component_id!(
         _assoc_store(associations),
         old_id,
         new_id,
@@ -290,7 +290,7 @@ end
 # The raw store rows. Used for the rollback snapshot and for comparison; callers that
 # just want a count should use `get_num_associations`.
 _association_rows(associations::SupplementalAttributeAssociations) =
-    TSS.list_supplemental_attribute_associations(_assoc_store(associations))
+    Castore.list_supplemental_attribute_associations(_assoc_store(associations))
 
 """
 Return the total number of association rows.
@@ -299,7 +299,7 @@ Distinct from [`get_num_attributes`](@ref), which counts distinct attributes: on
 attribute attached to three components is one attribute but three rows.
 """
 get_num_associations(associations::SupplementalAttributeAssociations) =
-    TSS.count_supplemental_attribute_associations(_assoc_store(associations))
+    Castore.count_supplemental_attribute_associations(_assoc_store(associations))
 
 """
 Replace every association row with `rows`.
@@ -314,7 +314,7 @@ function restore_associations!(
 )
     clear_associations!(associations)
     isempty(rows) && return
-    TSS.add_supplemental_attribute_associations!(_assoc_store(associations), rows)
+    Castore.add_supplemental_attribute_associations!(_assoc_store(associations), rows)
     return
 end
 
@@ -325,9 +325,9 @@ function copy_associations!(
     dst::SupplementalAttributeAssociations,
     src::SupplementalAttributeAssociations,
 )
-    rows = TSS.list_supplemental_attribute_associations(_assoc_store(src))
+    rows = Castore.list_supplemental_attribute_associations(_assoc_store(src))
     isempty(rows) && return
-    TSS.add_supplemental_attribute_associations!(_assoc_store(dst), rows)
+    Castore.add_supplemental_attribute_associations!(_assoc_store(dst), rows)
     return
 end
 
@@ -335,7 +335,7 @@ end
 Remove every association row.
 """
 function clear_associations!(associations::SupplementalAttributeAssociations)
-    TSS.remove_supplemental_attribute_associations!(_assoc_store(associations))
+    Castore.remove_supplemental_attribute_associations!(_assoc_store(associations))
     return
 end
 

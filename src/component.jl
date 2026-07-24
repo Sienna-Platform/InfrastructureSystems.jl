@@ -8,7 +8,7 @@ function assign_new_id_internal!(data, component::InfrastructureSystemsComponent
     new_id = get_next_component_id!(data)
     mgr = get_time_series_manager(component)
     if !isnothing(mgr)
-        rust_replace_component_id!(mgr.data_store, old_id, new_id)
+        castore_replace_component_id!(mgr.data_store, old_id, new_id)
     end
 
     associations = _get_supplemental_attribute_associations(component)

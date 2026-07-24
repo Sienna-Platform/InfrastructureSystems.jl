@@ -1984,7 +1984,7 @@ end
     end
 
     ts_storage = sys.time_series_manager.data_store
-    @test ts_storage isa IS.RustTimeSeriesStore
+    @test ts_storage isa IS.Store
     @test IS.get_num_time_series(sys) == 1
 end
 
@@ -3451,7 +3451,7 @@ end
 end
 
 @testset "Test custom time series directory via env" begin
-    # The directory env var now places the Rust backend's `.nc` file (HDF5's file
+    # The directory env var now places the Castore backend's `.nc` file (HDF5's file
     # placement was removed); the in-memory backend has no on-disk file.
     @assert !haskey(ENV, IS.TIME_SERIES_DIRECTORY_ENV_VAR)
     path = mkpath("tmp-ts-dir")
@@ -4306,7 +4306,7 @@ function setup_for_multi_interval_tests()
 end
 
 @testset "Test Deterministic with multiple intervals" begin
-    # KNOWN PARITY GAP (Rust backend): the time-series-store's uniqueness key omits
+    # KNOWN PARITY GAP (Castore backend): the Castore's uniqueness key omits
     # `interval`, so two forecasts that share name/resolution/features but differ
     # only by interval cannot coexist. Re-enable when the store key includes
     # interval (a core schema/key change).
@@ -4535,7 +4535,7 @@ end
 end
 
 @testset "Test Deterministic retrieval with multiple intervals" begin
-    # KNOWN PARITY GAP (Rust backend): the time-series-store key omits `interval`,
+    # KNOWN PARITY GAP (Castore backend): the Castore key omits `interval`,
     # so two forecasts differing only by interval cannot coexist. Re-enable when
     # the store key includes interval (a core schema/key change).
     try
@@ -4648,14 +4648,14 @@ end
 end
 
 @testset "Test DeterministicSingleTimeSeries with multiple intervals" begin
-    # KNOWN PARITY GAP (Rust backend): the time-series-store key omits the forecast
+    # KNOWN PARITY GAP (Castore backend): the Castore key omits the forecast
     # interval, so one SingleTimeSeries cannot become DSTs with multiple intervals.
     # Re-enable when the store key includes interval (a core schema/key change).
-    @test_skip "multiple-interval DSTs need interval in the Rust store key"
+    @test_skip "multiple-interval DSTs need interval in the Castore store key"
 end
 
 @testset "Test ForecastCache with multiple intervals" begin
-    # KNOWN PARITY GAP (Rust backend): see "Test Deterministic with multiple
+    # KNOWN PARITY GAP (Castore backend): see "Test Deterministic with multiple
     # intervals" — the store key omits `interval`, so interval-only-distinct
     # forecasts cannot coexist. Re-enable when the store key includes interval.
     params = try
@@ -5179,7 +5179,7 @@ end
     # A key with no matching stored array (an owner that has none) raises.
     c4 = IS.TestComponent("c4", 5)
     IS.add_component!(sys, c4)
-    @test_throws IS.RustTimeSeriesNotFound IS.get_time_series_hash(c4, k1)
+    @test_throws IS.Castore.NotFoundError IS.get_time_series_hash(c4, k1)
 end
 
 @testset "Test ForecastReader with shared forecasts" begin

@@ -1,11 +1,4 @@
 
-"""
-Abstract type for time series storage implementations. The only concrete subtype
-is [`RustTimeSeriesStore`](@ref), which delegates both array data and metadata to
-the external `time-series-store` engine.
-"""
-abstract type TimeSeriesStorage end
-
 const DEFAULT_COMPRESSION = false
 
 @scoped_enum(CompressionTypes, BLOSC = 0, DEFLATE = 1,)
@@ -60,12 +53,25 @@ function CompressionSettings(;
 end
 
 """
-Open the storage for a batch of operations. The Rust backend has no file handle
+The store backing a system's time series data and its component /
+supplemental-attribute associations. Wraps a `Castore.Store`; the Castore-backed
+constructor and operations live in `castore.jl`.
+"""
+mutable struct Store
+    inner::Castore.Store
+    "Filesystem base path for the `.nc` / `.sqlite` pair (nothing if in-memory)."
+    path::Union{Nothing, String}
+    "Compression policy the store was created/opened with."
+    compression::CompressionSettings
+end
+
+"""
+Open the storage for a batch of operations. The Castore backend has no file handle
 to manage at this layer, so this just runs `func`.
 """
 function open_store!(
     func::Function,
-    ::TimeSeriesStorage,
+    ::Store,
     mode = "r",
     args...;
     kwargs...,
