@@ -14,50 +14,6 @@
 # ---- Store construction ----------------------------------------------------
 
 """
-    Store(; in_memory=false, path=nothing, compression=CompressionSettings())
-
-Create a Castore-backed store (time series data plus component / supplemental-attribute
-associations). When `in_memory=false`, `path` is the base path for the on-disk artifacts
-(`<path>.nc` and `<path>.sqlite`).
-
-`compression` is a [`CompressionSettings`](@ref). The Castore backend supports
-`DEFLATE` (with `level` 0-9 and `shuffle`) or no compression (`enabled=false`);
-`BLOSC` is not available and raises an error.
-"""
-function Store(;
-    in_memory::Bool = false,
-    path = nothing,
-    compression::CompressionSettings = CompressionSettings(),
-)
-    kwargs = _castore_compression_kwargs(compression)
-    store = if in_memory
-        Castore.Store(; in_memory = true, kwargs...)
-    else
-        Castore.Store(; in_memory = false, path = path, kwargs...)
-    end
-    return Store(
-        store,
-        path === nothing ? nothing : String(path),
-        compression,
-    )
-end
-
-# Translate a `CompressionSettings` into the keyword arguments accepted by
-# `Castore.Store`. BLOSC is not supported by the Castore backend.
-function _castore_compression_kwargs(c::CompressionSettings)
-    if !c.enabled
-        return (; compression = :none)
-    end
-    if c.type == CompressionTypes.DEFLATE
-        return (; compression = :deflate, compression_level = c.level, shuffle = c.shuffle)
-    end
-    error(
-        "Castore does not support $(c.type) compression; " *
-        "use CompressionTypes.DEFLATE or disable compression (enabled=false).",
-    )
-end
-
-"""
     open_castore_store(path; read_only=false)
 
 Open an existing on-disk Castore store from its `.nc` base path.
@@ -70,11 +26,7 @@ function open_castore_store(path::AbstractString; read_only::Bool = false)
     # open time, so a later `persist!` fails once the cwd changes.
     abs_path = abspath(String(path))
     inner = Castore.open_store(abs_path; read_only = read_only)
-    return Store(
-        inner,
-        abs_path,
-        _compression_settings(Castore.get_compression(inner)),
-    )
+    return Store(inner, abs_path)
 end
 
 # Translate the `Castore.get_compression` NamedTuple back into a
@@ -546,7 +498,8 @@ end
 
 # Compression is fixed when the store is created/opened (threaded through the FFI
 # via `_castore_compression_kwargs`); report the policy the store carries.
-get_compression_settings(store::Store) = store.compression
+get_compression_settings(store::Store) =
+    _compression_settings(Castore.get_compression(store.inner))
 
 """
     serialize(store::Store, file_path)

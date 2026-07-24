@@ -54,15 +54,54 @@ end
 
 """
 The store backing a system's time series data and its component /
-supplemental-attribute associations. Wraps a `Castore.Store`; the Castore-backed
-constructor and operations live in `castore.jl`.
+supplemental-attribute associations. Wraps a `Castore.Store`; the operations live
+in `castore.jl`.
 """
 mutable struct Store
     inner::Castore.Store
-    "Filesystem base path for the `.nc` / `.sqlite` pair (nothing if in-memory)."
+    "Filesystem base path for the `.nc` / `.sqlite` pair (nothing if in-memory). Tracked
+    here because `Castore.Store` does not expose its backing path or in-memory status."
     path::Union{Nothing, String}
-    "Compression policy the store was created/opened with."
-    compression::CompressionSettings
+end
+
+"""
+    Store(; in_memory=false, path=nothing, compression=CompressionSettings())
+
+Create a Castore-backed store (time series data plus component / supplemental-attribute
+associations). When `in_memory=false`, `path` is the base path for the on-disk artifacts
+(`<path>.nc` and `<path>.sqlite`).
+
+`compression` is a [`CompressionSettings`](@ref). The Castore backend supports
+`DEFLATE` (with `level` 0-9 and `shuffle`) or no compression (`enabled=false`);
+`BLOSC` is not available and raises an error.
+"""
+function Store(;
+    in_memory::Bool = false,
+    path = nothing,
+    compression::CompressionSettings = CompressionSettings(),
+)
+    kwargs = _castore_compression_kwargs(compression)
+    inner = if in_memory
+        Castore.Store(; in_memory = true, kwargs...)
+    else
+        Castore.Store(; in_memory = false, path = path, kwargs...)
+    end
+    return Store(inner, path === nothing ? nothing : String(path))
+end
+
+# Translate a `CompressionSettings` into the keyword arguments accepted by
+# `Castore.Store`. BLOSC is not supported by the Castore backend.
+function _castore_compression_kwargs(c::CompressionSettings)
+    if !c.enabled
+        return (; compression = :none)
+    end
+    if c.type == CompressionTypes.DEFLATE
+        return (; compression = :deflate, compression_level = c.level, shuffle = c.shuffle)
+    end
+    error(
+        "Castore does not support $(c.type) compression; " *
+        "use CompressionTypes.DEFLATE or disable compression (enabled=false).",
+    )
 end
 
 """
