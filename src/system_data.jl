@@ -683,11 +683,9 @@ function _transform_single_time_series!(
 
     try
         begin_time_series_update(data.time_series_manager) do
-            add_metadata!(
-                data.time_series_manager.metadata_store,
-                components,
-                all_metadata,
-            )
+            for (component, metadata) in zip(components, all_metadata)
+                add_metadata!(data.time_series_manager.metadata_store, component, metadata)
+            end
         end
     catch
         # Only remove the metadata entries that were added in this batch so that
@@ -708,6 +706,12 @@ function _transform_single_time_series!(
     end
     return
 end
+
+# Replicates the SQL partial feature match used by list_metadata: every requested
+# feature key-value pair must be present in the existing metadata's features.
+_features_contain(existing_features, requested_features) =
+    all(kv -> isequal(get(existing_features, kv.first, nothing), kv.second),
+        requested_features)
 
 """
 Check that all existing SingleTimeSeries can be converted to DeterministicSingleTimeSeries
@@ -735,33 +739,27 @@ function _check_transform_single_time_series(
     )
 
     # The loop below runs once per SingleTimeSeries (potentially tens of thousands). To
-    # avoid issuing one or more SQLite queries per iteration we build a few lookups up
-    # front:
+    # avoid issuing one or more SQLite queries per iteration we build lookups up front:
     # - system forecast parameters depend only on (resolution, interval), so memoize them.
-    # - a component can only conflict with an existing Deterministic (or, when
-    #   skip_existing, DeterministicSingleTimeSeries) forecast if it actually owns one, so
-    #   collect the set of such owners once and only run the per-component metadata query
-    #   for owners in that set. In the common case (no pre-existing forecasts) these sets
-    #   are empty and the per-component queries are skipped entirely.
+    # - fetch all existing Deterministic and DeterministicSingleTimeSeries metadata with
+    #   one query and index it by (owner_uuid, name, resolution). The per-series conflict
+    #   and skip_existing checks then run in memory against this lookup.
     forecast_params_cache =
         Dict{Tuple{Dates.Period, Dates.Period}, Union{Nothing, ForecastParameters}}()
-    owners_with_deterministic = Set(
-        list_owner_uuids_with_time_series(
-            store,
-            InfrastructureSystemsComponent;
-            time_series_type = Deterministic,
-        ),
+    existing_forecasts =
+        Dict{Tuple{Base.UUID, String, String}, Vector{TimeSeriesMetadata}}()
+    for entry in list_metadata_with_owner_uuid(
+        store,
+        InfrastructureSystemsComponent;
+        # Note: Deterministic matches both Deterministic and DeterministicSingleTimeSeries.
+        time_series_type = Deterministic,
     )
-    owners_with_deterministic_sts = if skip_existing
-        Set(
-            list_owner_uuids_with_time_series(
-                store,
-                InfrastructureSystemsComponent;
-                time_series_type = DeterministicSingleTimeSeries,
-            ),
+        key = (
+            entry.owner_uuid,
+            get_name(entry.metadata),
+            _serialize_period(get_resolution(entry.metadata)),
         )
-    else
-        Set{Base.UUID}()
+        push!(get!(() -> TimeSeriesMetadata[], existing_forecasts, key), entry.metadata)
     end
 
     components_with_params_and_metadata = NamedTuple[]
@@ -784,6 +782,12 @@ function _check_transform_single_time_series(
 
         ts_name = get_name(item.metadata)
         ts_resolution = get_resolution(item.metadata)
+        ts_features = get_features(item.metadata)
+        existing = get(
+            existing_forecasts,
+            (item.owner_uuid, ts_name, _serialize_period(ts_resolution)),
+            nothing,
+        )
 
         # We do not allow a component to have both Deterministic and
         # DeterministicSingleTimeSeries with the same parameters.
@@ -791,22 +795,13 @@ function _check_transform_single_time_series(
         # Deterministic forecasts. If other components already have Deterministic forecasts,
         # this check will fail.
         # transform_single_time_series! cannot be called at the component level.
-        # Note: has_metadata with Deterministic matches both Deterministic and
-        # DeterministicSingleTimeSeries. Use list_metadata and filter to check only for
-        # actual Deterministic forecasts.
-        if item.owner_uuid in owners_with_deterministic
-            ts_features = get_features(item.metadata)
-            ts_features_symbols =
-                Dict{Symbol, Any}(Symbol(k) => v for (k, v) in ts_features)
-            existing_det = list_metadata(
-                store,
-                component;
-                time_series_type = Deterministic,
-                name = ts_name,
-                resolution = ts_resolution,
-                ts_features_symbols...,
+        if !isnothing(existing)
+            if any(
+                m ->
+                    get_time_series_type(m) === Deterministic &&
+                        _features_contain(get_features(m), ts_features),
+                existing,
             )
-            if any(m -> get_time_series_type(m) === Deterministic, existing_det)
                 throw(
                     ConflictingInputsError(
                         "Cannot transform SingleTimeSeries to DeterministicSingleTimeSeries: " *
@@ -815,27 +810,16 @@ function _check_transform_single_time_series(
                     ),
                 )
             end
-        end
 
-        # If skip_existing is true, skip SingleTimeSeries entries that already have a
-        # DeterministicSingleTimeSeries with the same name, resolution, features,
-        # horizon, and interval.
-        if skip_existing && item.owner_uuid in owners_with_deterministic_sts
-            ts_features_symbols = Dict{Symbol, Any}(
-                Symbol(k) => v for (k, v) in get_features(item.metadata)
-            )
-            existing = list_metadata(
-                store,
-                component;
-                time_series_type = DeterministicSingleTimeSeries,
-                name = ts_name,
-                resolution = ts_resolution,
-                ts_features_symbols...,
-            )
-            if any(
+            # If skip_existing is true, skip SingleTimeSeries entries that already have a
+            # DeterministicSingleTimeSeries with the same name, resolution, features,
+            # horizon, and interval.
+            if skip_existing && any(
                 m ->
-                    get_horizon(m) == params.horizon &&
-                        get_interval(m) == params.interval,
+                    get_time_series_type(m) === DeterministicSingleTimeSeries &&
+                        get_horizon(m) == params.horizon &&
+                        get_interval(m) == params.interval &&
+                        _features_contain(get_features(m), ts_features),
                 existing,
             )
                 continue
