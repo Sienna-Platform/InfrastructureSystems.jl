@@ -707,10 +707,13 @@ function _transform_single_time_series!(
     return
 end
 
-# Replicates the SQL partial feature match used by list_metadata: every requested
-# feature key-value pair must be present in the existing metadata's features.
+# Every requested feature key-value pair must be present in the existing metadata's
+# features. This is an intentionally exact match, stricter than the SQL LIKE-based
+# partial feature match in list_metadata, which can over-match on substrings
+# (e.g., a request for key=1 matches a stored key=10) and on LIKE wildcard
+# characters in string values.
 _features_contain(existing_features, requested_features) =
-    all(kv -> isequal(get(existing_features, kv.first, nothing), kv.second),
+    all(kv -> get(existing_features, kv.first, nothing) === kv.second,
         requested_features)
 
 """
