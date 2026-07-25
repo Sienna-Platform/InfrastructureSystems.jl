@@ -217,7 +217,6 @@ function get_time_series_key(
     features...,
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(owner)
-    # TODO DT: this is not a key
     return get_time_series_key(
         mgr,
         owner,
