@@ -234,44 +234,6 @@ function _decode_pwl_step_row(mat, i::Integer)
     return PiecewiseStepData(xs, ys)
 end
 
-# Reconstruct the full value vector from the stored array, keyed on ext.
-function _read_values(
-    store::Store,
-    hash::Vector{UInt8},
-    ext,
-    dtype,
-    len::Integer,
-)
-    if ext == "LinearFunctionData"
-        mat = Castore.get_array_nd(store.inner, hash, Float64, (len, 2))
-        return [LinearFunctionData(mat[i, 1], mat[i, 2]) for i in 1:len]
-    elseif ext == "QuadraticFunctionData"
-        mat = Castore.get_array_nd(store.inner, hash, Float64, (len, 3))
-        return [QuadraticFunctionData(mat[i, 1], mat[i, 2], mat[i, 3]) for i in 1:len]
-    elseif ext == "PiecewiseLinearData"
-        flat = get_array_by_hash(store, hash, Float64)
-        k = div(length(flat), len)  # 1 + 2*max_points (derived from the array size)
-        mat = Castore.get_array_nd(store.inner, hash, Float64, (len, k))
-        out = Vector{PiecewiseLinearData}(undef, len)
-        for i in 1:len
-            n = Int(round(mat[i, 1]))
-            out[i] = PiecewiseLinearData([(mat[i, 2j], mat[i, 2j + 1]) for j in 1:n])
-        end
-        return out
-    elseif ext == "PiecewiseStepData"
-        flat = get_array_by_hash(store, hash, Float64)
-        k = div(length(flat), len)
-        mat = Castore.get_array_nd(store.inner, hash, Float64, (len, k))
-        return [_decode_pwl_step_row(mat, i) for i in 1:len]
-    elseif !isnothing(_ntuple_arity(ext))
-        n = _ntuple_arity(ext)
-        mat = Castore.get_array_nd(store.inner, hash, Float64, (len, n))
-        return _decode_ntuples(mat, len, n)
-    else
-        return get_array_by_hash(store, hash, dtype)  # scalar
-    end
-end
-
 # Decode an already-materialized static value array (the inverse of `_storage_array`),
 # keyed on `ext`. Used by the non-sequential read path, where the backend
 # returns the `(len, k)` FunctionData matrix (or scalar vector) in memory rather than
@@ -347,16 +309,23 @@ end
 
 # ---- Operations (thin delegations to Castore) ----------------------
 
+# The Castore destination an IS-level write lands on: the wrapped store handle,
+# or an `AddBatch` staging a bulk commit.
+_castore_sink(store::Store) = store.inner
+_castore_sink(batch::Castore.AddBatch) = batch
+
 """
-    serialize_single!(store, owner_id, owner_type, owner_category, name, sts;
+    serialize_single!(dest, owner_id, owner_type, owner_category, name, sts;
                       features=Dict(), units=nothing)
 
 Add a `SingleTimeSeries` (data + metadata) to the Castore store. The array is
 content-addressed; identical arrays are de-duplicated automatically.
 `owner_category` is the String tag ("Component" / "SupplementalAttribute").
+`dest` is the [`Store`](@ref) for an immediate write, or a `Castore.AddBatch`
+to stage the series for a bulk commit.
 """
 function serialize_single!(
-    store::Store,
+    dest::Union{Store, Castore.AddBatch},
     owner_id::Integer,
     owner_type::AbstractString,
     owner_category::AbstractString,
@@ -378,19 +347,19 @@ function serialize_single!(
         name;
         ext = _encode_ext(logical),
     )
-    Castore.add_time_series!(store.inner, owner_id, owner_type,
+    Castore.add_time_series!(_castore_sink(dest), owner_id, owner_type,
         castore_category(owner_category),
         tss_ts; features = features, units = units)
     return
 end
 
 """
-    get_metadata(store, owner_id, owner_category, name; resolution, features=Dict())
+    get_time_series_metadata(store, owner_id, owner_category, name; resolution, features=Dict())
 
 Return `(; initial_timestamp, resolution, length, data_hash, ext, dtype)`
 for a stored SingleTimeSeries. Throws `Castore.NotFoundError` if absent.
 """
-get_metadata(store::Store, owner_id::Integer,
+get_time_series_metadata(store::Store, owner_id::Integer,
     owner_category::Castore.OwnerCategory, name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing, features = Dict{String, Any}()) =
     Castore.get_metadata(
@@ -402,24 +371,18 @@ get_metadata(store::Store, owner_id::Integer,
         features = features,
     )
 
-get_array_by_hash(
-    store::Store,
-    data_hash::Vector{UInt8},
-    ::Type{T} = Float64,
-) where {T} =
-    Castore.get_array_by_hash(store.inner, data_hash, T)
-
 """
-    serialize_non_sequential!(store, owner_id, owner_type, owner_category, name, nts;
+    serialize_non_sequential!(dest, owner_id, owner_type, owner_category, name, nts;
                               features=Dict(), units=nothing)
 
 Add a `NonSequentialTimeSeries` (irregular timestamps + data) to the Castore store.
 The array is content-addressed (and de-duplicated); the explicit timestamps are
 carried on the association. `owner_category` is the String tag ("Component" /
-"SupplementalAttribute").
+"SupplementalAttribute"). `dest` is the [`Store`](@ref) for an immediate write, or
+a `Castore.AddBatch` to stage the series for a bulk commit.
 """
 function serialize_non_sequential!(
-    store::Store,
+    dest::Union{Store, Castore.AddBatch},
     owner_id::Integer,
     owner_type::AbstractString,
     owner_category::AbstractString,
@@ -438,7 +401,7 @@ function serialize_non_sequential!(
         name;
         ext = _encode_ext(logical),
     )
-    Castore.add_time_series!(store.inner, owner_id, owner_type,
+    Castore.add_time_series!(_castore_sink(dest), owner_id, owner_type,
         castore_category(owner_category),
         tss_ts; features = features, units = units)
     return
@@ -621,6 +584,20 @@ _castore_add!(::TimeSeriesManager, ::TimeSeriesOwners, ts::TimeSeriesData; featu
         "(got $(typeof(ts)))",
     )
 
+# Map the store's duplicate-association rejection to the IS-level ArgumentError.
+# The add paths rely on the store's unique constraint instead of paying a
+# pre-existence catalog query per add; any other error propagates unchanged.
+function _castore_rethrow_duplicate(e, owner_type, name)
+    if e isa Castore.DuplicateAssociationError || e isa Castore.DuplicateTimeSeriesError
+        throw(
+            ArgumentError(
+                "Time series data with duplicate attributes are already stored: " *
+                "$(owner_type)/$(name)"),
+        )
+    end
+    rethrow()
+end
+
 function _castore_add!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
@@ -629,22 +606,16 @@ function _castore_add!(
 )
     store = mgr.data_store::Store
     owner_id, owner_type, owner_category = _castore_owner_args(owner)
-    category = castore_category(owner_category)
     name = get_name(time_series)
     resolution = get_resolution(time_series)
     feats = _castore_features(features)
 
-    if has_time_series(store, owner_id, category, name;
-        resolution = resolution, features = feats)
-        throw(
-            ArgumentError(
-                "Time series data with duplicate attributes are already stored: " *
-                "$(owner_type)/$(name) resolution=$(resolution) features=$(feats)"),
-        )
+    try
+        serialize_single!(store, owner_id, owner_type, owner_category, name, time_series;
+            features = feats)
+    catch e
+        _castore_rethrow_duplicate(e, owner_type, name)
     end
-
-    serialize_single!(store, owner_id, owner_type, owner_category, name, time_series;
-        features = feats)
     return StaticTimeSeriesKey(;
         time_series_type = SingleTimeSeries,
         name = name,
@@ -668,21 +639,15 @@ function _castore_add_non_sequential!(
 )
     store = mgr.data_store::Store
     owner_id, owner_type, owner_category = _castore_owner_args(owner)
-    category = castore_category(owner_category)
     name = get_name(time_series)
     feats = _castore_features(features)
 
-    if has_typed(store, owner_id, category, name, Castore.CASTORE_TYPE_NON_SEQUENTIAL;
-        features = feats)
-        throw(
-            ArgumentError(
-                "Time series data with duplicate attributes are already stored: " *
-                "$(owner_type)/$(name) features=$(feats)"),
-        )
+    try
+        serialize_non_sequential!(store, owner_id, owner_type, owner_category, name,
+            time_series; features = feats)
+    catch e
+        _castore_rethrow_duplicate(e, owner_type, name)
     end
-
-    serialize_non_sequential!(store, owner_id, owner_type, owner_category, name,
-        time_series; features = feats)
     return NonSequentialTimeSeriesKey(;
         time_series_type = NonSequentialTimeSeries,
         name = name,
@@ -737,40 +702,66 @@ function castore_get_time_series(
     resolution::Union{Nothing, Dates.Period} = nothing,
     features...,
 )
-    mgr = get_time_series_manager(owner)
-    store = mgr.data_store::Store
-    owner_id, _, owner_category = _castore_owner_args(owner)
-    category = castore_category(owner_category)
     # Resolve the unique series matching a possibly-partial (subset) feature /
     # resolution query, then read it by its exact stored attributes.
-    matched = castore_get_metadata(
+    key = castore_get_time_series_key(
         owner,
         SingleTimeSeries,
         name;
         resolution = resolution,
         features...,
     )
-    feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
-    meta = get_metadata(store, owner_id, category, name;
-        resolution = get_resolution(matched), features = feats)
-    full =
-        _read_values(store, meta.data_hash, _decode_ext(meta.ext), meta.dtype, meta.length)
+    return _castore_read_single(owner, key; start_time = start_time, len = len)
+end
 
-    start = isnothing(start_time) ? meta.initial_timestamp : start_time
-    index = compute_time_array_index(meta.initial_timestamp, start, meta.resolution)
-    n = isnothing(len) ? (meta.length - index + 1) : len
-    if index < 1 || index + n - 1 > meta.length
-        throw(ArgumentError("requested index=$index len=$n exceeds range $(meta.length)"))
+# Key-addressed SingleTimeSeries read: the key carries the exact stored attributes
+# plus the `(initial_timestamp, resolution, length)` needed to validate the
+# requested window, so no catalog query is issued. The store slices the half-open
+# `[start, start + n·resolution)` window server-side; only the requested steps are
+# read and decoded.
+function _castore_read_single(
+    owner::TimeSeriesOwners,
+    key::StaticTimeSeriesKey;
+    start_time::Union{Nothing, Dates.DateTime} = nothing,
+    len::Union{Nothing, Int} = nothing,
+)
+    mgr = get_time_series_manager(owner)
+    store = mgr.data_store
+    owner_id, _, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
+    name = get_name(key)
+    initial_timestamp = get_initial_timestamp(key)
+    resolution = get_resolution(key)
+    total = get_length(key)
+    feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(key))
+
+    start = isnothing(start_time) ? initial_timestamp : start_time
+    index = compute_time_array_index(initial_timestamp, start, resolution)
+    n = isnothing(len) ? (total - index + 1) : len
+    if index < 1 || n < 1 || index + n - 1 > total
+        throw(ArgumentError("requested index=$index len=$n exceeds range $total"))
     end
-    vals = full[index:(index + n - 1)]
-    t0 = meta.initial_timestamp + meta.resolution * (index - 1)
-    sts = SingleTimeSeries(
-        String(name),
-        t0,
-        meta.resolution,
-        vals,
-    )
-    return sts
+    # The store clamps an out-of-grid range rather than erroring, so the window is
+    # validated above against the key before the sliced read.
+    time_range = if (isnothing(start_time) && isnothing(len))
+        nothing
+    else
+        (start, start + resolution * n)
+    end
+    sts = Castore.get_time_series(Castore.SingleTimeSeries, store.inner, owner_id,
+        category, name;
+        resolution = resolution, features = feats, time_range = time_range)
+    # The key-addressed core read does not carry the `ext` reconstruction tag, so
+    # fetch it from the association metadata only when the payload could need
+    # decoding (any non-vector array; a plain vector is always scalar data).
+    values = if sts.data isa Vector
+        sts.data
+    else
+        meta = get_time_series_metadata(store, owner_id, category, name;
+            resolution = resolution, features = feats)
+        _decode_static_values(sts.data, _decode_ext(meta.ext), size(sts.data, 1))
+    end
+    return SingleTimeSeries(String(name), sts.initial_timestamp, sts.resolution, values)
 end
 
 """
@@ -787,15 +778,27 @@ function castore_get_time_series(
     resolution::Union{Nothing, Dates.Period} = nothing,  # not applicable; ignored
     features...,
 )
-    mgr = get_time_series_manager(owner)
-    store = mgr.data_store::Store
-    owner_id, _, owner_category = _castore_owner_args(owner)
-    category = castore_category(owner_category)
     # Resolve the unique series matching a possibly-partial (subset) feature query,
     # then read it by its exact stored attributes.
-    matched = castore_get_metadata(owner, NonSequentialTimeSeries, name; features...)
-    feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
-    nts = get_non_sequential(store, owner_id, category, name; features = feats)
+    key = castore_get_time_series_key(owner, NonSequentialTimeSeries, name; features...)
+    return _castore_read_non_sequential(owner, key; start_time = start_time, len = len)
+end
+
+# Key-addressed NonSequentialTimeSeries read (no catalog re-resolution). The
+# timestamps are irregular, so `start_time`/`len` slice on the materialized
+# series in Julia; the read itself is one store call.
+function _castore_read_non_sequential(
+    owner::TimeSeriesOwners,
+    key::NonSequentialTimeSeriesKey;
+    start_time::Union{Nothing, Dates.DateTime} = nothing,
+    len::Union{Nothing, Int} = nothing,
+)
+    mgr = get_time_series_manager(owner)
+    store = mgr.data_store
+    owner_id, _, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
+    feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(key))
+    nts = get_non_sequential(store, owner_id, category, get_name(key); features = feats)
     (isnothing(start_time) && isnothing(len)) && return nts
 
     # Slice on the explicit, strictly-increasing timestamps. The values are sliced
@@ -813,7 +816,8 @@ function castore_get_time_series(
     end
     colons = ntuple(_ -> Colon(), ndims(full) - 1)
     vals = full[index:(index + n - 1), colons...]
-    return NonSequentialTimeSeries(String(name), timestamps[index:(index + n - 1)], vals)
+    return NonSequentialTimeSeries(
+        String(get_name(key)), timestamps[index:(index + n - 1)], vals)
 end
 
 # ---- Forecasts (Deterministic / DeterministicSingleTimeSeries) -------------
@@ -882,21 +886,17 @@ function _castore_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
     )
 
     if ts isa Probabilistic
-        if has_typed(store, owner_id, category, name, Castore.CASTORE_TYPE_PROBABILISTIC;
-            resolution = resolution, features = feats)
-            throw(
-                ArgumentError(
-                    "Time series data with duplicate attributes are already stored",
-                ),
-            )
-        end
         arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
         prob =
             Castore.Probabilistic(get_initial_timestamp(ts), resolution, get_horizon(ts),
                 _storage_forecast_interval(interval, get_horizon(ts)), get_count(ts),
                 Float64.(get_percentiles(ts)), arr, name)
-        Castore.add_time_series!(store.inner, owner_id, owner_type,
-            category, prob; features = feats)
+        try
+            Castore.add_time_series!(store.inner, owner_id, owner_type,
+                category, prob; features = feats)
+        catch e
+            _castore_rethrow_duplicate(e, owner_type, name)
+        end
         return ForecastKey(;
             time_series_type = typeof(ts), name = name,
             initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
@@ -952,19 +952,6 @@ function _castore_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
         error("unsupported forecast type $(typeof(ts))")
     end
 
-    if has_typed(
-        store,
-        owner_id,
-        category,
-        name,
-        ts_type;
-        resolution = resolution,
-        features = feats,
-    )
-        throw(
-            ArgumentError("Time series data with duplicate attributes are already stored"),
-        )
-    end
     storage_interval = _storage_forecast_interval(interval, get_horizon(ts))
     tss_ts = if ts_type == Castore.CASTORE_TYPE_DETERMINISTIC
         Castore.Deterministic(get_initial_timestamp(ts), resolution, get_horizon(ts),
@@ -973,14 +960,215 @@ function _castore_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
         Castore.Scenarios(get_initial_timestamp(ts), resolution, get_horizon(ts),
             storage_interval, count, arr, name; ext = _encode_ext(logical))
     end
-    Castore.add_time_series!(store.inner, owner_id, owner_type,
-        category, tss_ts; features = feats)
+    try
+        Castore.add_time_series!(store.inner, owner_id, owner_type,
+            category, tss_ts; features = feats)
+    catch e
+        _castore_rethrow_duplicate(e, owner_type, name)
+    end
     return ForecastKey(;
         time_series_type = typeof(ts), name = name,
         initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
         horizon = get_horizon(ts), interval = interval, count = count,
         features = Dict{String, Any}(feats))
 end
+
+# ---- Bulk staging ----------------------------------------------------------
+# The bulk-add fast path stages every association onto a `Castore.AddBatch` and
+# commits once: one metadata transaction, and the backend packs the arrays into
+# batch-sized datasets with whole-chunk writes (no per-add read-modify-write).
+# A `DeterministicSingleTimeSeries` cannot be staged — it is derived in-store
+# from its underlying `SingleTimeSeries` — so its presence routes the whole
+# batch through the legacy per-add path (see `bulk_add_time_series!`).
+
+# Whether an association must go through the per-add transform path.
+_castore_needs_transform(::TimeSeriesData) = false
+_castore_needs_transform(::DeterministicSingleTimeSeries) = true
+
+"""
+Stage one `(owner, time_series)` association onto `batch`, applying the same
+validation as the per-add path, and return its `TimeSeriesKey`. The write
+happens when the batch is committed. `params_cache` carries the forecast window
+parameters per `(resolution, interval)` group so staged forecasts are checked
+for compatibility against both the store and each other with one catalog query
+per group.
+"""
+function _castore_stage!(
+    batch::Castore.AddBatch,
+    mgr::TimeSeriesManager,
+    params_cache::AbstractDict,
+    owner::TimeSeriesOwners,
+    time_series::TimeSeriesData;
+    features...,
+)
+    throw_if_does_not_support_time_series(owner)
+    _castore_check_time_series_data(time_series)
+    return _castore_stage_data!(batch, mgr, params_cache, owner, time_series; features...)
+end
+
+function _castore_stage_data!(
+    batch::Castore.AddBatch,
+    ::TimeSeriesManager,
+    ::AbstractDict,
+    owner::TimeSeriesOwners,
+    time_series::SingleTimeSeries;
+    features...,
+)
+    owner_id, owner_type, owner_category = _castore_owner_args(owner)
+    name = get_name(time_series)
+    feats = _castore_features(features)
+    serialize_single!(batch, owner_id, owner_type, owner_category, name, time_series;
+        features = feats)
+    return StaticTimeSeriesKey(;
+        time_series_type = SingleTimeSeries,
+        name = name,
+        initial_timestamp = get_initial_timestamp(time_series),
+        resolution = get_resolution(time_series),
+        length = length(time_series),
+        features = Dict{String, Any}(feats),
+    )
+end
+
+function _castore_stage_data!(
+    batch::Castore.AddBatch,
+    ::TimeSeriesManager,
+    ::AbstractDict,
+    owner::TimeSeriesOwners,
+    time_series::NonSequentialTimeSeries;
+    features...,
+)
+    owner_id, owner_type, owner_category = _castore_owner_args(owner)
+    name = get_name(time_series)
+    feats = _castore_features(features)
+    serialize_non_sequential!(batch, owner_id, owner_type, owner_category, name,
+        time_series; features = feats)
+    return NonSequentialTimeSeriesKey(;
+        time_series_type = NonSequentialTimeSeries,
+        name = name,
+        length = length(time_series),
+        features = Dict{String, Any}(feats),
+    )
+end
+
+# Validate a staged forecast's window parameters against its `(resolution,
+# interval)` group: the store's parameters are fetched once per group and the
+# staged parameters become the group's baseline thereafter, so forecasts inside
+# one batch are checked against each other as well as against the store.
+function _castore_check_staged_forecast!(
+    params_cache::AbstractDict,
+    mgr::TimeSeriesManager,
+    ts::Forecast,
+)
+    group = (get_resolution(ts), get_interval(ts))
+    existing = get!(params_cache, group) do
+        castore_forecast_parameters(
+            mgr.data_store;
+            resolution = group[1],
+            interval = group[2],
+        )
+    end
+    params = make_time_series_parameters(ts)
+    check_params_compatibility(existing, params)
+    isnothing(existing) && (params_cache[group] = params)
+    return
+end
+
+function _castore_stage_data!(
+    batch::Castore.AddBatch,
+    mgr::TimeSeriesManager,
+    params_cache::AbstractDict,
+    owner::TimeSeriesOwners,
+    ts::Probabilistic;
+    features...,
+)
+    _castore_check_staged_forecast!(params_cache, mgr, ts)
+    owner_id, owner_type, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
+    name = get_name(ts)
+    resolution = get_resolution(ts)
+    interval = get_interval(ts)
+    feats = _castore_features(features)
+    arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
+    prob = Castore.Probabilistic(get_initial_timestamp(ts), resolution, get_horizon(ts),
+        _storage_forecast_interval(interval, get_horizon(ts)), get_count(ts),
+        Float64.(get_percentiles(ts)), arr, name)
+    Castore.add_time_series!(batch, owner_id, owner_type, category, prob;
+        features = feats)
+    return ForecastKey(;
+        time_series_type = typeof(ts), name = name,
+        initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
+        horizon = get_horizon(ts), interval = interval, count = get_count(ts),
+        features = Dict{String, Any}(feats))
+end
+
+function _castore_stage_data!(
+    batch::Castore.AddBatch,
+    mgr::TimeSeriesManager,
+    params_cache::AbstractDict,
+    owner::TimeSeriesOwners,
+    ts::Deterministic;
+    features...,
+)
+    _castore_check_staged_forecast!(params_cache, mgr, ts)
+    owner_id, owner_type, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
+    name = get_name(ts)
+    resolution = get_resolution(ts)
+    interval = get_interval(ts)
+    feats = _castore_features(features)
+    windows = collect(values(get_data(ts)))
+    arr, logical = _storage_forecast_array(windows)
+    det = Castore.Deterministic(get_initial_timestamp(ts), resolution, get_horizon(ts),
+        _storage_forecast_interval(interval, get_horizon(ts)), length(windows), arr,
+        name; ext = _encode_ext(logical))
+    Castore.add_time_series!(batch, owner_id, owner_type, category, det;
+        features = feats)
+    return ForecastKey(;
+        time_series_type = typeof(ts), name = name,
+        initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
+        horizon = get_horizon(ts), interval = interval, count = length(windows),
+        features = Dict{String, Any}(feats))
+end
+
+function _castore_stage_data!(
+    batch::Castore.AddBatch,
+    mgr::TimeSeriesManager,
+    params_cache::AbstractDict,
+    owner::TimeSeriesOwners,
+    ts::Scenarios;
+    features...,
+)
+    _castore_check_staged_forecast!(params_cache, mgr, ts)
+    owner_id, owner_type, owner_category = _castore_owner_args(owner)
+    category = castore_category(owner_category)
+    name = get_name(ts)
+    resolution = get_resolution(ts)
+    interval = get_interval(ts)
+    feats = _castore_features(features)
+    arr = Float64.(get_array_for_hdf(ts))  # (scenario_count, horizon_count, count)
+    scen = Castore.Scenarios(get_initial_timestamp(ts), resolution, get_horizon(ts),
+        _storage_forecast_interval(interval, get_horizon(ts)), get_count(ts), arr,
+        name; ext = _encode_ext(nothing))
+    Castore.add_time_series!(batch, owner_id, owner_type, category, scen;
+        features = feats)
+    return ForecastKey(;
+        time_series_type = typeof(ts), name = name,
+        initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
+        horizon = get_horizon(ts), interval = interval, count = get_count(ts),
+        features = Dict{String, Any}(feats))
+end
+
+_castore_stage_data!(
+    ::Castore.AddBatch,
+    ::TimeSeriesManager,
+    ::AbstractDict,
+    ::TimeSeriesOwners,
+    ts::TimeSeriesData;
+    features...,
+) = error(
+    "Castore backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
+    "Deterministic, Probabilistic, and Scenarios in bulk adds (got $(typeof(ts)))",
+)
 
 # Translate IS's `start_time` / `count` window selection into the core's
 # half-open `[start, end)` `time_range`, validated against the forecast's stored
@@ -1047,7 +1235,8 @@ function _assemble_forecast_windows(initial_timestamp, interval, count, window)
 end
 
 """Reconstruct a forecast from the Castore store (matches the STORED type),
-honoring `start_time` / `count` slicing on the window axis."""
+honoring `start_time` / `count` slicing on the window axis. Pass `key` (a
+previously resolved `ForecastKey`) to skip the catalog resolution query."""
 function _castore_get_forecast(
     owner, name;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
@@ -1055,6 +1244,7 @@ function _castore_get_forecast(
     count::Union{Nothing, Int} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
+    key::Union{Nothing, ForecastKey} = nothing,
     features...,
 )
     mgr = get_time_series_manager(owner)
@@ -1066,22 +1256,32 @@ function _castore_get_forecast(
     # `interval` matters when one series name carries several forecasts that differ only
     # by interval (`transform_single_time_series!` with `delete_existing = false`);
     # without it the lookup is ambiguous.
-    matched = castore_get_metadata(
-        owner, Forecast, name;
-        resolution = resolution, interval = interval, features...,
-    )
+    matched = if isnothing(key)
+        castore_get_time_series_key(
+            owner, Forecast, name;
+            resolution = resolution, interval = interval, features...,
+        )
+    else
+        key
+    end
     feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
     resolution = get_resolution(matched)
     # Pin every store lookup below to the resolved forecast's exact (stored) interval.
     # One name can carry several forecasts differing only by interval, and the typed
     # lookups match on attributes, so without this they would match more than one.
-    matched_interval = get_interval(matched)
+    # A single-window forecast is presented with `interval == Second(0)` (e.g. on a
+    # key returned by `add_time_series!`) but stored with `interval == horizon`;
+    # map it back to the storage form for the lookups.
+    matched_interval =
+        _storage_forecast_interval(get_interval(matched), get_horizon(matched))
+    # The resolved key names the stored concrete type, so dispatch on it directly —
+    # no per-type existence queries.
+    stored_type = get_time_series_type(matched)
     # `len`, when given, truncates each window to its first `len` horizon steps
     # (the horizon is the leading axis of a window vector or matrix).
     _truncate(w) = isnothing(len) ? w : (ndims(w) == 1 ? w[1:len] : w[1:len, :])
 
-    if has_typed(store, owner_id, category, name, Castore.CASTORE_TYPE_PROBABILISTIC;
-        resolution = resolution, interval = matched_interval, features = feats)
+    if stored_type <: Probabilistic
         # `.data` is the canonical (percentile_count, horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
@@ -1099,8 +1299,7 @@ function _castore_get_forecast(
             percentiles = p.percentiles, resolution = p.resolution,
             interval = _forecast_display_interval(p.count, p.interval, p.horizon))
         return result
-    elseif has_typed(store, owner_id, category, name, Castore.CASTORE_TYPE_DETERMINISTIC;
-        resolution = resolution, interval = matched_interval, features = feats)
+    elseif stored_type <: Deterministic
         # `.data` is the canonical (horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
@@ -1126,9 +1325,7 @@ function _castore_get_forecast(
             resolution = d.resolution,
             interval = _forecast_display_interval(d.count, d.interval, d.horizon))
         return result
-    elseif has_typed(store, owner_id, category, name,
-        Castore.CASTORE_TYPE_DETERMINISTIC_SINGLE;
-        resolution = resolution, interval = matched_interval, features = feats)
+    elseif stored_type <: DeterministicSingleTimeSeries
         # A DeterministicSingleTimeSeries is an internal storage optimization: it
         # shares the underlying SingleTimeSeries array instead of materializing the
         # overlapping windows. On read it is always returned as a regular
@@ -1170,8 +1367,7 @@ function _castore_get_forecast(
         return Deterministic(; name = String(name), data = data,
             resolution = d.resolution,
             interval = _forecast_display_interval(d.count, d.interval, d.horizon))
-    elseif has_typed(store, owner_id, category, name, Castore.CASTORE_TYPE_SCENARIOS;
-        resolution = resolution, interval = matched_interval, features = feats)
+    elseif stored_type <: Scenarios
         # `.data` is the canonical (scenario_count, horizon_count, count) array.
         tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
             get_count(matched), start_time, count)
@@ -1190,7 +1386,7 @@ function _castore_get_forecast(
             interval = _forecast_display_interval(s_ts.count, s_ts.interval, s_ts.horizon))
         return result
     end
-    throw(Castore.NotFoundError("no forecast for owner=$owner_id name=$name"))
+    error("unreachable: unexpected stored forecast type $stored_type")
 end
 
 # ---- ForecastReader --------------------------------------------------------
@@ -1278,14 +1474,12 @@ Forecasts that share an underlying array read the `.nc` file once per timestamp
 (and materialize once in Julia); inspect the sharing via the entries' `slot`
 field or [`get_num_forecast_slots`](@ref).
 """
-mutable struct ForecastReader
+mutable struct ForecastReader{T <: Forecast}
     inner::Castore.ForecastReader
     store::Store
     entries::Vector{ForecastReaderEntry}
     "ext for each entry (parallel to `entries`); `nothing` for scalars."
     exts::Vector{Union{Nothing, String}}
-    "The IS forecast type the reader was built for (drives window orientation)."
-    reported_type::Type
     "Per-slot materialized window cache; reset on each read."
     windows::Vector{Any}
     has_read::Bool
@@ -1331,7 +1525,7 @@ function castore_build_forecast_reader(
         entries[i] = ForecastReaderEntry(owner, key, e.slot + 1)
     end
     windows = Vector{Any}(nothing, Castore.forecast_num_slots(inner))
-    return ForecastReader(inner, store, entries, exts, T, windows, false)
+    return ForecastReader{T}(inner, store, entries, exts, windows, false)
 end
 
 """
@@ -1378,15 +1572,14 @@ The decoded window for entry `entry_index` (1-based) from the most recent
 [`read_forecast_window!`](@ref). Entries that share a slot return the same
 materialized array (read once per timestamp); treat it as read-only.
 """
-function get_forecast_window(reader::ForecastReader, entry_index::Integer)
+function get_forecast_window(reader::ForecastReader{T}, entry_index::Integer) where {T}
     reader.has_read || throw(
         ArgumentError("call read_forecast_window! before reading window values"))
     entry = reader.entries[entry_index]
     cached = reader.windows[entry.slot]
     cached === nothing || return cached
     raw = Castore.forecast_values(reader.inner, entry_index)
-    window = _decode_forecast_reader_window(
-        reader.reported_type, raw, reader.exts[entry_index])
+    window = _decode_forecast_reader_window(T, raw, reader.exts[entry_index])
     reader.windows[entry.slot] = window
     return window
 end
@@ -1403,7 +1596,7 @@ function castore_has_time_series(
     features...,
 ) where {T <: TimeSeriesData}
     return !isempty(
-        castore_owner_list_metadata(owner;
+        castore_owner_list_keys(owner;
             time_series_type = T, name = name, resolution = resolution,
             interval = interval, features...),
     )
@@ -1555,7 +1748,7 @@ end
 # `time_series_type` (or `Deterministic`, which also matches a DST) and `interval`
 # are not catalog filter columns, so they are applied as a residual on the
 # already-narrowed rows.
-function _castore_list_metadata(
+function _castore_list_keys(
     store::Store,
     owner_id::Integer,
     owner_category::Castore.OwnerCategory;
@@ -1598,7 +1791,7 @@ _castore_all_metadata(store::Store) =
     [_key_from_row(row) for row in Castore.list_keys(store.inner)]
 
 # Owner-level `list_metadata` entry point (mirrors the metadata-store signature).
-function castore_owner_list_metadata(
+function castore_owner_list_keys(
     owner::TimeSeriesOwners;
     time_series_type = nothing,
     name = nothing,
@@ -1609,14 +1802,13 @@ function castore_owner_list_metadata(
     mgr = get_time_series_manager(owner)
     store = mgr.data_store::Store
     owner_id, _, owner_category = _castore_owner_args(owner)
-    return _castore_list_metadata(store, owner_id, castore_category(owner_category);
+    return _castore_list_keys(store, owner_id, castore_category(owner_category);
         time_series_type = time_series_type, name = name, resolution = resolution,
         interval = interval, features = _castore_features(features))
 end
 
-# Single matching metadata; throws when zero or more than one match (parity with
-# `TimeSeriesMetadataStore.get_metadata`).
-function castore_get_metadata(
+# Single matching time series key; throws when zero or more than one match.
+function castore_get_time_series_key(
     owner::TimeSeriesOwners,
     ::Type{T},
     name::AbstractString;
@@ -1624,7 +1816,7 @@ function castore_get_metadata(
     interval = nothing,
     features...,
 ) where {T <: TimeSeriesData}
-    items = castore_owner_list_metadata(owner; time_series_type = T, name = name,
+    items = castore_owner_list_keys(owner; time_series_type = T, name = name,
         resolution = resolution, interval = interval, features...)
     if isempty(items)
         throw(ArgumentError("No matching metadata is stored."))
@@ -1698,23 +1890,18 @@ function castore_get_time_series_multiple(
     resolution = nothing,
     interval = nothing,
 )
-    metas = castore_owner_list_metadata(owner; time_series_type = type, name = name,
+    metas = castore_owner_list_keys(owner; time_series_type = type, name = name,
         resolution = resolution, interval = interval)
     Channel() do channel
         for m in metas
-            feats = (Symbol(k) => v for (k, v) in get_features(m))
+            # Each key is already fully resolved, so read key-addressed — no
+            # catalog re-resolution per series.
             ts = if m isa ForecastKey
-                # Pin the read to this key's own interval: a name may carry several
-                # forecasts differing only by interval, which would otherwise be
-                # ambiguous here.
-                _castore_get_forecast(owner, get_name(m);
-                    resolution = get_resolution(m), interval = get_interval(m), feats...,
-                )
+                _castore_get_forecast(owner, get_name(m); key = m)
             elseif m isa NonSequentialTimeSeriesKey
-                castore_get_time_series(NonSequentialTimeSeries, owner, get_name(m); feats...)
+                _castore_read_non_sequential(owner, m)
             else
-                castore_get_time_series(SingleTimeSeries, owner, get_name(m);
-                    resolution = get_resolution(m), feats...)
+                _castore_read_single(owner, m)
             end
             (isnothing(filter_func) || filter_func(ts)) && put!(channel, ts)
         end
@@ -1867,7 +2054,7 @@ end
 # restricted by time series type (strict subtype) and resolution. Owner category
 # and resolution are pushed into the core query; the strict type filter is applied
 # on the returned keys.
-function castore_list_metadata_with_owner(
+function castore_list_keys_with_owner(
     store::Store,
     owner_type::Type;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,

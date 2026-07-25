@@ -112,18 +112,49 @@ function get_time_series(
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series(
-        get_time_series_type(key),
+    # The key is already fully resolved, so read key-addressed — no catalog
+    # re-resolution by name.
+    return _get_time_series_by_key(
         owner,
-        get_name(key);
-        resolution = get_resolution(key),
+        key;
         start_time = start_time,
         len = len,
         count = count,
-        features...,
     )
 end
+
+_get_time_series_by_key(
+    owner::TimeSeriesOwners,
+    key::ForecastKey;
+    start_time,
+    len,
+    count,
+) = _castore_get_forecast(
+    owner,
+    get_name(key);
+    key = key,
+    start_time = start_time,
+    len = len,
+    count = count,
+)
+
+# `count` does not apply to a static series; it is accepted for interface
+# uniformity and ignored.
+_get_time_series_by_key(
+    owner::TimeSeriesOwners,
+    key::NonSequentialTimeSeriesKey;
+    start_time,
+    len,
+    count,
+) = _castore_read_non_sequential(owner, key; start_time = start_time, len = len)
+
+_get_time_series_by_key(
+    owner::TimeSeriesOwners,
+    key::StaticTimeSeriesKey;
+    start_time,
+    len,
+    count,
+) = _castore_read_single(owner, key; start_time = start_time, len = len)
 
 """
 Returns an iterator of TimeSeriesData instances attached to the component or attribute.
@@ -186,7 +217,8 @@ function get_time_series_key(
     features...,
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(owner)
-    return get_metadata(
+    # TODO DT: this is not a key
+    return get_time_series_key(
         mgr,
         owner,
         T,
@@ -1003,7 +1035,7 @@ function get_time_series_keys(
 )
     mgr = get_time_series_manager(owner)
     isnothing(mgr) && return TimeSeriesKey[]
-    return list_metadata(
+    return list_time_series_keys(
         mgr,
         owner;
         time_series_type = time_series_type,

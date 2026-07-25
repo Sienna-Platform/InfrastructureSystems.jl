@@ -221,8 +221,7 @@ TimeSeriesData{T}
 `N` is the array rank — per-window for forecasts, per-series for static — and is
 deliberately NOT lifted to the abstract parents, since its meaning varies by subtype.
 
-`Base.eltype(::TimeSeriesData{T}) = T` is the only accessor (it replaced the removed
-`eltype_data`/`eltype_data_common` pair, which read `T` back out of the stored data).
+`Base.eltype(::TimeSeriesData{T}) = T` is the only accessor.
 Prefer a signature constraint over a runtime check:
 
 ```julia

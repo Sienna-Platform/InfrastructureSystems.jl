@@ -654,7 +654,7 @@ function _check_transform_single_time_series(
     resolution::Union{Nothing, Dates.Period};
     skip_existing::Bool = false,
 )
-    items = castore_list_metadata_with_owner(
+    items = castore_list_keys_with_owner(
         data.time_series_manager.data_store,
         InfrastructureSystemsComponent;
         time_series_type = SingleTimeSeries,
@@ -689,7 +689,7 @@ function _check_transform_single_time_series(
         ts_resolution = get_resolution(item.metadata)
         ts_features = get_features(item.metadata)
         ts_features_symbols = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in ts_features)
-        existing_det = list_metadata(
+        existing_det = list_time_series_keys(
             data.time_series_manager,
             component;
             time_series_type = Deterministic,
@@ -711,7 +711,7 @@ function _check_transform_single_time_series(
         # DeterministicSingleTimeSeries with the same name, resolution, features,
         # horizon, and interval.
         if skip_existing
-            existing = list_metadata(
+            existing = list_time_series_keys(
                 data.time_series_manager,
                 component;
                 time_series_type = DeterministicSingleTimeSeries,

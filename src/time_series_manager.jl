@@ -103,18 +103,56 @@ function bulk_add_time_series!(
     associations;
     kwargs...,
 )
-    ts_keys = TimeSeriesKey[]
-    begin_time_series_update(mgr) do
-        for association in associations
-            key = add_time_series!(
-                mgr,
-                association.owner,
-                association.time_series; association.features...,
-            )
-            push!(ts_keys, key)
+    _throw_if_read_only(mgr)
+    assocs = collect(associations)
+    # A DeterministicSingleTimeSeries is derived in-store from its underlying
+    # SingleTimeSeries, so it cannot be staged onto a batch; route such batches
+    # through the per-add path (with its diff-based rollback).
+    if any(a -> _castore_needs_transform(a.time_series), assocs)
+        ts_keys = TimeSeriesKey[]
+        begin_time_series_update(mgr) do
+            for association in assocs
+                key = add_time_series!(
+                    mgr,
+                    association.owner,
+                    association.time_series; association.features...,
+                )
+                push!(ts_keys, key)
+            end
         end
+        return ts_keys
     end
 
+    # Fast path: stage everything onto one `AddBatch` and commit once — a single
+    # metadata transaction, and the backend packs the arrays into batch-sized
+    # datasets written whole-chunk (no per-add read-modify-write). The commit is
+    # all-or-nothing, so no catalog snapshot is needed for rollback.
+    batch = Castore.AddBatch()
+    params_cache = Dict{Tuple{Dates.Period, Dates.Period}, Any}()
+    ts_keys = Vector{TimeSeriesKey}(undef, length(assocs))
+    for (i, association) in enumerate(assocs)
+        ts_keys[i] = _castore_stage!(
+            batch,
+            mgr,
+            params_cache,
+            association.owner,
+            association.time_series;
+            association.features...,
+        )
+    end
+    try
+        Castore.add_time_series_bulk!(mgr.data_store.inner, batch)
+    catch e
+        if e isa Castore.DuplicateAssociationError ||
+           e isa Castore.DuplicateTimeSeriesError
+            throw(
+                ArgumentError(
+                    "Time series data with duplicate attributes are already stored"),
+            )
+        end
+        rethrow()
+    end
+    flush!(mgr.data_store)
     return ts_keys
 end
 
@@ -143,7 +181,7 @@ function clear_time_series!(mgr::TimeSeriesManager, component::TimeSeriesOwners)
     return
 end
 
-get_metadata(
+get_time_series_key(
     mgr::TimeSeriesManager,
     component::TimeSeriesOwners,
     time_series_type::Type{<:TimeSeriesData},
@@ -151,7 +189,7 @@ get_metadata(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = castore_get_metadata(
+) = castore_get_time_series_key(
     component,
     time_series_type,
     name;
@@ -160,7 +198,7 @@ get_metadata(
     features...,
 )
 
-list_metadata(
+list_time_series_keys(
     mgr::TimeSeriesManager,
     component::TimeSeriesOwners;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
@@ -168,7 +206,7 @@ list_metadata(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = castore_owner_list_metadata(
+) = castore_owner_list_keys(
     component;
     time_series_type = time_series_type,
     name = name,
@@ -195,7 +233,7 @@ function remove_time_series!(
     category = castore_category(owner_category)
     # Subset (partial) feature/resolution matching: remove every stored series of
     # type `time_series_type` that contains at least the requested features.
-    for key in castore_owner_list_metadata(owner;
+    for key in castore_owner_list_keys(owner;
         time_series_type = time_series_type, name = name, resolution = resolution,
         interval = interval, features...)
         mt = get_time_series_type(key)
@@ -207,7 +245,7 @@ function remove_time_series!(
             # DST — i.e. a DST references the array and this is its last backing
             # SingleTimeSeries. Other components sharing the array make removal safe.
             hash =
-                get_metadata(store, owner_id, category, name;
+                get_time_series_metadata(store, owner_id, category, name;
                     resolution = res, features = feats).data_hash
             c = castore_array_sts_dst_counts(store, hash)
             if c.dst >= 1 && c.sts <= 1
