@@ -234,6 +234,30 @@ Because the abstract types are `UnionAll`s, plain `::TimeSeriesData` annotations
 unchanged. What does NOT work is subtyping without a parameter — `struct Foo <:
 TimeSeriesData end` must become `<: TimeSeriesData{Float64}`.
 
+## Time series batching and transactions
+
+One primitive: `open_time_series_store!(data) do context ... end`. Pass `context` to each
+`add_time_series!` inside and they are buffered and written as one bulk call — that batching
+is what buys block-sized array writes and feature-set dedup, which a transaction does not
+provide. The block is also an InfraStore transaction: if it throws, everything it did is
+rolled back, **including removals**, which are irreversible outside one (the store frees an
+array once its last reference goes; inside a transaction that free is deferred to the
+commit).
+
+`context = nothing` (the default) means "no batch": the operation goes straight to the store,
+which is atomic on its own. Read paths take no context and allocate nothing — a
+`TimeSeriesContext` owns an FFI `AddBatch` handle, so constructing one per read would be a
+real cost in per-timestep loops. The batch itself is created lazily on the first stage.
+
+Constraints: blocks nest innermost-first (SQLite savepoints are a stack), an open block holds
+the store's write lock so gather data *before* opening one, and a `DeterministicSingleTimeSeries`
+flushes the buffer before its in-store transform because it needs its backing series present.
+
+Removed in IS4 — do not reintroduce: `begin_time_series_update` (snapshot-diff rollback),
+`bulk_add_time_series!` and `TimeSeriesAssociation` (a six-line loop over the context), the
+`mode` argument to `open_time_series_store!` (never read), and `ADD_TIME_SERIES_BATCH_SIZE`
+(silently ignored).
+
 ## Core Abstractions
 
 - `InfrastructureSystemsComponent`
@@ -258,7 +282,8 @@ TimeSeriesData end` must become `<: TimeSeriesData{Float64}`.
 - **Single testset** (regex on testset names):
   `julia --project=test -e 'include("test/InfrastructureSystemsTests.jl"); run_tests("<name>")'`
 - If the package registry is unreachable (HTTP 403), prefix commands with `JULIA_PKG_SERVER=`.
-- Full-suite baseline (2026-07-05): 8,635 passing.
+- Full-suite baseline (2026-07-26): 8,656 passing, 1 broken.
+- Requires `INFRASTORE_LIB` pointing at `libinfrastore_ffi` (see the InfraStore repo).
 
 ## Common Tasks
 

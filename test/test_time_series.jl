@@ -3732,7 +3732,7 @@ end
     @test_throws ErrorException IS.get_horizon_count(Dates.Hour(1), Dates.Minute(33))
 end
 
-@testset "Test bulk_add_time_series" begin
+@testset "Test batched adds through a context" begin
     sys = IS.SystemData()
     name = "Component1"
     component = IS.TestComponent(name, 5)
@@ -3746,21 +3746,20 @@ end
     horizon_count = 24
 
     make_values(count, index) = ones(count) * index
-    associations = (
-        IS.TimeSeriesAssociation(
-            component,
-            IS.Deterministic(;
+    IS.open_time_series_store!(sys) do context
+        for i in 1:30
+            forecast = IS.Deterministic(;
                 data = SortedDict(
                     initial_time => make_values(horizon_count, i),
                     other_time => make_values(horizon_count, i),
                 ),
                 name = "ts_$(i)", resolution = resolution,
-            );
-            model_year = "high",
-        )
-        for i in 1:30
-    )
-    IS.bulk_add_time_series!(sys, associations; batch_size = 13)
+            )
+            IS.add_time_series!(
+                sys, component, forecast; context = context, model_year = "high",
+            )
+        end
+    end
     ts_keys = IS.get_time_series_keys(component)
     @test length(ts_keys) == 30
     actual_ts_data = Dict(IS.get_name(x) => x for x in ts_keys)
@@ -3778,7 +3777,7 @@ end
     end
 end
 
-@testset "Test bulk_add_time_series with duplicates" begin
+@testset "Test batched adds reject duplicates" begin
     sys = IS.SystemData()
     name = "Component1"
     component = IS.TestComponent(name, 5)
@@ -3797,23 +3796,22 @@ end
         name = "ts", resolution = resolution,
     )
 
-    @test_throws ArgumentError IS.bulk_add_time_series!(
-        sys,
-        [
-            IS.TimeSeriesAssociation(component, forecast; model_year = "high"),
-            IS.TimeSeriesAssociation(component, forecast; model_year = "low"),
-            IS.TimeSeriesAssociation(component, forecast; model_year = "high"),
-        ],
-    )
+    # A duplicate anywhere in the batch rejects the whole batch.
+    @test_throws ArgumentError IS.open_time_series_store!(sys) do context
+        for year in ("high", "low", "high")
+            IS.add_time_series!(
+                sys, component, forecast; context = context, model_year = year,
+            )
+        end
+    end
+    @test isempty(IS.get_time_series_keys(component))
 
-    @test_throws ArgumentError IS.bulk_add_time_series!(
-        sys,
-        [
-            IS.TimeSeriesAssociation(component, forecast),
-            IS.TimeSeriesAssociation(component, forecast),
-            IS.TimeSeriesAssociation(component, forecast),
-        ],
-    )
+    @test_throws ArgumentError IS.open_time_series_store!(sys) do context
+        for _ in 1:3
+            IS.add_time_series!(sys, component, forecast; context = context)
+        end
+    end
+    @test isempty(IS.get_time_series_keys(component))
 end
 
 @testset "Test bulk addition of time series with transaction" begin
@@ -3830,7 +3828,7 @@ end
     horizon_count = 24
 
     make_values(count, index) = ones(count) * index
-    IS.begin_time_series_update(sys.time_series_manager) do
+    IS.open_time_series_store!(sys) do context
         for i in 1:5
             forecast = IS.Deterministic(;
                 data = SortedDict(
@@ -3839,7 +3837,9 @@ end
                 ),
                 name = "ts_$(i)", resolution = resolution,
             )
-            IS.add_time_series!(sys, component, forecast; model_year = "high")
+            IS.add_time_series!(
+                sys, component, forecast; context = context, model_year = "high",
+            )
         end
     end
     ts_keys = IS.get_time_series_keys(component)
@@ -3885,7 +3885,7 @@ end
 
     @test_throws(
         ArgumentError,
-        IS.begin_time_series_update(sys.time_series_manager) do
+        IS.open_time_series_store!(sys) do context
             for i in 1:5
                 if i < 5
                     name = "ts_$i"
@@ -3899,7 +3899,7 @@ end
                     ),
                     name = name, resolution = resolution,
                 )
-                IS.add_time_series!(sys, component, forecast)
+                IS.add_time_series!(sys, component, forecast; context = context)
             end
         end,
     )
@@ -5316,4 +5316,85 @@ end
     @test window == w0
     full = IS.get_time_series(IS.Probabilistic, c, "load")
     @test window == TimeSeries.values(IS.get_window(full, t0))
+end
+
+@testset "Test time series context rollback" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    make_ts(name, base) = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = 8, step = resolution),
+            collect(base:(base + 7.0)),
+        ),
+        name = name,
+    )
+
+    IS.add_time_series!(sys, component, make_ts("keep", 0.0))
+
+    # A throwing block undoes everything it did -- adds and removals alike.
+    # Outside a block the removal would be irreversible: the store frees the
+    # array as soon as its last reference goes.
+    @test_throws ErrorException IS.open_time_series_store!(sys) do context
+        IS.add_time_series!(sys, component, make_ts("added", 100.0); context = context)
+        IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "keep")
+        error("boom")
+    end
+    keys = IS.get_time_series_keys(component)
+    @test length(keys) == 1
+    @test IS.get_name(keys[1]) == "keep"
+    # The data came back, not just the catalog row.
+    restored = IS.get_time_series(IS.SingleTimeSeries, component, "keep")
+    @test TimeSeries.values(IS.get_data(restored))[1] == 0.0
+
+    # A clean block commits.
+    IS.open_time_series_store!(sys) do context
+        IS.add_time_series!(sys, component, make_ts("added", 100.0); context = context)
+    end
+    @test length(IS.get_time_series_keys(component)) == 2
+end
+
+@testset "Test time series context nesting and reuse" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    make_ts(name) = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = 8, step = resolution), collect(1.0:8.0),
+        ),
+        name = name,
+    )
+
+    # Blocks nest innermost-first: an inner failure undoes only its own work and
+    # leaves the enclosing block usable.
+    outer_context = nothing
+    IS.open_time_series_store!(sys) do context
+        outer_context = context
+        IS.add_time_series!(sys, component, make_ts("outer"); context = context)
+        @test_throws ErrorException IS.open_time_series_store!(sys) do inner
+            IS.add_time_series!(sys, component, make_ts("inner"); context = inner)
+            error("inner failed")
+        end
+    end
+    names = Set(IS.get_name(k) for k in IS.get_time_series_keys(component))
+    @test names == Set(["outer"])
+
+    # A context is valid only inside its own block.
+    @test_throws ArgumentError IS.add_time_series!(
+        sys, component, make_ts("late"); context = outer_context,
+    )
+
+    # A context from one system cannot be used against another.
+    other = IS.SystemData()
+    other_component = IS.TestComponent("Other", 5)
+    IS.add_component!(other, other_component)
+    IS.open_time_series_store!(sys) do context
+        @test_throws ArgumentError IS.add_time_series!(
+            other, other_component, make_ts("foreign"); context = context,
+        )
+    end
 end

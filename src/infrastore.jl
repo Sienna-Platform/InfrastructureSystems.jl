@@ -875,11 +875,35 @@ end
 # batch-sized datasets with whole-chunk writes (no per-add read-modify-write).
 # A `DeterministicSingleTimeSeries` cannot be staged — it is derived in-store
 # from its underlying `SingleTimeSeries` — so its presence routes the whole
-# batch through the legacy per-add path (see `bulk_add_time_series!`).
+# batch through the per-add path (see `_stage_on_context!`).
 
 # Whether an association must go through the per-add transform path.
 _infrastore_needs_transform(::TimeSeriesData) = false
 _infrastore_needs_transform(::DeterministicSingleTimeSeries) = true
+
+"""
+Commit a staged `AddBatch` to the store as one all-or-nothing bulk add.
+
+The backend packs the arrays into batch-sized datasets written whole-chunk, so
+this is materially cheaper than the same adds issued one at a time — which is why
+the client-side buffer exists even though the store now has transactions.
+"""
+function _infrastore_commit_batch!(mgr::AbstractTimeSeriesManager, batch)
+    try
+        InfraStore.add_time_series_bulk!(mgr.data_store.inner, batch)
+    catch e
+        if e isa InfraStore.DuplicateAssociationError ||
+           e isa InfraStore.DuplicateTimeSeriesError
+            throw(
+                ArgumentError(
+                    "Time series data with duplicate attributes are already stored"),
+            )
+        end
+        rethrow()
+    end
+    flush!(mgr.data_store)
+    return
+end
 
 """
 Stage one `(owner, time_series)` association onto `batch`, applying the same
@@ -1568,9 +1592,10 @@ end
 const _INFRASTORE_IS_TYPES =
     Dict(nameof(c) => k for (c, k) in _INFRASTORE_TYPE_PAIRS)
 _infrastore_is_type(t::Type) = _infrastore_is_type(nameof(t))
-_infrastore_is_type(s::Symbol) = get(_INFRASTORE_IS_TYPES, s) do
-    error("InfraStore backend does not support time series type $s")
-end
+_infrastore_is_type(s::Symbol) =
+    get(_INFRASTORE_IS_TYPES, s) do
+        error("InfraStore backend does not support time series type $s")
+    end
 
 # Whether a stored row of concrete type `row_type` satisfies a query for type `T`.
 # Mirrors the metadata-store semantics: a `Deterministic` (or `AbstractDeterministic`)

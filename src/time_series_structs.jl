@@ -121,31 +121,3 @@ attributes.
     static_time_series_count::Int
     forecast_count::Int
 end
-
-"""
-Defines an association between a time series owner (component or supplemental attribute)
-and the time series metadata.
-
-# Examples
-```julia
-association1 = TimeSeriesAssociation(component, time_series)
-association2 = TimeSeriesAssociation(component, time_series, scenario = "high")
-```
-"""
-struct TimeSeriesAssociation
-    owner::TimeSeriesOwners
-    time_series::TimeSeriesData
-    features::Dict{Symbol, Any}
-end
-
-function TimeSeriesAssociation(owner, time_series; features...)
-    return TimeSeriesAssociation(owner, time_series, features)
-end
-
-function TimeSeriesAssociation(owner, time_series, features::Dict{String, Any})
-    return TimeSeriesAssociation(
-        owner,
-        time_series,
-        Dict{Symbol, Any}(Symbol(k) => v for (k, v) in features),
-    )
-end

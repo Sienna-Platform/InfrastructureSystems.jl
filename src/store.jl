@@ -100,17 +100,3 @@ function _infrastore_compression_kwargs(c::CompressionSettings)
         "use CompressionTypes.DEFLATE or disable compression (enabled=false).",
     )
 end
-
-"""
-Open the storage for a batch of operations. The InfraStore backend has no file handle
-to manage at this layer, so this just runs `func`.
-"""
-function open_store!(
-    func::Function,
-    ::Store,
-    mode = "r",
-    args...;
-    kwargs...,
-)
-    return func(args...; kwargs...)
-end

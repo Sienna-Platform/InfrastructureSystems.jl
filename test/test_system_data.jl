@@ -637,33 +637,31 @@ end
         ts_name = "test"
         component_names = String[]
 
-        IS.open_time_series_store!(sys, "r+") do
+        IS.open_time_series_store!(sys) do context
             for (i, ta) in enumerate(arrays)
                 name = "component_$(i)"
                 component = IS.TestComponent(name, 3)
                 IS.add_component!(sys, component)
                 push!(component_names, name)
                 ts = IS.SingleTimeSeries(; data = ta, name = ts_name)
-                IS.add_time_series!(sys, component, ts)
+                IS.add_time_series!(sys, component, ts; context = context)
             end
         end
 
-        IS.open_time_series_store!(sys, "r") do
-            for (i, expected_array) in enumerate(arrays)
-                name = component_names[i]
-                component = IS.get_component(IS.TestComponent, sys, name)
-                @test !isnothing(component)
-                ts = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
-                @test IS.get_data(ts) == expected_array
-            end
+        for (i, expected_array) in enumerate(arrays)
+            name = component_names[i]
+            component = IS.get_component(IS.TestComponent, sys, name)
+            @test !isnothing(component)
+            ts = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
+            @test IS.get_data(ts) == expected_array
         end
     end
 end
 
-@testset "Test bulk add of time series via function with args and kwargs" begin
-    function add_time_series(sys_data, component, ta; ts_name)
+@testset "Test bulk add of time series via a helper function" begin
+    function add_time_series(sys_data, component, ta, context; ts_name)
         ts = IS.SingleTimeSeries(; data = ta, name = ts_name)
-        IS.add_time_series!(sys_data, component, ts)
+        IS.add_time_series!(sys_data, component, ts; context = context)
     end
 
     for in_memory in (false, true)
@@ -677,15 +675,9 @@ end
         name = "component"
         component = IS.TestComponent(name, 3)
         IS.add_component!(sys, component)
-        IS.open_time_series_store!(
-            add_time_series,
-            sys,
-            "r+",
-            sys,
-            component,
-            ta;
-            ts_name = ts_name,
-        )
+        IS.open_time_series_store!(sys) do context
+            add_time_series(sys, component, ta, context; ts_name = ts_name)
+        end
 
         ts = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
         @test IS.get_data(ts) == ta

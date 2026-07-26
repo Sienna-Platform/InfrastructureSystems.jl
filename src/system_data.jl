@@ -127,20 +127,26 @@ function get_next_supplemental_attribute_id!(data::SystemData)
     return id
 end
 
-function open_time_series_store!(
-    func::Function,
-    data::SystemData,
-    mode = "r",
-    args...;
-    kwargs...,
-)
-    open_store!(
-        func,
-        data.time_series_manager.data_store,
-        mode,
-        args...;
-        kwargs...,
-    )
+"""
+Open a batch of time series work and run `func` on it, inside a store transaction.
+
+Additions made through the yielded [`TimeSeriesContext`](@ref) are buffered and
+written as one bulk call. The block commits when `func` returns; if it throws,
+everything the block did is rolled back — **including removals**, which are
+recoverable only in here.
+
+Blocks nest innermost-first.
+
+```julia
+open_time_series_store!(data) do context
+    for (component, profile) in profiles
+        add_time_series!(data, component, profile; context = context)
+    end
+end
+```
+"""
+function open_time_series_store!(func::Function, data::SystemData)
+    return open_time_series_store!(func, data.time_series_manager)
 end
 
 """
@@ -158,6 +164,7 @@ function add_time_series!(
     data::SystemData,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
+    context::Union{Nothing, TimeSeriesContext} = nothing,
     features...,
 )
     _validate(data, owner)
@@ -165,16 +172,9 @@ function add_time_series!(
         data.time_series_manager,
         owner,
         time_series;
+        context = context,
         features...,
     )
-end
-
-function bulk_add_time_series!(
-    data::SystemData,
-    associations;
-    batch_size = ADD_TIME_SERIES_BATCH_SIZE,
-)
-    bulk_add_time_series!(data.time_series_manager, associations; batch_size = batch_size)
 end
 
 """
@@ -195,21 +195,28 @@ function add_time_series!(
     data::SystemData,
     components,
     time_series::TimeSeriesData;
+    context::Union{Nothing, TimeSeriesContext} = nothing,
     features...,
 )
+    # Component information is not embedded into the key, so every component
+    # produces the same one.
     key = nothing
-    for component in components
-        # Component information is not embedded into the key and so it will always be the
-        # same.
-        key = add_time_series!(
-            data,
-            component,
-            time_series;
-            features...,
-        )
+    _with_context(data.time_series_manager, context) do ctx
+        for component in components
+            key = add_time_series!(data, component, time_series; context = ctx, features...)
+        end
     end
-
     return key
+end
+
+# Run `func` on the caller's context, or on a block opened for just this call so
+# the components are added as one batch and land atomically.
+function _with_context(func::Function, mgr::TimeSeriesManager, context::TimeSeriesContext)
+    return func(context)
+end
+
+function _with_context(func::Function, mgr::TimeSeriesManager, ::Nothing)
+    return open_time_series_store!(func, mgr)
 end
 
 """

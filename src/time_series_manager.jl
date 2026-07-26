@@ -1,6 +1,3 @@
-# Adds can be batched through `begin_time_series_update` to amortize store flushes.
-const ADD_TIME_SERIES_BATCH_SIZE = 100
-
 mutable struct TimeSeriesManager <: AbstractTimeSeriesManager
     data_store::Store
     read_only::Bool
@@ -64,102 +61,86 @@ function _infrastore_features(features)
 end
 
 """
-Begin an update of time series. Use this function when adding many time series arrays
-in order to improve performance by amortizing store flushes across the batch.
+Open a batch of time series work and run `func` on it, inside a store transaction.
 
-If an error occurs during the update, time series added within it are rolled back.
+Additions made through the yielded [`TimeSeriesContext`](@ref) are buffered and
+written as one bulk call, so the store pays one catalog transaction for the block
+instead of one per series. The block commits when `func` returns.
+
+If `func` throws, the transaction is rolled back and the whole block is undone —
+buffered additions never reached the store, and everything that did, **including
+removals**, is reversed. A removal is recoverable only in here; outside a block the
+store frees the array as soon as its last reference goes.
+
+Blocks nest innermost-first: an inner block must finish before the one enclosing
+it.
+
+```julia
+open_time_series_store!(mgr) do context
+    for (component, profile) in profiles
+        add_time_series!(mgr, component, profile; context = context)
+    end
+end
+```
 """
-function begin_time_series_update(
-    func::Function,
-    mgr::TimeSeriesManager,
-)
-    store = mgr.data_store
-    before = Set(infrastore_row_identity(r) for r in InfraStore.list_keys(store.inner))
-    try
-        func()
-        flush!(store)
-    catch
-        # Roll back: remove associations added during this update so the store is
-        # left consistent with its pre-update state.
-        for row in InfraStore.list_keys(store.inner)
-            infrastore_row_identity(row) in before && continue
-            try
-                infrastore_remove_row!(store, row)
-            catch
-                # Best-effort cleanup; ignore rows already gone.
-            end
-        end
-        rethrow()
-    end
-    return
-end
-
-function bulk_add_time_series!(
-    mgr::TimeSeriesManager,
-    associations;
-    kwargs...,
-)
+function open_time_series_store!(func::Function, mgr::TimeSeriesManager)
     _throw_if_read_only(mgr)
-    assocs = collect(associations)
-    # A DeterministicSingleTimeSeries is derived in-store from its underlying
-    # SingleTimeSeries, so it cannot be staged onto a batch; route such batches
-    # through the per-add path (with its diff-based rollback).
-    if any(a -> _infrastore_needs_transform(a.time_series), assocs)
-        ts_keys = TimeSeriesKey[]
-        begin_time_series_update(mgr) do
-            for association in assocs
-                key = add_time_series!(
-                    mgr,
-                    association.owner,
-                    association.time_series; association.features...,
-                )
-                push!(ts_keys, key)
-            end
-        end
-        return ts_keys
-    end
-
-    # Fast path: stage everything onto one `AddBatch` and commit once — a single
-    # metadata transaction, and the backend packs the arrays into batch-sized
-    # datasets written whole-chunk (no per-add read-modify-write). The commit is
-    # all-or-nothing, so no catalog snapshot is needed for rollback.
-    batch = InfraStore.AddBatch()
-    params_cache = Dict{Tuple{Dates.Period, Dates.Period}, Any}()
-    ts_keys = Vector{TimeSeriesKey}(undef, length(assocs))
-    for (i, association) in enumerate(assocs)
-        ts_keys[i] = _infrastore_stage!(
-            batch,
-            mgr,
-            params_cache,
-            association.owner,
-            association.time_series;
-            association.features...,
-        )
-    end
-    try
-        InfraStore.add_time_series_bulk!(mgr.data_store.inner, batch)
-    catch e
-        if e isa InfraStore.DuplicateAssociationError ||
-           e isa InfraStore.DuplicateTimeSeriesError
-            throw(
-                ArgumentError(
-                    "Time series data with duplicate attributes are already stored"),
-            )
-        end
+    context = TimeSeriesContext(mgr)
+    begin_transaction!(context)
+    result = try
+        func(context)
+    catch
+        discard!(context)
         rethrow()
     end
-    flush!(mgr.data_store)
-    return ts_keys
+    commit!(context)
+    return result
 end
 
+"""
+Add a time series, buffering it on `context` when one is given.
+
+With no context the add goes straight to the store, which is atomic on its own.
+"""
 function add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
+    context::Union{Nothing, TimeSeriesContext} = nothing,
     features...,
 )
     _throw_if_read_only(mgr)
-    return infrastore_add_time_series!(mgr, owner, time_series; features...)
+    isnothing(context) &&
+        return infrastore_add_time_series!(mgr, owner, time_series; features...)
+    _throw_if_foreign(context, mgr)
+    return _stage_on_context!(context, owner, time_series; features...)
+end
+
+# A DeterministicSingleTimeSeries is derived in-store from its backing
+# SingleTimeSeries, so it cannot be staged onto a batch. It needs that series
+# physically present, which is the same condition a read imposes: flush, then
+# perform the transform directly. Inside a transaction the flush is still
+# undoable, so this costs nothing beyond the early write.
+function _stage_on_context!(
+    context::TimeSeriesContext,
+    owner::TimeSeriesOwners,
+    time_series::TimeSeriesData;
+    features...,
+)
+    if _infrastore_needs_transform(time_series)
+        flush!(context)
+        return infrastore_add_time_series!(context.mgr, owner, time_series; features...)
+    end
+    key = _infrastore_stage!(
+        _batch!(context),
+        context.mgr,
+        context.params_cache,
+        owner,
+        time_series;
+        features...,
+    )
+    push!(context.keys, key)
+    return key
 end
 
 function clear_time_series!(mgr::TimeSeriesManager)
