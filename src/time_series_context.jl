@@ -11,7 +11,7 @@ cannot do for the caller:
     for compatibility against each other as well as against the store, with one
     catalog query per `(resolution, interval)` group rather than one per add.
 
-Atomicity belongs to the store. A context from [`open_time_series_store!`](@ref)
+Atomicity belongs to the store. A context from [`time_series_transaction`](@ref)
 opens an InfraStore transaction and commits or rolls it back on exit, so undoing a
 failed block is one call. Because the write lands *inside* that transaction,
 draining the buffer part-way through a block costs nothing in recoverability —
@@ -67,7 +67,7 @@ function _throw_if_closed(context::TimeSeriesContext)
     context.closed && throw(
         ArgumentError(
             "This time series context is closed. A context is valid only inside the " *
-            "open_time_series_store! block that created it; open a new one.",
+            "time_series_transaction block that created it; open a new one.",
         ),
     )
     return
@@ -93,7 +93,7 @@ end
 """
 Open the store transaction backing `context`.
 
-Called by [`open_time_series_store!`](@ref). A context used for a single operation
+Called by [`time_series_transaction`](@ref). A context used for a single operation
 skips this: that operation is already atomic, and taking the write lock for it
 would be wasted work — and would fail outright on a read-only store.
 """

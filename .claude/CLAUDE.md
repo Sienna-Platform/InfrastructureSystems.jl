@@ -236,7 +236,7 @@ TimeSeriesData end` must become `<: TimeSeriesData{Float64}`.
 
 ## Time series batching and transactions
 
-One primitive: `open_time_series_store!(data) do context ... end`. Pass `context` to each
+One primitive: `time_series_transaction(data) do context ... end`. Pass `context` to each
 `add_time_series!` inside and they are buffered and written as one bulk call — that batching
 is what buys block-sized array writes and feature-set dedup, which a transaction does not
 provide. The block is also an InfraStore transaction: if it throws, everything it did is
@@ -254,9 +254,10 @@ the store's write lock so gather data *before* opening one, and a `Deterministic
 flushes the buffer before its in-store transform because it needs its backing series present.
 
 Removed in IS4 — do not reintroduce: `begin_time_series_update` (snapshot-diff rollback),
-`bulk_add_time_series!` and `TimeSeriesAssociation` (a six-line loop over the context), the
-`mode` argument to `open_time_series_store!` (never read), and `ADD_TIME_SERIES_BATCH_SIZE`
-(silently ignored).
+`open_time_series_store!` and its `mode` argument (named an HDF5 handle that no longer
+exists; the arg was never read — renamed to `time_series_transaction`),
+`bulk_add_time_series!` and `TimeSeriesAssociation` (a six-line loop over the context), and
+`ADD_TIME_SERIES_BATCH_SIZE` (silently ignored).
 
 ## Core Abstractions
 

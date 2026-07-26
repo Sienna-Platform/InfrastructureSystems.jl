@@ -3746,7 +3746,7 @@ end
     horizon_count = 24
 
     make_values(count, index) = ones(count) * index
-    IS.open_time_series_store!(sys) do context
+    IS.time_series_transaction(sys) do context
         for i in 1:30
             forecast = IS.Deterministic(;
                 data = SortedDict(
@@ -3797,7 +3797,7 @@ end
     )
 
     # A duplicate anywhere in the batch rejects the whole batch.
-    @test_throws ArgumentError IS.open_time_series_store!(sys) do context
+    @test_throws ArgumentError IS.time_series_transaction(sys) do context
         for year in ("high", "low", "high")
             IS.add_time_series!(
                 sys, component, forecast; context = context, model_year = year,
@@ -3806,7 +3806,7 @@ end
     end
     @test isempty(IS.get_time_series_keys(component))
 
-    @test_throws ArgumentError IS.open_time_series_store!(sys) do context
+    @test_throws ArgumentError IS.time_series_transaction(sys) do context
         for _ in 1:3
             IS.add_time_series!(sys, component, forecast; context = context)
         end
@@ -3828,7 +3828,7 @@ end
     horizon_count = 24
 
     make_values(count, index) = ones(count) * index
-    IS.open_time_series_store!(sys) do context
+    IS.time_series_transaction(sys) do context
         for i in 1:5
             forecast = IS.Deterministic(;
                 data = SortedDict(
@@ -3885,7 +3885,7 @@ end
 
     @test_throws(
         ArgumentError,
-        IS.open_time_series_store!(sys) do context
+        IS.time_series_transaction(sys) do context
             for i in 1:5
                 if i < 5
                     name = "ts_$i"
@@ -5337,7 +5337,7 @@ end
     # A throwing block undoes everything it did -- adds and removals alike.
     # Outside a block the removal would be irreversible: the store frees the
     # array as soon as its last reference goes.
-    @test_throws ErrorException IS.open_time_series_store!(sys) do context
+    @test_throws ErrorException IS.time_series_transaction(sys) do context
         IS.add_time_series!(sys, component, make_ts("added", 100.0); context = context)
         IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "keep")
         error("boom")
@@ -5350,7 +5350,7 @@ end
     @test TimeSeries.values(IS.get_data(restored))[1] == 0.0
 
     # A clean block commits.
-    IS.open_time_series_store!(sys) do context
+    IS.time_series_transaction(sys) do context
         IS.add_time_series!(sys, component, make_ts("added", 100.0); context = context)
     end
     @test length(IS.get_time_series_keys(component)) == 2
@@ -5372,10 +5372,10 @@ end
     # Blocks nest innermost-first: an inner failure undoes only its own work and
     # leaves the enclosing block usable.
     outer_context = nothing
-    IS.open_time_series_store!(sys) do context
+    IS.time_series_transaction(sys) do context
         outer_context = context
         IS.add_time_series!(sys, component, make_ts("outer"); context = context)
-        @test_throws ErrorException IS.open_time_series_store!(sys) do inner
+        @test_throws ErrorException IS.time_series_transaction(sys) do inner
             IS.add_time_series!(sys, component, make_ts("inner"); context = inner)
             error("inner failed")
         end
@@ -5392,7 +5392,7 @@ end
     other = IS.SystemData()
     other_component = IS.TestComponent("Other", 5)
     IS.add_component!(other, other_component)
-    IS.open_time_series_store!(sys) do context
+    IS.time_series_transaction(sys) do context
         @test_throws ArgumentError IS.add_time_series!(
             other, other_component, make_ts("foreign"); context = context,
         )

@@ -76,14 +76,14 @@ Blocks nest innermost-first: an inner block must finish before the one enclosing
 it.
 
 ```julia
-open_time_series_store!(mgr) do context
+time_series_transaction(mgr) do context
     for (component, profile) in profiles
         add_time_series!(mgr, component, profile; context = context)
     end
 end
 ```
 """
-function open_time_series_store!(func::Function, mgr::TimeSeriesManager)
+function time_series_transaction(func::Function, mgr::TimeSeriesManager)
     _throw_if_read_only(mgr)
     context = TimeSeriesContext(mgr)
     begin_transaction!(context)

@@ -39,7 +39,7 @@ and deleted together:
     from `tempdir()`. This can be changed via `time_series_directory` if the data is larger than
     the available tmp space. Refer to the [`InfrastructureSystems.SystemData`](@ref) link above.
   - By default, the call to `add_time_series!` writes per call, which has overhead. If you will
-    add thousands of time series arrays, batch them with `open_time_series_store!`: pass the
+    add thousands of time series arrays, batch them with `time_series_transaction`: pass the
     yielded context to each `add_time_series!` and they are written as one bulk call.
     The block is also a transaction — if it throws, everything it did is rolled back,
     **including removals**, which are irreversible outside one. Hold the block only for the

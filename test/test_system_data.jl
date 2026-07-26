@@ -637,7 +637,7 @@ end
         ts_name = "test"
         component_names = String[]
 
-        IS.open_time_series_store!(sys) do context
+        IS.time_series_transaction(sys) do context
             for (i, ta) in enumerate(arrays)
                 name = "component_$(i)"
                 component = IS.TestComponent(name, 3)
@@ -675,7 +675,7 @@ end
         name = "component"
         component = IS.TestComponent(name, 3)
         IS.add_component!(sys, component)
-        IS.open_time_series_store!(sys) do context
+        IS.time_series_transaction(sys) do context
             add_time_series(sys, component, ta, context; ts_name = ts_name)
         end
 

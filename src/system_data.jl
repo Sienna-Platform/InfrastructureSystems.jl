@@ -138,15 +138,15 @@ recoverable only in here.
 Blocks nest innermost-first.
 
 ```julia
-open_time_series_store!(data) do context
+time_series_transaction(data) do context
     for (component, profile) in profiles
         add_time_series!(data, component, profile; context = context)
     end
 end
 ```
 """
-function open_time_series_store!(func::Function, data::SystemData)
-    return open_time_series_store!(func, data.time_series_manager)
+function time_series_transaction(func::Function, data::SystemData)
+    return time_series_transaction(func, data.time_series_manager)
 end
 
 """
@@ -216,7 +216,7 @@ function _with_context(func::Function, mgr::TimeSeriesManager, context::TimeSeri
 end
 
 function _with_context(func::Function, mgr::TimeSeriesManager, ::Nothing)
-    return open_time_series_store!(func, mgr)
+    return time_series_transaction(func, mgr)
 end
 
 """
