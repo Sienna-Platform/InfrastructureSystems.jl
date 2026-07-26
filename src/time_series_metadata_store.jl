@@ -1,6 +1,26 @@
 const ASSOCIATIONS_TABLE_NAME = "time_series_associations"
 const METADATA_TABLE_NAME = "time_series_metadata"
 const KEY_VALUE_TABLE_NAME = "key_value_store"
+# Column order must match the tuple returned by _create_row and the associations schema.
+const ASSOCIATIONS_TABLE_COLUMNS = (
+    "id",
+    "time_series_uuid",
+    "time_series_type",
+    "initial_timestamp",
+    "resolution",
+    "horizon",
+    "interval",
+    "window_count",
+    "length",
+    "name",
+    "owner_uuid",
+    "owner_type",
+    "owner_category",
+    "features",
+    "scaling_factor_multiplier",
+    "metadata_uuid",
+    "units",
+)
 const DB_FILENAME = "time_series_metadata.db"
 # This version is also used in the Python package infrasys.
 const TS_METADATA_FORMAT_VERSION = "1.1.0"
@@ -328,25 +348,7 @@ function _add_migrated_rows!(store::TimeSeriesMetadataStore, rows)
     _add_rows!(
         store.db,
         rows,
-        (
-            "id",
-            "time_series_uuid",
-            "time_series_type",
-            "initial_timestamp",
-            "resolution",
-            "horizon",
-            "interval",
-            "window_count",
-            "length",
-            "name",
-            "owner_uuid",
-            "owner_type",
-            "owner_category",
-            "features",
-            "scaling_factor_multiplier",
-            "metadata_uuid",
-            "units",
-        ),
+        ASSOCIATIONS_TABLE_COLUMNS,
         ASSOCIATIONS_TABLE_NAME,
     )
     _create_key_value_table!(store)

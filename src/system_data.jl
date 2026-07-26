@@ -707,6 +707,15 @@ function _transform_single_time_series!(
     return
 end
 
+# Every requested feature key-value pair must be present in the existing metadata's
+# features. This is an intentionally exact match, stricter than the SQL LIKE-based
+# partial feature match in list_metadata, which can over-match on substrings
+# (e.g., a request for key=1 matches a stored key=10) and on LIKE wildcard
+# characters in string values.
+_features_contain(existing_features, requested_features) =
+    all(kv -> get(existing_features, kv.first, nothing) === kv.second,
+        requested_features)
+
 """
 Check that all existing SingleTimeSeries can be converted to DeterministicSingleTimeSeries
 with the given horizon and interval.
@@ -724,12 +733,38 @@ function _check_transform_single_time_series(
     resolution::Union{Nothing, Dates.Period};
     skip_existing::Bool = false,
 )
+    store = data.time_series_manager.metadata_store
     items = list_metadata_with_owner_uuid(
-        data.time_series_manager.metadata_store,
+        store,
         InfrastructureSystemsComponent;
         time_series_type = SingleTimeSeries,
         resolution = resolution,
     )
+
+    # The loop below runs once per SingleTimeSeries (potentially tens of thousands). To
+    # avoid issuing one or more SQLite queries per iteration we build lookups up front:
+    # - system forecast parameters depend only on (resolution, interval), so memoize them.
+    # - fetch all existing Deterministic and DeterministicSingleTimeSeries metadata with
+    #   one query and index it by (owner_uuid, name, resolution). The per-series conflict
+    #   and skip_existing checks then run in memory against this lookup.
+    forecast_params_cache =
+        Dict{Tuple{Dates.Period, Dates.Period}, Union{Nothing, ForecastParameters}}()
+    existing_forecasts =
+        Dict{Tuple{Base.UUID, String, String}, Vector{TimeSeriesMetadata}}()
+    for entry in list_metadata_with_owner_uuid(
+        store,
+        InfrastructureSystemsComponent;
+        # Note: Deterministic matches both Deterministic and DeterministicSingleTimeSeries.
+        time_series_type = Deterministic,
+    )
+        key = (
+            entry.owner_uuid,
+            get_name(entry.metadata),
+            _serialize_period(get_resolution(entry.metadata)),
+        )
+        push!(get!(() -> TimeSeriesMetadata[], existing_forecasts, key), entry.metadata)
+    end
+
     components_with_params_and_metadata = NamedTuple[]
     for item in items
         params = _check_single_time_series_transformed_parameters(
@@ -738,13 +773,24 @@ function _check_transform_single_time_series(
             horizon,
             interval,
         )
-        system_params = get_forecast_parameters(
-            data.time_series_manager.metadata_store;
-            resolution = params.resolution,
-            interval = params.interval,
-        )
+        system_params = get!(forecast_params_cache, (params.resolution, params.interval)) do
+            get_forecast_parameters(
+                store;
+                resolution = params.resolution,
+                interval = params.interval,
+            )
+        end
         check_params_compatibility(system_params, params)
         component = get_component(data, item.owner_uuid)
+
+        ts_name = get_name(item.metadata)
+        ts_resolution = get_resolution(item.metadata)
+        ts_features = get_features(item.metadata)
+        existing = get(
+            existing_forecasts,
+            (item.owner_uuid, ts_name, _serialize_period(ts_resolution)),
+            nothing,
+        )
 
         # We do not allow a component to have both Deterministic and
         # DeterministicSingleTimeSeries with the same parameters.
@@ -752,47 +798,31 @@ function _check_transform_single_time_series(
         # Deterministic forecasts. If other components already have Deterministic forecasts,
         # this check will fail.
         # transform_single_time_series! cannot be called at the component level.
-        # Note: has_metadata with Deterministic matches both Deterministic and
-        # DeterministicSingleTimeSeries. Use list_metadata and filter to check only for
-        # actual Deterministic forecasts.
-        ts_name = get_name(item.metadata)
-        ts_resolution = get_resolution(item.metadata)
-        ts_features = get_features(item.metadata)
-        ts_features_symbols = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in ts_features)
-        existing_det = list_metadata(
-            data.time_series_manager.metadata_store,
-            component;
-            time_series_type = Deterministic,
-            name = ts_name,
-            resolution = ts_resolution,
-            ts_features_symbols...,
-        )
-        if any(m -> get_time_series_type(m) === Deterministic, existing_det)
-            throw(
-                ConflictingInputsError(
-                    "Cannot transform SingleTimeSeries to DeterministicSingleTimeSeries: " *
-                    "A Deterministic forecast already exists for component $(summary(component)) " *
-                    "with name='$ts_name', resolution=$ts_resolution, and features=$ts_features",
-                ),
-            )
-        end
-
-        # If skip_existing is true, skip SingleTimeSeries entries that already have a
-        # DeterministicSingleTimeSeries with the same name, resolution, features,
-        # horizon, and interval.
-        if skip_existing
-            existing = list_metadata(
-                data.time_series_manager.metadata_store,
-                component;
-                time_series_type = DeterministicSingleTimeSeries,
-                name = ts_name,
-                resolution = ts_resolution,
-                ts_features_symbols...,
-            )
+        if !isnothing(existing)
             if any(
                 m ->
-                    get_horizon(m) == params.horizon &&
-                        get_interval(m) == params.interval,
+                    get_time_series_type(m) === Deterministic &&
+                        _features_contain(get_features(m), ts_features),
+                existing,
+            )
+                throw(
+                    ConflictingInputsError(
+                        "Cannot transform SingleTimeSeries to DeterministicSingleTimeSeries: " *
+                        "A Deterministic forecast already exists for component $(summary(component)) " *
+                        "with name='$ts_name', resolution=$ts_resolution, and features=$ts_features",
+                    ),
+                )
+            end
+
+            # If skip_existing is true, skip SingleTimeSeries entries that already have a
+            # DeterministicSingleTimeSeries with the same name, resolution, features,
+            # horizon, and interval.
+            if skip_existing && any(
+                m ->
+                    get_time_series_type(m) === DeterministicSingleTimeSeries &&
+                        get_horizon(m) == params.horizon &&
+                        get_interval(m) == params.interval &&
+                        _features_contain(get_features(m), ts_features),
                 existing,
             )
                 continue
