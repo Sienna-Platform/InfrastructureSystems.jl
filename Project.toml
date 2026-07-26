@@ -27,6 +27,14 @@ TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
+# InfraStore is not registered yet, so consumers cannot resolve it from a
+# registry. Declaring it here means any downstream package that develops IS by
+# path (PowerSystems, PowerSystemCaseBuilder) resolves it too, instead of each
+# one needing to know where it lives. The path is relative to this file. Drop
+# this section once InfraStore is registered.
+[sources]
+InfraStore = {path = "../../infrastore/julia/InfraStore.jl"}
+
 [compat]
 InfraStore = "0.1"
 DataFrames = "^1.7"
