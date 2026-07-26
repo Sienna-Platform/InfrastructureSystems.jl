@@ -40,10 +40,8 @@ function TimeSeriesManager(;
     return TimeSeriesManager(data_store, read_only)
 end
 
-# (owner_id::Int, owner_type::String, owner_category::String) for the InfraStore FFI.
-# The owner is identified by its integer id; `owner_category` is the String tag
-# ("Component" / "SupplementalAttribute"), converted to a `InfraStore.OwnerCategory`
-# enum via `infrastore_category` at the call sites that need it.
+# (owner_id::Int, owner_type::String, owner_category::InfraStore.OwnerCategory)
+# for the InfraStore binding. The owner is identified by its integer id.
 function _infrastore_owner_args(owner::TimeSeriesOwners)
     return (
         get_id(owner),
@@ -78,9 +76,7 @@ function begin_time_series_update(
     store = mgr.data_store
     before = Set(infrastore_row_identity(r) for r in InfraStore.list_keys(store.inner))
     try
-        open_store!(store, "r+") do
-            func()
-        end
+        func()
         flush!(store)
     catch
         # Roll back: remove associations added during this update so the store is
@@ -174,8 +170,10 @@ end
 
 function clear_time_series!(mgr::TimeSeriesManager, component::TimeSeriesOwners)
     _throw_if_read_only(mgr)
-    owner_id, _, owner_category = _infrastore_owner_args(component)
-    infrastore_clear_owner!(mgr.data_store, owner_id, infrastore_category(owner_category))
+    owner_id, _, category = _infrastore_owner_args(component)
+    # One owner-scoped clear (order-independent, so it is not blocked by the
+    # core's SingleTimeSeries/DST removal guard).
+    InfraStore.clear!(mgr.data_store.inner; owner_id = owner_id, owner_category = category)
     @debug "Cleared time_series in $(summary(component))." _group =
         LOG_GROUP_TIME_SERIES
     return
@@ -229,8 +227,7 @@ function remove_time_series!(
 )
     _throw_if_read_only(mgr)
     store = mgr.data_store
-    owner_id, _, owner_category = _infrastore_owner_args(owner)
-    category = infrastore_category(owner_category)
+    owner_id, _, category = _infrastore_owner_args(owner)
     # Subset (partial) feature/resolution matching: remove every stored series of
     # type `time_series_type` that contains at least the requested features.
     for key in infrastore_owner_list_keys(owner;
@@ -239,36 +236,24 @@ function remove_time_series!(
         mt = get_time_series_type(key)
         res = get_resolution(key)
         feats = _infrastore_features((Symbol(k) => v for (k, v) in get_features(key)))
-        if mt <: SingleTimeSeries
-            # A DeterministicSingleTimeSeries shares the underlying SingleTimeSeries
-            # array, so the base series cannot be removed if doing so would orphan a
-            # DST — i.e. a DST references the array and this is its last backing
-            # SingleTimeSeries. Other components sharing the array make removal safe.
-            hash =
-                get_time_series_metadata(store, owner_id, category, name;
-                    resolution = res, features = feats).data_hash
-            c = infrastore_array_sts_dst_counts(store, hash)
-            if c.dst >= 1 && c.sts <= 1
+        # Pin this key's own interval: a name can carry several forecasts
+        # differing only by interval, so removing by (type, name, resolution)
+        # alone would be ambiguous. The core refuses to remove a
+        # SingleTimeSeries whose array still backs a
+        # DeterministicSingleTimeSeries; surface that as the IS-level error.
+        try
+            InfraStore.remove_time_series!(_infrastore_type(mt), store.inner,
+                owner_id, category, name;
+                resolution = res, interval = get_interval(key), features = feats)
+        catch e
+            if mt <: SingleTimeSeries && e isa InfraStore.InvalidParameterError
                 throw(
                     ArgumentError(
                         "Cannot remove SingleTimeSeries '$name' because it is attached to a " *
                         "DeterministicSingleTimeSeries."),
                 )
             end
-            remove_single!(
-                store,
-                owner_id,
-                category,
-                name;
-                resolution = res,
-                features = feats,
-            )
-        else
-            # Pin this key's own interval: a name can carry several forecasts differing
-            # only by interval, so removing by (type, name, resolution) alone would be
-            # ambiguous.
-            remove_typed!(store, owner_id, category, name, infrastore_ts_code(mt);
-                resolution = res, interval = get_interval(key), features = feats)
+            rethrow()
         end
     end
     return

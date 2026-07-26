@@ -984,8 +984,7 @@ function _copy_time_series!(
 
     store = mgr.data_store::Store
     dst_id, dst_type, _ = _infrastore_owner_args(dst)
-    src_id, _, src_category = _infrastore_owner_args(src)
-    category = infrastore_category(src_category)
+    src_id, _, category = _infrastore_owner_args(src)
 
     # The copy happens entirely inside the store: it clones the association row
     # against the same content-addressed array. Nothing is read into Julia, so no
@@ -1004,12 +1003,12 @@ function _copy_time_series!(
             end
             @debug "Copy ts_key with" _group = LOG_GROUP_TIME_SERIES new_name
         end
-        copy_typed!(
-            store,
+        InfraStore.copy_time_series!(
+            _infrastore_type(get_time_series_type(ts_key)),
+            store.inner,
             src_id,
             category,
             name,
-            infrastore_ts_code(get_time_series_type(ts_key)),
             dst_id,
             dst_type;
             new_name = new_name,

@@ -1361,7 +1361,7 @@ See also [`get_time_series_hash`](@ref) for the hash of one `(owner, key)`.
 function get_time_series_array_groups(data::SystemData; only_shared = true)
     store = data.time_series_manager.data_store::Store
     id_to_owner =
-        (id, category) -> if category == "Component"
+        (id, category) -> if category == InfraStore.Component
             get_component(data, id)
         else
             get_supplemental_attribute(data, id)
@@ -1394,7 +1394,7 @@ function build_forecast_reader(
 ) where {T <: Forecast}
     store = data.time_series_manager.data_store::Store
     id_to_owner =
-        (id, category) -> if category == "Component"
+        (id, category) -> if category == InfraStore.Component
             get_component(data, id)
         else
             get_supplemental_attribute(data, id)
@@ -1461,9 +1461,9 @@ get_num_components_with_supplemental_attributes(data::SystemData) =
     get_num_components_with_attributes(data.supplemental_attribute_manager.associations)
 
 get_num_time_series(data::SystemData) =
-    infrastore_get_num_time_series(data.time_series_manager.data_store)
+    InfraStore.num_distinct_arrays(data.time_series_manager.data_store.inner)
 function get_time_series_counts(data::SystemData)
-    c = infrastore_time_series_counts(data.time_series_manager.data_store)
+    c = InfraStore.time_series_counts(data.time_series_manager.data_store.inner)
     return TimeSeriesCounts(;
         components_with_time_series = c.components_with_time_series,
         supplemental_attributes_with_time_series = c.supplemental_attributes_with_time_series,

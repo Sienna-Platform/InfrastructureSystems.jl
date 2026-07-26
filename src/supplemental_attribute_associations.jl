@@ -81,7 +81,7 @@ Return a `Vector{OrderedDict}` of attribute counts by type, with keys `"type"` a
 """
 function get_attribute_counts_by_type(associations::SupplementalAttributeAssociations)
     return [
-        OrderedDict{String, Any}("type" => row.type, "count" => row.count)
+        OrderedDict{String, Any}("type" => row.attribute_type, "count" => row.count)
         for
         row in InfraStore.supplemental_attribute_counts_by_type(_assoc_store(associations))
     ]

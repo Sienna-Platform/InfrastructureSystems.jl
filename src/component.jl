@@ -8,7 +8,7 @@ function assign_new_id_internal!(data, component::InfrastructureSystemsComponent
     new_id = get_next_component_id!(data)
     mgr = get_time_series_manager(component)
     if !isnothing(mgr)
-        infrastore_replace_component_id!(mgr.data_store, old_id, new_id)
+        InfraStore.replace_owner!(mgr.data_store.inner, old_id, new_id, InfraStore.Component)
     end
 
     associations = _get_supplemental_attribute_associations(component)
