@@ -1,7 +1,7 @@
 """
 Abstract type for time series stored in the system.
 Components reference this data through a [`TimeSeriesKey`](@ref); the data itself is held
-by the `Castore` backend so it can reside on storage media instead of memory.
+by the `InfraStore` backend so it can reside on storage media instead of memory.
 
 `T` is the value element type (`Float64` or a domain type such as `LinearFunctionData`).
 Because it is a parameter of the abstract type, callers can dispatch on the payload type

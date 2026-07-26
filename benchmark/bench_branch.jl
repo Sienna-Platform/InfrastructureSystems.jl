@@ -1,4 +1,4 @@
-const BRANCH_LABEL = "castore"
+const BRANCH_LABEL = "infrastore"
 using Dates
 using InfrastructureSystems
 make_ts(name, t0, resolution, vals) =

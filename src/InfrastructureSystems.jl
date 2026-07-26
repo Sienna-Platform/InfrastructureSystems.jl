@@ -31,7 +31,7 @@ import SHA
 import StringTemplates
 import TerminalLoggers: TerminalLogger, ProgressLevel
 import TimeSeries
-import Castore
+import InfraStore
 import TimerOutputs
 import TOML
 using DataStructures: OrderedDict, SortedDict
@@ -207,7 +207,7 @@ include("time_series_structs.jl")
 include("function_data/time_series_function_data.jl")
 include("time_series_manager.jl")
 include("time_series_interface.jl")
-include("castore.jl")
+include("infrastore.jl")
 include("time_series_cache.jl")
 include("time_series_utils.jl")
 include("supplemental_attribute_associations.jl")

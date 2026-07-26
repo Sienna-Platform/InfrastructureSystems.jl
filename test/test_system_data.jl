@@ -234,7 +234,7 @@ end
     @test IS.get_compression_settings(IS.SystemData()) == none
     @test IS.get_compression_settings(IS.SystemData(; time_series_in_memory = true)) ==
           none
-    # The Castore backend honors the requested compression policy (DEFLATE).
+    # The InfraStore backend honors the requested compression policy (DEFLATE).
     settings =
         IS.CompressionSettings(; enabled = true, type = IS.CompressionTypes.DEFLATE)
     @test IS.get_compression_settings(IS.SystemData(; compression = settings)) == settings
@@ -626,7 +626,7 @@ end
 @testset "Test bulk add of time series" begin
     for in_memory in (false, true)
         sys = IS.SystemData(; time_series_in_memory = in_memory)
-        # The Castore backend honors `time_series_in_memory`: in-memory keeps the
+        # The InfraStore backend honors `time_series_in_memory`: in-memory keeps the
         # store handle off-disk, otherwise it writes a `.nc` (+ `.sqlite`) pair.
         @test IS.stores_time_series_in_memory(sys) == in_memory
         initial_time = Dates.DateTime("2020-09-01")

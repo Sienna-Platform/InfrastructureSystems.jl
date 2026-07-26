@@ -1,5 +1,5 @@
 # Chunked-timing characterization of add_time_series!/get_time_series scaling on
-# the Castore branch. Prints marginal cost per chunk so the growth curve is visible
+# the InfraStore branch. Prints marginal cost per chunk so the growth curve is visible
 # without waiting for a full 100k O(N^2) run.
 using Dates, Random, Printf
 using InfrastructureSystems

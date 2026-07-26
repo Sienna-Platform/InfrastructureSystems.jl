@@ -47,9 +47,9 @@ function create_system_data(;
     return data
 end
 
-# True if the Castore native library is available, so on-disk serialization
-# tests can run. Set CASTORE_LIB for a development build of the library.
-function castore_ts_available()
+# True if the InfraStore native library is available, so on-disk serialization
+# tests can run. Set INFRASTORE_LIB for a development build of the library.
+function infrastore_ts_available()
     try
         store = IS.Store(; in_memory = true)
         IS.close!(store)

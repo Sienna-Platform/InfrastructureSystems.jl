@@ -6,8 +6,8 @@
 
 ## Overview
 
-InfrastructureSystems.jl tracks two kinds of associations, and **both live in Castore**
-(accessed through its `Castore.jl` binding). IS.jl maintains no database of its own:
+InfrastructureSystems.jl tracks two kinds of associations, and **both live in InfraStore**
+(accessed through its `InfraStore.jl` binding). IS.jl maintains no database of its own:
 
  1. **Components/supplemental attributes ↔ time series data** — the backend's time series
     catalog. Both the numerical arrays and the catalog live there. See
@@ -27,9 +27,9 @@ InfrastructureSystems.jl tracks two kinds of associations, and **both live in Ca
 These associations enable fast lookups, efficient filtering, proper lifecycle management
 (add/remove/update), and serialization/deserialization.
 
-## Time Series Associations (Castore backend)
+## Time Series Associations (InfraStore backend)
 
-Time series associations are stored by the `Castore` backend, not by an
+Time series associations are stored by the `InfraStore` backend, not by an
 IS.jl-managed SQLite database. The on-disk artifact is a NetCDF file (`<path>.nc`) for the
 arrays plus a sibling SQLite catalog (`<path>.sqlite`) for the associations; the two files are
 one logical unit and must be moved, copied, and deleted together. Each association is
@@ -38,9 +38,9 @@ the concrete `time_series_type`, together with the array's SHA-256 content hash 
 automatic de-duplication).
 
 For the on-disk layout, the catalog columns and indexes, and the `DATA_FORMAT_VERSION`
-compatibility contract, see [Time Series Data](@ref) and the `Castore` repository's
+compatibility contract, see [Time Series Data](@ref) and the `InfraStore` repository's
 file-format reference. The IS.jl glue lives in
-[`src/castore.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/castore.jl).
+[`src/infrastore.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/infrastore.jl).
 
 !!! note "Component and time series identifiers"
     
@@ -53,7 +53,7 @@ file-format reference. The IS.jl glue lives in
 `SupplementalAttributeAssociations` is the adapter over the backend's
 `supplemental_attribute_associations` table. It keeps the dispatch-based IS.jl API — the
 `Type`-taking overloads of `has_association`, `list_associated_component_ids`, and friends —
-and forwards each call to `Castore.jl`.
+and forwards each call to `InfraStore.jl`.
 
 **Row shape:** `component_id`, `component_type`, `attribute_id`, `attribute_type`.
 
@@ -85,7 +85,7 @@ unlike a diff of newly added rows it also undoes removals, matching the previous
 
 ### Time Series
 
-Time series data and its association catalog are persisted by the `Castore` backend
+Time series data and its association catalog are persisted by the `InfraStore` backend
 as the `<path>.nc` / `<path>.sqlite` pair described above. See [Time Series Data](@ref).
 
 ### Supplemental Attribute Associations
@@ -101,7 +101,7 @@ artifact for an attribute-only system and silently drop them.
 
 ## Implementation Files
 
-  - **Time Series (Castore backend) glue**: [`src/castore.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/castore.jl)
+  - **Time Series (InfraStore backend) glue**: [`src/infrastore.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/infrastore.jl)
   - **Supplemental Attribute Associations**: [`src/supplemental_attribute_associations.jl`](https://github.com/Sienna-Platform/InfrastructureSystems.jl/blob/main/src/supplemental_attribute_associations.jl)
 
 ## Best Practices for Developers

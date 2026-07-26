@@ -18,7 +18,7 @@ function TimeSeriesManager(;
     end
 
     if isnothing(data_store)
-        # The Castore store unifies data + metadata. On-disk artifacts live at
+        # The InfraStore store unifies data + metadata. On-disk artifacts live at
         # `<dir>/<uuid>_time_series.nc` (+ sidecar `.sqlite`).
         path = if in_memory
             nothing
@@ -40,11 +40,11 @@ function TimeSeriesManager(;
     return TimeSeriesManager(data_store, read_only)
 end
 
-# (owner_id::Int, owner_type::String, owner_category::String) for the Castore FFI.
+# (owner_id::Int, owner_type::String, owner_category::String) for the InfraStore FFI.
 # The owner is identified by its integer id; `owner_category` is the String tag
-# ("Component" / "SupplementalAttribute"), converted to a `Castore.OwnerCategory`
-# enum via `castore_category` at the call sites that need it.
-function _castore_owner_args(owner::TimeSeriesOwners)
+# ("Component" / "SupplementalAttribute"), converted to a `InfraStore.OwnerCategory`
+# enum via `infrastore_category` at the call sites that need it.
+function _infrastore_owner_args(owner::TimeSeriesOwners)
     return (
         get_id(owner),
         string(nameof(typeof(owner))),
@@ -52,7 +52,7 @@ function _castore_owner_args(owner::TimeSeriesOwners)
     )
 end
 
-function _castore_features(features)
+function _infrastore_features(features)
     out = Dict{String, Any}()
     for (k, v) in features
         v isa Union{Bool, Real, AbstractString} || throw(
@@ -76,7 +76,7 @@ function begin_time_series_update(
     mgr::TimeSeriesManager,
 )
     store = mgr.data_store
-    before = Set(castore_row_identity(r) for r in Castore.list_keys(store.inner))
+    before = Set(infrastore_row_identity(r) for r in InfraStore.list_keys(store.inner))
     try
         open_store!(store, "r+") do
             func()
@@ -85,10 +85,10 @@ function begin_time_series_update(
     catch
         # Roll back: remove associations added during this update so the store is
         # left consistent with its pre-update state.
-        for row in Castore.list_keys(store.inner)
-            castore_row_identity(row) in before && continue
+        for row in InfraStore.list_keys(store.inner)
+            infrastore_row_identity(row) in before && continue
             try
-                castore_remove_row!(store, row)
+                infrastore_remove_row!(store, row)
             catch
                 # Best-effort cleanup; ignore rows already gone.
             end
@@ -108,7 +108,7 @@ function bulk_add_time_series!(
     # A DeterministicSingleTimeSeries is derived in-store from its underlying
     # SingleTimeSeries, so it cannot be staged onto a batch; route such batches
     # through the per-add path (with its diff-based rollback).
-    if any(a -> _castore_needs_transform(a.time_series), assocs)
+    if any(a -> _infrastore_needs_transform(a.time_series), assocs)
         ts_keys = TimeSeriesKey[]
         begin_time_series_update(mgr) do
             for association in assocs
@@ -127,11 +127,11 @@ function bulk_add_time_series!(
     # metadata transaction, and the backend packs the arrays into batch-sized
     # datasets written whole-chunk (no per-add read-modify-write). The commit is
     # all-or-nothing, so no catalog snapshot is needed for rollback.
-    batch = Castore.AddBatch()
+    batch = InfraStore.AddBatch()
     params_cache = Dict{Tuple{Dates.Period, Dates.Period}, Any}()
     ts_keys = Vector{TimeSeriesKey}(undef, length(assocs))
     for (i, association) in enumerate(assocs)
-        ts_keys[i] = _castore_stage!(
+        ts_keys[i] = _infrastore_stage!(
             batch,
             mgr,
             params_cache,
@@ -141,10 +141,10 @@ function bulk_add_time_series!(
         )
     end
     try
-        Castore.add_time_series_bulk!(mgr.data_store.inner, batch)
+        InfraStore.add_time_series_bulk!(mgr.data_store.inner, batch)
     catch e
-        if e isa Castore.DuplicateAssociationError ||
-           e isa Castore.DuplicateTimeSeriesError
+        if e isa InfraStore.DuplicateAssociationError ||
+           e isa InfraStore.DuplicateTimeSeriesError
             throw(
                 ArgumentError(
                     "Time series data with duplicate attributes are already stored"),
@@ -163,7 +163,7 @@ function add_time_series!(
     features...,
 )
     _throw_if_read_only(mgr)
-    return castore_add_time_series!(mgr, owner, time_series; features...)
+    return infrastore_add_time_series!(mgr, owner, time_series; features...)
 end
 
 function clear_time_series!(mgr::TimeSeriesManager)
@@ -174,8 +174,8 @@ end
 
 function clear_time_series!(mgr::TimeSeriesManager, component::TimeSeriesOwners)
     _throw_if_read_only(mgr)
-    owner_id, _, owner_category = _castore_owner_args(component)
-    castore_clear_owner!(mgr.data_store, owner_id, castore_category(owner_category))
+    owner_id, _, owner_category = _infrastore_owner_args(component)
+    infrastore_clear_owner!(mgr.data_store, owner_id, infrastore_category(owner_category))
     @debug "Cleared time_series in $(summary(component))." _group =
         LOG_GROUP_TIME_SERIES
     return
@@ -189,7 +189,7 @@ get_time_series_key(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = castore_get_time_series_key(
+) = infrastore_get_time_series_key(
     component,
     time_series_type,
     name;
@@ -206,7 +206,7 @@ list_time_series_keys(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = castore_owner_list_keys(
+) = infrastore_owner_list_keys(
     component;
     time_series_type = time_series_type,
     name = name,
@@ -229,16 +229,16 @@ function remove_time_series!(
 )
     _throw_if_read_only(mgr)
     store = mgr.data_store
-    owner_id, _, owner_category = _castore_owner_args(owner)
-    category = castore_category(owner_category)
+    owner_id, _, owner_category = _infrastore_owner_args(owner)
+    category = infrastore_category(owner_category)
     # Subset (partial) feature/resolution matching: remove every stored series of
     # type `time_series_type` that contains at least the requested features.
-    for key in castore_owner_list_keys(owner;
+    for key in infrastore_owner_list_keys(owner;
         time_series_type = time_series_type, name = name, resolution = resolution,
         interval = interval, features...)
         mt = get_time_series_type(key)
         res = get_resolution(key)
-        feats = _castore_features((Symbol(k) => v for (k, v) in get_features(key)))
+        feats = _infrastore_features((Symbol(k) => v for (k, v) in get_features(key)))
         if mt <: SingleTimeSeries
             # A DeterministicSingleTimeSeries shares the underlying SingleTimeSeries
             # array, so the base series cannot be removed if doing so would orphan a
@@ -247,7 +247,7 @@ function remove_time_series!(
             hash =
                 get_time_series_metadata(store, owner_id, category, name;
                     resolution = res, features = feats).data_hash
-            c = castore_array_sts_dst_counts(store, hash)
+            c = infrastore_array_sts_dst_counts(store, hash)
             if c.dst >= 1 && c.sts <= 1
                 throw(
                     ArgumentError(
@@ -267,7 +267,7 @@ function remove_time_series!(
             # Pin this key's own interval: a name can carry several forecasts differing
             # only by interval, so removing by (type, name, resolution) alone would be
             # ambiguous.
-            remove_typed!(store, owner_id, category, name, castore_ts_code(mt);
+            remove_typed!(store, owner_id, category, name, infrastore_ts_code(mt);
                 resolution = res, interval = get_interval(key), features = feats)
         end
     end

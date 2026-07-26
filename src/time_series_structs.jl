@@ -63,7 +63,7 @@ A unique key to identify and retrieve a [`NonSequentialTimeSeries`](@ref)
 Unlike [`StaticTimeSeriesKey`](@ref), a non-sequential series is irregular: it has
 no `resolution` and no regular `initial_timestamp` (its timestamps are stored with
 the data), so the key carries only its `length`. This mirrors the dedicated
-non-sequential key in the Castore backend.
+non-sequential key in the InfraStore backend.
 
 See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
 """

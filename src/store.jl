@@ -54,21 +54,21 @@ end
 
 """
 The store backing a system's time series data and its component /
-supplemental-attribute associations. A thin wrapper over `Castore.Store` that lets IS
-own its `deepcopy`/`isempty`/serialization semantics; the operations live in `castore.jl`.
+supplemental-attribute associations. A thin wrapper over `InfraStore.Store` that lets IS
+own its `deepcopy`/`isempty`/serialization semantics; the operations live in `infrastore.jl`.
 """
 mutable struct Store
-    inner::Castore.Store
+    inner::InfraStore.Store
 end
 
 """
     Store(; in_memory=false, path=nothing, compression=CompressionSettings())
 
-Create a Castore-backed store (time series data plus component / supplemental-attribute
+Create a InfraStore-backed store (time series data plus component / supplemental-attribute
 associations). When `in_memory=false`, `path` is the base path for the on-disk artifacts
 (`<path>.nc` and `<path>.sqlite`).
 
-`compression` is a [`CompressionSettings`](@ref). The Castore backend supports
+`compression` is a [`CompressionSettings`](@ref). The InfraStore backend supports
 `DEFLATE` (with `level` 0-9 and `shuffle`) or no compression (`enabled=false`);
 `BLOSC` is not available and raises an error.
 """
@@ -77,18 +77,18 @@ function Store(;
     path = nothing,
     compression::CompressionSettings = CompressionSettings(),
 )
-    kwargs = _castore_compression_kwargs(compression)
+    kwargs = _infrastore_compression_kwargs(compression)
     inner = if in_memory
-        Castore.Store(; in_memory = true, kwargs...)
+        InfraStore.Store(; in_memory = true, kwargs...)
     else
-        Castore.Store(; in_memory = false, path = path, kwargs...)
+        InfraStore.Store(; in_memory = false, path = path, kwargs...)
     end
     return Store(inner)
 end
 
 # Translate a `CompressionSettings` into the keyword arguments accepted by
-# `Castore.Store`. BLOSC is not supported by the Castore backend.
-function _castore_compression_kwargs(c::CompressionSettings)
+# `InfraStore.Store`. BLOSC is not supported by the InfraStore backend.
+function _infrastore_compression_kwargs(c::CompressionSettings)
     if !c.enabled
         return (; compression = :none)
     end
@@ -96,13 +96,13 @@ function _castore_compression_kwargs(c::CompressionSettings)
         return (; compression = :deflate, compression_level = c.level, shuffle = c.shuffle)
     end
     error(
-        "Castore does not support $(c.type) compression; " *
+        "InfraStore does not support $(c.type) compression; " *
         "use CompressionTypes.DEFLATE or disable compression (enabled=false).",
     )
 end
 
 """
-Open the storage for a batch of operations. The Castore backend has no file handle
+Open the storage for a batch of operations. The InfraStore backend has no file handle
 to manage at this layer, so this just runs `func`.
 """
 function open_store!(

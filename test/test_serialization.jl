@@ -14,7 +14,7 @@ function validate_serialization(sys::IS.SystemData; time_series_read_only = fals
     @test haskey(data, "time_series_storage_file") ==
           !isempty(sys.time_series_manager.data_store)
     if haskey(data, "time_series_storage_file")
-        # Move the time series artifact(s) alongside the JSON. The Castore backend
+        # Move the time series artifact(s) alongside the JSON. The InfraStore backend
         # writes a `.nc` + sibling `.sqlite`; move both if present.
         base = data["time_series_storage_file"]
         for f in (base, base * ".sqlite")
@@ -100,8 +100,8 @@ end
 end
 
 @testset "Test JSON serialization of system data" begin
-    # On-disk time series serialization now uses the Castore backend (HDF5 removed).
-    if castore_ts_available()
+    # On-disk time series serialization now uses the InfraStore backend (HDF5 removed).
+    if infrastore_ts_available()
         sys = create_system_data_shared_time_series()
         _, result = validate_serialization(sys)
         @test result
@@ -111,7 +111,7 @@ end
 end
 
 @testset "Test JSON serialization of NonSequentialTimeSeries" begin
-    if castore_ts_available()
+    if infrastore_ts_available()
         sys = IS.SystemData()
         component = IS.TestComponent("Component1", 5)
         IS.add_component!(sys, component)
@@ -165,7 +165,7 @@ function _make_time_series()
 end
 
 @testset "Test JSON serialization of with read-only time series" begin
-    if castore_ts_available()
+    if infrastore_ts_available()
         sys = create_system_data_shared_time_series()
         sys2, result = validate_serialization(sys; time_series_read_only = true)
         @test result
@@ -178,7 +178,7 @@ end
 end
 
 @testset "Test JSON serialization of with mutable time series" begin
-    if castore_ts_available()
+    if infrastore_ts_available()
         sys = create_system_data_shared_time_series()
         sys2, result = validate_serialization(sys; time_series_read_only = false)
         @test result
@@ -196,8 +196,8 @@ end
 end
 
 @testset "Test JSON serialization with supplemental attributes" begin
-    if !castore_ts_available()
-        @test_skip false  # on-disk serialization needs the Castore backend
+    if !infrastore_ts_available()
+        @test_skip false  # on-disk serialization needs the InfraStore backend
     else
         sys = IS.SystemData()
         initial_time = Dates.DateTime("2020-09-01")
@@ -372,8 +372,8 @@ end
 end
 
 @testset "Test serialization of deserialized system" begin
-    if castore_ts_available()
-        # create_system_data adds a Deterministic on the Castore path; verify a
+    if infrastore_ts_available()
+        # create_system_data adds a Deterministic on the InfraStore path; verify a
         # deserialized system re-serializes.
         sys = create_system_data(; with_time_series = true)
         sys2, result = validate_serialization(sys)

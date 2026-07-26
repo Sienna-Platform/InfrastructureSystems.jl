@@ -1,6 +1,6 @@
 
-# Castore backend: NetCDF arrays; metadata lives beside it as `<file>.sqlite`.
-const CASTORE_TIME_SERIES_STORAGE_FILE = "time_series_storage.nc"
+# InfraStore backend: NetCDF arrays; metadata lives beside it as `<file>.sqlite`.
+const INFRASTORE_TIME_SERIES_STORAGE_FILE = "time_series_storage.nc"
 const TIME_SERIES_DIRECTORY_ENV_VAR = "SIENNA_TIME_SERIES_DIRECTORY"
 const VALIDATION_DESCRIPTOR_FILE = "validation_descriptors.json"
 const SERIALIZATION_METADATA_KEY = "__serialization_metadata__"
@@ -428,7 +428,7 @@ function iterate_components_with_time_series(
 )
     return (
         get_component(data, x) for
-        x in castore_list_owner_ids(
+        x in infrastore_list_owner_ids(
             data.time_series_manager.data_store,
             InfrastructureSystemsComponent;
             time_series_type = time_series_type,
@@ -443,7 +443,7 @@ function iterate_supplemental_attributes_with_time_series(
 )
     return (
         get_supplemental_attribute(data, x) for
-        x in castore_list_owner_ids(
+        x in infrastore_list_owner_ids(
             data.time_series_manager.data_store,
             SupplementalAttribute;
             time_series_type = time_series_type,
@@ -499,7 +499,7 @@ check_time_series_consistency(
     data::SystemData,
     ts_type;
     resolution::Union{Nothing, Dates.Period} = nothing,
-) = castore_check_consistency(
+) = infrastore_check_consistency(
     data.time_series_manager.data_store,
     ts_type;
     resolution = resolution,
@@ -623,15 +623,15 @@ function _transform_single_time_series!(
         end
     end
 
-    # The Castore store derives a DeterministicSingleTimeSeries view over every
+    # The InfraStore store derives a DeterministicSingleTimeSeries view over every
     # stored component SingleTimeSeries that shares the array (no data is copied);
     # the window parameters are recorded in the metadata. Supplemental-attribute
     # series are left untouched, matching the metadata-store behavior.
-    Castore.transform_single_time_series!(
+    InfraStore.transform_single_time_series!(
         data.time_series_manager.data_store.inner,
         horizon,
         interval;
-        owner_category = Castore.Component,
+        owner_category = InfraStore.Component,
         resolution = resolution,
     )
     return
@@ -654,7 +654,7 @@ function _check_transform_single_time_series(
     resolution::Union{Nothing, Dates.Period};
     skip_existing::Bool = false,
 )
-    items = castore_list_keys_with_owner(
+    items = infrastore_list_keys_with_owner(
         data.time_series_manager.data_store,
         InfrastructureSystemsComponent;
         time_series_type = SingleTimeSeries,
@@ -810,7 +810,7 @@ function prepare_for_serialization_to_file!(
     sys_base = _get_system_basename(filename)
     ts_base = joinpath(
         directory,
-        _get_secondary_basename(sys_base, CASTORE_TIME_SERIES_STORAGE_FILE),
+        _get_secondary_basename(sys_base, INFRASTORE_TIME_SERIES_STORAGE_FILE),
     )
     files = [
         filename,
@@ -885,15 +885,15 @@ function serialize(data::SystemData)
                     get_compression_settings(store).enabled
                 json_data["time_series_in_memory"] = isnothing(_store_path(store))
             else
-                # Castore backend: write the .nc arrays + standalone .sqlite metadata.
+                # InfraStore backend: write the .nc arrays + standalone .sqlite metadata.
                 time_series_base_name =
-                    _get_secondary_basename(base, CASTORE_TIME_SERIES_STORAGE_FILE)
+                    _get_secondary_basename(base, INFRASTORE_TIME_SERIES_STORAGE_FILE)
                 time_series_storage_file = joinpath(directory, time_series_base_name)
                 serialize(store, time_series_storage_file)
                 json_data["time_series_storage_file"] = time_series_base_name
                 # Stable on-disk discriminator for the storage backend, intentionally
                 # decoupled from the `Store` Julia type name.
-                json_data["time_series_storage_type"] = "CastoreStore"
+                json_data["time_series_storage_type"] = "InfraStore"
             end
         end
         pop!(json_data["internal"]["ext"], SERIALIZATION_METADATA_KEY, nothing)
@@ -912,19 +912,19 @@ function deserialize(
 )
     @debug "deserialize" raw _group = LOG_GROUP_SERIALIZATION
 
-    # "RustTimeSeriesStore" is the pre-rename name for the same Castore backend; accept
-    # it so systems serialized before the rename still load.
+    # "CastoreStore" and "RustTimeSeriesStore" are earlier names for the same InfraStore
+    # backend; accept them so systems serialized before either rename still load.
     if haskey(raw, "time_series_storage_file") &&
        strip_module_name(get(raw, "time_series_storage_type", "")) in
-       ("CastoreStore", "RustTimeSeriesStore")
+       ("InfraStore", "CastoreStore", "RustTimeSeriesStore")
         if !isfile(raw["time_series_storage_file"])
             error("time series file $(raw["time_series_storage_file"]) does not exist")
         end
-        # Castore backend: open the .nc + sidecar .sqlite. When the system is not
+        # InfraStore backend: open the .nc + sidecar .sqlite. When the system is not
         # read-only, isolate it from the source file by opening a working copy so
         # that adding/removing time series cannot corrupt a shared/cached store.
         time_series_manager = TimeSeriesManager(;
-            data_store = open_deserialized_castore_store(
+            data_store = open_deserialized_infrastore_store(
                 raw["time_series_storage_file"],
                 time_series_directory,
                 time_series_read_only,
@@ -935,10 +935,10 @@ function deserialize(
         error(
             "This system was serialized with the legacy HDF5 time series storage " *
             "(type = $(get(raw, "time_series_storage_type", "unknown"))), which is no " *
-            "longer supported. HDF5 storage has been removed in favor of the Castore backend.",
+            "longer supported. HDF5 storage has been removed in favor of the InfraStore backend.",
         )
     else
-        # The serialized store was empty; create a fresh Castore store honoring the
+        # The serialized store was empty; create a fresh InfraStore store honoring the
         # recorded in-memory flag and compression setting.
         time_series_manager = TimeSeriesManager(;
             in_memory = get(raw, "time_series_in_memory", true),
@@ -1299,7 +1299,7 @@ get_forecast_parameters(
     data::SystemData;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-) = castore_forecast_parameters(
+) = infrastore_forecast_parameters(
     data.time_series_manager.data_store;
     resolution = resolution,
     interval = interval,
@@ -1334,7 +1334,7 @@ end
 get_time_series_resolutions(
     data::SystemData;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
-) = castore_get_time_series_resolutions(
+) = infrastore_get_time_series_resolutions(
     data.time_series_manager.data_store;
     time_series_type = time_series_type,
 )
@@ -1366,7 +1366,7 @@ function get_time_series_array_groups(data::SystemData; only_shared = true)
         else
             get_supplemental_attribute(data, id)
         end
-    return castore_group_by_hash(store, id_to_owner; only_shared = only_shared)
+    return infrastore_group_by_hash(store, id_to_owner; only_shared = only_shared)
 end
 
 """
@@ -1399,7 +1399,7 @@ function build_forecast_reader(
         else
             get_supplemental_attribute(data, id)
         end
-    return castore_build_forecast_reader(
+    return infrastore_build_forecast_reader(
         store,
         id_to_owner,
         T;
@@ -1461,9 +1461,9 @@ get_num_components_with_supplemental_attributes(data::SystemData) =
     get_num_components_with_attributes(data.supplemental_attribute_manager.associations)
 
 get_num_time_series(data::SystemData) =
-    castore_get_num_time_series(data.time_series_manager.data_store)
+    infrastore_get_num_time_series(data.time_series_manager.data_store)
 function get_time_series_counts(data::SystemData)
-    c = castore_time_series_counts(data.time_series_manager.data_store)
+    c = infrastore_time_series_counts(data.time_series_manager.data_store)
     return TimeSeriesCounts(;
         components_with_time_series = c.components_with_time_series,
         supplemental_attributes_with_time_series = c.supplemental_attributes_with_time_series,
@@ -1472,11 +1472,11 @@ function get_time_series_counts(data::SystemData)
     )
 end
 get_time_series_counts_by_type(data::SystemData) =
-    castore_get_time_series_counts_by_type(data.time_series_manager.data_store)
+    infrastore_get_time_series_counts_by_type(data.time_series_manager.data_store)
 get_static_time_series_summary_table(data::SystemData) =
-    castore_static_summary_table(data.time_series_manager.data_store)
+    infrastore_static_summary_table(data.time_series_manager.data_store)
 get_forecast_summary_table(data::SystemData) =
-    castore_forecast_summary_table(data.time_series_manager.data_store)
+    infrastore_forecast_summary_table(data.time_series_manager.data_store)
 
 _get_system_basename(system_file) = splitext(basename(system_file))[1]
 _get_secondary_basename(system_basename, name) = system_basename * "_" * name

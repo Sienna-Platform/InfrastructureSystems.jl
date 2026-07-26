@@ -66,7 +66,7 @@ function get_time_series(
     features...,
 ) where {T <: TimeSeriesData}
     TimerOutputs.@timeit_debug SYSTEM_TIMERS "get_time_series" begin
-        return castore_get_time_series(
+        return infrastore_get_time_series(
             T, owner, name;
             start_time = start_time, len = len, count = count,
             resolution = resolution, interval = interval, features...,
@@ -129,7 +129,7 @@ _get_time_series_by_key(
     start_time,
     len,
     count,
-) = _castore_get_forecast(
+) = _infrastore_get_forecast(
     owner,
     get_name(key);
     key = key,
@@ -146,7 +146,7 @@ _get_time_series_by_key(
     start_time,
     len,
     count,
-) = _castore_read_non_sequential(owner, key; start_time = start_time, len = len)
+) = _infrastore_read_non_sequential(owner, key; start_time = start_time, len = len)
 
 _get_time_series_by_key(
     owner::TimeSeriesOwners,
@@ -154,7 +154,7 @@ _get_time_series_by_key(
     start_time,
     len,
     count,
-) = _castore_read_single(owner, key; start_time = start_time, len = len)
+) = _infrastore_read_single(owner, key; start_time = start_time, len = len)
 
 """
 Returns an iterator of TimeSeriesData instances attached to the component or attribute.
@@ -191,7 +191,7 @@ function get_time_series_multiple(
     mgr = get_time_series_manager(owner)
     # This is true when the component or attribute is not part of a system.
     isnothing(mgr) && return ()
-    return castore_get_time_series_multiple(
+    return infrastore_get_time_series_multiple(
         owner,
         filter_func;
         type = type,
@@ -881,8 +881,8 @@ function has_time_series(owner::TimeSeriesOwners; kwargs...)
     kw = Dict(kwargs)
     name = pop!(kw, :name, nothing)
     T = pop!(kw, :time_series_type, TimeSeriesData)
-    isnothing(name) && return castore_has_any(owner; time_series_type = T)
-    return castore_has_time_series(
+    isnothing(name) && return infrastore_has_any(owner; time_series_type = T)
+    return infrastore_has_time_series(
         T === TimeSeriesData ? SingleTimeSeries : T,
         owner,
         name;
@@ -899,7 +899,7 @@ function has_time_series(
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(val)
     isnothing(mgr) && return false
-    return castore_has_any(val; time_series_type = T)
+    return infrastore_has_any(val; time_series_type = T)
 end
 
 function has_time_series(
@@ -912,7 +912,7 @@ function has_time_series(
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(val)
     isnothing(mgr) && return false
-    return castore_has_time_series(
+    return infrastore_has_time_series(
         T, val, name;
         resolution = resolution, interval = interval, features...,
     )
@@ -983,9 +983,9 @@ function _copy_time_series!(
     end
 
     store = mgr.data_store::Store
-    dst_id, dst_type, _ = _castore_owner_args(dst)
-    src_id, _, src_category = _castore_owner_args(src)
-    category = castore_category(src_category)
+    dst_id, dst_type, _ = _infrastore_owner_args(dst)
+    src_id, _, src_category = _infrastore_owner_args(src)
+    category = infrastore_category(src_category)
 
     # The copy happens entirely inside the store: it clones the association row
     # against the same content-addressed array. Nothing is read into Julia, so no
@@ -1009,7 +1009,7 @@ function _copy_time_series!(
             src_id,
             category,
             name,
-            castore_ts_code(get_time_series_type(ts_key)),
+            infrastore_ts_code(get_time_series_type(ts_key)),
             dst_id,
             dst_type;
             new_name = new_name,
@@ -1060,7 +1060,7 @@ To enumerate every group of time series that share data across a whole system,
 use [`get_time_series_array_groups`](@ref).
 """
 get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey) =
-    castore_get_time_series_hash(owner, key)
+    infrastore_get_time_series_hash(owner, key)
 
 function clear_time_series!(owner::TimeSeriesOwners)
     mgr = get_time_series_manager(owner)
