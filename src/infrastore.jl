@@ -976,6 +976,44 @@ function _infrastore_check_staged_forecast!(
     return
 end
 
+# The three dense-forecast stagers differ only in how they build the InfraStore
+# forecast object; the validation, owner marshalling, add, and returned
+# `ForecastKey` around it are shared. `build(initial, resolution, horizon,
+# storage_interval, name)` returns that object together with its window count,
+# which is the one field the callers disagree on.
+function _infrastore_stage_forecast!(
+    build,
+    batch::InfraStore.AddBatch,
+    mgr::TimeSeriesManager,
+    params_cache::AbstractDict,
+    owner::TimeSeriesOwners,
+    ts::Forecast;
+    features...,
+)
+    _infrastore_check_staged_forecast!(params_cache, mgr, ts)
+    owner_id, owner_type, category = _infrastore_owner_args(owner)
+    name = get_name(ts)
+    initial = get_initial_timestamp(ts)
+    resolution = get_resolution(ts)
+    interval = get_interval(ts)
+    horizon = get_horizon(ts)
+    feats = _infrastore_features(features)
+    obj, count = build(
+        initial,
+        resolution,
+        horizon,
+        _storage_forecast_interval(interval, horizon),
+        name,
+    )
+    InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
+        features = feats)
+    return ForecastKey(;
+        time_series_type = typeof(ts), name = name,
+        initial_timestamp = initial, resolution = resolution,
+        horizon = horizon, interval = interval, count = count,
+        features = Dict{String, Any}(feats))
+end
+
 function _infrastore_stage_data!(
     batch::InfraStore.AddBatch,
     mgr::TimeSeriesManager,
@@ -984,23 +1022,14 @@ function _infrastore_stage_data!(
     ts::Probabilistic;
     features...,
 )
-    _infrastore_check_staged_forecast!(params_cache, mgr, ts)
-    owner_id, owner_type, category = _infrastore_owner_args(owner)
-    name = get_name(ts)
-    resolution = get_resolution(ts)
-    interval = get_interval(ts)
-    feats = _infrastore_features(features)
-    arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
-    prob = InfraStore.Probabilistic(get_initial_timestamp(ts), resolution, get_horizon(ts),
-        _storage_forecast_interval(interval, get_horizon(ts)), get_count(ts),
-        Float64.(get_percentiles(ts)), arr, name)
-    InfraStore.add_time_series!(batch, owner_id, owner_type, category, prob;
-        features = feats)
-    return ForecastKey(;
-        time_series_type = typeof(ts), name = name,
-        initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
-        horizon = get_horizon(ts), interval = interval, count = get_count(ts),
-        features = Dict{String, Any}(feats))
+    return _infrastore_stage_forecast!(
+        batch, mgr, params_cache, owner, ts; features...,
+    ) do initial, resolution, horizon, storage_interval, name
+        arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
+        prob = InfraStore.Probabilistic(initial, resolution, horizon, storage_interval,
+            get_count(ts), Float64.(get_percentiles(ts)), arr, name)
+        return (prob, get_count(ts))
+    end
 end
 
 function _infrastore_stage_data!(
@@ -1011,24 +1040,15 @@ function _infrastore_stage_data!(
     ts::Deterministic;
     features...,
 )
-    _infrastore_check_staged_forecast!(params_cache, mgr, ts)
-    owner_id, owner_type, category = _infrastore_owner_args(owner)
-    name = get_name(ts)
-    resolution = get_resolution(ts)
-    interval = get_interval(ts)
-    feats = _infrastore_features(features)
-    windows = collect(values(get_data(ts)))
-    arr, logical = _storage_forecast_array(windows)
-    det = InfraStore.Deterministic(get_initial_timestamp(ts), resolution, get_horizon(ts),
-        _storage_forecast_interval(interval, get_horizon(ts)), length(windows), arr,
-        name; ext = _encode_ext(logical))
-    InfraStore.add_time_series!(batch, owner_id, owner_type, category, det;
-        features = feats)
-    return ForecastKey(;
-        time_series_type = typeof(ts), name = name,
-        initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
-        horizon = get_horizon(ts), interval = interval, count = length(windows),
-        features = Dict{String, Any}(feats))
+    return _infrastore_stage_forecast!(
+        batch, mgr, params_cache, owner, ts; features...,
+    ) do initial, resolution, horizon, storage_interval, name
+        windows = collect(values(get_data(ts)))
+        arr, logical = _storage_forecast_array(windows)
+        det = InfraStore.Deterministic(initial, resolution, horizon, storage_interval,
+            length(windows), arr, name; ext = _encode_ext(logical))
+        return (det, length(windows))
+    end
 end
 
 function _infrastore_stage_data!(
@@ -1039,23 +1059,14 @@ function _infrastore_stage_data!(
     ts::Scenarios;
     features...,
 )
-    _infrastore_check_staged_forecast!(params_cache, mgr, ts)
-    owner_id, owner_type, category = _infrastore_owner_args(owner)
-    name = get_name(ts)
-    resolution = get_resolution(ts)
-    interval = get_interval(ts)
-    feats = _infrastore_features(features)
-    arr = Float64.(get_array_for_hdf(ts))  # (scenario_count, horizon_count, count)
-    scen = InfraStore.Scenarios(get_initial_timestamp(ts), resolution, get_horizon(ts),
-        _storage_forecast_interval(interval, get_horizon(ts)), get_count(ts), arr,
-        name; ext = _encode_ext(nothing))
-    InfraStore.add_time_series!(batch, owner_id, owner_type, category, scen;
-        features = feats)
-    return ForecastKey(;
-        time_series_type = typeof(ts), name = name,
-        initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
-        horizon = get_horizon(ts), interval = interval, count = get_count(ts),
-        features = Dict{String, Any}(feats))
+    return _infrastore_stage_forecast!(
+        batch, mgr, params_cache, owner, ts; features...,
+    ) do initial, resolution, horizon, storage_interval, name
+        arr = Float64.(get_array_for_hdf(ts))  # (scenario_count, horizon_count, count)
+        scen = InfraStore.Scenarios(initial, resolution, horizon, storage_interval,
+            get_count(ts), arr, name; ext = _encode_ext(nothing))
+        return (scen, get_count(ts))
+    end
 end
 
 _infrastore_stage_data!(
@@ -1493,57 +1504,9 @@ function infrastore_has_time_series(
     )
 end
 
-# The InfraStore (binding) time series type for a concrete IS time series type.
-# The names mirror each other one-to-one, so this map plus `_infrastore_is_type`
-# (its inverse, keyed by name) is the whole translation layer.
-_infrastore_type(::Type{<:SingleTimeSeries}) = InfraStore.SingleTimeSeries
-_infrastore_type(::Type{<:NonSequentialTimeSeries}) = InfraStore.NonSequentialTimeSeries
-_infrastore_type(::Type{<:DeterministicSingleTimeSeries}) =
-    InfraStore.DeterministicSingleTimeSeries
-_infrastore_type(::Type{<:Deterministic}) = InfraStore.Deterministic
-_infrastore_type(::Type{<:Probabilistic}) = InfraStore.Probabilistic
-_infrastore_type(::Type{<:Scenarios}) = InfraStore.Scenarios
-
-# Name-less existence queries. `_infrastore_query_types(T)` maps a query type to
-# the stored InfraStore types to match (empty tuple = any type).
-_infrastore_query_types(::Type{<:SingleTimeSeries}) = (InfraStore.SingleTimeSeries,)
-_infrastore_query_types(::Type{<:NonSequentialTimeSeries}) =
-    (InfraStore.NonSequentialTimeSeries,)
-_infrastore_query_types(::Type{<:AbstractDeterministic}) =
-    (InfraStore.Deterministic, InfraStore.DeterministicSingleTimeSeries)
-_infrastore_query_types(::Type{<:DeterministicSingleTimeSeries}) =
-    (InfraStore.DeterministicSingleTimeSeries,)
-_infrastore_query_types(::Type{<:Probabilistic}) = (InfraStore.Probabilistic,)
-_infrastore_query_types(::Type{<:Scenarios}) = (InfraStore.Scenarios,)
-_infrastore_query_types(::Type{<:Forecast}) = (
-    InfraStore.Deterministic,
-    InfraStore.DeterministicSingleTimeSeries,
-    InfraStore.Probabilistic,
-    InfraStore.Scenarios,
-)
-_infrastore_query_types(::Type{<:StaticTimeSeries}) =
-    (InfraStore.SingleTimeSeries, InfraStore.NonSequentialTimeSeries)
-_infrastore_query_types(::Type{<:TimeSeriesData}) = ()
-
-# The single InfraStore type to push into the core `list_keys` filter for a query
-# type, or `nothing` when the type cannot be expressed as one stored type: an
-# abstract family, or `Deterministic` (which, under the metadata-store semantics
-# encoded in `_infrastore_type_matches`, also matches a stored
-# `DeterministicSingleTimeSeries`). When `nothing`, the caller applies the
-# residual `_infrastore_type_matches` filter on the (already narrowed) rows.
-_infrastore_pushable_type(::Type{<:SingleTimeSeries}) = InfraStore.SingleTimeSeries
-_infrastore_pushable_type(::Type{<:NonSequentialTimeSeries}) =
-    InfraStore.NonSequentialTimeSeries
-_infrastore_pushable_type(::Type{<:DeterministicSingleTimeSeries}) =
-    InfraStore.DeterministicSingleTimeSeries
-_infrastore_pushable_type(::Type{<:Probabilistic}) = InfraStore.Probabilistic
-_infrastore_pushable_type(::Type{<:Scenarios}) = InfraStore.Scenarios
-_infrastore_pushable_type(::Type{<:TimeSeriesData}) = nothing
-
-# All InfraStore types whose IS type is a subtype of `T` (strict `<:` semantics —
-# distinct from `_infrastore_type_matches`, which treats a `Deterministic` query
-# as also matching a `DeterministicSingleTimeSeries`). Used by the store-wide
-# filters (`resolutions`, `list_owner_ids`) that key on subtyping.
+# ---- Type translation ------------------------------------------------------
+# The InfraStore and IS time series types mirror each other one-to-one, so this
+# table is the whole translation layer; everything below is derived from it.
 const _INFRASTORE_TYPE_PAIRS = (
     (InfraStore.SingleTimeSeries, SingleTimeSeries),
     (InfraStore.NonSequentialTimeSeries, NonSequentialTimeSeries),
@@ -1552,8 +1515,37 @@ const _INFRASTORE_TYPE_PAIRS = (
     (InfraStore.Probabilistic, Probabilistic),
     (InfraStore.Scenarios, Scenarios),
 )
+
+# The InfraStore type for a concrete IS time series type.
+for (store_type, is_type) in _INFRASTORE_TYPE_PAIRS
+    @eval _infrastore_type(::Type{<:$is_type}) = $store_type
+end
+
+# All InfraStore types whose IS type is a subtype of `T` (strict `<:` semantics —
+# distinct from `_infrastore_type_matches`, which treats a `Deterministic` query
+# as also matching a `DeterministicSingleTimeSeries`). Used by the store-wide
+# filters (`resolutions`, `list_owner_ids`) that key on subtyping.
 _infrastore_subtype_types(::Type{T}) where {T <: TimeSeriesData} =
     Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if k <: T)
+
+# Name-less existence queries: the stored InfraStore types a query for `T` should
+# match, under the same `Deterministic`-matches-DST semantics as
+# `_infrastore_type_matches`. A match on every type is returned as the empty
+# tuple, the caller's signal to issue one unfiltered query instead of six.
+function _infrastore_query_types(::Type{T}) where {T <: TimeSeriesData}
+    types = Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if _infrastore_type_matches(k, T))
+    return length(types) == length(_INFRASTORE_TYPE_PAIRS) ? () : types
+end
+
+# The single InfraStore type to push into the core `list_keys` filter for a query
+# type, or `nothing` when the type cannot be expressed as one stored type: an
+# abstract family, or `Deterministic` (which also matches a stored
+# `DeterministicSingleTimeSeries`). When `nothing`, the caller applies the
+# residual `_infrastore_type_matches` filter on the (already narrowed) rows.
+function _infrastore_pushable_type(::Type{T}) where {T <: TimeSeriesData}
+    types = _infrastore_query_types(T)
+    return length(types) == 1 ? only(types) : nothing
+end
 
 # True iff `owner` has any time series, optionally restricted to type `T`.
 function infrastore_has_any(owner; time_series_type::Union{Nothing, Type} = nothing)
@@ -1571,24 +1563,14 @@ function infrastore_has_any(owner; time_series_type::Union{Nothing, Type} = noth
 end
 
 # ---- Metadata reconstruction (parity with the SQLite metadata store) --------
-# IS time series type for a `InfraStore` metadata-row type (matched by name).
+# IS time series type for a `InfraStore` metadata-row type (matched by name) —
+# the inverse of `_infrastore_type`, over the same table.
+const _INFRASTORE_IS_TYPES =
+    Dict(nameof(c) => k for (c, k) in _INFRASTORE_TYPE_PAIRS)
 _infrastore_is_type(t::Type) = _infrastore_is_type(nameof(t))
-_infrastore_is_type(s::Symbol) =
-    if s === :SingleTimeSeries
-        SingleTimeSeries
-    elseif s === :NonSequentialTimeSeries
-        NonSequentialTimeSeries
-    elseif s === :Deterministic
-        Deterministic
-    elseif s === :DeterministicSingleTimeSeries
-        DeterministicSingleTimeSeries
-    elseif s === :Probabilistic
-        Probabilistic
-    elseif s === :Scenarios
-        Scenarios
-    else
-        error("InfraStore backend does not support time series type $s")
-    end
+_infrastore_is_type(s::Symbol) = get(_INFRASTORE_IS_TYPES, s) do
+    error("InfraStore backend does not support time series type $s")
+end
 
 # Whether a stored row of concrete type `row_type` satisfies a query for type `T`.
 # Mirrors the metadata-store semantics: a `Deterministic` (or `AbstractDeterministic`)
@@ -1919,7 +1901,6 @@ function infrastore_list_owner_ids(
     for row in
         InfraStore.list_keys(store.inner; owner_category = category,
         resolution = resolution)
-
         if !isnothing(time_series_type)
             _infrastore_is_type(row.time_series_type) <: time_series_type || continue
         end

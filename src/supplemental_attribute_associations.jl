@@ -111,113 +111,54 @@ Return the number of distinct components with supplemental attributes.
 get_num_components_with_attributes(associations::SupplementalAttributeAssociations) =
     InfraStore.count_components_with_attributes(_assoc_store(associations))
 
+# Each query below selects rows by some mix of a component, an attribute, and
+# their types; every such argument maps to exactly one store filter keyword, so
+# the queries just splat whatever they were given. `nothing` contributes no
+# filter, which is how the optional type arguments stay optional.
+_assoc_filters(::Nothing) = ()
+_assoc_filters(component::InfrastructureSystemsComponent) =
+    (:component_id => get_id(component),)
+_assoc_filters(attribute::SupplementalAttribute) = (:attribute_id => get_id(attribute),)
+_assoc_filters(component_type::Type{<:InfrastructureSystemsComponent}) =
+    (:component_types => _type_names(component_type),)
+_assoc_filters(attribute_type::Type{<:SupplementalAttribute}) =
+    (:attribute_types => _type_names(attribute_type),)
+
+# The store filter keywords implied by a query's positional arguments.
+_assoc_query(args...) = (p for arg in args for p in _assoc_filters(arg))
+
 """
-Return true if there is at least one association matching the arguments.
+Return true if there is at least one association matching the arguments: a component,
+an attribute, both, or a component together with an attribute type (which may be
+abstract).
 """
-function has_association(
-    associations::SupplementalAttributeAssociations,
-    attribute::SupplementalAttribute,
-)
-    return InfraStore.has_supplemental_attribute_association(
-        _assoc_store(associations);
-        attribute_id = get_id(attribute),
-    )
-end
-
-function has_association(
-    associations::SupplementalAttributeAssociations,
-    component::InfrastructureSystemsComponent,
-    attribute::SupplementalAttribute,
-)
-    return InfraStore.has_supplemental_attribute_association(
-        _assoc_store(associations);
-        component_id = get_id(component),
-        attribute_id = get_id(attribute),
-    )
-end
-
-function has_association(
-    associations::SupplementalAttributeAssociations,
-    component::InfrastructureSystemsComponent,
-)
-    return InfraStore.has_supplemental_attribute_association(
-        _assoc_store(associations);
-        component_id = get_id(component),
-    )
-end
-
-function has_association(
-    associations::SupplementalAttributeAssociations,
-    component::InfrastructureSystemsComponent,
-    attribute_type::Type{<:SupplementalAttribute},
-)
-    return InfraStore.has_supplemental_attribute_association(
-        _assoc_store(associations);
-        component_id = get_id(component),
-        attribute_types = _type_names(attribute_type),
-    )
-end
+has_association(associations::SupplementalAttributeAssociations, args...) =
+    InfraStore.has_supplemental_attribute_association(
+        _assoc_store(associations); _assoc_query(args...)...)
 
 """
 Return the IDs of components associated with the given attribute or attribute type,
 optionally restricted to a component type. Both types may be abstract.
 """
-function list_associated_component_ids(
+list_associated_component_ids(
     associations::SupplementalAttributeAssociations,
-    attribute::SupplementalAttribute,
+    attribute::Union{SupplementalAttribute, Type{<:SupplementalAttribute}},
     component_type::Union{Nothing, Type{<:InfrastructureSystemsComponent}},
-)
-    return InfraStore.list_components_with_attributes(
-        _assoc_store(associations);
-        attribute_id = get_id(attribute),
-        component_types = _type_names(component_type),
-    )
-end
-
-function list_associated_component_ids(
-    associations::SupplementalAttributeAssociations,
-    attribute_type::Type{<:SupplementalAttribute},
-    component_type::Union{Nothing, Type{<:InfrastructureSystemsComponent}},
-)
-    return InfraStore.list_components_with_attributes(
-        _assoc_store(associations);
-        attribute_types = _type_names(attribute_type),
-        component_types = _type_names(component_type),
-    )
-end
+) = InfraStore.list_components_with_attributes(
+    _assoc_store(associations); _assoc_query(attribute, component_type)...)
 
 """
 Return the IDs of supplemental attributes associated with the given component or
 component type, optionally restricted to an attribute type. Both types may be abstract.
 """
-function list_associated_supplemental_attribute_ids(
-    associations::SupplementalAttributeAssociations,
-    component::InfrastructureSystemsComponent,
-    attribute_type::Union{Nothing, Type{<:SupplementalAttribute}},
-)
-    return InfraStore.list_supplemental_attribute_ids(
-        _assoc_store(associations);
-        component_id = get_id(component),
-        attribute_types = _type_names(attribute_type),
-    )
-end
-
 list_associated_supplemental_attribute_ids(
     associations::SupplementalAttributeAssociations,
-    component::InfrastructureSystemsComponent,
-) = list_associated_supplemental_attribute_ids(associations, component, nothing)
-
-function list_associated_supplemental_attribute_ids(
-    associations::SupplementalAttributeAssociations,
-    component_type::Type{<:InfrastructureSystemsComponent},
-    attribute_type::Union{Nothing, Type{<:SupplementalAttribute}},
-)
-    return InfraStore.list_supplemental_attribute_ids(
-        _assoc_store(associations);
-        component_types = _type_names(component_type),
-        attribute_types = _type_names(attribute_type),
-    )
-end
+    component::Union{
+        InfrastructureSystemsComponent, Type{<:InfrastructureSystemsComponent},
+    },
+    attribute_type::Union{Nothing, Type{<:SupplementalAttribute}} = nothing,
+) = InfraStore.list_supplemental_attribute_ids(
+    _assoc_store(associations); _assoc_query(component, attribute_type)...)
 
 """
 Return the `(component_id, attribute_id)` pairs for the given attribute and component
@@ -230,8 +171,7 @@ function list_associated_pair_ids(
 )
     rows = InfraStore.list_supplemental_attribute_associations(
         _assoc_store(associations);
-        attribute_types = _type_names(attribute_type),
-        component_types = _type_names(component_type),
+        _assoc_query(attribute_type, component_type)...,
     )
     return [(row.component_id, row.attribute_id) for row in rows]
 end
