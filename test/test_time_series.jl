@@ -5318,6 +5318,84 @@ end
     @test window == TimeSeries.values(IS.get_window(full, t0))
 end
 
+@testset "Test StaticTimeSeriesReader" begin
+    sys = IS.SystemData()
+    comps = [IS.TestComponent("c$i", 5) for i in 1:3]
+    foreach(c -> IS.add_component!(sys, c), comps)
+
+    t0 = Dates.DateTime("2020-01-01")
+    res = Dates.Hour(1)
+    len = 24
+    timestamps = range(t0; length = len, step = res)
+    arrays = [collect(1.0:len) .* i for i in 1:3]
+    for (c, vals) in zip(comps, arrays)
+        IS.add_time_series!(sys, c,
+            IS.SingleTimeSeries(;
+                data = TimeSeries.TimeArray(timestamps, vals), name = "load"))
+    end
+    # A series at another resolution must not match the reader's filter.
+    IS.add_time_series!(sys, comps[1],
+        IS.SingleTimeSeries(;
+            data = TimeSeries.TimeArray(
+                range(t0; length = len, step = Dates.Minute(5)), rand(len)),
+            name = "load_5min"))
+
+    reader = IS.build_static_time_series_reader(sys; resolution = res)
+    @test reader isa IS.StaticTimeSeriesReader
+    @test length(reader) == 3
+
+    grid = IS.get_static_time_series_reader_grid(reader)
+    @test grid.initial_timestamp == t0
+    @test grid.resolution == Dates.Millisecond(res)
+    @test grid.length == len
+
+    entries = IS.get_static_time_series_reader_entries(reader)
+    @test Set(IS.get_name(e.owner) for e in entries) == Set(["c1", "c2", "c3"])
+    @test all(e.key isa IS.StaticTimeSeriesKey for e in entries)
+    # All three scalar series pack into one columnar group: one read per step.
+    @test IS.get_num_static_time_series_groups(reader) == 1
+
+    # Reading values requires a prior read.
+    @test_throws ArgumentError IS.get_static_time_series_value(reader, 1)
+
+    by_name = Dict(IS.get_name(e.owner) => i for (i, e) in enumerate(entries))
+    for (k, timestamp) in enumerate(timestamps)
+        IS.read_static_time_series_values!(reader, timestamp)
+        for i in 1:3
+            @test IS.get_static_time_series_value(reader, by_name["c$i"]) ==
+                  arrays[i][k]
+        end
+    end
+
+    # Off-grid timestamps are a hard error.
+    @test_throws Exception IS.read_static_time_series_values!(
+        reader, t0 + Dates.Minute(30))
+
+    # The name filter narrows the match.
+    named = IS.build_static_time_series_reader(
+        sys; resolution = Dates.Minute(5), name = "load_5min")
+    @test length(named) == 1
+end
+
+@testset "Test StaticTimeSeriesReader with FunctionData elements" begin
+    sys = IS.SystemData()
+    c = IS.TestComponent("c1", 5)
+    IS.add_component!(sys, c)
+
+    t0 = Dates.DateTime("2020-01-01")
+    res = Dates.Hour(1)
+    len = 4
+    fds = [IS.LinearFunctionData(1.0 * i, 2.0 * i) for i in 1:len]
+    IS.add_time_series!(sys, c, IS.SingleTimeSeries("cost", t0, res, fds))
+
+    reader = IS.build_static_time_series_reader(sys; resolution = res)
+    @test length(reader) == 1
+    for k in 1:len
+        IS.read_static_time_series_values!(reader, t0 + res * (k - 1))
+        @test IS.get_static_time_series_value(reader, 1) == fds[k]
+    end
+end
+
 @testset "Test time series context rollback" begin
     sys = IS.SystemData()
     component = IS.TestComponent("Component1", 5)

@@ -1416,6 +1416,41 @@ function build_forecast_reader(
     )
 end
 
+"""
+$(TYPEDSIGNATURES)
+Build a [`StaticTimeSeriesReader`](@ref) over every `SingleTimeSeries` in
+`data`. `resolution` is required and pins the reader to one resolution; `name`
+and `features` further narrow the match. All matched series must share one time
+grid (`initial_timestamp` + `length`).
+
+The reader serves the simulation pattern "at each timestamp, get every
+component's value": drive it with [`read_static_time_series_values!`](@ref) and
+read each entry with [`get_static_time_series_value`](@ref). Series with the
+same element type are packed into one columnar group and served by a single
+storage read per timestamp.
+"""
+function build_static_time_series_reader(
+    data::SystemData;
+    resolution::Dates.Period,
+    name::Union{Nothing, AbstractString} = nothing,
+    features...,
+)
+    store = data.time_series_manager.data_store::Store
+    id_to_owner =
+        (id, category) -> if category == InfraStore.Component
+            get_component(data, id)
+        else
+            get_supplemental_attribute(data, id)
+        end
+    return infrastore_build_static_time_series_reader(
+        store,
+        id_to_owner;
+        resolution = resolution,
+        name = name,
+        features = Dict{String, Any}(string(k) => v for (k, v) in features),
+    )
+end
+
 function get_forecast_total_period(
     data::SystemData;
     resolution::Union{Nothing, Dates.Period} = nothing,

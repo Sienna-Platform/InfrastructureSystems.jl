@@ -1510,6 +1510,159 @@ function get_forecast_window(reader::ForecastReader{T}, entry_index::Integer) wh
     return window
 end
 
+# ---- StaticTimeSeriesReader ------------------------------------------------
+# The static counterpart of the ForecastReader, for the simulation pattern
+# "at each timestamp, get every component's value". It wraps the InfraStore
+# `StaticReader`, which packs the matching series into columnar
+# `(dtype, element_shape)` groups so a whole group is served by one physical
+# `.nc` read per timestamp. This wrapper carries that grouping up to Julia —
+# each group's values are materialized at most once per read.
+
+"""
+One series in a [`StaticTimeSeriesReader`], bound to its owner. `group` and
+`column` locate the entry in the reader's columnar layout: every entry in one
+`group` is served by a single physical read per timestamp.
+"""
+struct StaticTimeSeriesReaderEntry
+    owner::TimeSeriesOwners
+    key::StaticTimeSeriesKey
+    group::Int
+    column::Int
+end
+
+"""
+A timestamp-oriented reader over every `SingleTimeSeries` matching a build
+filter. Drive it with [`read_static_time_series_values!`](@ref), then pull each
+entry's value with [`get_static_time_series_value`](@ref). Build one with
+`build_static_time_series_reader(data; ...)`.
+
+The matched series are packed into columnar groups; one physical `.nc` read per
+group serves every entry in it at a timestamp — see
+[`get_num_static_time_series_groups`](@ref).
+"""
+mutable struct StaticTimeSeriesReader
+    inner::InfraStore.StaticReader
+    store::Store
+    entries::Vector{StaticTimeSeriesReaderEntry}
+    "ext for each entry (parallel to `entries`); decode tag for FunctionData/tuple rows."
+    exts::Vector{Union{Nothing, String}}
+    "Per-group materialized values cache; reset on each read."
+    values::Vector{Any}
+    has_read::Bool
+end
+
+# Build a reader from the store. `id_to_owner(owner_id::Int, category)` resolves
+# each entry's owner object (the system holds the owner maps). Per-entry metadata
+# (owner, key, ext) is resolved once here, off the read path.
+function infrastore_build_static_time_series_reader(
+    store::Store,
+    id_to_owner;
+    resolution::Dates.Period,
+    name::Union{Nothing, AbstractString} = nothing,
+    features = Dict{String, Any}(),
+)
+    inner = InfraStore.build_static_reader(store.inner;
+        resolution = resolution, name = name, features = features)
+    entries = StaticTimeSeriesReaderEntry[]
+    exts = Union{Nothing, String}[]
+    groups = InfraStore.static_groups(inner)
+    for (gi, group) in enumerate(groups)
+        for (col, k) in enumerate(group.keys)
+            info = InfraStore.key_info(k)
+            owner = id_to_owner(Int(info.owner_id), info.owner_category)
+            feats = Dict{String, Any}(info.features)
+            smeta = InfraStore.get_metadata(InfraStore.SingleTimeSeries, store.inner,
+                info.owner_id, info.owner_category, info.name;
+                resolution = info.resolution, features = feats)
+            key = StaticTimeSeriesKey(;
+                time_series_type = SingleTimeSeries,
+                name = info.name,
+                initial_timestamp = smeta.initial_timestamp,
+                resolution = smeta.resolution,
+                length = smeta.length,
+                features = feats,
+            )
+            push!(entries, StaticTimeSeriesReaderEntry(owner, key, gi, col))
+            push!(exts, _decode_ext(smeta.ext))
+        end
+    end
+    values = Vector{Any}(nothing, length(groups))
+    return StaticTimeSeriesReader(inner, store, entries, exts, values, false)
+end
+
+"""
+$(TYPEDSIGNATURES)
+The reader's time grid as `(; initial_timestamp, resolution, length)`. Valid
+read timestamps are `initial_timestamp + k·resolution` for `k in 0:length-1`.
+"""
+get_static_time_series_reader_grid(reader::StaticTimeSeriesReader) =
+    InfraStore.static_grid(reader.inner)
+
+"""
+$(TYPEDSIGNATURES)
+The reader's entries, one per matching `SingleTimeSeries`, each bound to its
+owner.
+"""
+get_static_time_series_reader_entries(reader::StaticTimeSeriesReader) = reader.entries
+
+"""
+$(TYPEDSIGNATURES)
+The number of columnar groups — the count of physical `.nc` reads
+[`read_static_time_series_values!`](@ref) performs per timestamp. Series with
+the same element type collapse into one group, so this is
+`≤ length(get_static_time_series_reader_entries(reader))` (typically 1).
+"""
+get_num_static_time_series_groups(reader::StaticTimeSeriesReader) =
+    length(reader.values)
+
+Base.length(reader::StaticTimeSeriesReader) = length(reader.entries)
+
+"""
+$(TYPEDSIGNATURES)
+Read the value of every entry at `timestamp`, performing one `.nc` read per
+columnar group. Follow with [`get_static_time_series_value`](@ref). Throws if
+`timestamp` is off the reader's grid.
+"""
+function read_static_time_series_values!(
+    reader::StaticTimeSeriesReader,
+    timestamp::Dates.DateTime,
+)
+    InfraStore.static_read!(reader.inner, timestamp)
+    fill!(reader.values, nothing)
+    reader.has_read = true
+    return reader
+end
+
+"""
+$(TYPEDSIGNATURES)
+The decoded value for entry `entry_index` (1-based) from the most recent
+[`read_static_time_series_values!`](@ref): a scalar for scalar series, or the
+reconstructed element (e.g. a `FunctionData`) for structured series.
+"""
+function get_static_time_series_value(
+    reader::StaticTimeSeriesReader,
+    entry_index::Integer,
+)
+    reader.has_read || throw(
+        ArgumentError(
+            "call read_static_time_series_values! before reading values"))
+    entry = reader.entries[entry_index]
+    vals = reader.values[entry.group]
+    if vals === nothing
+        vals = InfraStore.static_values(reader.inner, entry.group)
+        reader.values[entry.group] = vals
+    end
+    # A vector group is scalar data (one value per column); a higher-rank group
+    # carries one encoded element row per column, decoded through the ext tag
+    # (same scheme as `_decode_static_values`).
+    vals isa AbstractVector && return vals[entry.column]
+    colons = ntuple(_ -> Colon(), ndims(vals) - 1)
+    element = vals[entry.column, colons...]
+    ext = reader.exts[entry_index]
+    isnothing(ext) && return element
+    return _decode_static_values(reshape(element, 1, :), ext, 1)[1]
+end
+
 """Route `has_time_series(owner, T, name; ...)` to the InfraStore store. Honors partial
 (subset) feature / resolution queries: matches if any stored series of type `T`
 contains at least the requested features."""
