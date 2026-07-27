@@ -923,7 +923,7 @@ function deserialize(
     # backend; accept them so systems serialized before either rename still load.
     if haskey(raw, "time_series_storage_file") &&
        strip_module_name(get(raw, "time_series_storage_type", "")) in
-       ("InfraStore", "CastoreStore", "RustTimeSeriesStore")
+       ("InfraStore", "RustTimeSeriesStore")
         if !isfile(raw["time_series_storage_file"])
             error("time series file $(raw["time_series_storage_file"]) does not exist")
         end
