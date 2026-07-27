@@ -21,7 +21,7 @@ series per `TestComponent`, disk-backed stores (defaults for both branches).
 | `bench_branch_scaling.jl` | chunked marginal-cost sweep for this branch (per-1000-op timing) |
 | `results_is4.csv` | IS4 full 100k-series run |
 | `results_scaling.csv` | this branch's 20k marginal-cost sweep (pre-fix, per-add path) |
-| `bench_bulk.jl` | post-fix benchmark: `bulk_add_time_series!` (AddBatch path) + reads |
+| `bench_bulk.jl` | post-fix benchmark: batched adds via `time_series_transaction` (AddBatch path) + reads |
 | `results_bulk_postfix.csv` | this branch's 100k run after the AddBatch/read-path fixes |
 
 Run:
@@ -59,17 +59,21 @@ Key observations:
    (≈ 2.5 µs × store size; O(N²) total — a 100k non-shared build projects to
    ~3.5 h). Cause: the Rust core's incremental write packs each array into a
    shared NetCDF dataset via a per-column read-modify-write. The fix is the
-   batch path: `bulk_add_time_series!` now stages onto a `InfraStore.AddBatch`
-   and commits once (whole-chunk block writes, one metadata transaction).
+   batch path: adds staged inside a `time_series_transaction` block land on an
+   `InfraStore.AddBatch` and commit once (whole-chunk block writes, one
+   metadata transaction).
 3. **Shared adds**: InfraStore ~500 µs (content hashing + association insert) vs
    IS4 16 µs (metadata row only). Partially addressed by dropping the per-add
    existence pre-check; the remaining gap is FFI encode + hashing.
 
 ## Results after the fixes (same day, 100,000 series)
 
-`bulk_add_time_series!` staged onto a `InfraStore.AddBatch` (one commit,
-whole-chunk block writes); reads via key validation + server-side `time_range`
-slicing (no full-array materialization, no redundant catalog queries):
+Adds staged onto an `InfraStore.AddBatch` inside a `time_series_transaction`
+block (one commit, whole-chunk block writes); reads via key validation +
+server-side `time_range` slicing (no full-array materialization, no redundant
+catalog queries). (Measured via the then-named `bulk_add_time_series!`, since
+replaced by `time_series_transaction` — same AddBatch path, so the numbers
+carry over.)
 
 | scenario | bulk add | get (full) | get (sliced len=12) |
 |---|---:|---:|---:|
@@ -81,5 +85,5 @@ slicing (no full-array materialization, no redundant catalog queries):
 vs IS4 at the same scale: adds 238× faster (non-shared), reads ~98× faster,
 and both stay flat with store size. The O(N²) build is gone; per-add
 (`add_time_series!` one at a time) still takes the un-managed Rust write path
-and remains O(N) per call — prefer `bulk_add_time_series!` for large ingests
-until the core's incremental write is fixed.
+and remains O(N) per call — batch large ingests inside a
+`time_series_transaction` block until the core's incremental write is fixed.

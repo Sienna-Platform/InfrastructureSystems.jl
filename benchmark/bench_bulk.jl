@@ -1,4 +1,5 @@
-# Post-fix benchmark: bulk_add_time_series! (AddBatch path) + reads at 100k.
+# Post-fix benchmark: batched adds via time_series_transaction (AddBatch path)
+# + reads at 100k.
 using Dates, Random, Printf
 using InfrastructureSystems
 const IS = InfrastructureSystems
@@ -22,10 +23,17 @@ function run_bulk(label, shared, n)
     else
         [IS.SingleTimeSeries("val", T0, Hour(1), rand(LEN)) for _ in 1:n]
     end
-    assocs =
-        [(owner = comps[i], time_series = tss[i], features = (;)) for i in 1:n]
     GC.gc()
-    t_add = @elapsed IS.bulk_add_time_series!(sys.time_series_manager, assocs)
+    t_add = @elapsed IS.time_series_transaction(sys.time_series_manager) do context
+        for i in 1:n
+            IS.add_time_series!(
+                sys.time_series_manager,
+                comps[i],
+                tss[i];
+                context = context,
+            )
+        end
+    end
     @printf("%s,bulk_add,%d,%.3f,%.2f\n", label, n, t_add, 1e6 * t_add / n)
     GC.gc()
     t_get = @elapsed for i in 1:n
