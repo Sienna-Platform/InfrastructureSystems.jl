@@ -1651,11 +1651,24 @@ function infrastore_has_time_series(
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
 ) where {T <: TimeSeriesData}
-    return !isempty(
-        infrastore_owner_list_keys(owner;
-            time_series_type = T, name = name, resolution = resolution,
-            interval = interval, features...),
-    )
+    mgr = get_time_series_manager(owner)
+    store = mgr.data_store::Store
+    owner_id, _, category = _infrastore_owner_args(owner)
+    feats = _infrastore_features(features)
+    # Pure existence probe — a covering-index `SELECT 1 ... LIMIT 1` in the
+    # store; nothing is listed, hydrated, or marshaled, so this is safe in hot
+    # per-component loops. A query type that is not one stored type (an
+    # abstract family, or `Deterministic`, which also matches a stored DST)
+    # expands to one probe per candidate; the empty tuple means every type
+    # matches, i.e. one unfiltered probe.
+    probe =
+        t -> InfraStore.has_any_time_series(store.inner;
+            owner_id = owner_id, owner_category = category,
+            time_series_type = t, name = name, resolution = resolution,
+            interval = interval, features = feats)
+    types = _infrastore_query_types(T)
+    isempty(types) && return probe(nothing)
+    return any(probe, types)
 end
 
 # ---- Type translation ------------------------------------------------------
