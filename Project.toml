@@ -36,7 +36,7 @@ YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 InfraStore = {path = "../../infrastore/julia/InfraStore.jl"}
 
 [compat]
-InfraStore = "0.2"
+InfraStore = "0.3"
 DataFrames = "^1.7"
 DataStructures = "^0.18, ^0.19"
 Dates = "1"
