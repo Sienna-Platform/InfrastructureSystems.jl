@@ -473,13 +473,6 @@ end
 
 # ---- TimeSeriesManager routing ---------------------------------------------
 
-# Validate the raw time series array before storing. A DeterministicSingleTimeSeries
-# is a derived view over an already-validated SingleTimeSeries (it has no raw
-# `get_data`), so it skips the check.
-_infrastore_check_time_series_data(time_series::TimeSeriesData) =
-    check_time_series_data(time_series)
-_infrastore_check_time_series_data(::DeterministicSingleTimeSeries) = nothing
-
 """
 Route a manager-level `add_time_series!` to the InfraStore store, dispatching on the
 concrete time series type. Data identity is the array content hash.
@@ -491,13 +484,12 @@ function infrastore_add_time_series!(
     features...,
 )
     throw_if_does_not_support_time_series(owner)
-    _infrastore_check_time_series_data(time_series)
+    check_time_series_data(time_series)
     return _infrastore_add!(mgr, owner, time_series; features...)
 end
 
-# Dispatch on the concrete series type. Forecasts (including
-# DeterministicSingleTimeSeries) and NonSequentialTimeSeries route to their
-# dedicated handlers; SingleTimeSeries is stored below; anything else is
+# Dispatch on the concrete series type. Forecasts and NonSequentialTimeSeries route
+# to their dedicated handlers; SingleTimeSeries is stored below; anything else is
 # unsupported on the InfraStore backend.
 _infrastore_add!(
     mgr::TimeSeriesManager,
@@ -517,8 +509,9 @@ _infrastore_add!(
 _infrastore_add!(::TimeSeriesManager, ::TimeSeriesOwners, ts::TimeSeriesData; features...) =
     error(
         "InfraStore backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
-        "Deterministic, DeterministicSingleTimeSeries, Probabilistic, and Scenarios " *
-        "(got $(typeof(ts)))",
+        "Deterministic, Probabilistic, and Scenarios (got $(typeof(ts))). A " *
+        "DeterministicSingleTimeSeries is derived in-store with " *
+        "transform_single_time_series!.",
     )
 
 # Map the store's duplicate-association rejection to the IS-level ArgumentError.
@@ -753,7 +746,7 @@ function _infrastore_read_non_sequential(
         String(get_name(key)), timestamps[index:(index + n - 1)], vals)
 end
 
-# ---- Forecasts (Deterministic / DeterministicSingleTimeSeries) -------------
+# ---- Forecasts --------------------------------------------------------------
 
 # IS encodes a single-window forecast (count == 1) with `interval = Second(0)`,
 # since there is no second window to step to. The InfraStore store, however, requires a
@@ -769,7 +762,47 @@ _storage_forecast_interval(interval::Dates.Period, horizon::Dates.Period) =
 _forecast_display_interval(count::Integer, interval::Dates.Period, horizon::Dates.Period) =
     (count == 1 && interval == horizon) ? Dates.Second(0) : interval
 
-"""Add a Deterministic or DeterministicSingleTimeSeries via the InfraStore store."""
+# Build the InfraStore object for a forecast, returning `(store_ts, count)`.
+# `count` also feeds the returned key; for a `Deterministic` it is derived from
+# the window data rather than read from the forecast.
+function _storage_forecast(ts::Probabilistic, resolution, interval, name)
+    arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
+    prob = InfraStore.Probabilistic(get_initial_timestamp(ts), resolution,
+        get_horizon(ts), interval, get_count(ts), Float64.(get_percentiles(ts)),
+        arr, name)
+    return prob, get_count(ts)
+end
+
+function _storage_forecast(ts::Deterministic, resolution, interval, name)
+    windows = collect(values(get_data(ts)))
+    # (horizon_count, count) for scalars; (horizon_count, count, k) tagged with
+    # `logical` for FunctionData windows.
+    arr, logical = _storage_forecast_array(windows)
+    count = length(windows)
+    d = InfraStore.Deterministic(get_initial_timestamp(ts), resolution,
+        get_horizon(ts), interval, count, arr, name; ext = _encode_ext(logical))
+    return d, count
+end
+
+function _storage_forecast(ts::Scenarios, resolution, interval, name)
+    arr = Float64.(get_array_for_hdf(ts))  # (scenario_count, horizon_count, count)
+    s = InfraStore.Scenarios(get_initial_timestamp(ts), resolution,
+        get_horizon(ts), interval, get_count(ts), arr, name;
+        ext = _encode_ext(nothing))
+    return s, get_count(ts)
+end
+
+_storage_forecast(ts::Forecast, resolution, interval, name) =
+    throw(
+        ArgumentError(
+            "Cannot add a forecast of type $(typeof(ts)). Supported types are " *
+            "Deterministic, Probabilistic, and Scenarios; a " *
+            "DeterministicSingleTimeSeries is derived in-store with " *
+            "transform_single_time_series!.",
+        ),
+    )
+
+"""Add a forecast via the InfraStore store."""
 function _infrastore_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
     store = mgr.data_store::Store
     owner_id, owner_type, category = _infrastore_owner_args(owner)
@@ -785,77 +818,8 @@ function _infrastore_add_forecast!(mgr::TimeSeriesManager, owner, ts; features..
         make_time_series_parameters(ts),
     )
 
-    if ts isa Probabilistic
-        arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
-        prob =
-            InfraStore.Probabilistic(get_initial_timestamp(ts), resolution, get_horizon(ts),
-                _storage_forecast_interval(interval, get_horizon(ts)), get_count(ts),
-                Float64.(get_percentiles(ts)), arr, name)
-        try
-            InfraStore.add_time_series!(store.inner, owner_id, owner_type,
-                category, prob; features = feats)
-        catch e
-            _infrastore_rethrow_duplicate(e, owner_type, name)
-        end
-        return ForecastKey(;
-            time_series_type = typeof(ts), name = name,
-            initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
-            horizon = get_horizon(ts), interval = interval, count = get_count(ts),
-            features = Dict{String, Any}(feats))
-    elseif ts isa Deterministic
-        windows = collect(values(get_data(ts)))
-        # (horizon_count, count) for scalars; (horizon_count, count, k) tagged with
-        # `logical` for FunctionData windows.
-        arr, logical = _storage_forecast_array(windows)
-        count = length(windows)
-        builder = InfraStore.Deterministic
-    elseif ts isa DeterministicSingleTimeSeries
-        if InfraStore.has_time_series(InfraStore.DeterministicSingleTimeSeries,
-            store.inner, owner_id, category, name;
-            resolution = resolution, features = feats)
-            throw(
-                ArgumentError(
-                    "Time series data with duplicate attributes are already stored",
-                ),
-            )
-        end
-        # The InfraStore store derives a DeterministicSingleTimeSeries from a stored
-        # SingleTimeSeries (sharing the array) via transform_single_time_series!,
-        # rather than persisting a separate forecast array. Ensure the underlying
-        # series is present, then derive the DST.
-        underlying = get_single_time_series(ts)
-        InfraStore.has_time_series(
-            store.inner,
-            owner_id,
-            category,
-            name;
-            resolution = resolution,
-            features = feats,
-        ) ||
-            serialize_single!(store, owner_id, owner_type, category, name,
-                underlying;
-                features = feats)
-        InfraStore.transform_single_time_series!(store.inner, get_horizon(ts), interval;
-            owner_category = category, resolution = resolution)
-        # DeterministicSingleTimeSeries has no internal UUID, so nothing to assign.
-        return ForecastKey(;
-            time_series_type = typeof(ts), name = name,
-            initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
-            horizon = get_horizon(ts), interval = interval, count = get_count(ts),
-            features = Dict{String, Any}(feats))
-    elseif ts isa Scenarios
-        arr = Float64.(get_array_for_hdf(ts))  # (scenario_count, horizon_count, count)
-        logical = nothing
-        count = get_count(ts)
-        builder = InfraStore.Scenarios
-    else
-        error("unsupported forecast type $(typeof(ts))")
-    end
-
-    # `Deterministic` and `Scenarios` share a constructor shape.
     storage_interval = _storage_forecast_interval(interval, get_horizon(ts))
-    tss_ts = builder(get_initial_timestamp(ts), resolution, get_horizon(ts),
-        storage_interval, count, arr, name; ext = _encode_ext(logical))
+    tss_ts, count = _storage_forecast(ts, resolution, storage_interval, name)
     try
         InfraStore.add_time_series!(store.inner, owner_id, owner_type,
             category, tss_ts; features = feats)
@@ -873,13 +837,6 @@ end
 # The bulk-add fast path stages every association onto a `InfraStore.AddBatch` and
 # commits once: one metadata transaction, and the backend packs the arrays into
 # batch-sized datasets with whole-chunk writes (no per-add read-modify-write).
-# A `DeterministicSingleTimeSeries` cannot be staged — it is derived in-store
-# from its underlying `SingleTimeSeries` — so its presence routes the whole
-# batch through the per-add path (see `_stage_on_context!`).
-
-# Whether an association must go through the per-add transform path.
-_infrastore_needs_transform(::TimeSeriesData) = false
-_infrastore_needs_transform(::DeterministicSingleTimeSeries) = true
 
 """
 Commit a staged `AddBatch` to the store as one all-or-nothing bulk add.
@@ -922,7 +879,7 @@ function _infrastore_stage!(
     features...,
 )
     throw_if_does_not_support_time_series(owner)
-    _infrastore_check_time_series_data(time_series)
+    check_time_series_data(time_series)
     return _infrastore_stage_data!(
         batch,
         mgr,
@@ -1208,116 +1165,136 @@ function _infrastore_get_forecast(
     # map it back to the storage form for the lookups.
     matched_interval =
         _storage_forecast_interval(get_interval(matched), get_horizon(matched))
-    # The resolved key names the stored concrete type, so dispatch on it directly —
-    # no per-type existence queries.
-    stored_type = get_time_series_type(matched)
-    # `len`, when given, truncates each window to its first `len` horizon steps
-    # (the horizon is the leading axis of a window vector or matrix).
-    _truncate(w) = isnothing(len) ? w : (ndims(w) == 1 ? w[1:len] : w[1:len, :])
+    tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
+        get_count(matched), start_time, count)
+    # The resolved key names the stored concrete type; it selects the
+    # reconstruction method (function barrier — the key's type is not known
+    # statically).
+    return _reconstruct_forecast(
+        get_time_series_type(matched),
+        store,
+        owner_id,
+        category,
+        String(name),
+        resolution,
+        matched_interval,
+        feats,
+        tr,
+        len,
+    )
+end
 
-    if stored_type <: Probabilistic
-        # `.data` is the canonical (percentile_count, horizon_count, count) array.
-        tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
-            get_count(matched), start_time, count)
-        p = InfraStore.get_time_series(InfraStore.Probabilistic, store.inner, owner_id,
-            category,
-            name;
-            resolution = resolution, interval = matched_interval, features = feats,
-            time_range = tr)
-        # `p` is already sliced to the requested window range by the store.
-        data = SortedDict{Dates.DateTime, Matrix{Float64}}()
-        for i in 1:(p.count)
-            data[p.initial_timestamp + p.interval * (i - 1)] =
-                _truncate(permutedims(p.data[:, :, i]))
-        end
-        result = Probabilistic(; name = String(name), data = data,
-            percentiles = p.percentiles, resolution = p.resolution,
-            interval = _forecast_display_interval(p.count, p.interval, p.horizon))
-        return result
-    elseif stored_type <: Deterministic
-        # `.data` is the canonical (horizon_count, count) array.
-        tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
-            get_count(matched), start_time, count)
-        d = InfraStore.get_time_series(InfraStore.Deterministic, store.inner, owner_id,
-            category,
-            name;
-            resolution = resolution, interval = matched_interval, features = feats,
-            time_range = tr)
-        logical = _decode_ext(d.ext)  # `nothing` for scalar windows
-        window(i) = _truncate(
-            if isnothing(logical)
-                d.data[:, i]
-            else
-                _decode_forecast_window(d.data, logical, i)
-            end,
-        )
-        # `d` is already sliced to the requested window range by the store.
-        data = _assemble_forecast_windows(
-            d.initial_timestamp, d.interval, d.count, window)
-        result = Deterministic(; name = String(name), data = data,
-            resolution = d.resolution,
-            interval = _forecast_display_interval(d.count, d.interval, d.horizon))
-        return result
-    elseif stored_type <: DeterministicSingleTimeSeries
-        # A DeterministicSingleTimeSeries is an internal storage optimization: it
-        # shares the underlying SingleTimeSeries array instead of materializing the
-        # overlapping windows. On read it is always returned as a regular
-        # `Deterministic` — the InfraStore store expands the shared array into the
-        # canonical (horizon_count, count) window matrix (honoring `time_range`),
-        # so the reconstruction below is identical to the `Deterministic` branch.
-        #
-        # This does NOT cost the storage optimization on a copy: `copy_time_series!`
-        # clones the association row inside the store, so the stored type survives
-        # without ever round-tripping through these Julia objects.
-        tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
-            get_count(matched), start_time, count)
-        d = InfraStore.get_time_series(InfraStore.DeterministicSingleTimeSeries,
-            store.inner,
-            owner_id,
-            category, name;
-            resolution = resolution, interval = matched_interval, features = feats,
-            time_range = tr)
-        logical = _decode_ext(d.ext)
-        # Scalar windows come back as a 2D `(horizon_count, count)` array; encoded
-        # FunctionData windows carry trailing coefficient dims (3D). A DST inherits
-        # the shared SingleTimeSeries metadata, whose `ext` may be set even
-        # for scalar data, so key the decode on the array rank rather than `logical`.
-        dst_window(i) = _truncate(
-            if ndims(d.data) == 3
-                _decode_forecast_window(d.data, logical, i)
-            else
-                d.data[:, i]
-            end,
-        )
-        # A single window has no step between window starts, so IS represents that
-        # interval as `Second(0)`; otherwise the stored window interval is kept.
-        # `d` is already sliced to the requested window range by the store.
-        data = _assemble_forecast_windows(
-            d.initial_timestamp, d.interval, d.count, dst_window)
-        return Deterministic(; name = String(name), data = data,
-            resolution = d.resolution,
-            interval = _forecast_display_interval(d.count, d.interval, d.horizon))
-    elseif stored_type <: Scenarios
-        # `.data` is the canonical (scenario_count, horizon_count, count) array.
-        tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
-            get_count(matched), start_time, count)
-        s_ts = InfraStore.get_time_series(InfraStore.Scenarios, store.inner, owner_id,
-            category,
-            name;
-            resolution = resolution, interval = matched_interval, features = feats,
-            time_range = tr)
-        # `s_ts` is already sliced to the requested window range by the store.
-        data = SortedDict{Dates.DateTime, Matrix{Float64}}()
-        for i in 1:(s_ts.count)
-            data[s_ts.initial_timestamp + s_ts.interval * (i - 1)] =
-                _truncate(permutedims(s_ts.data[:, :, i]))
-        end
-        result = Scenarios(; name = String(name), data = data,
-            scenario_count = s_ts.scenario_count, resolution = s_ts.resolution,
-            interval = _forecast_display_interval(s_ts.count, s_ts.interval, s_ts.horizon))
-        return result
+# `len`, when given, truncates a window to its first `len` horizon steps (the
+# horizon is the leading axis of a window vector or matrix).
+_truncate_window(w, ::Nothing) = w
+_truncate_window(w::AbstractVector, len::Int) = w[1:len]
+_truncate_window(w::AbstractMatrix, len::Int) = w[1:len, :]
+
+# Extract window `i` from a stored deterministic-forecast array. Scalar windows
+# are columns of a 2D `(horizon_count, count)` array; encoded FunctionData
+# windows carry trailing coefficient dims (3D). The stored `ext`/`logical` tag
+# may be set even when the data is scalar (a DST inherits the metadata of the
+# SingleTimeSeries it shares), so key the decode on the array rank instead.
+_forecast_window(data::AbstractMatrix, logical, i) = data[:, i]
+_forecast_window(data::AbstractArray{<:Any, 3}, logical, i) =
+    _decode_forecast_window(data, logical, i)
+
+# Reconstruct a forecast read from the store as its user-facing type. Every
+# InfraStore read below is already sliced to the requested window range.
+function _reconstruct_forecast(
+    ::Type{<:Probabilistic},
+    store::Store,
+    owner_id,
+    category,
+    name::String,
+    resolution,
+    interval,
+    feats,
+    time_range,
+    len,
+)
+    # `.data` is the canonical (percentile_count, horizon_count, count) array.
+    p = InfraStore.get_time_series(InfraStore.Probabilistic, store.inner, owner_id,
+        category, name;
+        resolution = resolution, interval = interval, features = feats,
+        time_range = time_range)
+    data = SortedDict{Dates.DateTime, Matrix{Float64}}()
+    for i in 1:(p.count)
+        data[p.initial_timestamp + p.interval * (i - 1)] =
+            _truncate_window(permutedims(p.data[:, :, i]), len)
     end
-    error("unreachable: unexpected stored forecast type $stored_type")
+    return Probabilistic(; name = name, data = data,
+        percentiles = p.percentiles, resolution = p.resolution,
+        interval = _forecast_display_interval(p.count, p.interval, p.horizon))
+end
+
+_reconstruct_forecast(::Type{<:Deterministic}, args...) =
+    _reconstruct_deterministic(InfraStore.Deterministic, args...)
+
+# A DeterministicSingleTimeSeries is an internal storage optimization: it shares
+# the underlying SingleTimeSeries array instead of materializing the overlapping
+# windows. On read it is always returned as a regular `Deterministic` — the
+# InfraStore store expands the shared array into the canonical
+# (horizon_count, count) window matrix (honoring `time_range`), so the
+# reconstruction is identical to the `Deterministic` method.
+#
+# This does NOT cost the storage optimization on a copy: `copy_time_series!`
+# clones the association row inside the store, so the stored type survives
+# without ever round-tripping through these Julia objects.
+_reconstruct_forecast(::Type{<:DeterministicSingleTimeSeries}, args...) =
+    _reconstruct_deterministic(InfraStore.DeterministicSingleTimeSeries, args...)
+
+_reconstruct_forecast(::Type{T}, args...) where {T} =
+    error("unreachable: unexpected stored forecast type $T")
+
+function _reconstruct_deterministic(
+    store_type,
+    store::Store,
+    owner_id,
+    category,
+    name::String,
+    resolution,
+    interval,
+    feats,
+    time_range,
+    len,
+)
+    d = InfraStore.get_time_series(store_type, store.inner, owner_id, category, name;
+        resolution = resolution, interval = interval, features = feats,
+        time_range = time_range)
+    logical = _decode_ext(d.ext)  # `nothing` for scalar windows
+    window(i) = _truncate_window(_forecast_window(d.data, logical, i), len)
+    data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
+    return Deterministic(; name = name, data = data,
+        resolution = d.resolution,
+        interval = _forecast_display_interval(d.count, d.interval, d.horizon))
+end
+
+function _reconstruct_forecast(
+    ::Type{<:Scenarios},
+    store::Store,
+    owner_id,
+    category,
+    name::String,
+    resolution,
+    interval,
+    feats,
+    time_range,
+    len,
+)
+    # `.data` is the canonical (scenario_count, horizon_count, count) array.
+    s_ts = InfraStore.get_time_series(InfraStore.Scenarios, store.inner, owner_id,
+        category, name;
+        resolution = resolution, interval = interval, features = feats,
+        time_range = time_range)
+    data = SortedDict{Dates.DateTime, Matrix{Float64}}()
+    for i in 1:(s_ts.count)
+        data[s_ts.initial_timestamp + s_ts.interval * (i - 1)] =
+            _truncate_window(permutedims(s_ts.data[:, :, i]), len)
+    end
+    return Scenarios(; name = name, data = data,
+        scenario_count = s_ts.scenario_count, resolution = s_ts.resolution,
+        interval = _forecast_display_interval(s_ts.count, s_ts.interval, s_ts.horizon))
 end
 
 # ---- ForecastReader --------------------------------------------------------

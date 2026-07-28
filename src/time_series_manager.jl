@@ -166,21 +166,12 @@ function add_time_series!(
     return key
 end
 
-# A DeterministicSingleTimeSeries is derived in-store from its backing
-# SingleTimeSeries, so it cannot be staged onto a batch. It needs that series
-# physically present, which is the same condition a read imposes: flush, then
-# perform the transform directly. Inside a transaction the flush is still
-# undoable, so this costs nothing beyond the early write.
 function _stage_on_context!(
     context::TimeSeriesContext,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
     features...,
 )
-    if _infrastore_needs_transform(time_series)
-        flush!(context)
-        return infrastore_add_time_series!(context.mgr, owner, time_series; features...)
-    end
     key = _infrastore_stage!(
         _batch!(context),
         context.mgr,

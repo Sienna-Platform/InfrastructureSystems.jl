@@ -716,17 +716,6 @@ end
         resolution = resolution,
     )
     @test scen isa IS.Scenarios{Float64, 2}
-
-    # DeterministicSingleTimeSeries propagates {T, N} from the wrapped series.
-    sts = IS.SingleTimeSeries("u", initial_time, resolution, collect(1.0:24.0))
-    dst = IS.DeterministicSingleTimeSeries(;
-        single_time_series = sts,
-        initial_timestamp = initial_time,
-        interval = resolution,
-        count = 1,
-        horizon = 24 * resolution,
-    )
-    @test dst isa IS.DeterministicSingleTimeSeries{Float64, 1}
 end
 
 @testset "Test add SingleTimeSeries with features" begin

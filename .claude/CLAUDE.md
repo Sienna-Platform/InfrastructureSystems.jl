@@ -217,6 +217,12 @@ TimeSeriesData{T}
    └─ AbstractDeterministic{T} ⊃ Deterministic{T, N}, DeterministicSingleTimeSeries{T, N}
 ```
 
+`DeterministicSingleTimeSeries` is a **fieldless query marker** (as of IS4): the DST is
+derived in-store by `transform_single_time_series!`, reads materialize a `Deterministic`,
+and no instance is ever constructed. The type exists only for query/removal filters,
+`TimeSeriesKey.time_series_type`, and the transform API — do not reintroduce data-bearing
+fields or an instance `add_time_series!` path.
+
 `T` is the value element type (`Float64` or a domain type such as `LinearFunctionData`);
 `N` is the array rank — per-window for forecasts, per-series for static — and is
 deliberately NOT lifted to the abstract parents, since its meaning varies by subtype.
@@ -252,9 +258,8 @@ Read paths take no context and allocate nothing — a `TimeSeriesContext` owns a
 `AddBatch` handle, so constructing one per read would be a real cost in per-timestep loops.
 The batch itself is created lazily on the first stage.
 
-Constraints: blocks nest innermost-first (SQLite savepoints are a stack), an open block holds
-the store's write lock so gather data *before* opening one, and a `DeterministicSingleTimeSeries`
-flushes the buffer before its in-store transform because it needs its backing series present.
+Constraints: blocks nest innermost-first (SQLite savepoints are a stack), and an open block
+holds the store's write lock so gather data *before* opening one.
 
 The batch auto-flushes at `AUTO_FLUSH_THRESHOLD` (10,000) staged additions or
 `AUTO_FLUSH_BYTES` (256 MiB) of staged array data, whichever first, so arbitrarily large

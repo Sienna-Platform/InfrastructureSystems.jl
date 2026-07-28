@@ -138,7 +138,7 @@ Write buffered additions to the store in one bulk call. A no-op when nothing is
 buffered.
 
 Any operation needing the arrays physically present — a read, a reader build, a
-removal, a `DeterministicSingleTimeSeries` transform — flushes first. Inside a
+removal — flushes first. Inside a
 transactional context that is free of consequence: the write lands in the open
 transaction and rolls back with it.
 """

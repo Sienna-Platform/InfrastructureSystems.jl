@@ -2,11 +2,12 @@
 Supertype for forecast time series
 Current concrete subtypes are:
 - [`Deterministic`](@ref)
-- [`DeterministicSingleTimeSeries`](@ref)
 - [`Scenarios`](@ref)
 - [`Probabilistic`](@ref)
+- [`DeterministicSingleTimeSeries`](@ref) — a query-only marker; reads materialize a
+  [`Deterministic`](@ref)
 
-Subtypes of Forecast must implement:
+Instantiable subtypes of Forecast must implement:
 - `get_horizon_count`
 - `get_initial_times`
 - `get_initial_timestamp`
@@ -21,7 +22,7 @@ Base.length(ts::Forecast) = get_count(ts)
 """
 Supertype for all deterministic forecast time series.
 
-Concrete subtypes include [`Deterministic`](@ref) and
+Concrete subtypes are [`Deterministic`](@ref) and the query-only marker
 [`DeterministicSingleTimeSeries`](@ref).
 """
 abstract type AbstractDeterministic{T} <: Forecast{T} end
