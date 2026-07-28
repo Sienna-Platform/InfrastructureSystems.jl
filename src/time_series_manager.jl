@@ -75,17 +75,37 @@ store frees the array as soon as its last reference goes.
 Blocks nest innermost-first: an inner block must finish before the one enclosing
 it.
 
+A batch that grows past `auto_flush_threshold` staged additions or
+`auto_flush_bytes` of staged array data — whichever comes first — is written out
+mid-block, so an arbitrarily large block holds a bounded amount of data in memory.
+Flushed work stays inside the transaction and rolls back with it.
+
 ```julia
-time_series_transaction(mgr) do context
+time_series_transaction(mgr) do txn
     for (component, profile) in profiles
-        add_time_series!(mgr, component, profile; context = context)
+        add_time_series!(txn, component, profile)
     end
 end
 ```
 """
-function time_series_transaction(func::Function, mgr::TimeSeriesManager)
+function time_series_transaction(func::Function, mgr::TimeSeriesManager; kwargs...)
+    return _time_series_transaction(func, mgr, nothing; kwargs...)
+end
+
+function _time_series_transaction(
+    func::Function,
+    mgr::TimeSeriesManager,
+    owner_validator::Union{Nothing, Function};
+    auto_flush_threshold::Int = AUTO_FLUSH_THRESHOLD,
+    auto_flush_bytes::Int = AUTO_FLUSH_BYTES,
+)
     _throw_if_read_only(mgr)
-    context = TimeSeriesContext(mgr)
+    context = TimeSeriesContext(
+        mgr,
+        owner_validator;
+        auto_flush_threshold = auto_flush_threshold,
+        auto_flush_bytes = auto_flush_bytes,
+    )
     begin_transaction!(context)
     result = try
         func(context)
@@ -98,22 +118,52 @@ function time_series_transaction(func::Function, mgr::TimeSeriesManager)
 end
 
 """
-Add a time series, buffering it on `context` when one is given.
-
-With no context the add goes straight to the store, which is atomic on its own.
+Add a time series directly to the store, outside any batch. A single add is atomic
+on its own; to batch many adds, open [`time_series_transaction`](@ref) and call
+`add_time_series!` on the yielded transaction instead.
 """
 function add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    context::Union{Nothing, TimeSeriesContext} = nothing,
     features...,
 )
     _throw_if_read_only(mgr)
-    isnothing(context) &&
-        return infrastore_add_time_series!(mgr, owner, time_series; features...)
-    _throw_if_foreign(context, mgr)
+    return infrastore_add_time_series!(mgr, owner, time_series; features...)
+end
+
+"""
+Add a time series through an open transaction, buffering it into the block's one
+bulk write. If the block throws, the addition is rolled back with the rest of it.
+"""
+function add_time_series!(
+    context::TimeSeriesContext,
+    owner::TimeSeriesOwners,
+    time_series::TimeSeriesData;
+    features...,
+)
+    _throw_if_closed(context)
+    isnothing(context.owner_validator) || context.owner_validator(owner)
     return _stage_on_context!(context, owner, time_series; features...)
+end
+
+"""
+Add the same time series to multiple components through an open transaction. Only
+one copy of the array is stored.
+"""
+function add_time_series!(
+    context::TimeSeriesContext,
+    components,
+    time_series::TimeSeriesData;
+    features...,
+)
+    # Component information is not embedded into the key, so every component
+    # produces the same one.
+    key = nothing
+    for component in components
+        key = add_time_series!(context, component, time_series; features...)
+    end
+    return key
 end
 
 # A DeterministicSingleTimeSeries is derived in-store from its backing
@@ -140,8 +190,21 @@ function _stage_on_context!(
         features...,
     )
     push!(context.keys, key)
+    context.staged_bytes += _staged_nbytes(time_series)
+    # A batch that grows past either limit is written out so an arbitrarily large
+    # block holds a bounded amount of data in memory. The write lands inside the
+    # open transaction, so it rolls back with the block.
+    if length(context.keys) >= context.auto_flush_threshold ||
+       context.staged_bytes >= context.auto_flush_bytes
+        flush!(context)
+    end
     return key
 end
+
+# Estimate of the array bytes a staged series keeps buffered (the batch copies the
+# data at stage time). Drives the byte-based auto-flush, so it only needs to track
+# the dominant cost, not exact overhead.
+_staged_nbytes(time_series::TimeSeriesData) = Base.summarysize(get_data(time_series))
 
 function clear_time_series!(mgr::TimeSeriesManager)
     _throw_if_read_only(mgr)

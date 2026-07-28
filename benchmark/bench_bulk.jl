@@ -24,14 +24,9 @@ function run_bulk(label, shared, n)
         [IS.SingleTimeSeries("val", T0, Hour(1), rand(LEN)) for _ in 1:n]
     end
     GC.gc()
-    t_add = @elapsed IS.time_series_transaction(sys.time_series_manager) do context
+    t_add = @elapsed IS.time_series_transaction(sys.time_series_manager) do txn
         for i in 1:n
-            IS.add_time_series!(
-                sys.time_series_manager,
-                comps[i],
-                tss[i];
-                context = context,
-            )
+            IS.add_time_series!(txn, comps[i], tss[i])
         end
     end
     @printf("%s,bulk_add,%d,%.3f,%.2f\n", label, n, t_add, 1e6 * t_add / n)

@@ -137,16 +137,28 @@ recoverable only in here.
 
 Blocks nest innermost-first.
 
+A batch that grows past `auto_flush_threshold` staged additions or
+`auto_flush_bytes` of staged array data — whichever comes first — is written out
+mid-block, so an arbitrarily large block holds a bounded amount of data in memory.
+Flushed work stays inside the transaction and rolls back with it.
+
 ```julia
-time_series_transaction(data) do context
+time_series_transaction(data) do txn
     for (component, profile) in profiles
-        add_time_series!(data, component, profile; context = context)
+        add_time_series!(txn, component, profile)
     end
 end
 ```
 """
-function time_series_transaction(func::Function, data::SystemData)
-    return time_series_transaction(func, data.time_series_manager)
+function time_series_transaction(func::Function, data::SystemData; kwargs...)
+    # The transaction carries the system-level owner check, so adds made through it
+    # validate exactly as adds made through `data` itself.
+    return _time_series_transaction(
+        func,
+        data.time_series_manager,
+        owner -> _validate(data, owner);
+        kwargs...,
+    )
 end
 
 """
@@ -164,17 +176,10 @@ function add_time_series!(
     data::SystemData,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    context::Union{Nothing, TimeSeriesContext} = nothing,
     features...,
 )
     _validate(data, owner)
-    return add_time_series!(
-        data.time_series_manager,
-        owner,
-        time_series;
-        context = context,
-        features...,
-    )
+    return add_time_series!(data.time_series_manager, owner, time_series; features...)
 end
 
 """
@@ -195,28 +200,14 @@ function add_time_series!(
     data::SystemData,
     components,
     time_series::TimeSeriesData;
-    context::Union{Nothing, TimeSeriesContext} = nothing,
     features...,
 )
-    # Component information is not embedded into the key, so every component
-    # produces the same one.
-    key = nothing
-    _with_context(data.time_series_manager, context) do ctx
-        for component in components
-            key = add_time_series!(data, component, time_series; context = ctx, features...)
-        end
+    # A block opened for just this call, so the components land as one batch,
+    # atomically. The transaction's dispatch stores the array once and validates
+    # each component against `data`.
+    return time_series_transaction(data) do txn
+        add_time_series!(txn, components, time_series; features...)
     end
-    return key
-end
-
-# Run `func` on the caller's context, or on a block opened for just this call so
-# the components are added as one batch and land atomically.
-function _with_context(func::Function, mgr::TimeSeriesManager, context::TimeSeriesContext)
-    return func(context)
-end
-
-function _with_context(func::Function, mgr::TimeSeriesManager, ::Nothing)
-    return time_series_transaction(func, mgr)
 end
 
 """

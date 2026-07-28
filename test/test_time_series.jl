@@ -3746,7 +3746,7 @@ end
     horizon_count = 24
 
     make_values(count, index) = ones(count) * index
-    IS.time_series_transaction(sys) do context
+    IS.time_series_transaction(sys) do txn
         for i in 1:30
             forecast = IS.Deterministic(;
                 data = SortedDict(
@@ -3755,9 +3755,7 @@ end
                 ),
                 name = "ts_$(i)", resolution = resolution,
             )
-            IS.add_time_series!(
-                sys, component, forecast; context = context, model_year = "high",
-            )
+            IS.add_time_series!(txn, component, forecast; model_year = "high")
         end
     end
     ts_keys = IS.get_time_series_keys(component)
@@ -3797,18 +3795,16 @@ end
     )
 
     # A duplicate anywhere in the batch rejects the whole batch.
-    @test_throws ArgumentError IS.time_series_transaction(sys) do context
+    @test_throws ArgumentError IS.time_series_transaction(sys) do txn
         for year in ("high", "low", "high")
-            IS.add_time_series!(
-                sys, component, forecast; context = context, model_year = year,
-            )
+            IS.add_time_series!(txn, component, forecast; model_year = year)
         end
     end
     @test isempty(IS.get_time_series_keys(component))
 
-    @test_throws ArgumentError IS.time_series_transaction(sys) do context
+    @test_throws ArgumentError IS.time_series_transaction(sys) do txn
         for _ in 1:3
-            IS.add_time_series!(sys, component, forecast; context = context)
+            IS.add_time_series!(txn, component, forecast)
         end
     end
     @test isempty(IS.get_time_series_keys(component))
@@ -3828,7 +3824,7 @@ end
     horizon_count = 24
 
     make_values(count, index) = ones(count) * index
-    IS.time_series_transaction(sys) do context
+    IS.time_series_transaction(sys) do txn
         for i in 1:5
             forecast = IS.Deterministic(;
                 data = SortedDict(
@@ -3837,9 +3833,7 @@ end
                 ),
                 name = "ts_$(i)", resolution = resolution,
             )
-            IS.add_time_series!(
-                sys, component, forecast; context = context, model_year = "high",
-            )
+            IS.add_time_series!(txn, component, forecast; model_year = "high")
         end
     end
     ts_keys = IS.get_time_series_keys(component)
@@ -3885,7 +3879,7 @@ end
 
     @test_throws(
         ArgumentError,
-        IS.time_series_transaction(sys) do context
+        IS.time_series_transaction(sys) do txn
             for i in 1:5
                 if i < 5
                     name = "ts_$i"
@@ -3899,7 +3893,7 @@ end
                     ),
                     name = name, resolution = resolution,
                 )
-                IS.add_time_series!(sys, component, forecast; context = context)
+                IS.add_time_series!(txn, component, forecast)
             end
         end,
     )
@@ -5415,8 +5409,8 @@ end
     # A throwing block undoes everything it did -- adds and removals alike.
     # Outside a block the removal would be irreversible: the store frees the
     # array as soon as its last reference goes.
-    @test_throws ErrorException IS.time_series_transaction(sys) do context
-        IS.add_time_series!(sys, component, make_ts("added", 100.0); context = context)
+    @test_throws ErrorException IS.time_series_transaction(sys) do txn
+        IS.add_time_series!(txn, component, make_ts("added", 100.0))
         IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "keep")
         error("boom")
     end
@@ -5428,10 +5422,57 @@ end
     @test TimeSeries.values(IS.get_data(restored))[1] == 0.0
 
     # A clean block commits.
-    IS.time_series_transaction(sys) do context
-        IS.add_time_series!(sys, component, make_ts("added", 100.0); context = context)
+    IS.time_series_transaction(sys) do txn
+        IS.add_time_series!(txn, component, make_ts("added", 100.0))
     end
     @test length(IS.get_time_series_keys(component)) == 2
+end
+
+@testset "Test time series auto flush" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    make_ts(name) = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = 8, step = resolution), collect(1.0:8.0),
+        ),
+        name = name,
+    )
+
+    # A batch past the threshold drains mid-block instead of accumulating in memory.
+    IS.time_series_transaction(sys; auto_flush_threshold = 3) do txn
+        for i in 1:7
+            IS.add_time_series!(txn, component, make_ts("ts_$i"))
+        end
+        # Auto-flushes at 3 and 6 drained all but the seventh entry.
+        @test IS.has_staged_data(txn)
+    end
+    @test length(IS.get_time_series_keys(component)) == 7
+
+    # The byte limit flushes long series well before the count limit would.
+    series_bytes = Base.summarysize(IS.get_data(make_ts("probe")))
+    IS.time_series_transaction(sys; auto_flush_bytes = 3 * series_bytes) do txn
+        for i in 1:7
+            IS.add_time_series!(txn, component, make_ts("bytes_$i"))
+        end
+        # Byte-triggered flushes at 3 and 6 drained all but the seventh entry.
+        @test IS.has_staged_data(txn)
+    end
+    @test length(IS.get_time_series_keys(component)) == 14
+
+    # Auto-flushed work still rolls back with the block.
+    @test_throws ErrorException IS.time_series_transaction(
+        sys; auto_flush_threshold = 2,
+    ) do txn
+        for i in 1:5
+            IS.add_time_series!(txn, component, make_ts("rolled_$i"))
+        end
+        error("boom")
+    end
+    names = Set(IS.get_name(k) for k in IS.get_time_series_keys(component))
+    @test names == union(Set("ts_$i" for i in 1:7), Set("bytes_$i" for i in 1:7))
 end
 
 @testset "Test time series context nesting and reuse" begin
@@ -5449,30 +5490,31 @@ end
 
     # Blocks nest innermost-first: an inner failure undoes only its own work and
     # leaves the enclosing block usable.
-    outer_context = nothing
-    IS.time_series_transaction(sys) do context
-        outer_context = context
-        IS.add_time_series!(sys, component, make_ts("outer"); context = context)
+    outer_txn = nothing
+    IS.time_series_transaction(sys) do txn
+        outer_txn = txn
+        IS.add_time_series!(txn, component, make_ts("outer"))
         @test_throws ErrorException IS.time_series_transaction(sys) do inner
-            IS.add_time_series!(sys, component, make_ts("inner"); context = inner)
+            IS.add_time_series!(inner, component, make_ts("inner"))
             error("inner failed")
         end
     end
     names = Set(IS.get_name(k) for k in IS.get_time_series_keys(component))
     @test names == Set(["outer"])
 
-    # A context is valid only inside its own block.
+    # A transaction is valid only inside its own block.
     @test_throws ArgumentError IS.add_time_series!(
-        sys, component, make_ts("late"); context = outer_context,
+        outer_txn, component, make_ts("late"),
     )
 
-    # A context from one system cannot be used against another.
+    # A transaction opened on one system rejects a component stored in another:
+    # its owner check runs against the system that opened the block.
     other = IS.SystemData()
     other_component = IS.TestComponent("Other", 5)
     IS.add_component!(other, other_component)
-    IS.time_series_transaction(sys) do context
+    IS.time_series_transaction(sys) do txn
         @test_throws ArgumentError IS.add_time_series!(
-            other, other_component, make_ts("foreign"); context = context,
+            txn, other_component, make_ts("foreign"),
         )
     end
 end

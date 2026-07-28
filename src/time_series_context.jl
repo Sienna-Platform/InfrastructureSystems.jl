@@ -26,12 +26,26 @@ keeps no in-memory association index — the store is the single source of truth
 read inside a block flushes the buffer and then asks the store, which sees the
 uncommitted rows through the same connection.
 
-`nothing` is a valid context everywhere one is accepted, and means "no batch": the
-operation goes straight to the store, which is already atomic on its own. Read
-paths pass `nothing` by default and allocate no context at all — a fresh context
-has an empty buffer and nothing to commit, so the two are indistinguishable except
-in cost, and these accessors run in per-timestep loops.
+The context is the block's API surface: `add_time_series!` dispatches on it as the
+first argument, the Julia shape of calling methods on the yielded transaction
+object. An `add_time_series!` call that targets the system or manager instead runs
+on its own — it goes straight to the store, which is already atomic for a single
+operation. Read paths never allocate a context at all — a fresh context has an
+empty buffer and nothing to commit, and these accessors run in per-timestep loops.
 """
+# A context flushes on its own when its buffer reaches either limit below, whichever
+# comes first. Inside a transaction an early flush costs nothing in recoverability, so
+# these only split the I/O, never the atomicity.
+#
+# The count limit keeps the store's layout healthy: each flush becomes one NetCDF
+# dataset whose chunk width equals the batch width, so 10,000 f64 series produce 80 KiB
+# chunks — near the store's 1 MiB chunk cap. The byte limit is what actually bounds
+# memory, which the count cannot do when individual arrays are long: the batch copies
+# each array at stage time and keeps it until the flush, so the buffer holds at most
+# ~AUTO_FLUSH_BYTES of array data no matter how large each series is.
+const AUTO_FLUSH_THRESHOLD = 10_000
+const AUTO_FLUSH_BYTES = 256 * 1024 * 1024
+
 mutable struct TimeSeriesContext
     # Typed on the abstract supertype: this file is included before the concrete
     # `TimeSeriesManager`, which needs `TimeSeriesContext` in its own signatures.
@@ -45,9 +59,30 @@ mutable struct TimeSeriesContext
     "Whether a store transaction backs this context."
     transactional::Bool
     closed::Bool
+    """
+    Validates each add's owner against the layer that opened the block. A block
+    opened on a `SystemData` checks that the owner is stored in that system; one
+    opened on a bare manager has no system to check against.
+    """
+    owner_validator::Union{Nothing, Function}
+    "Staged additions to buffer before flushing on its own."
+    auto_flush_threshold::Int
+    "Bytes of staged array data to buffer before flushing on its own."
+    auto_flush_bytes::Int
+    "Estimated array bytes currently buffered."
+    staged_bytes::Int
 end
 
-function TimeSeriesContext(mgr::AbstractTimeSeriesManager)
+function TimeSeriesContext(
+    mgr::AbstractTimeSeriesManager,
+    owner_validator::Union{Nothing, Function} = nothing;
+    auto_flush_threshold::Int = AUTO_FLUSH_THRESHOLD,
+    auto_flush_bytes::Int = AUTO_FLUSH_BYTES,
+)
+    auto_flush_threshold >= 1 ||
+        throw(ArgumentError("auto_flush_threshold must be positive: $auto_flush_threshold"))
+    auto_flush_bytes >= 1 ||
+        throw(ArgumentError("auto_flush_bytes must be positive: $auto_flush_bytes"))
     return TimeSeriesContext(
         mgr,
         nothing,
@@ -55,6 +90,10 @@ function TimeSeriesContext(mgr::AbstractTimeSeriesManager)
         Dict{Tuple{Dates.Period, Dates.Period}, Any}(),
         false,
         false,
+        owner_validator,
+        auto_flush_threshold,
+        auto_flush_bytes,
+        0,
     )
 end
 
@@ -69,16 +108,6 @@ function _throw_if_closed(context::TimeSeriesContext)
             "This time series context is closed. A context is valid only inside the " *
             "time_series_transaction block that created it; open a new one.",
         ),
-    )
-    return
-end
-
-# Verify the context belongs to this manager. Passing another system's context
-# would stage work onto the wrong store.
-function _throw_if_foreign(context::TimeSeriesContext, mgr::AbstractTimeSeriesManager)
-    _throw_if_closed(context)
-    context.mgr === mgr || throw(
-        ArgumentError("This time series context belongs to a different system."),
     )
     return
 end
@@ -122,6 +151,7 @@ function flush!(context::TimeSeriesContext)
     context.batch = nothing
     empty!(context.keys)
     empty!(context.params_cache)
+    context.staged_bytes = 0
     _infrastore_commit_batch!(context.mgr, batch)
     return
 end
@@ -155,6 +185,7 @@ function discard!(context::TimeSeriesContext)
     context.batch = nothing
     empty!(context.keys)
     empty!(context.params_cache)
+    context.staged_bytes = 0
     context.closed = true
     context.transactional || return
     try
@@ -165,8 +196,3 @@ function discard!(context::TimeSeriesContext)
     end
     return
 end
-
-# Flush whatever `context` has buffered, when a caller may or may not have one.
-# The `nothing` method is why read paths cost nothing when no batch is open.
-_flush_context(::Nothing) = nothing
-_flush_context(context::TimeSeriesContext) = flush!(context)

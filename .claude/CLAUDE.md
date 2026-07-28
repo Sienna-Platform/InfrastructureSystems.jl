@@ -236,22 +236,31 @@ TimeSeriesData end` must become `<: TimeSeriesData{Float64}`.
 
 ## Time series batching and transactions
 
-One primitive: `time_series_transaction(data) do context ... end`. Pass `context` to each
-`add_time_series!` inside and they are buffered and written as one bulk call — that batching
-is what buys block-sized array writes and feature-set dedup, which a transaction does not
-provide. The block is also an InfraStore transaction: if it throws, everything it did is
-rolled back, **including removals**, which are irreversible outside one (the store frees an
-array once its last reference goes; inside a transaction that free is deferred to the
-commit).
+One primitive: `time_series_transaction(data) do txn ... end`. The yielded
+`TimeSeriesContext` is the block's API surface: call `add_time_series!(txn, owner, ts)` on it
+and the adds are buffered and written as one bulk call — that batching is what buys
+block-sized array writes and feature-set dedup, which a transaction does not provide. The
+block is also an InfraStore transaction: if it throws, everything it did is rolled back,
+**including removals**, which are irreversible outside one (the store frees an array once
+its last reference goes; inside a transaction that free is deferred to the commit).
 
-`context = nothing` (the default) means "no batch": the operation goes straight to the store,
-which is atomic on its own. Read paths take no context and allocate nothing — a
-`TimeSeriesContext` owns an FFI `AddBatch` handle, so constructing one per read would be a
-real cost in per-timestep loops. The batch itself is created lazily on the first stage.
+`add_time_series!` on the `SystemData` or manager means "no batch": the operation goes
+straight to the store, which is atomic on its own. There is no `context` kwarg — the batch
+is selected by dispatch on the first argument. A transaction opened on a `SystemData`
+carries its owner validation (`owner_validator`); one opened on a bare manager does not.
+Read paths take no context and allocate nothing — a `TimeSeriesContext` owns an FFI
+`AddBatch` handle, so constructing one per read would be a real cost in per-timestep loops.
+The batch itself is created lazily on the first stage.
 
 Constraints: blocks nest innermost-first (SQLite savepoints are a stack), an open block holds
 the store's write lock so gather data *before* opening one, and a `DeterministicSingleTimeSeries`
 flushes the buffer before its in-store transform because it needs its backing series present.
+
+The batch auto-flushes at `AUTO_FLUSH_THRESHOLD` (10,000) staged additions or
+`AUTO_FLUSH_BYTES` (256 MiB) of staged array data, whichever first, so arbitrarily large
+blocks hold bounded memory. The count keeps NetCDF chunks near the store's 1 MiB cap (chunk
+width = batch width); the byte limit is the real memory bound for long arrays. Auto-flushed
+work still rolls back with the block.
 
 Removed in IS4 — do not reintroduce: `begin_time_series_update` (snapshot-diff rollback),
 `open_time_series_store!` and its `mode` argument (named an HDF5 handle that no longer

@@ -637,14 +637,14 @@ end
         ts_name = "test"
         component_names = String[]
 
-        IS.time_series_transaction(sys) do context
+        IS.time_series_transaction(sys) do txn
             for (i, ta) in enumerate(arrays)
                 name = "component_$(i)"
                 component = IS.TestComponent(name, 3)
                 IS.add_component!(sys, component)
                 push!(component_names, name)
                 ts = IS.SingleTimeSeries(; data = ta, name = ts_name)
-                IS.add_time_series!(sys, component, ts; context = context)
+                IS.add_time_series!(txn, component, ts)
             end
         end
 
@@ -659,9 +659,9 @@ end
 end
 
 @testset "Test bulk add of time series via a helper function" begin
-    function add_time_series(sys_data, component, ta, context; ts_name)
+    function add_time_series(txn, component, ta; ts_name)
         ts = IS.SingleTimeSeries(; data = ta, name = ts_name)
-        IS.add_time_series!(sys_data, component, ts; context = context)
+        IS.add_time_series!(txn, component, ts)
     end
 
     for in_memory in (false, true)
@@ -675,8 +675,8 @@ end
         name = "component"
         component = IS.TestComponent(name, 3)
         IS.add_component!(sys, component)
-        IS.time_series_transaction(sys) do context
-            add_time_series(sys, component, ta, context; ts_name = ts_name)
+        IS.time_series_transaction(sys) do txn
+            add_time_series(txn, component, ta; ts_name = ts_name)
         end
 
         ts = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
