@@ -86,6 +86,18 @@ function clear_ext!(obj::InfrastructureSystemsInternal)
     return
 end
 
+"""
+Get the UUID of an [`InfrastructureSystemsType`](@ref) that carries an
+[`InfrastructureSystemsInternal`](@ref), such as an
+[`InfrastructureSystemsComponent`](@ref) or a [`SupplementalAttribute`](@ref).
+
+The UUID is assigned on construction and uniquely identifies the instance within a
+system. The generic method relies on [`get_internal`](@ref), so it applies only to
+subtypes that store an `InfrastructureSystemsInternal`; instances of other subtypes,
+such as most [`DeviceParameter`](@ref)s, do not have UUIDs.
+"""
+function get_uuid end
+
 get_uuid(internal::InfrastructureSystemsInternal) = internal.uuid
 set_uuid!(internal::InfrastructureSystemsInternal, uuid) = internal.uuid = uuid
 
