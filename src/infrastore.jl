@@ -1911,6 +1911,55 @@ function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSerie
     throw(InfraStore.NotFoundError("no stored array matches key name=$(get_name(key))"))
 end
 
+# Content hashes for a homogeneous collection of owners, resolved by ONE catalog
+# query (`list_array_groups` filtered on category/type/name/resolution/interval)
+# instead of one per owner. Returns `get_id(owner) => 64-char hex hash` for every
+# owner in `owners` with a stored series matching the filters; owners with no
+# match are simply absent. Two matches with the same hash are fine (they resolve
+# to the same array); two matches with different hashes mean the filters
+# underdetermine the series for that owner, so that is an error.
+function infrastore_get_time_series_hashes(
+    owners,
+    ::Type{T},
+    name::AbstractString;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features...,
+) where {T <: TimeSeriesData}
+    hashes = Dict{Int, String}()
+    isempty(owners) && return hashes
+    owner = first(owners)
+    mgr = get_time_series_manager(owner)
+    isnothing(mgr) && return hashes
+    store = mgr.data_store::Store
+    ids = Set{Int}(get_id(o) for o in owners)
+    rows = InfraStore.list_array_groups(store.inner;
+        owner_category = get_owner_category(owner),
+        time_series_type = _infrastore_pushable_type(T),
+        name = name,
+        resolution = resolution,
+        interval = interval,
+        features = _infrastore_features(features))
+    for row in rows
+        id = Int(row.owner_id)
+        id in ids || continue
+        _infrastore_type_matches(_infrastore_is_type(row.time_series_type), T) || continue
+        hex = bytes2hex(row.data_hash)
+        existing = get(hashes, id, nothing)
+        if !isnothing(existing) && existing != hex
+            throw(
+                ArgumentError(
+                    "More than one time series of type $T with name=$name matches " *
+                    "owner id $id. Specify additional keyword arguments (resolution, " *
+                    "interval, or features) to disambiguate.",
+                ),
+            )
+        end
+        hashes[id] = hex
+    end
+    return hashes
+end
+
 # Group every stored association by content hash, as `(owner, key)` pairs. The
 # `id_to_owner` callback resolves an `(owner_id, owner_category)` row back to the
 # owner object (the system holds the component / supplemental-attribute maps).

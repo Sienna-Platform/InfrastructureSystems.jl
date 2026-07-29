@@ -1061,6 +1061,37 @@ use [`get_time_series_array_groups`](@ref).
 get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey) =
     infrastore_get_time_series_hash(owner, key)
 
+"""
+$(TYPEDSIGNATURES)
+Return the content hash (64-character lowercase hex string) of the array behind
+the time series of type `T` named `name` for each owner in `owners`, as a `Dict`
+keyed by the owner's integer id ([`get_id`](@ref)). Owners with no matching time
+series are absent from the result. Resolved by a single catalog query for the
+whole collection, so prefer this over per-owner [`get_time_series_hash`](@ref)
+when processing many owners (e.g. batching model parameters by shared array).
+
+All owners must be of one category (all components or all supplemental
+attributes). `resolution`, `interval`, and `features` narrow the match the same
+way they do in [`get_time_series_keys`](@ref); if the filters leave more than
+one matching series with distinct arrays for an owner, an error is thrown.
+"""
+get_time_series_hashes(
+    owners,
+    ::Type{T},
+    name::AbstractString;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features...,
+) where {T <: TimeSeriesData} =
+    infrastore_get_time_series_hashes(
+        owners,
+        T,
+        name;
+        resolution = resolution,
+        interval = interval,
+        features...,
+    )
+
 function clear_time_series!(owner::TimeSeriesOwners)
     mgr = get_time_series_manager(owner)
     if !isnothing(mgr)
