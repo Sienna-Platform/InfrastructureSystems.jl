@@ -32,7 +32,71 @@ series per `TestComponent`, disk-backed stores (defaults for both branches).
 | `results_bulk_hdf5.csv` | this branch's 100k float run, `INFRASTORE_BACKEND=hdf5` spike |
 | `results_scaling_hdf5.csv` | per-add (un-managed path) 20k sweep on the hdf5 backend |
 | `results_costs_postfix.csv` | 10k cost-payload run after netcdf removal + read fixes |
-| `results_costs_nbytes.csv` | 10k cost-payload run after the staged-add byte-accounting fix (current state) |
+| `results_costs_nbytes.csv` | 10k cost-payload run after the staged-add byte-accounting fix |
+| `bench_full_common.jl` | full-matrix driver: every TS type × eltype, add/read/slice, reader/cache sweeps, has_time_series (see below) |
+| `bench_full_branch.jl` | full-matrix entry point for this branch |
+| `bench_full_is4.jl` | full-matrix entry point for IS4 |
+| `results_full_branch.csv` | this branch's 100k full-matrix run |
+| `results_full_branch_w2.csv` | this branch's 100k dst/shared/serialize/remove run |
+| `results_full_branch_has_postfix.csv` | this branch's 100k `has` rerun after the has_time_series optimization (supersedes the `has_ts` rows in `results_full_branch.csv`) |
+| `results_full_is4_{sts,det,misc,sweep}.csv` | IS4's 100k full-matrix run (split across four processes) |
+| `results_full_is4_w2.csv` | IS4's 100k dst/shared/serialize/remove run |
+| `REPORT.md` | funder-facing summary of the 100k full-matrix comparison |
+
+## Full-matrix suite (`bench_full_*.jl`)
+
+One CSV row per (branch, kind, eltype, op). Sections, selectable via
+`BENCH_KINDS` (comma list) so long runs can be split across processes:
+
+- `sts`, `nst`, `det`: bulk-add N series (one per component) via the branch's
+  recommended batched path, then full-array reads and sliced (STS) / one-window
+  (forecast) reads, for each element type in `BENCH_ELTYPES`
+  (`float64,ntuple2,linear,quadratic,pwl`). `nst` is recorded as unsupported on
+  IS4; combos a branch rejects (e.g. tuple forecasts here) get an `error:` row.
+- `prob`, `scen`: same ops with `Matrix{Float64}` windows (5 percentiles /
+  scenarios), float64 only.
+- `sweep`: the simulation access patterns. STS by-timestamp over every
+  component (`StaticTimeSeriesReader` here vs a `StaticTimeSeriesCache` per
+  component on IS4) and Deterministic by-window (`ForecastReader` vs
+  `ForecastCache`). µs/op is per (component, timestamp|window) value.
+- `has`: N series spread 10-per-component (2 names × 5 feature combos, each
+  association carrying 2 features); `has_time_series` with the full identity
+  (type, name, resolution, features), hits and misses.
+- `dst`: N Float64 STS transformed via `transform_single_time_series!` to
+  `DeterministicSingleTimeSeries`, then single-window reads and the by-window
+  sweep over every component (the standard PowerSimulations feed path).
+- `shared`: one STS / one Deterministic instance added to all N components
+  (deduplicated storage) — add, reads, and the sweeps, where per-timestamp
+  dedup should shine.
+- `serialize`: `to_json` / `from_json` round-trip of a system with N Float64
+  STS (including the store artifacts; `store_disk_bytes` here is the
+  serialized footprint), verified with one read from the reloaded system.
+- `remove`: `remove_time_series!` of all N series, one call per component.
+
+`maxrss` rows record process-lifetime peak RSS after ingests; only the first
+combo in a process attributes cleanly (the value is monotone).
+
+After each bulk add the store's on-disk footprint is recorded
+(`store_disk_bytes` rows; each system gets a private temp directory).
+
+Run:
+
+```sh
+INFRASTORE_LIB=... BENCH_N=100000 julia --project=test benchmark/bench_full_branch.jl
+BENCH_N=100000 julia --project=<is4-env> benchmark/bench_full_is4.jl
+```
+
+The is4 env is a scratch project with the IS4 branch dev'd plus TimeSeries and
+DataStructures (2026-07-29 run: worktree `~/repos/sienna/is4-bench`, env
+`~/repos/sienna/is4-bench-env`).
+
+Baseline note: the IS4 branch predates PR #594 (`transform_single_time_series!`
+speedup, merged to `main` only), and without it the 100k `dst` transform did
+not complete in an hour (O(N²) SQLite scans). The wave-2 run
+(`results_full_is4_w2.csv`) therefore uses IS4 + a cherry-pick of #594
+(`is4-bench` @ `f55c812dd`) so IS4 is measured with its best transform. #594
+does not touch the paths measured in wave 1 (its metadata-store diff is a
+cosmetic constant extraction).
 
 Run:
 

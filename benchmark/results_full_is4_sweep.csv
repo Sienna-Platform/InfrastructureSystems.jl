@@ -1,0 +1,4 @@
+branch,kind,eltype,op,n,total_s,us_per_op,bytes,status
+is4,sts,float64,read_by_timestamp,2400000,661.423,275.593,3410400960,ok
+is4,det,float64,read_by_window,1200000,816.587,680.490,6474401248,ok
+DONE is4 full

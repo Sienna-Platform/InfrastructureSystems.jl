@@ -1,0 +1,13 @@
+branch,kind,eltype,op,n,total_s,us_per_op,bytes,status
+is4,prob,float64,bulk_add,100000,14.353,143.530,2381547616,ok
+is4,prob,float64,store_disk_bytes,1,0.000,0.000,639885763,ok
+is4,prob,float64,get_full,100000,34.519,345.194,3138800624,ok
+is4,prob,float64,get_window,100000,32.279,322.790,1186799808,ok
+is4,scen,float64,bulk_add,100000,13.077,130.766,2381547616,ok
+is4,scen,float64,store_disk_bytes,1,0.000,0.000,639536059,ok
+is4,scen,float64,get_full,100000,102.417,1024.172,3122800624,ok
+is4,scen,float64,get_window,100000,109.102,1091.016,1170800096,ok
+is4,has_ts,float64,bulk_add,100000,3.039,30.389,1709552608,ok
+is4,has_ts,float64,has_hit,100000,0.368,3.681,403200000,ok
+is4,has_ts,float64,has_miss,100000,1.547,15.466,630400000,ok
+DONE is4 full
