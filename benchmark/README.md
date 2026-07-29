@@ -31,7 +31,8 @@ series per `TestComponent`, disk-backed stores (defaults for both branches).
 | `results_costs_hdf5.csv` | this branch's 10k cost-payload run, `INFRASTORE_BACKEND=hdf5` spike |
 | `results_bulk_hdf5.csv` | this branch's 100k float run, `INFRASTORE_BACKEND=hdf5` spike |
 | `results_scaling_hdf5.csv` | per-add (un-managed path) 20k sweep on the hdf5 backend |
-| `results_costs_postfix.csv` | 10k cost-payload run after netcdf removal + read fixes (current state) |
+| `results_costs_postfix.csv` | 10k cost-payload run after netcdf removal + read fixes |
+| `results_costs_nbytes.csv` | 10k cost-payload run after the staged-add byte-accounting fix (current state) |
 
 Run:
 
@@ -356,3 +357,30 @@ IS4 at 10k on every payload, with the gap still widening with N since IS4
 reads degrade with store size. Shared-scenario reads land within ~10% of
 non-shared (83–118 µs); shared forecast adds are 80–352 µs vs IS4's
 metadata-only ~11–18 µs, unchanged from the earlier analysis.
+
+### Staged-add byte accounting fix (IS-side, 2026-07-29)
+
+Profiling the pwl forecast add (the one op still slower than IS4's batched
+path on some payloads) showed ~70% of it inside `Base.summarysize`, called
+per staged series by the auto-flush byte accounting — a reflective walk of
+the unencoded Julia object graph (299 µs/call for the 12×12 pwl forecast;
+even scalar Float64 windows cost 55 µs for the `SortedDict` walk alone).
+The encode itself is 9 µs, `_row_major_bytes` 9 µs, and the whole Rust side
+(sha256 + compact-dataset create; the data write is free — compact layout
+puts the bytes in the object header) ~55 µs.
+
+Fix: the staging layer now returns the encoded array's exact `sizeof`
+(materialized anyway) and the context adds that, instead of walking the
+source objects. `results_costs_nbytes.csv`; non-shared bulk adds, µs/op:
+
+| payload | kind | before | after | is4 |
+|---|---|---:|---:|---:|
+| linear | STS | 15 | 11 | 75 |
+| pwl | STS | 65 | **17** | 97 |
+| linear | Det | 110 | **55** | 118 |
+| quadratic | Det | 115 | 57 | 116 |
+| pwl | Det | 428 | **118** | 1,332 |
+
+Reads unchanged. Every add and read path now beats IS4 on every payload —
+the last "slower than IS4" cell (shared adds aside) is gone; pwl forecast
+ingest is 11× faster than IS4. Suite: 8,749 pass / 1 broken (baseline).

@@ -313,7 +313,8 @@ Add a `SingleTimeSeries` (data + metadata) to the InfraStore store. The array is
 content-addressed; identical arrays are de-duplicated automatically.
 `owner_category` is the `InfraStore.OwnerCategory` enum. `dest` is the
 [`Store`](@ref) for an immediate write, or a `InfraStore.AddBatch` to stage the
-series for a bulk commit.
+series for a bulk commit. Returns the encoded array's byte size — the amount a
+batch keeps buffered until it flushes.
 """
 function serialize_single!(
     dest::Union{Store, InfraStore.AddBatch},
@@ -340,7 +341,9 @@ function serialize_single!(
     )
     InfraStore.add_time_series!(_infrastore_sink(dest), owner_id, owner_type,
         owner_category, tss_ts; features = features, units = units)
-    return
+    # The encoded array is what a batch keeps buffered; its exact byte size
+    # drives the auto-flush accounting.
+    return sizeof(arr)
 end
 
 """
@@ -351,7 +354,9 @@ Add a `NonSequentialTimeSeries` (irregular timestamps + data) to the InfraStore 
 The array is content-addressed (and de-duplicated); the explicit timestamps are
 carried on the association. `owner_category` is the `InfraStore.OwnerCategory`
 enum. `dest` is the [`Store`](@ref) for an immediate write, or a
-`InfraStore.AddBatch` to stage the series for a bulk commit.
+`InfraStore.AddBatch` to stage the series for a bulk commit. Returns the byte
+size of the encoded array plus timestamps — the amount a batch keeps buffered
+until it flushes.
 """
 function serialize_non_sequential!(
     dest::Union{Store, InfraStore.AddBatch},
@@ -375,7 +380,9 @@ function serialize_non_sequential!(
     )
     InfraStore.add_time_series!(_infrastore_sink(dest), owner_id, owner_type,
         owner_category, tss_ts; features = features, units = units)
-    return
+    # As in `serialize_single!`: the staged bytes are the encoded array plus the
+    # explicit timestamps the association carries.
+    return sizeof(arr) + sizeof(get_timestamps(nts))
 end
 
 """
@@ -901,9 +908,9 @@ function _infrastore_stage_data!(
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(time_series)
     feats = _infrastore_features(features)
-    serialize_single!(batch, owner_id, owner_type, category, name, time_series;
-        features = feats)
-    return StaticTimeSeriesKey(;
+    nbytes = serialize_single!(batch, owner_id, owner_type, category, name,
+        time_series; features = feats)
+    key = StaticTimeSeriesKey(;
         time_series_type = SingleTimeSeries,
         name = name,
         initial_timestamp = get_initial_timestamp(time_series),
@@ -911,6 +918,7 @@ function _infrastore_stage_data!(
         length = length(time_series),
         features = Dict{String, Any}(feats),
     )
+    return key, nbytes
 end
 
 function _infrastore_stage_data!(
@@ -924,14 +932,15 @@ function _infrastore_stage_data!(
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(time_series)
     feats = _infrastore_features(features)
-    serialize_non_sequential!(batch, owner_id, owner_type, category, name,
+    nbytes = serialize_non_sequential!(batch, owner_id, owner_type, category, name,
         time_series; features = feats)
-    return NonSequentialTimeSeriesKey(;
+    key = NonSequentialTimeSeriesKey(;
         time_series_type = NonSequentialTimeSeries,
         name = name,
         length = length(time_series),
         features = Dict{String, Any}(feats),
     )
+    return key, nbytes
 end
 
 # Validate a staged forecast's window parameters against its `(resolution,
@@ -959,9 +968,9 @@ end
 
 # The three dense-forecast stagers differ only in how they build the InfraStore
 # forecast object; the validation, owner marshalling, add, and returned
-# `ForecastKey` around it are shared. `build(initial, resolution, horizon,
-# storage_interval, name)` returns that object together with its window count,
-# which is the one field the callers disagree on.
+# `(ForecastKey, staged_nbytes)` pair around it are shared. `build(initial,
+# resolution, horizon, storage_interval, name)` returns that object together
+# with its window count, which is the one field the callers disagree on.
 function _infrastore_stage_forecast!(
     build,
     batch::InfraStore.AddBatch,
@@ -988,11 +997,14 @@ function _infrastore_stage_forecast!(
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
         features = feats)
-    return ForecastKey(;
+    key = ForecastKey(;
         time_series_type = typeof(ts), name = name,
         initial_timestamp = initial, resolution = resolution,
         horizon = horizon, interval = interval, count = count,
         features = Dict{String, Any}(feats))
+    # `obj.data` is the encoded dense array the batch buffers — its exact byte
+    # size drives the auto-flush accounting.
+    return key, sizeof(obj.data)
 end
 
 function _infrastore_stage_data!(

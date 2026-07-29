@@ -5441,7 +5441,9 @@ end
     @test length(IS.get_time_series_keys(component)) == 7
 
     # The byte limit flushes long series well before the count limit would.
-    series_bytes = Base.summarysize(IS.get_data(make_ts("probe")))
+    # Staged-byte accounting counts the encoded array (for a Float64 series,
+    # exactly its raw values), not the wrapper objects.
+    series_bytes = sizeof(TimeSeries.values(IS.get_data(make_ts("probe"))))
     IS.time_series_transaction(sys; auto_flush_bytes = 3 * series_bytes) do txn
         for i in 1:7
             IS.add_time_series!(txn, component, make_ts("bytes_$i"))

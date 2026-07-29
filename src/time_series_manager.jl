@@ -172,7 +172,7 @@ function _stage_on_context!(
     time_series::TimeSeriesData;
     features...,
 )
-    key = _infrastore_stage!(
+    key, nbytes = _infrastore_stage!(
         _batch!(context),
         context.mgr,
         context.params_cache,
@@ -181,7 +181,10 @@ function _stage_on_context!(
         features...,
     )
     push!(context.keys, key)
-    context.staged_bytes += _staged_nbytes(time_series)
+    # `nbytes` is the exact size of the encoded array the batch copied at stage
+    # time (computed where the array is materialized — never derived by walking
+    # the source objects, which costs more than the rest of the stage combined).
+    context.staged_bytes += nbytes
     # A batch that grows past either limit is written out so an arbitrarily large
     # block holds a bounded amount of data in memory. The write lands inside the
     # open transaction, so it rolls back with the block.
@@ -191,11 +194,6 @@ function _stage_on_context!(
     end
     return key
 end
-
-# Estimate of the array bytes a staged series keeps buffered (the batch copies the
-# data at stage time). Drives the byte-based auto-flush, so it only needs to track
-# the dominant cost, not exact overhead.
-_staged_nbytes(time_series::TimeSeriesData) = Base.summarysize(get_data(time_series))
 
 function clear_time_series!(mgr::TimeSeriesManager)
     _throw_if_read_only(mgr)

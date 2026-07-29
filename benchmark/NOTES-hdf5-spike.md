@@ -111,10 +111,11 @@ the per-add path is flat. Recommendation recorded in the README: keep
   (via `sample`) HDF5 `H5Dcreate2` ≈ 35 µs, sha256 ≈ 8 µs, request/metadata
   building ≈ 10 µs, actual data write ≈ 0 (compact layout: bytes ride in the
   object header at create). Same story for the STS pwl-vs-linear add gap
-  (65 vs 15 µs). Fix is IS-side and trivial: stop calling `summarysize` —
-  the batch stages the *encoded* array, whose exact `sizeof` is already
-  materialized in `_infrastore_stage!`; return it from there (or estimate
-  from dims) instead of walking the source objects.
+  (65 vs 15 µs). **Fixed same day** (IS-side):
+  the staging layer returns the encoded array's exact `sizeof` and the
+  context sums that — no object-graph walk. Non-shared bulk adds: pwl Det
+  428 → 118 µs/op, linear Det 110 → 55, pwl STS 65 → 17
+  (`results_costs_nbytes.csv`).
 - **Shared adds still lose to IS4** (10–345 µs vs 11–18): content-hash dedup
   must hash + FFI-encode the full array before discovering it's a duplicate.
   Known since the float benchmark; unchanged by the backend swap.
