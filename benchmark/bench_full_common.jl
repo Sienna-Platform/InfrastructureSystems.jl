@@ -38,7 +38,8 @@ const PERCENTILES = [10.0, 25.0, 50.0, 75.0, 90.0]
 const KINDS = split(
     get(ENV, "BENCH_KINDS", "sts,nst,det,prob,scen,sweep,has,dst,shared,serialize,remove"),
     ",")
-const ELTYPES = split(get(ENV, "BENCH_ELTYPES", "float64,ntuple2,linear,quadratic,pwl"), ",")
+const ELTYPES =
+    split(get(ENV, "BENCH_ELTYPES", "float64,ntuple2,linear,quadratic,pwl"), ",")
 
 make_val_float64(rng) = rand(rng)
 make_val_ntuple2(rng) = (rand(rng), rand(rng))
@@ -131,9 +132,12 @@ function run_static_kind(kind, eltype, n;
     sys, comps, dir = build_system(n)
     rng = Random.Xoshiro(1234)
     is_sts = startswith(kind, "sts")
-    make_one = () -> is_sts ?
-        make_sts("val", T0, RES, [make_val(rng) for _ in 1:LEN]) :
-        make_nst("val", irregular_timestamps(rng, LEN), [make_val(rng) for _ in 1:LEN])
+    make_one =
+        () -> if is_sts
+            make_sts("val", T0, RES, [make_val(rng) for _ in 1:LEN])
+        else
+            make_nst("val", irregular_timestamps(rng, LEN), [make_val(rng) for _ in 1:LEN])
+        end
     tss = try_construct(kind, eltype, n,
         () -> shared ? fill(make_one(), n) : [make_one() for _ in 1:n])
     isnothing(tss) && return
@@ -154,18 +158,30 @@ function run_static_kind(kind, eltype, n;
     tss = nothing
 
     if main_ops
-        timed_op(kind, eltype, "get_full", n, () -> for i in 1:n
-            IS.get_time_series(ttype, comps[i], "val")
-        end)
+        timed_op(
+            kind,
+            eltype,
+            "get_full",
+            n,
+            () -> for i in 1:n
+                IS.get_time_series(ttype, comps[i], "val")
+            end,
+        )
 
         # Sliced read: middle half of the series (regular-grid types only).
         if is_sts
             st = T0 + RES * (LEN ÷ 4)
             slice_len = LEN ÷ 2
-            timed_op(kind, eltype, "get_sliced", n, () -> for i in 1:n
-                IS.get_time_series(ttype, comps[i], "val";
-                    start_time = st, len = slice_len)
-            end)
+            timed_op(
+                kind,
+                eltype,
+                "get_sliced",
+                n,
+                () -> for i in 1:n
+                    IS.get_time_series(ttype, comps[i], "val";
+                        start_time = st, len = slice_len)
+                end,
+            )
         end
     end
 
@@ -192,13 +208,14 @@ function run_forecast_kind(kind, eltype, n;
     rng = Random.Xoshiro(1234)
     make_val = VAL_MAKERS[eltype]
     is_det = startswith(kind, "det")
-    make_one = () -> if is_det
-        make_det("fc", make_det_data(make_val, rng), RES, INTERVAL)
-    elseif kind == "prob"
-        make_prob("fc", make_matrix_data(rng, NPCT), PERCENTILES, RES, INTERVAL)
-    else
-        make_scen("fc", make_matrix_data(rng, NSCEN), NSCEN, RES, INTERVAL)
-    end
+    make_one =
+        () -> if is_det
+            make_det("fc", make_det_data(make_val, rng), RES, INTERVAL)
+        elseif kind == "prob"
+            make_prob("fc", make_matrix_data(rng, NPCT), PERCENTILES, RES, INTERVAL)
+        else
+            make_scen("fc", make_matrix_data(rng, NSCEN), NSCEN, RES, INTERVAL)
+        end
     fcs = try_construct(kind, eltype, n,
         () -> shared ? fill(make_one(), n) : [make_one() for _ in 1:n])
     isnothing(fcs) && return
@@ -220,15 +237,27 @@ function run_forecast_kind(kind, eltype, n;
     fcs = nothing
 
     if main_ops
-        timed_op(kind, eltype, "get_full", n, () -> for i in 1:n
-            IS.get_time_series(ttype, comps[i], "fc")
-        end)
+        timed_op(
+            kind,
+            eltype,
+            "get_full",
+            n,
+            () -> for i in 1:n
+                IS.get_time_series(ttype, comps[i], "fc")
+            end,
+        )
 
         # Single-window read: the second window.
         st = T0 + INTERVAL
-        timed_op(kind, eltype, "get_window", n, () -> for i in 1:n
-            IS.get_time_series(ttype, comps[i], "fc"; start_time = st, count = 1)
-        end)
+        timed_op(
+            kind,
+            eltype,
+            "get_window",
+            n,
+            () -> for i in 1:n
+                IS.get_time_series(ttype, comps[i], "fc"; start_time = st, count = 1)
+            end,
+        )
     end
 
     sweep && timed_op(kind, eltype, "read_by_window", n * NWIN,
@@ -258,10 +287,16 @@ function run_dst_kind(n)
 
     # Single-window read: the second window.
     st = T0 + INTERVAL
-    timed_op("dst", "float64", "get_window", n, () -> for i in 1:n
-        IS.get_time_series(IS.DeterministicSingleTimeSeries, comps[i], "val";
-            start_time = st, count = 1)
-    end)
+    timed_op(
+        "dst",
+        "float64",
+        "get_window",
+        n,
+        () -> for i in 1:n
+            IS.get_time_series(IS.DeterministicSingleTimeSeries, comps[i], "val";
+                start_time = st, count = 1)
+        end,
+    )
 
     nwin = Dates.Millisecond(RES * (LEN - HORIZON)) ÷ Dates.Millisecond(INTERVAL) + 1
     timed_op("dst", "float64", "read_by_window", n * nwin,
@@ -288,45 +323,63 @@ function run_serialize_kind(n)
     outdir = mktempdir()
     filename = joinpath(outdir, "system.json")
     JSONmod = IS.JSON
-    timed_op("serialize", "float64", "to_json", n, () -> begin
-        IS.prepare_for_serialization_to_file!(sys, filename; force = true)
-        data = IS.serialize(sys)
-        open(filename, "w") do io
-            JSONmod.json(io, data)
-        end
-    end)
+    timed_op(
+        "serialize",
+        "float64",
+        "to_json",
+        n,
+        () -> begin
+            IS.prepare_for_serialization_to_file!(sys, filename; force = true)
+            data = IS.serialize(sys)
+            open(filename, "w") do io
+                JSONmod.json(io, data)
+            end
+        end,
+    )
     report_maxrss("serialize", "float64")
     report_disk("serialize", "float64", outdir)
 
     sys2 = Ref{Any}(nothing)
-    timed_op("serialize", "float64", "from_json", n, () -> begin
-        data = open(filename) do io
-            JSONmod.parse(io; dicttype = Dict{String, Any})
-        end
-        orig = pwd()
-        try
-            # Relative time series paths resolve against the working directory.
-            cd(outdir)
-            s2 = IS.deserialize(IS.SystemData, data)
-            # Component deserialization is normally directed by the parent
-            # package (PowerSystems); replicate that step here.
-            for component in data["components"]
-                type = IS.get_type_from_serialization_data(component)
-                comp = IS.deserialize(type, component)
-                IS.add_component!(s2, comp; allow_existing_time_series = true)
+    timed_op(
+        "serialize",
+        "float64",
+        "from_json",
+        n,
+        () -> begin
+            data = open(filename) do io
+                JSONmod.parse(io; dicttype = Dict{String, Any})
             end
-            sys2[] = s2
-        finally
-            cd(orig)
-        end
-    end)
+            orig = pwd()
+            try
+                # Relative time series paths resolve against the working directory.
+                cd(outdir)
+                s2 = IS.deserialize(IS.SystemData, data)
+                # Component deserialization is normally directed by the parent
+                # package (PowerSystems); replicate that step here.
+                for component in data["components"]
+                    type = IS.get_type_from_serialization_data(component)
+                    comp = IS.deserialize(type, component)
+                    IS.add_component!(s2, comp; allow_existing_time_series = true)
+                end
+                sys2[] = s2
+            finally
+                cd(orig)
+            end
+        end,
+    )
 
     isnothing(sys2[]) && return
-    timed_op("serialize", "float64", "reload_read_one", 1, () -> begin
-        c = IS.get_component(IS.TestComponent, sys2[].components, "c1")
-        ts = IS.get_time_series(IS.SingleTimeSeries, c, "val")
-        length(IS.get_data(ts)) == LEN || error("reloaded series has wrong length")
-    end)
+    timed_op(
+        "serialize",
+        "float64",
+        "reload_read_one",
+        1,
+        () -> begin
+            c = IS.get_component(IS.TestComponent, sys2[].components, "c1")
+            ts = IS.get_time_series(IS.SingleTimeSeries, c, "val")
+            length(IS.get_data(ts)) == LEN || error("reloaded series has wrong length")
+        end,
+    )
     return
 end
 
@@ -343,9 +396,15 @@ function run_remove_kind(n)
     end
     tss = nothing
 
-    timed_op("remove", "float64", "remove_all", n, () -> for i in 1:n
-        IS.remove_time_series!(sys, IS.SingleTimeSeries, comps[i], "val")
-    end)
+    timed_op(
+        "remove",
+        "float64",
+        "remove_all",
+        n,
+        () -> for i in 1:n
+            IS.remove_time_series!(sys, IS.SingleTimeSeries, comps[i], "val")
+        end,
+    )
     return
 end
 
@@ -363,28 +422,46 @@ function run_has_kind(n)
     names = [("ts$(mod1(j, 2))", "s$(div(j - 1, 2) + 1)") for j in 1:10]
 
     nq = ncomp * 10
-    timed_op("has_ts", "float64", "bulk_add", nq, () -> bulk_add!(sys) do addfn
-        for c in comps, (j, (name, scen)) in enumerate(names)
-            addfn(c, base[mod1(j, 2)]; scenario = scen, model_year = "2030")
-        end
-    end)
+    timed_op(
+        "has_ts",
+        "float64",
+        "bulk_add",
+        nq,
+        () -> bulk_add!(sys) do addfn
+            for c in comps, (j, (name, scen)) in enumerate(names)
+                addfn(c, base[mod1(j, 2)]; scenario = scen, model_year = "2030")
+            end
+        end,
+    )
 
     hits = Ref(0)
-    ok = timed_op("has_ts", "float64", "has_hit", nq, () -> begin
-        for c in comps, (name, scen) in names
-            hits[] += IS.has_time_series(c, IS.SingleTimeSeries, name;
-                resolution = RES, scenario = scen, model_year = "2030")
-        end
-    end)
+    ok = timed_op(
+        "has_ts",
+        "float64",
+        "has_hit",
+        nq,
+        () -> begin
+            for c in comps, (name, scen) in names
+                hits[] += IS.has_time_series(c, IS.SingleTimeSeries, name;
+                    resolution = RES, scenario = scen, model_year = "2030")
+            end
+        end,
+    )
     ok && hits[] != nq && error("has_hit returned $(hits[]) of $nq expected trues")
 
     misses = Ref(0)
-    ok = timed_op("has_ts", "float64", "has_miss", nq, () -> begin
-        for c in comps, (name, _) in names
-            misses[] += IS.has_time_series(c, IS.SingleTimeSeries, name;
-                resolution = RES, scenario = "s99", model_year = "2030")
-        end
-    end)
+    ok = timed_op(
+        "has_ts",
+        "float64",
+        "has_miss",
+        nq,
+        () -> begin
+            for c in comps, (name, _) in names
+                misses[] += IS.has_time_series(c, IS.SingleTimeSeries, name;
+                    resolution = RES, scenario = "s99", model_year = "2030")
+            end
+        end,
+    )
     ok && misses[] != 0 && error("has_miss returned $(misses[]) unexpected trues")
     return
 end

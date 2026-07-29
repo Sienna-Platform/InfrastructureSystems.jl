@@ -40,7 +40,7 @@ series per `TestComponent`, disk-backed stores (defaults for both branches).
 | `results_full_branch_w2.csv` | this branch's 100k dst/shared/serialize/remove run |
 | `results_full_branch_has_postfix.csv` | this branch's 100k `has` rerun after the has_time_series optimization (supersedes the `has_ts` rows in `results_full_branch.csv`) |
 | `results_full_is4_{sts,det,misc,sweep}.csv` | IS4's 100k full-matrix run (split across four processes) |
-| `results_full_is4_w2.csv` | IS4's 100k dst/shared/serialize/remove run |
+| `results_full_is4_w2.csv` | IS4's 100k dst/shared/serialize run (no `remove` rows: IS4's 100k removal loop was stopped after 50+ min without completing — per-op SQLite deletes + HDF5 open-object iteration; the branch's run took 36.9 s) |
 | `REPORT.md` | funder-facing summary of the 100k full-matrix comparison |
 
 ## Full-matrix suite (`bench_full_*.jl`)
