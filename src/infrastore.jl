@@ -1596,6 +1596,23 @@ _infrastore_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} 
         row_type <: T
     end
 
+# `_infrastore_query_types`' answer is static per query type, and its generic
+# method's runtime match loop costs ~2 µs — real money on the
+# `has_time_series` per-component hot path. Bake a constant-returning method
+# for each type callers actually pass (the UnionAlls; parameterized concretes
+# still take the generic method).
+for T in (
+    (k for (_, k) in _INFRASTORE_TYPE_PAIRS)...,
+    AbstractDeterministic,
+    Forecast,
+    StaticTimeSeries,
+    TimeSeriesData,
+)
+    let types = _infrastore_query_types(T)
+        @eval _infrastore_query_types(::Type{$T}) = $types
+    end
+end
+
 # Build the matching IS `TimeSeriesKey` from a catalog row — a
 # `InfraStore.list_keys` / `list_array_groups` row or a `list_time_series`
 # metadata row (they share the key-describing fields). The key is the single
