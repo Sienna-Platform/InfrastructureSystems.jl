@@ -97,11 +97,24 @@ the per-add path is flat. Recommendation recorded in the README: keep
   - Inside `H5Dread` the time is hyperslab/selection bookkeeping
     (`H5D__chunk_io_init` selection copies, skip-list alloc/free), not data
     movement — inherent to per-column reads on both backends.
-- **PWL forecast adds 401 µs vs linear 107** on hdf5 (IS4: 1,332). Data-size
-  driven (12.7 KB vs 2.3 KB per forecast). Cost split unknown between IS-side
-  ragged→padded encode (`_storage_forecast_array` in `src/infrastore.jl`,
-  1.4 GB allocated per 10k run), blake hash of the array, and FFI copy.
-  A Julia `@profile` of the bulk_add loop would split it.
+- ~~**PWL forecast adds 401 µs vs linear 107** on hdf5~~ **RESOLVED
+  2026-07-29: it is none of encode/hash/FFI-copy — ~70% is
+  `Base.summarysize` in the auto-flush byte accounting.**
+  `_staged_nbytes` (`src/time_series_manager.jl:198`) calls
+  `Base.summarysize(get_data(ts))` per staged series — a reflective
+  object-graph walk of the *unencoded* Julia data. Measured per call on the
+  12×12 benchmark forecast: pwl 299 µs (PiecewiseLinearData is not isbits —
+  144 heap elements each holding a points Vector), linear 55 µs, and even
+  scalar Float64 55 µs (the SortedDict{DateTime,·} walk alone). Direct phase
+  timings of the 428 µs/op pwl add: encode (`_storage_forecast_array`)
+  9.2 µs, `_row_major_bytes` 8.8 µs, everything else ≈ 110 µs — of which
+  (via `sample`) HDF5 `H5Dcreate2` ≈ 35 µs, sha256 ≈ 8 µs, request/metadata
+  building ≈ 10 µs, actual data write ≈ 0 (compact layout: bytes ride in the
+  object header at create). Same story for the STS pwl-vs-linear add gap
+  (65 vs 15 µs). Fix is IS-side and trivial: stop calling `summarysize` —
+  the batch stages the *encoded* array, whose exact `sizeof` is already
+  materialized in `_infrastore_stage!`; return it from there (or estimate
+  from dims) instead of walking the source objects.
 - **Shared adds still lose to IS4** (10–345 µs vs 11–18): content-hash dedup
   must hash + FFI-encode the full array before discovering it's a duplicate.
   Known since the float benchmark; unchanged by the backend swap.
