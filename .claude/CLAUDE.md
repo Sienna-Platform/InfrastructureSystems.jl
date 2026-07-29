@@ -297,7 +297,7 @@ exists; the arg was never read — renamed to `time_series_transaction`),
 - **Single testset** (regex on testset names):
   `julia --project=test -e 'include("test/InfrastructureSystemsTests.jl"); run_tests("<name>")'`
 - If the package registry is unreachable (HTTP 403), prefix commands with `JULIA_PKG_SERVER=`.
-- Full-suite baseline (2026-07-26): 8,656 passing, 1 broken.
+- Full-suite baseline (2026-07-29): 8,771 passing, 1 broken.
 - Requires `INFRASTORE_LIB` pointing at `libinfrastore_ffi` (see the InfraStore repo).
 
 ## Common Tasks

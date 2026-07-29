@@ -273,51 +273,40 @@ function _storage_forecast_array(windows::Vector{<:AbstractVector{<:FunctionData
     return (arr, logical)
 end
 
+# The `ext` tags that mean a window is FunctionData (stored as a
+# `(horizon, k)` matrix per window). Any other tag (`nothing`, or a scalar
+# dtype string like "Float64" carried by a SingleTimeSeries-backed DST) is a
+# plain scalar window.
+const _INFRASTORE_FUNCTIONDATA_LOGICAL = (
+    "LinearFunctionData",
+    "QuadraticFunctionData",
+    "PiecewiseLinearData",
+    "PiecewiseStepData",
+)
+
 # Decode window `c` (1-based) of a `(horizon, count, k)` forecast array tagged
-# with `ext` into a Vector of the corresponding FunctionData.
+# with `ext` into a Vector of the corresponding FunctionData. The per-window
+# `(horizon, k)` slice decodes with the same row-wise scheme as a static array.
 function _decode_forecast_window(arr::AbstractArray{<:Real, 3}, ext, c::Integer)
-    horizon = size(arr, 1)
-    if ext == "LinearFunctionData"
-        return [LinearFunctionData(arr[h, c, 1], arr[h, c, 2]) for h in 1:horizon]
-    elseif ext == "QuadraticFunctionData"
-        return [
-            QuadraticFunctionData(arr[h, c, 1], arr[h, c, 2], arr[h, c, 3]) for
-            h in 1:horizon
-        ]
-    elseif ext == "PiecewiseLinearData"
-        out = Vector{PiecewiseLinearData}(undef, horizon)
-        for h in 1:horizon
-            n = Int(round(arr[h, c, 1]))
-            out[h] = PiecewiseLinearData([(arr[h, c, 2j], arr[h, c, 2j + 1]) for j in 1:n])
-        end
-        return out
-    elseif ext == "PiecewiseStepData"
-        slice = @view arr[:, c, :]  # (horizon, k) matrix for this window
-        return [_decode_pwl_step_row(slice, h) for h in 1:horizon]
-    end
-    error("InfraStore backend cannot decode forecast ext $ext")
+    ext in _INFRASTORE_FUNCTIONDATA_LOGICAL ||
+        error("InfraStore backend cannot decode forecast ext $ext")
+    return _decode_static_values(@view(arr[:, c, :]), ext, size(arr, 1))
 end
 
 # ---- Operations (thin delegations to InfraStore) ----------------------
 
-# The InfraStore destination an IS-level write lands on: the wrapped store handle,
-# or an `AddBatch` staging a bulk commit.
-_infrastore_sink(store::Store) = store.inner
-_infrastore_sink(batch::InfraStore.AddBatch) = batch
-
 """
-    serialize_single!(dest, owner_id, owner_type, owner_category, name, sts;
+    serialize_single!(batch, owner_id, owner_type, owner_category, name, sts;
                       features=Dict(), units=nothing)
 
-Add a `SingleTimeSeries` (data + metadata) to the InfraStore store. The array is
-content-addressed; identical arrays are de-duplicated automatically.
-`owner_category` is the `InfraStore.OwnerCategory` enum. `dest` is the
-[`Store`](@ref) for an immediate write, or a `InfraStore.AddBatch` to stage the
-series for a bulk commit. Returns the encoded array's byte size — the amount a
-batch keeps buffered until it flushes.
+Stage a `SingleTimeSeries` (data + metadata) onto a `InfraStore.AddBatch` for a
+bulk commit (a direct add is a one-item batch). The array is content-addressed;
+identical arrays are de-duplicated automatically. `owner_category` is the
+`InfraStore.OwnerCategory` enum. Returns the encoded array's byte size — the
+amount the batch keeps buffered until it flushes.
 """
 function serialize_single!(
-    dest::Union{Store, InfraStore.AddBatch},
+    batch::InfraStore.AddBatch,
     owner_id::Integer,
     owner_type::AbstractString,
     owner_category::InfraStore.OwnerCategory,
@@ -339,27 +328,26 @@ function serialize_single!(
         name;
         ext = _encode_ext(logical),
     )
-    InfraStore.add_time_series!(_infrastore_sink(dest), owner_id, owner_type,
+    InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features, units = units)
-    # The encoded array is what a batch keeps buffered; its exact byte size
+    # The encoded array is what the batch keeps buffered; its exact byte size
     # drives the auto-flush accounting.
     return sizeof(arr)
 end
 
 """
-    serialize_non_sequential!(dest, owner_id, owner_type, owner_category, name, nts;
+    serialize_non_sequential!(batch, owner_id, owner_type, owner_category, name, nts;
                               features=Dict(), units=nothing)
 
-Add a `NonSequentialTimeSeries` (irregular timestamps + data) to the InfraStore store.
-The array is content-addressed (and de-duplicated); the explicit timestamps are
+Stage a `NonSequentialTimeSeries` (irregular timestamps + data) onto a
+`InfraStore.AddBatch` for a bulk commit (a direct add is a one-item batch). The
+array is content-addressed (and de-duplicated); the explicit timestamps are
 carried on the association. `owner_category` is the `InfraStore.OwnerCategory`
-enum. `dest` is the [`Store`](@ref) for an immediate write, or a
-`InfraStore.AddBatch` to stage the series for a bulk commit. Returns the byte
-size of the encoded array plus timestamps — the amount a batch keeps buffered
-until it flushes.
+enum. Returns the byte size of the encoded array plus timestamps — the amount
+the batch keeps buffered until it flushes.
 """
 function serialize_non_sequential!(
-    dest::Union{Store, InfraStore.AddBatch},
+    batch::InfraStore.AddBatch,
     owner_id::Integer,
     owner_type::AbstractString,
     owner_category::InfraStore.OwnerCategory,
@@ -378,7 +366,7 @@ function serialize_non_sequential!(
         name;
         ext = _encode_ext(logical),
     )
-    InfraStore.add_time_series!(_infrastore_sink(dest), owner_id, owner_type,
+    InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features, units = units)
     # As in `serialize_single!`: the staged bytes are the encoded array plus the
     # explicit timestamps the association carries.
@@ -481,8 +469,11 @@ end
 # ---- TimeSeriesManager routing ---------------------------------------------
 
 """
-Route a manager-level `add_time_series!` to the InfraStore store, dispatching on the
-concrete time series type. Data identity is the array content hash.
+Route a manager-level `add_time_series!` to the InfraStore store. A direct add
+is a one-item batch through the staging path (which applies the same
+validation and key construction as bulk adds), committed immediately — exactly
+what the store's own single-add entry point does. Data identity is the array
+content hash.
 """
 function infrastore_add_time_series!(
     mgr::TimeSeriesManager,
@@ -490,108 +481,42 @@ function infrastore_add_time_series!(
     time_series::TimeSeriesData;
     features...,
 )
-    throw_if_does_not_support_time_series(owner)
-    check_time_series_data(time_series)
-    return _infrastore_add!(mgr, owner, time_series; features...)
-end
-
-# Dispatch on the concrete series type. Forecasts and NonSequentialTimeSeries route
-# to their dedicated handlers; SingleTimeSeries is stored below; anything else is
-# unsupported on the InfraStore backend.
-_infrastore_add!(
-    mgr::TimeSeriesManager,
-    owner::TimeSeriesOwners,
-    ts::Forecast;
-    features...,
-) =
-    _infrastore_add_forecast!(mgr, owner, ts; features...)
-
-_infrastore_add!(
-    mgr::TimeSeriesManager,
-    owner::TimeSeriesOwners,
-    ts::NonSequentialTimeSeries;
-    features...,
-) = _infrastore_add_non_sequential!(mgr, owner, ts; features...)
-
-_infrastore_add!(::TimeSeriesManager, ::TimeSeriesOwners, ts::TimeSeriesData; features...) =
-    error(
-        "InfraStore backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
-        "Deterministic, Probabilistic, and Scenarios (got $(typeof(ts))). A " *
-        "DeterministicSingleTimeSeries is derived in-store with " *
-        "transform_single_time_series!.",
+    batch = InfraStore.AddBatch()
+    key, _ = _infrastore_stage!(
+        batch,
+        mgr,
+        Dict{Tuple{Dates.Period, Dates.Period}, Any}(),
+        owner,
+        time_series;
+        features...,
     )
-
-# Map the store's duplicate-association rejection to the IS-level ArgumentError.
-# The add paths rely on the store's unique constraint instead of paying a
-# pre-existence catalog query per add; any other error propagates unchanged.
-function _infrastore_rethrow_duplicate(e, owner_type, name)
-    if e isa InfraStore.DuplicateAssociationError ||
-       e isa InfraStore.DuplicateTimeSeriesError
-        throw(
-            ArgumentError(
-                "Time series data with duplicate attributes are already stored: " *
-                "$(owner_type)/$(name)"),
+    try
+        InfraStore.add_time_series_bulk!(mgr.data_store.inner, batch)
+    catch e
+        _infrastore_rethrow_duplicate(
+            e,
+            _infrastore_owner_args(owner)[2],
+            get_name(time_series),
         )
     end
+    return key
+end
+
+# The store's duplicate-association rejection, which the add paths rely on
+# instead of paying a pre-existence catalog query per add.
+_infrastore_is_duplicate_error(e) =
+    e isa InfraStore.DuplicateAssociationError ||
+    e isa InfraStore.DuplicateTimeSeriesError
+
+# Map the store's duplicate rejection to the IS-level ArgumentError; any other
+# error propagates unchanged.
+function _infrastore_rethrow_duplicate(e, owner_type, name)
+    _infrastore_is_duplicate_error(e) && throw(
+        ArgumentError(
+            "Time series data with duplicate attributes are already stored: " *
+            "$(owner_type)/$(name)"),
+    )
     rethrow()
-end
-
-function _infrastore_add!(
-    mgr::TimeSeriesManager,
-    owner::TimeSeriesOwners,
-    time_series::SingleTimeSeries;
-    features...,
-)
-    store = mgr.data_store::Store
-    owner_id, owner_type, category = _infrastore_owner_args(owner)
-    name = get_name(time_series)
-    resolution = get_resolution(time_series)
-    feats = _infrastore_features(features)
-
-    try
-        serialize_single!(store, owner_id, owner_type, category, name, time_series;
-            features = feats)
-    catch e
-        _infrastore_rethrow_duplicate(e, owner_type, name)
-    end
-    return StaticTimeSeriesKey(;
-        time_series_type = SingleTimeSeries,
-        name = name,
-        initial_timestamp = get_initial_timestamp(time_series),
-        resolution = resolution,
-        length = length(time_series),
-        features = Dict{String, Any}(feats),
-    )
-end
-
-"""
-Route a manager-level `add_time_series!` of a `NonSequentialTimeSeries` to the InfraStore
-store. Addressed by name + features (a non-sequential series has no resolution);
-data identity is the array content hash.
-"""
-function _infrastore_add_non_sequential!(
-    mgr::TimeSeriesManager,
-    owner::TimeSeriesOwners,
-    time_series::NonSequentialTimeSeries;
-    features...,
-)
-    store = mgr.data_store::Store
-    owner_id, owner_type, category = _infrastore_owner_args(owner)
-    name = get_name(time_series)
-    feats = _infrastore_features(features)
-
-    try
-        serialize_non_sequential!(store, owner_id, owner_type, category, name,
-            time_series; features = feats)
-    catch e
-        _infrastore_rethrow_duplicate(e, owner_type, name)
-    end
-    return NonSequentialTimeSeriesKey(;
-        time_series_type = NonSequentialTimeSeries,
-        name = name,
-        length = length(time_series),
-        features = Dict{String, Any}(feats),
-    )
 end
 
 # Anything other than SingleTimeSeries / NonSequentialTimeSeries / Forecast is
@@ -753,93 +678,6 @@ function _infrastore_read_non_sequential(
         String(get_name(key)), timestamps[index:(index + n - 1)], vals)
 end
 
-# ---- Forecasts --------------------------------------------------------------
-
-# IS encodes a single-window forecast (count == 1) with `interval = Second(0)`,
-# since there is no second window to step to. The InfraStore store, however, requires a
-# strictly-positive interval. Store such a forecast with `interval = horizon` (the
-# DeterministicSingleTimeSeries convention) so it validates, and map it back to
-# `Second(0)` on read via `_forecast_display_interval`. `Dates.value` reads the raw
-# count without unit conversion, so this is safe for calendar intervals too.
-_storage_forecast_interval(interval::Dates.Period, horizon::Dates.Period) =
-    Dates.value(interval) == 0 ? horizon : interval
-
-# Inverse of `_storage_forecast_interval`: a stored single-window forecast carries
-# `interval == horizon`; present it to IS as `Second(0)`.
-_forecast_display_interval(count::Integer, interval::Dates.Period, horizon::Dates.Period) =
-    (count == 1 && interval == horizon) ? Dates.Second(0) : interval
-
-# Build the InfraStore object for a forecast, returning `(store_ts, count)`.
-# `count` also feeds the returned key; for a `Deterministic` it is derived from
-# the window data rather than read from the forecast.
-function _storage_forecast(ts::Probabilistic, resolution, interval, name)
-    arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
-    prob = InfraStore.Probabilistic(get_initial_timestamp(ts), resolution,
-        get_horizon(ts), interval, get_count(ts), Float64.(get_percentiles(ts)),
-        arr, name)
-    return prob, get_count(ts)
-end
-
-function _storage_forecast(ts::Deterministic, resolution, interval, name)
-    windows = collect(values(get_data(ts)))
-    # (horizon_count, count) for scalars; (horizon_count, count, k) tagged with
-    # `logical` for FunctionData windows.
-    arr, logical = _storage_forecast_array(windows)
-    count = length(windows)
-    d = InfraStore.Deterministic(get_initial_timestamp(ts), resolution,
-        get_horizon(ts), interval, count, arr, name; ext = _encode_ext(logical))
-    return d, count
-end
-
-function _storage_forecast(ts::Scenarios, resolution, interval, name)
-    arr = Float64.(get_array_for_hdf(ts))  # (scenario_count, horizon_count, count)
-    s = InfraStore.Scenarios(get_initial_timestamp(ts), resolution,
-        get_horizon(ts), interval, get_count(ts), arr, name;
-        ext = _encode_ext(nothing))
-    return s, get_count(ts)
-end
-
-_storage_forecast(ts::Forecast, resolution, interval, name) =
-    throw(
-        ArgumentError(
-            "Cannot add a forecast of type $(typeof(ts)). Supported types are " *
-            "Deterministic, Probabilistic, and Scenarios; a " *
-            "DeterministicSingleTimeSeries is derived in-store with " *
-            "transform_single_time_series!.",
-        ),
-    )
-
-"""Add a forecast via the InfraStore store."""
-function _infrastore_add_forecast!(mgr::TimeSeriesManager, owner, ts; features...)
-    store = mgr.data_store::Store
-    owner_id, owner_type, category = _infrastore_owner_args(owner)
-    name = get_name(ts)
-    resolution = get_resolution(ts)
-    interval = get_interval(ts)
-    feats = _infrastore_features(features)
-
-    # All forecasts that share a (resolution, interval) group must agree on the
-    # window parameters (count, horizon, initial timestamp).
-    check_params_compatibility(
-        infrastore_forecast_parameters(store; resolution = resolution, interval = interval),
-        make_time_series_parameters(ts),
-    )
-
-    storage_interval = _storage_forecast_interval(interval, get_horizon(ts))
-    tss_ts, count = _storage_forecast(ts, resolution, storage_interval, name)
-    try
-        InfraStore.add_time_series!(store.inner, owner_id, owner_type,
-            category, tss_ts; features = feats)
-    catch e
-        _infrastore_rethrow_duplicate(e, owner_type, name)
-    end
-    return ForecastKey(;
-        time_series_type = typeof(ts), name = name,
-        initial_timestamp = get_initial_timestamp(ts), resolution = resolution,
-        horizon = get_horizon(ts), interval = interval, count = count,
-        features = Dict{String, Any}(feats))
-end
-
 # ---- Bulk staging ----------------------------------------------------------
 # The bulk-add fast path stages every association onto a `InfraStore.AddBatch` and
 # commits once: one metadata transaction, and the backend packs the arrays into
@@ -856,13 +694,9 @@ function _infrastore_commit_batch!(mgr::AbstractTimeSeriesManager, batch)
     try
         InfraStore.add_time_series_bulk!(mgr.data_store.inner, batch)
     catch e
-        if e isa InfraStore.DuplicateAssociationError ||
-           e isa InfraStore.DuplicateTimeSeriesError
-            throw(
-                ArgumentError(
-                    "Time series data with duplicate attributes are already stored"),
-            )
-        end
+        _infrastore_is_duplicate_error(e) && throw(
+            ArgumentError("Time series data with duplicate attributes are already stored"),
+        )
         rethrow()
     end
     flush!(mgr.data_store)
@@ -969,7 +803,7 @@ end
 # The three dense-forecast stagers differ only in how they build the InfraStore
 # forecast object; the validation, owner marshalling, add, and returned
 # `(ForecastKey, staged_nbytes)` pair around it are shared. `build(initial,
-# resolution, horizon, storage_interval, name)` returns that object together
+# resolution, horizon, interval, name)` returns that object together
 # with its window count, which is the one field the callers disagree on.
 function _infrastore_stage_forecast!(
     build,
@@ -988,13 +822,7 @@ function _infrastore_stage_forecast!(
     interval = get_interval(ts)
     horizon = get_horizon(ts)
     feats = _infrastore_features(features)
-    obj, count = build(
-        initial,
-        resolution,
-        horizon,
-        _storage_forecast_interval(interval, horizon),
-        name,
-    )
+    obj, count = build(initial, resolution, horizon, interval, name)
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
         features = feats)
     key = ForecastKey(;
@@ -1017,9 +845,9 @@ function _infrastore_stage_data!(
 )
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features...,
-    ) do initial, resolution, horizon, storage_interval, name
+    ) do initial, resolution, horizon, interval, name
         arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
-        prob = InfraStore.Probabilistic(initial, resolution, horizon, storage_interval,
+        prob = InfraStore.Probabilistic(initial, resolution, horizon, interval,
             get_count(ts), Float64.(get_percentiles(ts)), arr, name)
         return (prob, get_count(ts))
     end
@@ -1035,10 +863,12 @@ function _infrastore_stage_data!(
 )
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features...,
-    ) do initial, resolution, horizon, storage_interval, name
+    ) do initial, resolution, horizon, interval, name
+        # (horizon_count, count) for scalars; (horizon_count, count, k) tagged
+        # with `logical` for FunctionData windows.
         windows = collect(values(get_data(ts)))
         arr, logical = _storage_forecast_array(windows)
-        det = InfraStore.Deterministic(initial, resolution, horizon, storage_interval,
+        det = InfraStore.Deterministic(initial, resolution, horizon, interval,
             length(windows), arr, name; ext = _encode_ext(logical))
         return (det, length(windows))
     end
@@ -1054,9 +884,9 @@ function _infrastore_stage_data!(
 )
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features...,
-    ) do initial, resolution, horizon, storage_interval, name
+    ) do initial, resolution, horizon, interval, name
         arr = Float64.(get_array_for_hdf(ts))  # (scenario_count, horizon_count, count)
-        scen = InfraStore.Scenarios(initial, resolution, horizon, storage_interval,
+        scen = InfraStore.Scenarios(initial, resolution, horizon, interval,
             get_count(ts), arr, name; ext = _encode_ext(nothing))
         return (scen, get_count(ts))
     end
@@ -1071,7 +901,9 @@ _infrastore_stage_data!(
     features...,
 ) = error(
     "InfraStore backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
-    "Deterministic, Probabilistic, and Scenarios in bulk adds (got $(typeof(ts)))",
+    "Deterministic, Probabilistic, and Scenarios (got $(typeof(ts))). A " *
+    "DeterministicSingleTimeSeries is derived in-store with " *
+    "transform_single_time_series!.",
 )
 
 # Translate IS's `start_time` / `count` window selection into the core's
@@ -1112,7 +944,7 @@ function _forecast_time_range(initial_timestamp, interval, total_count, start_ti
         )
     end
 
-    # A zero interval is IS's single-window sentinel (count == 1): window
+    # A single-window forecast (count == 1) carries a zero interval: window
     # arithmetic below collapses to a zero-width `[initial, initial)` range that
     # selects nothing. The request has already been validated against
     # `total_count`, so read the whole (single-window) series instead of slicing.
@@ -1169,14 +1001,10 @@ function _infrastore_get_forecast(
     end
     feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
     resolution = get_resolution(matched)
-    # Pin every store lookup below to the resolved forecast's exact (stored) interval.
-    # One name can carry several forecasts differing only by interval, and the typed
-    # lookups match on attributes, so without this they would match more than one.
-    # A single-window forecast is presented with `interval == Second(0)` (e.g. on a
-    # key returned by `add_time_series!`) but stored with `interval == horizon`;
-    # map it back to the storage form for the lookups.
-    matched_interval =
-        _storage_forecast_interval(get_interval(matched), get_horizon(matched))
+    # Pin every store lookup below to the resolved forecast's exact interval.
+    # One name can carry several forecasts differing only by interval, and the
+    # typed lookups match on attributes, so without this they would match more
+    # than one. (A single-window forecast carries a zero interval, stored as-is.)
     tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
         get_count(matched), start_time, count)
     # The resolved key names the stored concrete type; it selects the
@@ -1189,7 +1017,7 @@ function _infrastore_get_forecast(
         category,
         String(name),
         resolution,
-        matched_interval,
+        get_interval(matched),
         feats,
         tr,
         len,
@@ -1237,7 +1065,7 @@ function _reconstruct_forecast(
     end
     return Probabilistic(; name = name, data = data,
         percentiles = p.percentiles, resolution = p.resolution,
-        interval = _forecast_display_interval(p.count, p.interval, p.horizon))
+        interval = p.interval)
 end
 
 _reconstruct_forecast(::Type{<:Deterministic}, args...) =
@@ -1278,8 +1106,7 @@ function _reconstruct_deterministic(
     window(i) = _truncate_window(_forecast_window(d.data, logical, i), len)
     data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
     return Deterministic(; name = name, data = data,
-        resolution = d.resolution,
-        interval = _forecast_display_interval(d.count, d.interval, d.horizon))
+        resolution = d.resolution, interval = d.interval)
 end
 
 function _reconstruct_forecast(
@@ -1306,7 +1133,7 @@ function _reconstruct_forecast(
     end
     return Scenarios(; name = name, data = data,
         scenario_count = s_ts.scenario_count, resolution = s_ts.resolution,
-        interval = _forecast_display_interval(s_ts.count, s_ts.interval, s_ts.horizon))
+        interval = s_ts.interval)
 end
 
 # ---- ForecastReader --------------------------------------------------------
@@ -1327,36 +1154,11 @@ _tss_forecast_type(::Type{<:AbstractDeterministic}) = InfraStore.Deterministic
 _tss_forecast_type(::Type{<:Probabilistic}) = InfraStore.Probabilistic
 _tss_forecast_type(::Type{<:Scenarios}) = InfraStore.Scenarios
 
-# Decode a single `(horizon, k)` FunctionData window matrix (the per-window analog
-# of `_decode_forecast_window`, which slices a `(horizon, count, k)` array).
-function _decode_forecast_window_matrix(mat::AbstractMatrix{<:Real}, ext)
-    horizon = size(mat, 1)
-    if ext == "LinearFunctionData"
-        return [LinearFunctionData(mat[h, 1], mat[h, 2]) for h in 1:horizon]
-    elseif ext == "QuadraticFunctionData"
-        return [QuadraticFunctionData(mat[h, 1], mat[h, 2], mat[h, 3]) for h in 1:horizon]
-    elseif ext == "PiecewiseLinearData"
-        out = Vector{PiecewiseLinearData}(undef, horizon)
-        for h in 1:horizon
-            n = Int(round(mat[h, 1]))
-            out[h] = PiecewiseLinearData([(mat[h, 2j], mat[h, 2j + 1]) for j in 1:n])
-        end
-        return out
-    end
-    error("InfraStore backend cannot decode forecast ext $ext")
-end
-
-# The `ext` tags that mean a window is FunctionData (stored as a
-# `(horizon, k)` matrix). Any other tag (`nothing`, or a scalar dtype string like
-# "Float64" carried by a SingleTimeSeries-backed DST) is a plain scalar window.
-const _INFRASTORE_FUNCTIONDATA_LOGICAL =
-    ("LinearFunctionData", "QuadraticFunctionData", "PiecewiseLinearData")
-
 # Orient + decode one raw window into IS's canonical per-window value (matching a
 # single `get_time_series(...).data[timestamp]`): Probabilistic/Scenarios windows
 # are stored `(count_member, horizon)` and transposed to `(horizon, member)`;
-# Deterministic/DST windows are a horizon vector, or a FunctionData column decoded
-# via `ext`.
+# Deterministic/DST windows are a horizon vector, or a FunctionData
+# `(horizon, k)` matrix decoded row-wise via `ext`.
 function _decode_forecast_reader_window(
     ::Type{T},
     raw,
@@ -1366,7 +1168,7 @@ function _decode_forecast_reader_window(
         return permutedims(raw)
     end
     (ext in _INFRASTORE_FUNCTIONDATA_LOGICAL) || return raw
-    return _decode_forecast_window_matrix(raw, ext)
+    return _decode_static_values(raw, ext, size(raw, 1))
 end
 
 """
@@ -1400,6 +1202,44 @@ mutable struct ForecastReader{T <: Forecast}
     has_read::Bool
 end
 
+# The association identity a reader entry / metadata row is matched on:
+# everything a build filter cannot disambiguate further (`key_info` carries no
+# interval, but two same-identity forecasts differing only by interval cannot
+# share one reader timeline, so the reader build has already rejected that
+# case). Both arguments come off the same core catalog, so the periods and
+# feature values compare exactly.
+_infrastore_row_match_identity(x) = (
+    Int(x.owner_id),
+    x.owner_category,
+    x.time_series_type,
+    String(x.name),
+    x.resolution,
+    Tuple(sort!([string(k) => v for (k, v) in x.features])),
+)
+
+# Metadata rows for every association matching a reader build filter, indexed
+# by association identity — ONE core catalog query for the whole reader,
+# instead of a `get_metadata` round-trip per entry.
+function _infrastore_metadata_by_identity(store::Store, resolution, name, features)
+    metas = Dict{Any, InfraStore.TimeSeriesMetadata}()
+    for m in InfraStore.list_time_series(store.inner;
+        resolution = resolution, name = name, features = Dict{String, Any}(features))
+        # Identities are unique per (resolution, interval, features); rows that
+        # collide here differ only by interval and are unreachable behind a
+        # reader build (they cannot share a window timeline).
+        metas[_infrastore_row_match_identity(m)] = m
+    end
+    return metas
+end
+
+# The metadata row backing one reader entry (`info = key_info(entry.key)`).
+function _infrastore_entry_metadata(metas::AbstractDict, info)
+    meta = get(metas, _infrastore_row_match_identity(info), nothing)
+    isnothing(meta) &&
+        error("unreachable: reader entry $(info.name) has no matching metadata row")
+    return meta
+end
+
 # Build a reader from the store. `id_to_owner(owner_id::Int, category::String)`
 # resolves each entry's owner object (the system holds the owner maps). Per-entry
 # metadata (owner, key, ext) is resolved once here, off the read path.
@@ -1414,30 +1254,17 @@ function infrastore_build_forecast_reader(
     inner = InfraStore.build_forecast_reader(store.inner, _tss_forecast_type(T);
         resolution = resolution, name = name, features = features)
     tss_entries = InfraStore.forecast_entries(inner)
+    metas = _infrastore_metadata_by_identity(store, resolution, name, features)
     n = length(tss_entries)
     entries = Vector{ForecastReaderEntry}(undef, n)
     exts = Vector{Union{Nothing, String}}(undef, n)
     for (i, e) in enumerate(tss_entries)
         info = InfraStore.key_info(e.key)
         owner = id_to_owner(Int(info.owner_id), info.owner_category)
-        is_type = _infrastore_is_type(info.time_series_type)
-        feats = Dict{String, Any}(info.features)
-        fmeta = InfraStore.get_metadata(info.time_series_type, store.inner, info.owner_id,
-            info.owner_category, info.name;
-            resolution = info.resolution, features = feats)
+        fmeta = _infrastore_entry_metadata(metas, info)
         exts[i] = _decode_ext(fmeta.ext)
-        key = ForecastKey(;
-            time_series_type = is_type,
-            name = info.name,
-            initial_timestamp = fmeta.initial_timestamp,
-            resolution = fmeta.resolution,
-            horizon = fmeta.horizon,
-            interval = fmeta.interval,
-            count = fmeta.count,
-            features = feats,
-        )
         # `e.slot` is 0-based in the InfraStore store; carry it 1-based for Julia.
-        entries[i] = ForecastReaderEntry(owner, key, e.slot + 1)
+        entries[i] = ForecastReaderEntry(owner, _key_from_row(fmeta), e.slot + 1)
     end
     windows = Vector{Any}(nothing, InfraStore.forecast_num_slots(inner))
     return ForecastReader{T}(inner, store, entries, exts, windows, false)
@@ -1552,6 +1379,7 @@ function infrastore_build_static_time_series_reader(
 )
     inner = InfraStore.build_static_reader(store.inner;
         resolution = resolution, name = name, features = features)
+    metas = _infrastore_metadata_by_identity(store, resolution, name, features)
     entries = StaticTimeSeriesReaderEntry[]
     exts = Union{Nothing, String}[]
     groups = InfraStore.static_groups(inner)
@@ -1559,19 +1387,11 @@ function infrastore_build_static_time_series_reader(
         for (col, k) in enumerate(group.keys)
             info = InfraStore.key_info(k)
             owner = id_to_owner(Int(info.owner_id), info.owner_category)
-            feats = Dict{String, Any}(info.features)
-            smeta = InfraStore.get_metadata(InfraStore.SingleTimeSeries, store.inner,
-                info.owner_id, info.owner_category, info.name;
-                resolution = info.resolution, features = feats)
-            key = StaticTimeSeriesKey(;
-                time_series_type = SingleTimeSeries,
-                name = info.name,
-                initial_timestamp = smeta.initial_timestamp,
-                resolution = smeta.resolution,
-                length = smeta.length,
-                features = feats,
+            smeta = _infrastore_entry_metadata(metas, info)
+            push!(
+                entries,
+                StaticTimeSeriesReaderEntry(owner, _key_from_row(smeta), gi, col),
             )
-            push!(entries, StaticTimeSeriesReaderEntry(owner, key, gi, col))
             push!(exts, _decode_ext(smeta.ext))
         end
     end
@@ -1669,9 +1489,9 @@ function infrastore_has_time_series(
     feats = _infrastore_features(features)
     # Pure existence probe — a covering-index `SELECT 1 ... LIMIT 1` in the
     # store; nothing is listed, hydrated, or marshaled, so this is safe in hot
-    # per-component loops. A query type that is not one stored type (an
-    # abstract family, or `Deterministic`, which also matches a stored DST)
-    # expands to one probe per candidate; the empty tuple means every type
+    # per-component loops. A broad abstract query type expands to one probe per
+    # candidate (the `Deterministic` family collapses to a single probe via the
+    # `AbstractDeterministic` sentinel); the empty tuple means every type
     # matches, i.e. one unfiltered probe.
     probe =
         t -> InfraStore.has_any_time_series(store.inner;
@@ -1700,12 +1520,22 @@ for (store_type, is_type) in _INFRASTORE_TYPE_PAIRS
     @eval _infrastore_type(::Type{<:$is_type}) = $store_type
 end
 
+# The deterministic pair collapses to the core's `AbstractDeterministic` family
+# sentinel, which the catalog filters expand to both concrete members — one
+# query/probe instead of two.
+_infrastore_collapse_family(types::Tuple) =
+    if types == (InfraStore.Deterministic, InfraStore.DeterministicSingleTimeSeries)
+        (InfraStore.AbstractDeterministic,)
+    else
+        types
+    end
+
 # All InfraStore types whose IS type is a subtype of `T` (strict `<:` semantics —
 # distinct from `_infrastore_type_matches`, which treats a `Deterministic` query
 # as also matching a `DeterministicSingleTimeSeries`). Used by the store-wide
 # filters (`resolutions`, `list_owner_ids`) that key on subtyping.
 _infrastore_subtype_types(::Type{T}) where {T <: TimeSeriesData} =
-    Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if k <: T)
+    _infrastore_collapse_family(Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if k <: T))
 
 # Name-less existence queries: the stored InfraStore types a query for `T` should
 # match, under the same `Deterministic`-matches-DST semantics as
@@ -1713,13 +1543,14 @@ _infrastore_subtype_types(::Type{T}) where {T <: TimeSeriesData} =
 # tuple, the caller's signal to issue one unfiltered query instead of six.
 function _infrastore_query_types(::Type{T}) where {T <: TimeSeriesData}
     types = Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if _infrastore_type_matches(k, T))
-    return length(types) == length(_INFRASTORE_TYPE_PAIRS) ? () : types
+    length(types) == length(_INFRASTORE_TYPE_PAIRS) && return ()
+    return _infrastore_collapse_family(types)
 end
 
 # The single InfraStore type to push into the core `list_keys` filter for a query
-# type, or `nothing` when the type cannot be expressed as one stored type: an
-# abstract family, or `Deterministic` (which also matches a stored
-# `DeterministicSingleTimeSeries`). When `nothing`, the caller applies the
+# type — a concrete stored type, or the `AbstractDeterministic` family sentinel
+# for a `Deterministic`-family query. `nothing` when the type spans more than
+# that (a broader abstract family like `Forecast`); the caller then applies the
 # residual `_infrastore_type_matches` filter on the (already narrowed) rows.
 function _infrastore_pushable_type(::Type{T}) where {T <: TimeSeriesData}
     types = _infrastore_query_types(T)
@@ -1765,9 +1596,11 @@ _infrastore_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} 
         row_type <: T
     end
 
-# Build the matching IS `TimeSeriesKey` from a `InfraStore.list_keys` row. The key is
-# the single descriptor for a stored association; forecast-only fields
-# (percentiles, scenario_count) are not carried — they come from the data on read.
+# Build the matching IS `TimeSeriesKey` from a catalog row — a
+# `InfraStore.list_keys` / `list_array_groups` row or a `list_time_series`
+# metadata row (they share the key-describing fields). The key is the single
+# descriptor for a stored association; forecast-only fields (percentiles,
+# scenario_count) are not carried — they come from the data on read.
 function _key_from_row(row)
     feats = Dict{String, Any}(string(k) => v for (k, v) in row.features)
     is_type = _infrastore_is_type(row.time_series_type)
@@ -2073,33 +1906,28 @@ function infrastore_forecast_summary_table(store::Store)
     )
 end
 
-# First forecast's parameters, optionally filtered by resolution/interval. The
-# store keeps a single forecast window configuration, mirroring the legacy
-# `get_forecast_parameters`.
+# First matching forecast's parameters, optionally filtered by
+# resolution/interval — one filtered catalog query in the core (every forecast
+# in a `(resolution, interval)` group shares its window parameters). Returns
+# `nothing` when no forecast matches.
 function infrastore_forecast_parameters(
     store::Store;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
 )
-    # The first forecast key matching `resolution`/`interval`, compared with
-    # `Period` equality. The store preserves the calendar-aware `Period` type, so
-    # the stored periods are passed through unchanged — converting them to
-    # `Millisecond` would throw for irregular `Month`/`Year` resolutions.
-    for row in InfraStore.list_keys(store.inner)
-        _infrastore_is_type(row.time_series_type) <: Forecast || continue
-        isnothing(resolution) || row.resolution == resolution || continue
-        if !isnothing(interval)
-            (row.interval !== nothing && row.interval == interval) || continue
-        end
-        return ForecastParameters(;
-            horizon = row.horizon,
-            initial_timestamp = row.initial_timestamp,
-            interval = row.interval,
-            count = row.count,
-            resolution = row.resolution,
-        )
-    end
-    return nothing
+    p = InfraStore.get_forecast_parameters(
+        store.inner;
+        resolution = resolution,
+        interval = interval,
+    )
+    isnothing(p.count) && return nothing
+    return ForecastParameters(;
+        horizon = p.horizon,
+        initial_timestamp = p.initial_timestamp,
+        interval = p.interval,
+        count = p.count,
+        resolution = p.resolution,
+    )
 end
 
 # Distinct owner ids of the given category that have time series, optionally
