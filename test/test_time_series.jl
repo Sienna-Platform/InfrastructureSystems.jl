@@ -5165,6 +5165,117 @@ end
     @test_throws IS.InfraStore.NotFoundError IS.get_time_series_hash(c4, k1)
 end
 
+@testset "Test bulk time series content hashes" begin
+    sys = IS.SystemData()
+    c1 = IS.TestComponent("c1", 5)
+    c2 = IS.TestComponent("c2", 5)
+    c3 = IS.TestComponent("c3", 5)
+    c4 = IS.TestComponent("c4", 5)
+    foreach(c -> IS.add_component!(sys, c), (c1, c2, c3, c4))
+    id(c) = IS.get_id(c)
+
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+    shared = ones(48)
+    mk(vals; name = "load") = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = length(vals), step = resolution), vals),
+        name = name)
+
+    k1 = IS.add_time_series!(sys, c1, mk(copy(shared)))
+    IS.add_time_series!(sys, c2, mk(copy(shared)))      # identical -> deduped
+    IS.add_time_series!(sys, c3, mk(collect(1.0:48.0))) # distinct array
+    # c4 stores nothing named "load".
+
+    # One catalog query resolves the whole collection; owners with no matching
+    # series are absent, and every returned hash agrees with the per-owner call.
+    hashes = IS.get_time_series_hashes((c1, c2, c3, c4), IS.SingleTimeSeries, "load")
+    @test hashes isa Dict{Int, String}
+    @test Set(keys(hashes)) == Set((id(c1), id(c2), id(c3)))
+    @test hashes[id(c1)] == IS.get_time_series_hash(c1, k1)
+    @test hashes[id(c1)] == hashes[id(c2)]
+    @test hashes[id(c1)] != hashes[id(c3)]
+    @test all(h -> length(h) == 64, values(hashes))
+
+    # Empty collection, unmatched name, unmatched resolution, or an unmatched
+    # type each yield an empty result rather than erroring.
+    @test isempty(
+        IS.get_time_series_hashes(IS.TestComponent[], IS.SingleTimeSeries, "load"),
+    )
+    @test isempty(IS.get_time_series_hashes((c1, c2), IS.SingleTimeSeries, "nope"))
+    @test isempty(
+        IS.get_time_series_hashes(
+            (c1, c2), IS.SingleTimeSeries, "load"; resolution = Dates.Minute(5),
+        ),
+    )
+    @test isempty(IS.get_time_series_hashes((c1, c2), IS.Deterministic, "load"))
+    # A matching resolution filter narrows without losing anyone.
+    @test IS.get_time_series_hashes(
+        (c1, c2), IS.SingleTimeSeries, "load"; resolution = resolution,
+    ) == Dict(id(c1) => hashes[id(c1)], id(c2) => hashes[id(c2)])
+
+    # Owners outside any system have no store to consult.
+    loose = IS.TestComponent("loose", 5)
+    @test isempty(IS.get_time_series_hashes([loose], IS.SingleTimeSeries, "load"))
+
+    # A Deterministic query matches derived DSTs, which resolve to the
+    # underlying SingleTimeSeries array; the STS query is unaffected by the
+    # added DST rows.
+    IS.transform_single_time_series!(
+        sys, IS.DeterministicSingleTimeSeries, Dates.Hour(6), Dates.Hour(6))
+    @test IS.get_time_series_hashes((c1, c3), IS.Deterministic, "load") ==
+          Dict(id(c1) => hashes[id(c1)], id(c3) => hashes[id(c3)])
+    @test IS.get_time_series_hashes((c1,), IS.SingleTimeSeries, "load") ==
+          Dict(id(c1) => hashes[id(c1)])
+
+    # Same owner/name/type twice with distinct arrays, distinguished only by
+    # features: the unfiltered query is underdetermined and raises; a features
+    # filter resolves it.
+    wk = IS.add_time_series!(sys, c4, mk(collect(2.0:2.0:96.0); name = "wind");
+        scenario = "high")
+    IS.add_time_series!(sys, c4, mk(collect(3.0:3.0:144.0); name = "wind");
+        scenario = "low")
+    @test_throws ArgumentError IS.get_time_series_hashes(
+        [c4], IS.SingleTimeSeries, "wind",
+    )
+    @test IS.get_time_series_hashes(
+        [c4], IS.SingleTimeSeries, "wind"; scenario = "high",
+    ) == Dict(id(c4) => IS.get_time_series_hash(c4, wk))
+    # Multiple matches that resolve to the SAME array are not ambiguous.
+    IS.add_time_series!(sys, c1, mk(copy(shared)); scenario = "alt")
+    @test IS.get_time_series_hashes((c1,), IS.SingleTimeSeries, "load") ==
+          Dict(id(c1) => hashes[id(c1)])
+
+    # Native forecasts (their own system: forecast window parameters must stay
+    # internally consistent, and the DST transform above uses different ones).
+    sys2 = IS.SystemData()
+    d1 = IS.TestComponent("d1", 5)
+    d2 = IS.TestComponent("d2", 5)
+    d3 = IS.TestComponent("d3", 5)
+    foreach(c -> IS.add_component!(sys2, c), (d1, d2, d3))
+    t0 = initial_time
+    window(base) = SortedDict(
+        t0 => [base, base + 1.0], t0 + resolution => [base + 10.0, base + 11.0])
+    fk1 = IS.add_time_series!(sys2, d1,
+        IS.Deterministic(; data = window(10.0), name = "fc", resolution = resolution))
+    IS.add_time_series!(sys2, d2,
+        IS.Deterministic(; data = window(50.0), name = "fc", resolution = resolution))
+
+    fh = IS.get_time_series_hashes((d1, d2, d3), IS.Deterministic, "fc")
+    @test Set(keys(fh)) == Set((id(d1), id(d2)))
+    @test fh[id(d1)] == IS.get_time_series_hash(d1, fk1)
+    @test fh[id(d1)] != fh[id(d2)]
+    # The interval filter narrows the same way resolution does.
+    @test IS.get_time_series_hashes(
+        (d1, d2), IS.Deterministic, "fc"; interval = resolution,
+    ) == fh
+    @test isempty(
+        IS.get_time_series_hashes(
+            (d1, d2), IS.Deterministic, "fc"; interval = Dates.Hour(2),
+        ),
+    )
+end
+
 @testset "Test ForecastReader with shared forecasts" begin
     sys = IS.SystemData()
     comps = [IS.TestComponent("c$i", 5) for i in 1:4]
