@@ -1997,9 +1997,11 @@ function infrastore_list_owner_ids(
 end
 
 # (owner_id, key) for every time series of the given owner category, optionally
-# restricted by time series type (strict subtype) and resolution. Owner category
-# and resolution are pushed into the core query; the strict type filter is applied
-# on the returned keys.
+# restricted by time series type (strict subtype) and resolution. Owner category,
+# resolution, and — when the type maps to a single core filter — the time series
+# type are pushed into the core query; the pushed set is a superset of the strict
+# match (`Deterministic`-family semantics), so the strict type filter is still
+# applied on the returned keys.
 function infrastore_list_keys_with_owner(
     store::Store,
     owner_type::Type;
@@ -2007,8 +2009,10 @@ function infrastore_list_keys_with_owner(
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
     category = get_owner_category(owner_type)
+    type_filter =
+        isnothing(time_series_type) ? nothing : _infrastore_pushable_type(time_series_type)
     rows = InfraStore.list_keys(store.inner; owner_category = category,
-        resolution = resolution)
+        time_series_type = type_filter, resolution = resolution)
     out = NamedTuple[]
     for row in rows
         if !isnothing(time_series_type)
