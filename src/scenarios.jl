@@ -176,19 +176,6 @@ function Scenarios(
     )
 end
 
-function get_array_for_hdf(forecast::Scenarios)
-    interval_count = get_count(forecast)
-    scenario_count = get_scenario_count(forecast)
-    horizon_count = get_horizon_count(forecast)
-    data = get_data(forecast)
-
-    data_for_hdf = Array{Float64, 3}(undef, scenario_count, horizon_count, interval_count)
-    for (ix, f) in enumerate(values(data))
-        data_for_hdf[:, :, ix] = transpose(f)
-    end
-    return data_for_hdf
-end
-
 """
 Get [`Scenarios`](@ref) `name`.
 """

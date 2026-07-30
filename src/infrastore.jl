@@ -273,6 +273,19 @@ function _storage_forecast_array(windows::Vector{<:AbstractVector{<:FunctionData
     return (arr, logical)
 end
 
+# Densify a Probabilistic/Scenarios forecast — a SortedDict of
+# `(horizon_count, dim1)` window matrices — into the `(dim1, horizon_count,
+# count)` array the store's forecast constructors take.
+function _dense_forecast_array(forecast::Forecast, dim1::Integer)
+    arr = Array{Float64, 3}(
+        undef, dim1, get_horizon_count(forecast), get_count(forecast),
+    )
+    for (ix, window) in enumerate(values(get_data(forecast)))
+        arr[:, :, ix] = transpose(window)
+    end
+    return arr
+end
+
 # The `ext` tags that mean a window is FunctionData (stored as a
 # `(horizon, k)` matrix per window). Any other tag (`nothing`, or a scalar
 # dtype string like "Float64" carried by a SingleTimeSeries-backed DST) is a
@@ -846,7 +859,7 @@ function _infrastore_stage_data!(
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features...,
     ) do initial, resolution, horizon, interval, name
-        arr = Float64.(get_array_for_hdf(ts))  # (percentile_count, horizon_count, count)
+        arr = _dense_forecast_array(ts, length(get_percentiles(ts)))
         prob = InfraStore.Probabilistic(initial, resolution, horizon, interval,
             get_count(ts), Float64.(get_percentiles(ts)), arr, name)
         return (prob, get_count(ts))
@@ -885,7 +898,7 @@ function _infrastore_stage_data!(
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features...,
     ) do initial, resolution, horizon, interval, name
-        arr = Float64.(get_array_for_hdf(ts))  # (scenario_count, horizon_count, count)
+        arr = _dense_forecast_array(ts, get_scenario_count(ts))
         scen = InfraStore.Scenarios(initial, resolution, horizon, interval,
             get_count(ts), arr, name; ext = _encode_ext(nothing))
         return (scen, get_count(ts))

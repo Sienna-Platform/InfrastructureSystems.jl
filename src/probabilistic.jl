@@ -219,19 +219,6 @@ Get [`Probabilistic`](@ref) `data`.
 """
 get_data(value::Probabilistic) = value.data
 
-function get_array_for_hdf(forecast::Probabilistic)
-    interval_count = get_count(forecast)
-    percentile_count = length(get_percentiles(forecast))
-    horizon_count = get_horizon_count(forecast)
-    data = get_data(forecast)
-
-    data_for_hdf = Array{Float64, 3}(undef, percentile_count, horizon_count, interval_count)
-    for (ix, f) in enumerate(values(data))
-        data_for_hdf[:, :, ix] = transpose(f)
-    end
-    return data_for_hdf
-end
-
 get_initial_times(forecast::Probabilistic) = get_initial_times_common(forecast)
 get_initial_timestamp(forecast::Probabilistic) = get_initial_timestamp_common(forecast)
 get_window(f::Probabilistic, initial_time::Dates.DateTime; len = nothing) =

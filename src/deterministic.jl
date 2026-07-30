@@ -27,7 +27,7 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
     "forecast interval"
     interval::Dates.Period
 
-    # Inner constructor validates NetCDF-storability on every construction (including
+    # Inner constructor validates store-encodability on every construction (including
     # the inferring outer constructor below), so unsupported element types are
     # rejected early.
     function Deterministic{T, N}(
@@ -205,10 +205,6 @@ convert_data(data::AbstractDict{<:Any, Vector{T}}) where {T} =
 
 # If everything is fully specified, pass through
 convert_data(data::SortedDict{Dates.DateTime, Vector}) = data
-
-function get_array_for_hdf(forecast::Deterministic)
-    return transform_array_for_hdf(forecast.data)
-end
 
 """
 Get [`Deterministic`](@ref) `name`.

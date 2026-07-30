@@ -271,10 +271,6 @@ get_initial_timestamp(time_series::SingleTimeSeries) = time_series.initial_times
 
 Base.length(time_series::SingleTimeSeries) = size(time_series.data, 1)
 
-function get_array_for_hdf(ts::SingleTimeSeries)
-    return transform_array_for_hdf(get_array(ts))
-end
-
 function Base.getindex(time_series::SingleTimeSeries, args...)
     return SingleTimeSeries(time_series, getindex(get_time_array(time_series), args...))
 end

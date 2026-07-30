@@ -4,12 +4,10 @@ import JSON
 
 const HASH_FILENAME = "check.sha256"
 
-# Supported element types for transform_array_for_hdf Vector inputs
-const TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES = [
+# Element types the time series store can encode for Deterministic forecast
+# windows (see `_storage_forecast_array` in infrastore.jl).
+const DETERMINISTIC_SUPPORTED_ELTYPES = [
     "Real (Float64, Int, etc.)",
-    "Tuple",
-    "Vector{Tuple}",
-    "Matrix",
     "LinearFunctionData",
     "QuadraticFunctionData",
     "PiecewiseLinearData",
@@ -17,15 +15,10 @@ const TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES = [
 ]
 
 """
-Check if the element type T is supported by transform_array_for_hdf.
-Returns true if supported, false otherwise.
-Uses multiple dispatch for a more Julian approach.
+Check if the element type T can be encoded by the time series store for
+Deterministic forecast windows. Returns true if supported, false otherwise.
 """
 is_array_type_supported(::Type{T}) where {T <: Real} = true
-is_array_type_supported(::Type{T}) where {T <: Tuple} = isconcretetype(T)
-is_array_type_supported(::Type{T}) where {T <: Vector{<:Tuple}} =
-    isconcretetype(T)
-is_array_type_supported(::Type{T}) where {T <: Matrix} = true
 is_array_type_supported(::Type{T}) where {T <: LinearFunctionData} = true
 is_array_type_supported(::Type{T}) where {T <: QuadraticFunctionData} = true
 is_array_type_supported(::Type{T}) where {T <: PiecewiseLinearData} = true
@@ -34,14 +27,14 @@ is_array_type_supported(::Type{T}) where {T <: PiecewiseStepData} = true
 is_array_type_supported(::Type{T}) where {T} = false
 
 """
-Validate that data in a SortedDict has supported element types for transform_array_for_hdf.
-Throws an ArgumentError if any vector has an unsupported element type.
+Validate that data in a SortedDict has element types the time series store can
+encode. Throws an ArgumentError if any vector has an unsupported element type.
 """
 function validate_time_series_data_for_backend(
     ::SortedDict{Dates.DateTime, Vector{T}},
 ) where {T}
     if !is_array_type_supported(T)
-        supported = join(TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES, ", ")
+        supported = join(DETERMINISTIC_SUPPORTED_ELTYPES, ", ")
         if !isconcretetype(T)
             throw(
                 ArgumentError(
@@ -67,7 +60,7 @@ end
 # Fallback for other SortedDict types - throw error since Deterministic only supports
 # SortedDict{Dates.DateTime, Vector{T}} where T is a supported type
 function validate_time_series_data_for_backend(data::SortedDict)
-    supported = join(TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES, ", ")
+    supported = join(DETERMINISTIC_SUPPORTED_ELTYPES, ", ")
     throw(
         ArgumentError(
             "Cannot create time series with this data structure. " *
@@ -565,185 +558,6 @@ function copy_file(src::AbstractString, dst::AbstractString)
         run(`cp -f $(src_path) $(dst_path)`)
     end
     return
-end
-
-function transform_array_for_hdf(data::SortedDict{Dates.DateTime, Vector{CONSTANT}})
-    return hcat(values(data)...)
-end
-
-function transform_array_for_hdf(data::AbstractVector{T}) where {T <: Number}
-    return transform_array_for_hdf(convert(Vector{T}, data))
-end
-
-function transform_array_for_hdf(data::Vector{<:Real})
-    return data
-end
-
-function transform_array_for_hdf(data::Vector{T}) where {T <: Tuple}
-    rows = length(data)
-    degree = fieldcount(T)  # 2 for linear, 3 for quadratic
-    t_lin_cost = Array{Float64}(undef, rows, degree)
-    for r in 1:rows
-        t_lin_cost[r, :] = collect(data[r])
-    end
-    return t_lin_cost
-end
-
-function transform_array_for_hdf(
-    data::SortedDict{Dates.DateTime, Vector{T}},
-) where {T <: Tuple}
-    lin_cost = hcat(values(data)...)
-    rows, cols = size(lin_cost)
-    degree = fieldcount(T)  # 2 for linear, 3 for quadratic
-    t_lin_cost = Array{Float64}(undef, rows, cols, degree)
-    for r in 1:rows, c in 1:cols
-        t_lin_cost[r, c, :] = collect(lin_cost[r, c])
-    end
-    return t_lin_cost
-end
-
-_elem_to_pad_for_hdf(::Type{Tuple{Float64, Float64}}) = (NaN, NaN)
-_elem_to_pad_for_hdf(::Type{Float64}) = NaN
-
-function _pad_fd_for_hdf(data::Array{T}, max_length) where {T}
-    data_length = first(size(data))
-    max_length >= data_length ||
-        throw(
-            ArgumentError("max_length must be greater than or equal to the length of data"),
-        )
-    data_other_dims = size(data)[2:end]
-    padding_shape = (max_length - data_length, data_other_dims...)
-    padding = fill(_elem_to_pad_for_hdf(T), padding_shape)
-    return vcat(data, padding)
-end
-
-function _pad_array_for_hdf(data::Vector{<:Array{T}}, max_length) where {T}
-    result = _pad_fd_for_hdf.(data, max_length)
-    return result
-end
-
-# entry point for the vector of FunctionData case
-_pad_array_for_hdf(data::Vector{<:Array{T}}) where {T} =
-    _pad_array_for_hdf(data, maximum(length.(data)))
-
-# entry point for the SortedDict of vector of FunctionData case
-_pad_arrays_for_hdf(data) =
-    _pad_array_for_hdf.(data, maximum((x -> maximum(length.(x))).(data)))
-
-function _unpad_array_for_hdf(data::AbstractArray{T}) where {T}
-    pad_elem = _elem_to_pad_for_hdf(T)
-    # find last slice for which it is not the case that everything is padding
-    last_valid = findlast(x -> !all(isequal(pad_elem), x), eachslice(data; dims = 1))
-    return selectdim(data, 1, 1:last_valid)
-end
-
-function transform_array_for_hdf(data::Vector{<:Vector{<:Tuple}})
-    data = _pad_array_for_hdf(data)
-    rows = length(data)
-    n_points = length(first(data))
-    @assert all(length.(data) .== n_points)  # because we padded
-    @assert_op length(first(first(data))) == 2  # should be just (x, y)
-    t_quad_cost = Array{Float64}(undef, rows, n_points, 2)
-    for r in 1:rows, t in 1:n_points
-        t_quad_cost[r, t, :] = collect(data[r][t])
-    end
-    return t_quad_cost
-end
-
-function transform_array_for_hdf(
-    data::SortedDict{Dates.DateTime, Vector{Vector{Tuple{Float64, Float64}}}},
-)
-    quad_cost = hcat(_pad_arrays_for_hdf(values(data))...)
-    rows, cols = size(quad_cost)
-    n_points = length(quad_cost[1, 1])
-    @assert all(length.(quad_cost) .== n_points)
-    @assert_op length(first(quad_cost[1, 1])) == 2  # should be just (x, y)
-    t_quad_cost = Array{Float64}(undef, rows, cols, n_points, 2)
-    for r in 1:rows, c in 1:cols, t in 1:n_points
-        t_quad_cost[r, c, t, :] = collect(quad_cost[r, c][t])
-    end
-    return t_quad_cost
-end
-
-function transform_array_for_hdf(data::Vector{<:Matrix})
-    data = _pad_array_for_hdf(data)
-    rows = length(data)
-    n_points = size(first(data), 1)
-    @assert all(size.(data, 1) .== n_points)
-    @assert_op size(first(data), 2) == 2  # should be just (x, y)
-    combined_cost = Array{Float64}(undef, rows, n_points, 2)
-    for r in 1:rows
-        combined_cost[r, :, :] = data[r]
-    end
-    return combined_cost
-end
-
-function transform_array_for_hdf(
-    data::SortedDict{Dates.DateTime, <:Vector{<:Matrix}},
-)
-    cols = length(data)
-    costs = _pad_arrays_for_hdf(values(data))
-    rows = length(first(costs))
-    n_points = size(first(first(costs)), 1)
-    for cost in costs
-        @assert length(cost) == rows && all(size.(cost, 1) .== n_points)
-    end
-    @assert_op size(first(first(costs)), 2) == 2  # should be just (x, y)
-
-    combined_cost = Array{Float64}(undef, rows, cols, n_points, 2)
-    for r in 1:rows, (c, ca) in enumerate(costs)
-        combined_cost[r, c, :, :] = ca[r]
-    end
-    return combined_cost
-end
-
-# Catchall methods for better error messages when element type cannot be determined
-function transform_array_for_hdf(::Vector{T}) where {T}
-    if !isconcretetype(T)
-        supported = join(TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES, ", ")
-        throw(
-            ArgumentError(
-                "Cannot determine the correct HDF5 data format to store time series data. " *
-                "The vector has element type $T which is not concrete. " *
-                "This typically occurs when Julia cannot infer the element type of your data. " *
-                "Please ensure your time series data has a concrete element type. " *
-                "Supported types: $supported.",
-            ),
-        )
-    end
-    supported = join(TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES, ", ")
-    throw(
-        ArgumentError(
-            "Cannot determine the correct HDF5 data format for time series data with element type $T. " *
-            "No transform_array_for_hdf method is defined for this type. " *
-            "Supported types: $supported. " *
-            "To use type $T, you need to implement a specific transform_array_for_hdf method for it in InfrastructureSystems.",
-        ),
-    )
-end
-
-function transform_array_for_hdf(data::SortedDict{Dates.DateTime, Vector{T}}) where {T}
-    if !isconcretetype(T)
-        supported = join(TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES, ", ")
-        throw(
-            ArgumentError(
-                "Cannot determine the correct HDF5 data format to store time series data. " *
-                "The SortedDict has value type Vector{$T} where $T is not concrete. " *
-                "This typically occurs when Julia cannot infer the element type of your data. " *
-                "Please ensure your time series data has a concrete element type. " *
-                "Supported types: $supported.",
-            ),
-        )
-    end
-    supported = join(TRANSFORM_ARRAY_FOR_HDF_SUPPORTED_ELTYPES, ", ")
-    throw(
-        ArgumentError(
-            "Cannot determine the correct HDF5 data format for time series data with element type $T. " *
-            "No transform_array_for_hdf method is defined for this type. " *
-            "Supported types: $supported. " *
-            "To use type $T, you need to implement a specific transform_array_for_hdf method for it.",
-        ),
-    )
 end
 
 to_namedtuple(val) = (; (x => getproperty(val, x) for x in fieldnames(typeof(val)))...)

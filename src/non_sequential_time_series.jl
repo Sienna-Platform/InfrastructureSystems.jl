@@ -231,10 +231,6 @@ get_initial_timestamp(time_series::NonSequentialTimeSeries) = time_series.timest
 
 Base.length(time_series::NonSequentialTimeSeries) = size(time_series.data, 1)
 
-function get_array_for_hdf(ts::NonSequentialTimeSeries)
-    return transform_array_for_hdf(get_array(ts))
-end
-
 function Base.getindex(time_series::NonSequentialTimeSeries, args...)
     return NonSequentialTimeSeries(
         time_series,
