@@ -5092,6 +5092,54 @@ end
     )
 end
 
+@testset "Test Deterministic with NTuple payload" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    interval = Dates.Hour(1)
+    horizon_count = 24
+    name = "test_tuples"
+    data = SortedDict{Dates.DateTime, Vector{NTuple{2, Float64}}}(
+        initial_time + interval * (w - 1) =>
+            [(Float64(w), Float64(w + i)) for i in 1:horizon_count] for w in 1:3
+    )
+    det = IS.Deterministic(name, data, resolution, interval)
+    @test det isa IS.Deterministic{NTuple{2, Float64}, 1}
+    IS.add_time_series!(sys, component, det)
+
+    # Full read round-trips every window with tuple values intact.
+    read_full = IS.get_time_series(IS.Deterministic, component, name)
+    @test read_full isa IS.Deterministic{NTuple{2, Float64}, 1}
+    @test IS.get_data(read_full) == data
+
+    # Sliced read returns the selected window.
+    start_time = initial_time + interval
+    read_one = IS.get_time_series(
+        IS.Deterministic,
+        component,
+        name;
+        start_time = start_time,
+        count = 1,
+    )
+    @test collect(keys(IS.get_data(read_one))) == [start_time]
+    @test IS.get_data(read_one)[start_time] == data[start_time]
+
+    # The by-window reader decodes tuple windows too.
+    reader = IS.build_forecast_reader(
+        sys,
+        IS.Deterministic;
+        resolution = resolution,
+        name = name,
+    )
+    @test length(reader) == 1
+    IS.read_forecast_window!(reader, start_time)
+    window = IS.get_forecast_window(reader, 1)
+    @test window == data[start_time]
+end
+
 @testset "Test time series content hash and sharing" begin
     sys = IS.SystemData()
     c1 = IS.TestComponent("c1", 5)

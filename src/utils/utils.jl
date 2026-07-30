@@ -12,6 +12,7 @@ const DETERMINISTIC_SUPPORTED_ELTYPES = [
     "QuadraticFunctionData",
     "PiecewiseLinearData",
     "PiecewiseStepData",
+    "NTuple{N, Float64}",
 ]
 
 """
@@ -23,6 +24,9 @@ is_array_type_supported(::Type{T}) where {T <: LinearFunctionData} = true
 is_array_type_supported(::Type{T}) where {T <: QuadraticFunctionData} = true
 is_array_type_supported(::Type{T}) where {T <: PiecewiseLinearData} = true
 is_array_type_supported(::Type{T}) where {T <: PiecewiseStepData} = true
+# Fixed-arity Float64 tuples — the same tuple form the static storage encoding
+# supports (`_storage_array` in infrastore.jl).
+is_array_type_supported(::Type{NTuple{N, Float64}}) where {N} = true
 # Catchall for unsupported types
 is_array_type_supported(::Type{T}) where {T} = false
 

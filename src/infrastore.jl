@@ -259,7 +259,12 @@ end
 _storage_forecast_array(windows::Vector{<:AbstractVector{<:Real}}) =
     (Float64.(reduce(hcat, windows)), nothing)
 
-function _storage_forecast_array(windows::Vector{<:AbstractVector{<:FunctionData}})
+# FunctionData windows encode row-wise like a SingleTimeSeries (ragged PWL is
+# padded to the widest row); NTuple windows are the same dense per-row layout at
+# constant width. Both carry the logical tag that drives window reconstruction.
+function _storage_forecast_array(
+    windows::Vector{<:AbstractVector{<:Union{FunctionData, NTuple}}},
+)
     count = length(windows)
     encoded = [_storage_array(w) for w in windows]   # each: ((horizon, k) matrix, logical)
     logical = encoded[1][2]
@@ -298,10 +303,11 @@ const _INFRASTORE_FUNCTIONDATA_LOGICAL = (
 )
 
 # Decode window `c` (1-based) of a `(horizon, count, k)` forecast array tagged
-# with `ext` into a Vector of the corresponding FunctionData. The per-window
-# `(horizon, k)` slice decodes with the same row-wise scheme as a static array.
+# with `ext` into a Vector of the corresponding FunctionData or NTuple. The
+# per-window `(horizon, k)` slice decodes with the same row-wise scheme as a
+# static array.
 function _decode_forecast_window(arr::AbstractArray{<:Real, 3}, ext, c::Integer)
-    ext in _INFRASTORE_FUNCTIONDATA_LOGICAL ||
+    ext in _INFRASTORE_FUNCTIONDATA_LOGICAL || !isnothing(_ntuple_arity(ext)) ||
         error("InfraStore backend cannot decode forecast ext $ext")
     return _decode_static_values(@view(arr[:, c, :]), ext, size(arr, 1))
 end
@@ -878,7 +884,7 @@ function _infrastore_stage_data!(
         batch, mgr, params_cache, owner, ts; features...,
     ) do initial, resolution, horizon, interval, name
         # (horizon_count, count) for scalars; (horizon_count, count, k) tagged
-        # with `logical` for FunctionData windows.
+        # with `logical` for FunctionData and NTuple windows.
         windows = collect(values(get_data(ts)))
         arr, logical = _storage_forecast_array(windows)
         det = InfraStore.Deterministic(initial, resolution, horizon, interval,
@@ -1180,7 +1186,8 @@ function _decode_forecast_reader_window(
     if T <: Probabilistic || T <: Scenarios
         return permutedims(raw)
     end
-    (ext in _INFRASTORE_FUNCTIONDATA_LOGICAL) || return raw
+    (ext in _INFRASTORE_FUNCTIONDATA_LOGICAL || !isnothing(_ntuple_arity(ext))) ||
+        return raw
     return _decode_static_values(raw, ext, size(raw, 1))
 end
 
