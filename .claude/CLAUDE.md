@@ -5,7 +5,7 @@
 
 ## Overview
 
-Foundational library for performance-critical simulation packages: SystemData, component containers, time series (HDF5/in-memory + SQLite metadata), serialization, struct codegen, and the `RelativeUnits` layer. For general Sienna coding practices see [.claude/Sienna.md](Sienna.md); for workspace wiring see `/home/jdlara/Sienna_work/psy6/CLAUDE.md`.
+Foundational library for performance-critical simulation packages: SystemData, component containers, time series (HDF5/in-memory + SQLite metadata), serialization, struct codegen, and the `RelativeUnits` layer. For general Sienna coding practices see [.claude/Sienna.md](Sienna.md); for workspace wiring see the psy6 workspace root `CLAUDE.md`.
 
 > **Maintenance note:** Update this file whenever files, directories, or architectural
 > patterns change so it stays accurate.
@@ -15,7 +15,7 @@ Foundational library for performance-critical simulation packages: SystemData, c
 **Every psy6 package sits on IS**: PowerSystems, PowerNetworkMatrices, PowerFlows, PowerFlowFileParser, InfrastructureOptimizationModels, PowerOperationsModels, PowerSystemCaseBuilder. Any signature/behavior change ripples platform-wide; time-series, serialization, and units changes are the highest-risk classes — extend serialization round-trip tests when touching them. After an IS change, smoke the stack:
 
 ```sh
-julia --project=/home/jdlara/Sienna_work/psy6 -e 'using PowerSystems, PowerNetworkMatrices, PowerFlows, PowerOperationsModels, PowerSystemCaseBuilder'
+julia --project=<psy6-workspace-root> -e 'using PowerSystems, PowerNetworkMatrices, PowerFlows, PowerOperationsModels, PowerSystemCaseBuilder'
 ```
 
 (The psy5 line's PowerSimulations/PSID consume the *top-level* IS checkout on `main`, not this one.)
