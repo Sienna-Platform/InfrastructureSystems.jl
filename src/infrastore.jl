@@ -1164,9 +1164,10 @@ end
 # reference it. This wrapper carries that dedup up to Julia — each unique slot's
 # window is materialized (and FunctionData-decoded) at most once per read.
 
-# Map an IS forecast type to the `InfraStore` reader type. A `Deterministic`
-# (or the `AbstractDeterministic` abstraction) reader is abstract and also
-# includes `DeterministicSingleTimeSeries`; a DST query is exact.
+# Map an IS forecast type to the `InfraStore` reader type. An
+# `InfraStore.Deterministic` reader spans both deterministic storage forms, so
+# both IS `Deterministic` and `AbstractDeterministic` map to it; a DST query is
+# exact.
 _tss_forecast_type(::Type{<:DeterministicSingleTimeSeries}) =
     InfraStore.DeterministicSingleTimeSeries
 _tss_forecast_type(::Type{<:AbstractDeterministic}) = InfraStore.Deterministic
@@ -1510,9 +1511,9 @@ function infrastore_has_time_series(
     # Pure existence probe — a covering-index `SELECT 1 ... LIMIT 1` in the
     # store; nothing is listed, hydrated, or marshaled, so this is safe in hot
     # per-component loops. A broad abstract query type expands to one probe per
-    # candidate (the `Deterministic` family collapses to a single probe via the
-    # `AbstractDeterministic` sentinel); the empty tuple means every type
-    # matches, i.e. one unfiltered probe.
+    # candidate (the deterministic pair collapses to a single probe, since
+    # `InfraStore.Deterministic` matches both storage forms); the empty tuple
+    # means every type matches, i.e. one unfiltered probe.
     probe =
         t -> InfraStore.has_any_time_series(store.inner;
             owner_id = owner_id, owner_category = category,
@@ -1540,12 +1541,11 @@ for (store_type, is_type) in _INFRASTORE_TYPE_PAIRS
     @eval _infrastore_type(::Type{<:$is_type}) = $store_type
 end
 
-# The deterministic pair collapses to the core's `AbstractDeterministic` family
-# sentinel, which the catalog filters expand to both concrete members — one
-# query/probe instead of two.
+# The deterministic pair collapses to `InfraStore.Deterministic`, which the core
+# already expands to both storage forms — one query/probe instead of two.
 _infrastore_collapse_family(types::Tuple) =
     if types == (InfraStore.Deterministic, InfraStore.DeterministicSingleTimeSeries)
-        (InfraStore.AbstractDeterministic,)
+        (InfraStore.Deterministic,)
     else
         types
     end
@@ -1568,10 +1568,11 @@ function _infrastore_query_types(::Type{T}) where {T <: TimeSeriesData}
 end
 
 # The single InfraStore type to push into the core `list_keys` filter for a query
-# type — a concrete stored type, or the `AbstractDeterministic` family sentinel
-# for a `Deterministic`-family query. `nothing` when the type spans more than
-# that (a broader abstract family like `Forecast`); the caller then applies the
-# residual `_infrastore_type_matches` filter on the (already narrowed) rows.
+# type — a stored type, where `InfraStore.Deterministic` covers a
+# `Deterministic`-family query because the core matches both storage forms under
+# it. `nothing` when the type spans more than that (a broader abstract family
+# like `Forecast`); the caller then applies the residual
+# `_infrastore_type_matches` filter on the (already narrowed) rows.
 function _infrastore_pushable_type(::Type{T}) where {T <: TimeSeriesData}
     types = _infrastore_query_types(T)
     return length(types) == 1 ? only(types) : nothing
@@ -1604,9 +1605,10 @@ _infrastore_is_type(s::Symbol) =
     end
 
 # Whether a stored row of concrete type `row_type` satisfies a query for type `T`.
-# Mirrors the metadata-store semantics: a `Deterministic` (or `AbstractDeterministic`)
-# query also matches a `DeterministicSingleTimeSeries` (which reads as a
-# `Deterministic`), while a `DeterministicSingleTimeSeries` query matches DST only.
+# Mirrors both the metadata-store semantics and InfraStore's: a `Deterministic`
+# (or `AbstractDeterministic`) query also matches a `DeterministicSingleTimeSeries`
+# (which reads as a `Deterministic`), while a `DeterministicSingleTimeSeries`
+# query matches DST only.
 _infrastore_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
     if T <: DeterministicSingleTimeSeries
         row_type <: DeterministicSingleTimeSeries
