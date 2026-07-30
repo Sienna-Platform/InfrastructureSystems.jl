@@ -3440,8 +3440,8 @@ end
 end
 
 @testset "Test custom time series directory via env" begin
-    # The directory env var now places the InfraStore backend's `.nc` file (HDF5's file
-    # placement was removed); the in-memory backend has no on-disk file.
+    # The directory env var places the InfraStore backend's `.h5` file; the in-memory
+    # backend has no on-disk file.
     @assert !haskey(ENV, IS.TIME_SERIES_DIRECTORY_ENV_VAR)
     path = mkpath("tmp-ts-dir")
     ENV[IS.TIME_SERIES_DIRECTORY_ENV_VAR] = path

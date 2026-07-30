@@ -1,6 +1,6 @@
 
-# InfraStore backend: NetCDF arrays; metadata lives beside it as `<file>.sqlite`.
-const INFRASTORE_TIME_SERIES_STORAGE_FILE = "time_series_storage.nc"
+# InfraStore backend: HDF5 arrays; metadata lives beside it as `<file>.sqlite`.
+const INFRASTORE_TIME_SERIES_STORAGE_FILE = "time_series_storage.h5"
 const TIME_SERIES_DIRECTORY_ENV_VAR = "SIENNA_TIME_SERIES_DIRECTORY"
 const VALIDATION_DESCRIPTOR_FILE = "validation_descriptors.json"
 const SERIALIZATION_METADATA_KEY = "__serialization_metadata__"
@@ -852,7 +852,7 @@ function prepare_for_serialization_to_file!(
     )
     files = [
         filename,
-        ts_base,                # NetCDF arrays
+        ts_base,                # HDF5 arrays
         ts_base * ".sqlite",    # sidecar metadata
     ]
     for file in files
@@ -923,7 +923,7 @@ function serialize(data::SystemData)
                     get_compression_settings(store).enabled
                 json_data["time_series_in_memory"] = isnothing(_store_path(store))
             else
-                # InfraStore backend: write the .nc arrays + standalone .sqlite metadata.
+                # InfraStore backend: write the .h5 arrays + standalone .sqlite metadata.
                 time_series_base_name =
                     _get_secondary_basename(base, INFRASTORE_TIME_SERIES_STORAGE_FILE)
                 time_series_storage_file = joinpath(directory, time_series_base_name)
@@ -958,7 +958,7 @@ function deserialize(
         if !isfile(raw["time_series_storage_file"])
             error("time series file $(raw["time_series_storage_file"]) does not exist")
         end
-        # InfraStore backend: open the .nc + sidecar .sqlite. When the system is not
+        # InfraStore backend: open the .h5 + sidecar .sqlite. When the system is not
         # read-only, isolate it from the source file by opening a working copy so
         # that adding/removing time series cannot corrupt a shared/cached store.
         time_series_manager = TimeSeriesManager(;

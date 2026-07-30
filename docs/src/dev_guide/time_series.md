@@ -8,7 +8,7 @@ Time series storage is backed by **InfraStore**, accessed through its `InfraStor
 InfraStore manages both the time series data and the associations between components /
 supplemental attributes and that data. Reasons to consider using it:
 
-  - Numerical arrays are stored independently of components in a NetCDF file with a SQLite
+  - Numerical arrays are stored independently of components in an HDF5 file with a SQLite
     catalog; components store associations to that data rather than copies.
   - System memory is not depleted by loading all time series data at once. Only data that you
     need is loaded.
@@ -24,10 +24,10 @@ supplemental attributes and that data. Reasons to consider using it:
 A persisted store is **two files that form one logical artifact** and must be moved, copied,
 and deleted together:
 
-  - `<path>.nc` — a NetCDF4 file holding the numerical arrays.
+  - `<path>.h5` — an HDF5 file holding the numerical arrays.
   - `<path>.sqlite` — a SQLite catalog of time series *associations* (metadata).
 
-> **`deepcopy` does not duplicate the on-disk `.nc`/`.sqlite` files.** A `deepcopy` of a
+> **`deepcopy` does not duplicate the on-disk `.h5`/`.sqlite` files.** A `deepcopy` of a
 > system yields a new object that still references the same files on disk. To obtain an
 > independent copy, serialize and then deserialize the system.
 
@@ -52,7 +52,7 @@ and deleted together:
 
 ## Data Format
 
-Numerical arrays live in the NetCDF file, keyed by the SHA-256 hash of their contents
+Numerical arrays live in the HDF5 file, keyed by the SHA-256 hash of their contents
 (content addressing, which yields automatic de-duplication). The SQLite catalog records one
 row per **association** between an owner (component or supplemental attribute) and a stored
 array, identified by:
@@ -68,7 +68,7 @@ together with the forecast window parameters (`initial_timestamp`, `horizon`, `i
 `count`) and the array's content hash. A `DeterministicSingleTimeSeries` shares the underlying
 `SingleTimeSeries` array and synthesizes its forecast windows on read.
 
-For the authoritative on-disk format — NetCDF dataset layout, hashing, the SQLite schema, and
+For the authoritative on-disk format — HDF5 dataset layout, hashing, the SQLite schema, and
 the `DATA_FORMAT_VERSION` compatibility contract — see the `InfraStore` repository's
 file-format reference.
 
@@ -86,13 +86,15 @@ ts = get_time_series(owner, keys[1])    # retrieve one by its key
 
 ## Debugging
 
-Inspect the artifacts with standard NetCDF and SQLite tools. For example, `ncdump -h <path>.nc`
-shows the array layout and dimensions, and `sqlite3 <path>.sqlite` lets you query the
-association catalog directly.
+Inspect a persisted (closed) store with standard HDF5 and SQLite tools. For example,
+`h5ls -r <path>.h5` shows the dataset layout and shapes, and `sqlite3 <path>.sqlite` lets you
+query the association catalog directly. Do not open a *live* store's `.h5` file with HDF5.jl —
+InfraStore statically links its own pinned libhdf5 and holds the file open; go through the
+store's API instead.
 
 ## Maintenance
 
-NetCDF files cannot shrink in place: deleting time series frees logical slots for reuse but
+HDF5 files cannot shrink in place: deleting time series frees logical slots for reuse but
 does not immediately reduce the file size. Recovering that space requires an explicit
 compaction — rebuilding the artifact with only the active arrays — which is provided by the
 `InfraStore` backend.

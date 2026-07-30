@@ -37,7 +37,7 @@ empty buffer and nothing to commit, and these accessors run in per-timestep loop
 # comes first. Inside a transaction an early flush costs nothing in recoverability, so
 # these only split the I/O, never the atomicity.
 #
-# The count limit keeps the store's layout healthy: each flush becomes one NetCDF
+# The count limit keeps the store's layout healthy: each flush becomes one HDF5
 # dataset whose chunk width equals the batch width, so 10,000 f64 series produce 80 KiB
 # chunks — near the store's 1 MiB chunk cap. The byte limit is what actually bounds
 # memory, which the count cannot do when individual arrays are long: the batch copies

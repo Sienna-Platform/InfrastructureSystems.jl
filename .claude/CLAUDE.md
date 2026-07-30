@@ -263,7 +263,7 @@ holds the store's write lock so gather data *before* opening one.
 
 The batch auto-flushes at `AUTO_FLUSH_THRESHOLD` (10,000) staged additions or
 `AUTO_FLUSH_BYTES` (256 MiB) of staged array data, whichever first, so arbitrarily large
-blocks hold bounded memory. The count keeps NetCDF chunks near the store's 1 MiB cap (chunk
+blocks hold bounded memory. The count keeps HDF5 chunks near the store's 1 MiB cap (chunk
 width = batch width); the byte limit is the real memory bound for long arrays. Auto-flushed
 work still rolls back with the block.
 

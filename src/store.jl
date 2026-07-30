@@ -66,7 +66,7 @@ end
 
 Create a InfraStore-backed store (time series data plus component / supplemental-attribute
 associations). When `in_memory=false`, `path` is the base path for the on-disk artifacts
-(`<path>.nc` and `<path>.sqlite`).
+(`<path>.h5` and `<path>.sqlite`).
 
 `compression` is a [`CompressionSettings`](@ref). The InfraStore backend supports
 `DEFLATE` (with `level` 0-9 and `shuffle`) or no compression (`enabled=false`);

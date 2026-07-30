@@ -15,7 +15,7 @@ function validate_serialization(sys::IS.SystemData; time_series_read_only = fals
           !isempty(sys.time_series_manager.data_store)
     if haskey(data, "time_series_storage_file")
         # Move the time series artifact(s) alongside the JSON. The InfraStore backend
-        # writes a `.nc` + sibling `.sqlite`; move both if present.
+        # writes a `.h5` + sibling `.sqlite`; move both if present.
         base = data["time_series_storage_file"]
         for f in (base, base * ".sqlite")
             src = joinpath(directory, f)

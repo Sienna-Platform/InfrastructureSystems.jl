@@ -627,7 +627,7 @@ end
     for in_memory in (false, true)
         sys = IS.SystemData(; time_series_in_memory = in_memory)
         # The InfraStore backend honors `time_series_in_memory`: in-memory keeps the
-        # store handle off-disk, otherwise it writes a `.nc` (+ `.sqlite`) pair.
+        # store handle off-disk, otherwise it writes a `.h5` (+ `.sqlite`) pair.
         @test IS.stores_time_series_in_memory(sys) == in_memory
         initial_time = Dates.DateTime("2020-09-01")
         resolution = Dates.Hour(1)

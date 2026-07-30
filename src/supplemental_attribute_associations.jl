@@ -5,7 +5,7 @@
 # serialized into the system JSON; both are gone.
 #
 # Consequences worth knowing:
-#   - Associations are persisted by the store's `<path>.nc` / `<path>.sqlite` pair, so a
+#   - Associations are persisted by the store's `<path>.h5` / `<path>.sqlite` pair, so a
 #     system with supplemental attributes but no time series now produces a storage
 #     artifact where it previously produced none. `isempty(::Store)`
 #     accounts for association rows so `serialize` writes that artifact.

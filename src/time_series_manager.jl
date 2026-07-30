@@ -16,7 +16,7 @@ function TimeSeriesManager(;
 
     if isnothing(data_store)
         # The InfraStore store unifies data + metadata. On-disk artifacts live at
-        # `<dir>/<uuid>_time_series.nc` (+ sidecar `.sqlite`).
+        # `<dir>/<uuid>_time_series.h5` (+ sidecar `.sqlite`).
         path = if in_memory
             nothing
         else
@@ -25,7 +25,7 @@ function TimeSeriesManager(;
             # scratch path that doesn't exist yet).
             dir = isnothing(directory) ? tempdir() : directory
             mkpath(dir)
-            joinpath(dir, string(UUIDs.uuid4()) * "_time_series.nc")
+            joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
         end
         data_store =
             Store(;

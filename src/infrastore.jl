@@ -3,9 +3,9 @@
 # InfraStore manages both the time series data and the associations between components /
 # supplemental attributes and that data. The `Store` type (declared in `store.jl`)
 # delegates BOTH array data and metadata to it, via the `InfraStore.jl` binding package.
-# InfraStore owns both: arrays land in a NetCDF4 `.nc` file (content-addressed by SHA-256
+# InfraStore owns both: arrays land in an HDF5 `.h5` file (content-addressed by SHA-256
 # hash) and metadata in a sibling `.sqlite` file. Time series *data* identity is the
-# array content hash, not a UUID. Persisting a system writes the `.nc` + `.sqlite` pair
+# array content hash, not a UUID. Persisting a system writes the `.h5` + `.sqlite` pair
 # directly.
 #
 # This file holds the IS-specific glue (owner/feature conversion, window
@@ -16,7 +16,7 @@
 """
     open_infrastore_store(path; read_only=false)
 
-Open an existing on-disk InfraStore store from its `.nc` base path.
+Open an existing on-disk InfraStore store from its `.h5` base path.
 """
 function open_infrastore_store(path::AbstractString; read_only::Bool = false)
     # Open with an absolute path so the InfraStore handle's backing path survives later
@@ -48,7 +48,7 @@ end
     open_deserialized_infrastore_store(source, directory, read_only)
 
 Open the InfraStore store for a deserialized system. In read-only mode the source
-artifacts are opened in place. Otherwise the `.nc` (+ sidecar `.sqlite`) are
+artifacts are opened in place. Otherwise the `.h5` (+ sidecar `.sqlite`) are
 copied to an isolated working location under `directory` (or `tempdir()`) and the
 copy is opened writable, so mutating the deserialized system cannot corrupt the
 source file (e.g. a cached system shared by later builds).
@@ -61,7 +61,7 @@ function open_deserialized_infrastore_store(
     read_only && return open_infrastore_store(source; read_only = true)
     dir = isnothing(directory) ? tempdir() : String(directory)
     mkpath(dir)
-    dst = joinpath(dir, string(UUIDs.uuid4()) * "_time_series.nc")
+    dst = joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
     cp(source, dst; force = true)
     src_sqlite = source * ".sqlite"
     isfile(src_sqlite) && cp(src_sqlite, dst * ".sqlite"; force = true)
@@ -82,7 +82,7 @@ function Base.deepcopy_internal(store::Store, dict::IdDict)
     # disk-backed: the backend gives us no way to clone in-memory state in place.
     path = _store_path(store)
     directory = isnothing(path) ? tempdir() : dirname(path)
-    dst = joinpath(directory, string(UUIDs.uuid4()) * "_time_series.nc")
+    dst = joinpath(directory, string(UUIDs.uuid4()) * "_time_series.h5")
     InfraStore.persist!(store.inner, dst)
     new_store = open_infrastore_store(dst; read_only = false)
     dict[store] = new_store
@@ -437,8 +437,8 @@ get_compression_settings(store::Store) =
 """
     serialize(store::Store, file_path)
 
-Persist the store's two artifacts to `file_path` (the NetCDF arrays) and
-`file_path * ".sqlite"` (the metadata). No HDF5 is produced.
+Persist the store's two artifacts to `file_path` (the HDF5 arrays) and
+`file_path * ".sqlite"` (the metadata).
 """
 function serialize(store::Store, file_path::AbstractString)
     # `persist!` copies the two artifacts for an on-disk store and materializes an
@@ -1158,7 +1158,7 @@ end
 # ---- ForecastReader --------------------------------------------------------
 # A timestamp-oriented reader over the forecasts matching a filter, for the
 # simulation pattern "at each window timestamp, get every component's forecast".
-# It wraps the InfraStore `ForecastReader`, which deduplicates the physical `.nc` read:
+# It wraps the InfraStore `ForecastReader`, which deduplicates the physical `.h5` read:
 # components that share a forecast array (and read plan) collapse to one window
 # slot, so the data is read once per timestamp no matter how many components
 # reference it. This wrapper carries that dedup up to Julia — each unique slot's
@@ -1207,7 +1207,7 @@ A timestamp-oriented reader over every forecast matching a build filter. Drive i
 with [`read_forecast_window!`](@ref), then pull each entry's window with
 [`get_forecast_window`](@ref). Build one with `build_forecast_reader(data, T; ...)`.
 
-Forecasts that share an underlying array read the `.nc` file once per timestamp
+Forecasts that share an underlying array read the `.h5` file once per timestamp
 (and materialize once in Julia); inspect the sharing via the entries' `slot`
 field or [`get_num_forecast_slots`](@ref).
 """
@@ -1307,7 +1307,7 @@ get_forecast_reader_entries(reader::ForecastReader) = reader.entries
 
 """
 $(TYPEDSIGNATURES)
-The number of deduplicated window slots — the count of physical `.nc` reads
+The number of deduplicated window slots — the count of physical `.h5` reads
 [`read_forecast_window!`](@ref) performs per timestamp. Entries that share a
 forecast array collapse to one slot, so this is `≤ length(get_forecast_reader_entries(reader))`.
 """
@@ -1317,7 +1317,7 @@ Base.length(reader::ForecastReader) = length(reader.entries)
 
 """
 $(TYPEDSIGNATURES)
-Read the forecast window at `timestamp` for every entry, performing one `.nc`
+Read the forecast window at `timestamp` for every entry, performing one `.h5`
 read per unique slot. Follow with [`get_forecast_window`](@ref). Throws if
 `timestamp` is off the window timeline.
 """
@@ -1351,7 +1351,7 @@ end
 # "at each timestamp, get every component's value". It wraps the InfraStore
 # `StaticReader`, which packs the matching series into columnar
 # `(dtype, element_shape)` groups so a whole group is served by one physical
-# `.nc` read per timestamp. This wrapper carries that grouping up to Julia —
+# `.h5` read per timestamp. This wrapper carries that grouping up to Julia —
 # each group's values are materialized at most once per read.
 
 """
@@ -1372,7 +1372,7 @@ filter. Drive it with [`read_static_time_series_values!`](@ref), then pull each
 entry's value with [`get_static_time_series_value`](@ref). Build one with
 `build_static_time_series_reader(data; ...)`.
 
-The matched series are packed into columnar groups; one physical `.nc` read per
+The matched series are packed into columnar groups; one physical `.h5` read per
 group serves every entry in it at a timestamp — see
 [`get_num_static_time_series_groups`](@ref).
 """
@@ -1436,7 +1436,7 @@ get_static_time_series_reader_entries(reader::StaticTimeSeriesReader) = reader.e
 
 """
 $(TYPEDSIGNATURES)
-The number of columnar groups — the count of physical `.nc` reads
+The number of columnar groups — the count of physical `.h5` reads
 [`read_static_time_series_values!`](@ref) performs per timestamp. Series with
 the same element type collapse into one group, so this is
 `≤ length(get_static_time_series_reader_entries(reader))` (typically 1).
@@ -1448,7 +1448,7 @@ Base.length(reader::StaticTimeSeriesReader) = length(reader.entries)
 
 """
 $(TYPEDSIGNATURES)
-Read the value of every entry at `timestamp`, performing one `.nc` read per
+Read the value of every entry at `timestamp`, performing one `.h5` read per
 columnar group. Follow with [`get_static_time_series_value`](@ref). Throws if
 `timestamp` is off the reader's grid.
 """
