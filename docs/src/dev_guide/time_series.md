@@ -94,7 +94,15 @@ store's API instead.
 
 ## Maintenance
 
-HDF5 files cannot shrink in place: deleting time series frees logical slots for reuse but
-does not immediately reduce the file size. Recovering that space requires an explicit
-compaction — rebuilding the artifact with only the active arrays — which is provided by the
-`InfraStore` backend.
+HDF5 files cannot shrink in place. Deleting time series drops the arrays, but the `.h5` file
+stays the same size — and this holds for `clear_time_series!` too, which empties the store
+without shrinking its file. Small arrays share packed datasets, so their slots are reused by
+later additions; the space held by a large standalone array is not returned.
+
+Serializing and deserializing does not repack the artifact either: an on-disk store is
+persisted by copying its two files byte-for-byte. To actually reclaim the space, build a
+fresh `SystemData` and add only the data worth keeping, which writes a new artifact.
+
+`InfraStore.compact!` is *not* that operation, despite the name: on the HDF5 backend it
+reports how many packed slots are reusable and sweeps orphaned feature sets out of the
+SQLite catalog, but it does not rebuild the `.h5` file.
