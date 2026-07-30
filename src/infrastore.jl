@@ -2023,6 +2023,60 @@ function infrastore_list_keys_with_owner(
     return out
 end
 
+# Bulk catalog removal for a query type: one core `remove_by_filter` call per
+# stored InfraStore type the query matches (`Deterministic`-family semantics,
+# like the listing paths), or a single unfiltered call when the query spans
+# every stored type. Each call removes all matching associations and frees the
+# newly unreferenced arrays in one store transaction — this is the fast path
+# for removals; per-key `remove_time_series!` pays a full transaction (WAL
+# commit and array free) per series. Returns the number of associations
+# removed.
+function _infrastore_remove_by_filter!(
+    store::Store,
+    time_series_type::Union{Nothing, Type{<:TimeSeriesData}};
+    owner_id::Union{Nothing, Integer} = nothing,
+    owner_category::Union{Nothing, InfraStore.OwnerCategory} = nothing,
+    name::Union{Nothing, String} = nothing,
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features::AbstractDict = Dict{String, Any}(),
+)
+    types = isnothing(time_series_type) ? () : _infrastore_query_types(time_series_type)
+    if isempty(types)
+        # The empty tuple means the query matches every stored type — or none
+        # at all (e.g. a parameterized concrete such as
+        # `Deterministic{Float64, 2}`, which no stored UnionAll subtypes).
+        # Disambiguate with one membership test before removing unfiltered.
+        if !isnothing(time_series_type) &&
+           !_infrastore_type_matches(_INFRASTORE_TYPE_PAIRS[1][2], time_series_type)
+            return 0
+        end
+        return InfraStore.remove_by_filter!(
+            store.inner;
+            owner_id = owner_id,
+            owner_category = owner_category,
+            name = name,
+            resolution = resolution,
+            interval = interval,
+            features = features,
+        )
+    end
+    count = 0
+    for t in types
+        count += InfraStore.remove_by_filter!(
+            store.inner;
+            owner_id = owner_id,
+            owner_category = owner_category,
+            time_series_type = t,
+            name = name,
+            resolution = resolution,
+            interval = interval,
+            features = features,
+        )
+    end
+    return count
+end
+
 # Verify that, per resolution, all SingleTimeSeries share an initial timestamp
 # and length; return `(initial_timestamp, length)` (parity with the
 # metadata-store check). SingleTimeSeries at different resolutions have

@@ -261,33 +261,33 @@ function remove_time_series!(
     _throw_if_read_only(mgr)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
-    # Subset (partial) feature/resolution matching: remove every stored series of
-    # type `time_series_type` that contains at least the requested features.
-    for key in infrastore_owner_list_keys(owner;
-        time_series_type = time_series_type, name = name, resolution = resolution,
-        interval = interval, features...)
-        mt = get_time_series_type(key)
-        res = get_resolution(key)
-        feats = _infrastore_features((Symbol(k) => v for (k, v) in get_features(key)))
-        # Pin this key's own interval: a name can carry several forecasts
-        # differing only by interval, so removing by (type, name, resolution)
-        # alone would be ambiguous. The core refuses to remove a
-        # SingleTimeSeries whose array still backs a
-        # DeterministicSingleTimeSeries; surface that as the IS-level error.
-        try
-            InfraStore.remove_time_series!(_infrastore_type(mt), store.inner,
-                owner_id, category, name;
-                resolution = res, interval = get_interval(key), features = feats)
-        catch e
-            if mt <: SingleTimeSeries && e isa InfraStore.InvalidParameterError
-                throw(
-                    ArgumentError(
-                        "Cannot remove SingleTimeSeries '$name' because it is attached to a " *
-                        "DeterministicSingleTimeSeries."),
-                )
-            end
-            rethrow()
+    feats = Dict{String, Any}(string(k) => v for (k, v) in features)
+    # Subset (partial) feature/resolution matching: each bulk catalog call
+    # removes every stored series of the query type that contains at least the
+    # requested features, in one store transaction — no per-key listing or
+    # per-key transactions. The core refuses to remove a SingleTimeSeries whose
+    # array still backs a DeterministicSingleTimeSeries; surface that as the
+    # IS-level error.
+    try
+        _infrastore_remove_by_filter!(
+            store,
+            time_series_type;
+            owner_id = owner_id,
+            owner_category = category,
+            name = name,
+            resolution = resolution,
+            interval = interval,
+            features = feats,
+        )
+    catch e
+        if e isa InfraStore.InvalidParameterError
+            throw(
+                ArgumentError(
+                    "Cannot remove SingleTimeSeries '$name' because it is attached to a " *
+                    "DeterministicSingleTimeSeries."),
+            )
         end
+        rethrow()
     end
     return
 end

@@ -260,23 +260,31 @@ function remove_time_series!(
     interval::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: TimeSeriesData}
     _throw_if_read_only(data.time_series_manager)
-    for component in iterate_components_with_time_series(
-        data;
-        time_series_type = T,
-        resolution = resolution,
-    )
-        for ts_key in get_time_series_keys(
-            component;
-            time_series_type = T,
+    # One bulk catalog removal per matching stored type instead of one store
+    # transaction per (component, key). Scoped to component owners, matching
+    # the per-component iteration this replaces; supplemental-attribute series
+    # are left untouched. The core refuses to remove SingleTimeSeries whose
+    # arrays still back a DeterministicSingleTimeSeries; surface that as the
+    # IS-level error.
+    try
+        _infrastore_remove_by_filter!(
+            data.time_series_manager.data_store,
+            T;
+            owner_category = InfraStore.Component,
             resolution = resolution,
+            interval = interval,
         )
-            ts_interval = get_interval(ts_key)
-            if !isnothing(interval) && ts_interval != interval
-                continue
-            end
-            remove_time_series!(data, component, ts_key)
+    catch e
+        if e isa InfraStore.InvalidParameterError
+            throw(
+                ArgumentError(
+                    "Cannot remove SingleTimeSeries because they are attached to a " *
+                    "DeterministicSingleTimeSeries."),
+            )
         end
+        rethrow()
     end
+    return
 end
 
 """
@@ -625,10 +633,14 @@ function _transform_single_time_series!(
     # stored component SingleTimeSeries that shares the array (no data is copied);
     # the window parameters are recorded in the metadata. Supplemental-attribute
     # series are left untouched, matching the metadata-store behavior.
+    # The store records the requested interval verbatim, so pass the *checked*
+    # interval: a single-window transform normalizes it to zero (with a warning
+    # in the check above), and the stored form must match IS semantics —
+    # `get_interval` on the materialized forecast returns zero, not the horizon.
     InfraStore.transform_single_time_series!(
         data.time_series_manager.data_store.inner,
         horizon,
-        interval;
+        items[1].params.interval;
         owner_category = InfraStore.Component,
         resolution = resolution,
     )
