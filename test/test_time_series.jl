@@ -1334,7 +1334,10 @@ end
     name3 = "val3"
     ts3 = IS.SingleTimeSeries(name3, ta3)
     IS.add_time_series!(sys, component, ts3)
-    @test_throws "different values for count" IS.transform_single_time_series!(
+    # Two series at one resolution with different lengths. The store diagnoses
+    # this as the divergent static grid it is, rather than as the differing
+    # window counts that follow from it.
+    @test_throws "more than one (initial_timestamp, length)" IS.transform_single_time_series!(
         sys,
         IS.DeterministicSingleTimeSeries,
         horizon,
@@ -1354,7 +1357,8 @@ end
     name3 = "val3"
     ts3 = IS.SingleTimeSeries(name3, ta3)
     IS.add_time_series!(sys, component, ts3)
-    @test_throws "different initial timestamps" IS.transform_single_time_series!(
+    # Same class as the window-count case above: one resolution, two grids.
+    @test_throws "more than one (initial_timestamp, length)" IS.transform_single_time_series!(
         sys,
         IS.DeterministicSingleTimeSeries,
         horizon,
@@ -1451,6 +1455,46 @@ end
         ),
     )
     @test length(all_metadata) == 1
+end
+
+@testset "Test transform_single_time_series! single window normalizes the interval" begin
+    # A horizon that spans the whole series leaves no room for a second window,
+    # so an interval equal to the horizon means "one window" and is stored as a
+    # zero interval — the form IS looks the view up by. The store detects the
+    # case and reports it; IS turns that into the warning.
+    sys = IS.SystemData(; time_series_in_memory = true)
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    resolution = Dates.Hour(1)
+    dates = create_dates("2020-01-01T00:00:00", resolution, "2020-01-01T23:00:00")
+    data = rand(length(dates))
+    ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("val1", ta))
+
+    horizon = resolution * length(dates)
+    @test_logs (:warn, r"only one forecast window") IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        horizon,
+        horizon,
+    )
+
+    forecast = IS.get_time_series(IS.DeterministicSingleTimeSeries, component, "val1")
+    @test IS.get_count(forecast) == 1
+    @test IS.get_interval(forecast) == Dates.Second(0)
+    @test IS.get_horizon(forecast) == horizon
+end
+
+@testset "Test transform_single_time_series! warns when there is nothing to transform" begin
+    sys = IS.SystemData(; time_series_in_memory = true)
+    IS.add_component!(sys, IS.TestComponent("Component1", 5))
+    @test_logs (:warn, r"no SingleTimeSeries") IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Hour(1),
+        Dates.Minute(30),
+    )
 end
 
 @testset "Test transform_single_time_series! delete_existing removes old transforms" begin

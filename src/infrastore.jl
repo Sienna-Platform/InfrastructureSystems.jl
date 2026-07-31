@@ -2124,6 +2124,45 @@ function _infrastore_remove_by_filter!(
     return count
 end
 
+# Derive DeterministicSingleTimeSeries views over the stored component
+# SingleTimeSeries, or (with `dry_run`) report whether that would succeed
+# without writing anything.
+#
+# The store owns the whole of the validation — horizon fit and divisibility,
+# interval divisibility and length, per-resolution grid uniformity, and
+# conflicts with forecasts already stored. The two policy flags are IS's
+# contract on top of that: a single-window interval is stored as zero (the form
+# IS looks views up by), and one system holds one forecast grid.
+#
+# The store's parameter and integrity failures are IS's ConflictingInputsError:
+# callers (`check_transform_single_time_series`, PowerSimulations) dispatch on
+# that type, and every one of these conditions was raised as a
+# ConflictingInputsError before the checks moved into the store.
+function infrastore_transform_single_time_series!(
+    store::Store,
+    horizon::Dates.Period,
+    interval::Dates.Period;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    dry_run::Bool = false,
+)
+    return try
+        InfraStore.transform_single_time_series!(
+            store.inner,
+            horizon,
+            interval;
+            owner_category = InfraStore.Component,
+            resolution = resolution,
+            normalize_single_window = true,
+            require_uniform_forecast_grid = true,
+            dry_run = dry_run,
+        )
+    catch e
+        (e isa InfraStore.InvalidParameterError || e isa InfraStore.IntegrityError) ||
+            rethrow()
+        throw(ConflictingInputsError(e.msg))
+    end
+end
+
 # Verify that, per resolution, all SingleTimeSeries share an initial timestamp
 # and length; return `(initial_timestamp, length)` (parity with the
 # metadata-store check). SingleTimeSeries at different resolutions have

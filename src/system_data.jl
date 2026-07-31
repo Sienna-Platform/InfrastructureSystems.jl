@@ -567,13 +567,14 @@ function check_transform_single_time_series(
         return false
     end
     try
-        _check_transform_single_time_series(
-            data,
-            DeterministicSingleTimeSeries,
+        # A dry run in the store: every check the real transform would run,
+        # nothing written.
+        infrastore_transform_single_time_series!(
+            data.time_series_manager.data_store,
             horizon,
-            interval,
-            resolution;
-            skip_existing = true,
+            interval;
+            resolution = resolution,
+            dry_run = true,
         )
     catch e
         e isa ConflictingInputsError && return false
@@ -593,242 +594,36 @@ function _transform_single_time_series!(
     if delete_existing
         remove_time_series!(data, DeterministicSingleTimeSeries; resolution = resolution)
     end
-    # Validate eligibility and cross-series consistency before committing.
-    items = _check_transform_single_time_series(
-        data,
-        DeterministicSingleTimeSeries,
+
+    # The store derives a DeterministicSingleTimeSeries view over every stored
+    # component SingleTimeSeries that shares the array (no data is copied); the
+    # window parameters are recorded in the metadata. Supplemental-attribute
+    # series are left untouched, matching the metadata-store behavior.
+    #
+    # Every eligibility check runs in the store: horizon fit and divisibility,
+    # interval divisibility and length, per-resolution grid uniformity, and
+    # conflicts with forecasts already stored. IS used to re-run all of it here
+    # over a listing of every SingleTimeSeries, which cost one JSON-marshaled
+    # catalog listing plus a per-series loop; the store answers the same
+    # questions from its distinct static grids, so the cost no longer scales
+    # with the number of series. The two policy flags are IS's contract: the
+    # single-window interval is stored as zero (what IS looks views up by), and
+    # one system holds one forecast grid.
+    outcome = infrastore_transform_single_time_series!(
+        data.time_series_manager.data_store,
         horizon,
-        interval,
-        resolution;
-        skip_existing = !delete_existing,
+        interval;
+        resolution = resolution,
     )
 
-    if isempty(items)
+    if outcome.sources == 0
         @warn "There are no SingleTimeSeries arrays to transform"
         return
     end
-
-    for i in 2:length(items)
-        params1 = items[1].params
-        params = items[i].params
-        if params.count != params1.count
-            throw(
-                ConflictingInputsError(
-                    "transform_single_time_series! with horizon = $horizon and " *
-                    "interval = $interval will produce Deterministic forecasts with " *
-                    "different values for count: $(params.count) $(params1.count)"),
-            )
-        end
-        if params.initial_timestamp != params1.initial_timestamp
-            throw(
-                ConflictingInputsError(
-                    "transform_single_time_series! is not supported when " *
-                    "SingleTimeSeries have different initial timestamps: " *
-                    "$(params.initial_timestamp) $(params1.initial_timestamp)"),
-            )
-        end
+    if outcome.interval_normalized
+        @warn "There is only one forecast window. Setting interval = $(Dates.canonicalize(outcome.interval))"
     end
-
-    # The InfraStore store derives a DeterministicSingleTimeSeries view over every
-    # stored component SingleTimeSeries that shares the array (no data is copied);
-    # the window parameters are recorded in the metadata. Supplemental-attribute
-    # series are left untouched, matching the metadata-store behavior.
-    # The store records the requested interval verbatim, so pass the *checked*
-    # interval: a single-window transform normalizes it to zero (with a warning
-    # in the check above), and the stored form must match IS semantics —
-    # `get_interval` on the materialized forecast returns zero, not the horizon.
-    InfraStore.transform_single_time_series!(
-        data.time_series_manager.data_store.inner,
-        horizon,
-        items[1].params.interval;
-        owner_category = InfraStore.Component,
-        resolution = resolution,
-    )
     return
-end
-
-# Every requested feature key-value pair must be present in the existing key's
-# features. This is an intentionally exact match, stricter than the core catalog's
-# partial feature matching, which can over-match on substrings and wildcard
-# characters in string values.
-_features_contain(existing_features, requested_features) =
-    all(
-        kv -> get(existing_features, kv.first, nothing) === kv.second,
-        requested_features,
-    )
-
-"""
-Check that all existing SingleTimeSeries can be converted to DeterministicSingleTimeSeries
-with the given horizon and interval.
-
-Throw ConflictingInputsError if any time series cannot be converted.
-
-Return a Vector of NamedTuple of component, time series metadata, and forecast parameters
-for all matches.
-"""
-function _check_transform_single_time_series(
-    data::SystemData,
-    ::Type{DeterministicSingleTimeSeries},
-    horizon::Dates.Period,
-    interval::Dates.Period,
-    resolution::Union{Nothing, Dates.Period};
-    skip_existing::Bool = false,
-)
-    store = data.time_series_manager.data_store
-    items = infrastore_list_keys_with_owner(
-        store,
-        InfrastructureSystemsComponent;
-        time_series_type = SingleTimeSeries,
-        resolution = resolution,
-    )
-
-    # The loop below runs once per SingleTimeSeries (potentially tens of thousands). To
-    # avoid issuing one or more FFI catalog queries per iteration, build lookups up front:
-    # - system forecast parameters depend only on (resolution, interval), so memoize them.
-    # - fetch all existing Deterministic and DeterministicSingleTimeSeries keys with one
-    #   catalog query and index them by (owner_id, name, resolution). The per-series
-    #   conflict and skip_existing checks then run in memory against this lookup.
-    forecast_params_cache =
-        Dict{Tuple{Dates.Period, Dates.Period}, Union{Nothing, ForecastParameters}}()
-    existing_forecasts = Dict{Tuple{Int, String, Dates.Period}, Vector{TimeSeriesKey}}()
-    for entry in infrastore_list_keys_with_owner(
-        store,
-        InfrastructureSystemsComponent;
-        # AbstractDeterministic matches both Deterministic and
-        # DeterministicSingleTimeSeries rows.
-        time_series_type = AbstractDeterministic,
-    )
-        key = (entry.owner_id, get_name(entry.metadata), get_resolution(entry.metadata))
-        push!(get!(() -> TimeSeriesKey[], existing_forecasts, key), entry.metadata)
-    end
-
-    components_with_params_and_metadata = NamedTuple[]
-    for item in items
-        params = _check_single_time_series_transformed_parameters(
-            item.metadata,
-            DeterministicSingleTimeSeries,
-            horizon,
-            interval,
-        )
-        system_params =
-            get!(forecast_params_cache, (params.resolution, params.interval)) do
-                get_forecast_parameters(
-                    data;
-                    resolution = params.resolution,
-                    interval = params.interval,
-                )
-            end
-        check_params_compatibility(system_params, params)
-        component = get_component(data, item.owner_id)
-
-        ts_name = get_name(item.metadata)
-        ts_resolution = get_resolution(item.metadata)
-        ts_features = get_features(item.metadata)
-        existing = get(
-            existing_forecasts,
-            (item.owner_id, ts_name, ts_resolution),
-            nothing,
-        )
-
-        if !isnothing(existing)
-            # We do not allow a component to have both Deterministic and
-            # DeterministicSingleTimeSeries with the same parameters.
-            # The user might be calling this function because some components are missing
-            # Deterministic forecasts. If other components already have Deterministic
-            # forecasts, this check will fail.
-            # transform_single_time_series! cannot be called at the component level.
-            if any(
-                m ->
-                    get_time_series_type(m) === Deterministic &&
-                        _features_contain(get_features(m), ts_features),
-                existing,
-            )
-                throw(
-                    ConflictingInputsError(
-                        "Cannot transform SingleTimeSeries to DeterministicSingleTimeSeries: " *
-                        "A Deterministic forecast already exists for component $(summary(component)) " *
-                        "with name='$ts_name', resolution=$ts_resolution, and features=$ts_features",
-                    ),
-                )
-            end
-
-            # If skip_existing is true, skip SingleTimeSeries entries that already have a
-            # DeterministicSingleTimeSeries with the same name, resolution, features,
-            # horizon, and interval.
-            if skip_existing && any(
-                m ->
-                    get_time_series_type(m) === DeterministicSingleTimeSeries &&
-                        get_horizon(m) == params.horizon &&
-                        get_interval(m) == params.interval &&
-                        _features_contain(get_features(m), ts_features),
-                existing,
-            )
-                continue
-            end
-        end
-
-        push!(
-            components_with_params_and_metadata,
-            (component = component, params = params, metadata = item.metadata),
-        )
-    end
-
-    return components_with_params_and_metadata
-end
-
-function _check_single_time_series_transformed_parameters(
-    metadata::StaticTimeSeriesKey,
-    ::Type{DeterministicSingleTimeSeries},
-    desired_horizon::Dates.Period,
-    desired_interval::Dates.Period,
-)
-    resolution = get_resolution(metadata)
-    len = length(metadata)
-    max_horizon = len * resolution
-    if desired_horizon > max_horizon
-        throw(
-            ConflictingInputsError(
-                "TimeSeries: $(get_name(metadata)) desired horizon = $(Dates.canonicalize(desired_horizon)) is greater than max horizon = $(Dates.canonicalize(max_horizon))",
-            ),
-        )
-    end
-
-    if desired_horizon % resolution != Dates.Millisecond(0)
-        throw(
-            ConflictingInputsError(
-                "TimeSeries: $(get_name(metadata)) desired horizon = $(Dates.canonicalize(desired_horizon)) is not evenly divisible by resolution = $(Dates.canonicalize(resolution))",
-            ),
-        )
-    end
-
-    horizon_count = get_horizon_count(desired_horizon, resolution)
-    max_interval = desired_horizon
-    if len == horizon_count && desired_interval == max_interval
-        desired_interval = Dates.Second(0)
-        @warn "There is only one forecast window. Setting interval = $(Dates.canonicalize(desired_interval))"
-    elseif desired_interval > max_interval
-        throw(
-            ConflictingInputsError(
-                "TimeSeries: $(get_name(metadata)) interval = $(Dates.canonicalize(desired_interval)) is bigger than the max of $(Dates.canonicalize(max_interval))",
-            ),
-        )
-    end
-
-    initial_timestamp = get_initial_timestamp(metadata)
-    count = get_forecast_window_count(
-        initial_timestamp,
-        desired_interval,
-        resolution,
-        len,
-        horizon_count,
-    )
-    return ForecastParameters(;
-        initial_timestamp = initial_timestamp,
-        count = count,
-        horizon = desired_horizon,
-        interval = desired_interval,
-        resolution = resolution,
-    )
 end
 
 """

@@ -223,6 +223,40 @@ and no instance is ever constructed. The type exists only for query/removal filt
 `TimeSeriesKey.time_series_type`, and the transform API — do not reintroduce data-bearing
 fields or an instance `add_time_series!` path.
 
+### transform_single_time_series! validation lives in Rust
+
+**All** of the transform's eligibility validation is in the InfraStore core — horizon fit
+and divisibility, interval divisibility and length, per-resolution grid uniformity, and
+conflicts with forecasts already stored. IS used to re-run every one of these in Julia
+over a listing of all 100k `SingleTimeSeries`; the store answers them from its distinct
+static grids (`GROUP BY resolution`), so the cost is O(distinct resolutions), not
+O(series). `_check_transform_single_time_series` and
+`_check_single_time_series_transformed_parameters` are **deleted** — do not reintroduce a
+Julia-side pre-check.
+
+IS calls through `infrastore_transform_single_time_series!` (`src/infrastore.jl`), which
+maps the core's `InvalidParameterError`/`IntegrityError` to `ConflictingInputsError` —
+the type callers dispatch on. The returned `TransformOutcome` carries `sources` (0 ⇒ the
+"nothing to transform" warning) and `interval_normalized` (⇒ the "only one forecast
+window" warning); IS re-emits both warnings from it rather than deriving them.
+
+Three rules turned out **not** to be storage invariants — the core has passing tests
+asserting the opposite — so they are opt-in via `TransformPolicy`, which IS sets and
+Python/CLI leave at `Default`:
+
+| flag | why it is a client rule |
+|---|---|
+| `normalize_single_window` | the interval is part of the association identity; IS looks single-window views up by zero, other clients by the horizon |
+| `require_uniform_forecast_grid` | the store is happy to hold forecasts on several grids; one-system-one-grid is an IS rule |
+| `dry_run` | validate and report without writing — how `check_transform_single_time_series` answers without a trial-and-rollback |
+
+The **irregular-period guard stays in Julia** (`transform_single_time_series!`,
+`system_data.jl`): the core supports monthly transforms and has a test for it, so IS's ban
+is an IS arithmetic limitation, not a store invariant. It is O(1) and costs nothing.
+
+Now unused inside IS but deliberately kept (downstream may reach them):
+`infrastore_list_keys_with_owner` and the 5-arg `get_forecast_window_count`.
+
 `T` is the value element type (`Float64` or a domain type such as `LinearFunctionData`);
 `N` is the array rank — per-window for forecasts, per-series for static — and is
 deliberately NOT lifted to the abstract parents, since its meaning varies by subtype.
