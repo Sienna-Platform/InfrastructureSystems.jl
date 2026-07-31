@@ -2110,6 +2110,61 @@ end
     @test isempty(IS.get_time_series_multiple(data))
 end
 
+@testset "Test compact_time_series! reclaims space after a removal" begin
+    # On-disk, because reclaiming space is the whole point: an in-memory system
+    # has no file to rewrite.
+    data = create_system_data(; time_series_in_memory = false)
+    component = first(IS.iterate_components(data))
+    path = IS._store_path(data.time_series_manager.data_store)
+    resolution = Dates.Hour(1)
+    initial_time = Dates.DateTime("2020-01-01T00:00:00")
+
+    IS.add_time_series!(
+        data,
+        component,
+        IS.SingleTimeSeries(;
+            name = "keep",
+            data = TimeSeries.TimeArray(
+                range(initial_time; length = 24, step = resolution),
+                ones(24),
+            ),
+        ),
+    )
+    # A forecast large enough that dropping it clears HDF5's own size noise.
+    horizon_count = 48
+    IS.add_time_series!(
+        data,
+        component,
+        IS.Deterministic(;
+            name = "bulky",
+            resolution = resolution,
+            data = SortedDict(
+                initial_time + (k - 1) * resolution =>
+                    collect(Float64, 1:horizon_count) for k in 1:400
+            ),
+        ),
+    )
+    IS.remove_time_series!(data, IS.Deterministic, component, "bulky")
+
+    before = filesize(path)
+    report = IS.compact_time_series!(data)
+    after = filesize(path)
+
+    @test report.bytes_reclaimed == before - after > 0
+    # The survivor still reads, and the system is usable across the file swap.
+    @test IS.get_time_series_counts(data).static_time_series_count == 1
+    kept = IS.get_time_series(IS.SingleTimeSeries, component, "keep")
+    @test TimeSeries.values(IS.get_data(kept)) == ones(24)
+
+    # An in-memory system compacts too; there is just no file to shrink.
+    in_memory = create_system_data(; with_time_series = true, time_series_in_memory = true)
+    @test IS.compact_time_series!(in_memory).bytes_reclaimed == 0
+
+    # Read-only rejects it, like every other store mutation.
+    data.time_series_manager.read_only = true
+    @test_throws ArgumentError IS.compact_time_series!(data)
+end
+
 @testset "Test that remove_component removes time_series" begin
     data = create_system_data(; with_time_series = true)
 

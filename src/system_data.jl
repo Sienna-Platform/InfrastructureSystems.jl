@@ -427,6 +427,24 @@ end
 
 clear_time_series!(data::SystemData) = clear_time_series!(data.time_series_manager)
 
+"""
+Reclaim the space that removed time series left behind, returning an
+`InfraStore.CompactionReport` (`slots_reclaimed`, `datasets_dropped`,
+`feature_sets_reclaimed`, `timestamp_sets_reclaimed`, `bytes_reclaimed`).
+
+HDF5 cannot hand freed space back in place, so removing time series — including
+[`clear_time_series!`](@ref) — leaves the `.h5` file the same size. For a system
+whose time series are on disk, this rewrites that file from what the catalog
+still references and replaces it, which is what actually shrinks it;
+`bytes_reclaimed` reports by how much. A system holding its time series in
+memory has no file to rewrite, and reports `0` bytes.
+
+The rewrite assumes this process is the file's only user: another process with
+the same artifact open keeps reading the pre-compaction file on Unix, and blocks
+the replacement on Windows.
+"""
+compact_time_series!(data::SystemData) = compact_time_series!(data.time_series_manager)
+
 function iterate_components_with_time_series(
     data::SystemData;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,

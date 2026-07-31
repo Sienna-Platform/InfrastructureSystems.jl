@@ -483,6 +483,17 @@ end
 """Remove all time series (data + metadata) from the store."""
 clear_time_series!(store::Store) = InfraStore.clear!(store.inner)
 
+"""
+Reclaim the space that removed time series left behind, returning an
+`InfraStore.CompactionReport`.
+
+For an on-disk store this rewrites the `.h5` file: the arrays the catalog still
+references are written to a sibling file which then replaces the original. The
+store stays usable across the swap, and the report's `bytes_reclaimed` says how
+much smaller the file got. An in-memory store has no file to rewrite.
+"""
+compact_time_series!(store::Store) = InfraStore.compact!(store.inner)
+
 # A hashable identity for one stored association (a `InfraStore.list_keys` row),
 # used to diff the store before/after a batch update for rollback.
 infrastore_row_identity(row) = (

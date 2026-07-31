@@ -128,9 +128,20 @@ without shrinking its file. Small arrays share packed datasets, so their slots a
 later additions; the space held by a large standalone array is not returned.
 
 Serializing and deserializing does not repack the artifact either: an on-disk store is
-persisted by copying its two files byte-for-byte. To actually reclaim the space, build a
-fresh `SystemData` and add only the data worth keeping, which writes a new artifact.
+persisted by copying its two files byte-for-byte.
 
-`InfraStore.compact!` is *not* that operation, despite the name: on the HDF5 backend it
-reports how many packed slots are reusable and sweeps orphaned feature sets out of the
-SQLite catalog, but it does not rebuild the `.h5` file.
+`compact_time_series!(data)` is the operation that does reclaim it. For a system whose time series live
+on disk, it rewrites the `.h5` from what the catalog still references and swaps the rewrite
+over the original, so the file finally shrinks; the system stays usable across the swap. It
+returns an `InfraStore.CompactionReport`, whose `bytes_reclaimed` says how much came back:
+
+```julia
+report = IS.compact_time_series!(data)
+@show report.bytes_reclaimed
+```
+
+Two caveats. The rewrite assumes this process is the artifact's only user — another process
+with it open keeps reading the pre-compaction file on Unix, and blocks the replacement on
+Windows. And a system holding its time series in memory has no file to rewrite, so it
+reports `0` bytes; there, building a fresh `SystemData` with only the data worth keeping is
+still the way to shed the arrays.

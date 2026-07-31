@@ -201,6 +201,11 @@ function clear_time_series!(mgr::TimeSeriesManager)
     return
 end
 
+function compact_time_series!(mgr::TimeSeriesManager)
+    _throw_if_read_only(mgr)
+    return compact_time_series!(mgr.data_store)
+end
+
 function clear_time_series!(mgr::TimeSeriesManager, component::TimeSeriesOwners)
     _throw_if_read_only(mgr)
     owner_id, _, category = _infrastore_owner_args(component)
