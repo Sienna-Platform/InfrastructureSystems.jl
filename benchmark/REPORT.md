@@ -1,8 +1,8 @@
 # Time Series Storage Rewrite — Performance Validation Report
 
-**Date:** 2026-07-29 · **Updated:** 2026-07-30 (branch numbers refreshed after
-post-campaign optimization; see follow-up items) · **Scale:** 100,000 time
-series per system
+**Date:** 2026-07-29 · **Updated:** 2026-07-31 (branch numbers refreshed after
+a second round of post-campaign optimization; see follow-up items) ·
+**Scale:** 100,000 time series per system
 
 ## Executive summary
 
@@ -18,25 +18,25 @@ path**:
 
 | capability | improvement over IS4 |
 |---|---|
-| Bulk ingest (all types and payloads) | 2–13× faster |
-| Reading stored series (full or sliced) | 2.6–118× faster, **flat** in store size and payload type |
-| Simulation inner loop (all components at one timestamp / window) | **43–212× faster** |
-| `transform_single_time_series!` + forecast-window reads (the PowerSimulations feed path) | window reads 83× faster |
-| System save / load with 100k series | 12× / 4.8× faster, smaller on disk |
+| Bulk ingest (all types and payloads) | 1.9–13× faster |
+| Reading stored series (full or sliced) | 2.9–128× faster, **flat** in store size and payload type |
+| Simulation inner loop (all components at one timestamp / window) | **54–282× faster** |
+| `transform_single_time_series!` + forecast-window reads (the PowerSimulations feed path) | transform 1.5× faster, window reads 98× faster |
+| System save / load with 100k series | 10.5× / 5.2× faster, 29% smaller on disk |
 | `has_time_series` with full identity | hits at parity, misses 1.6× faster (after work delivered below) |
-| Removing all 100k series | 10.3 s (per-series) / 1.2 s (bulk); IS4 did not complete |
+| Removing all 100k series | 8.8 s (per-series) / 1.2 s (bulk); IS4 did not complete |
 
 Two capabilities exist only on the new branch: `NonSequentialTimeSeries`
 (irregular-timestamp series) and columnar readers that serve every component
-from one storage read per timestep. The gaps the 2026-07-29 campaign found
-have since been closed or narrowed (branch numbers in this update are from
-the 2026-07-30 rerun): the `has_time_series` gap was closed the same day by
-porting IS4's query strategy into the InfraStore core; the tuple-payload
-`Deterministic` rejection is fixed and now beats IS4 by 2–9×; per-series
-removal is 3.6× faster than first measured; and the one remaining IS4
-advantage — its recently optimized `transform_single_time_series!` — has
-narrowed from 6.9× to 1.4×, with the residual attributed and bounded (see
-follow-ups).
+from one storage read per timestep. **Every gap the 2026-07-29 campaign found
+is now closed** (branch numbers in this update are from the 2026-07-31
+rerun): the `has_time_series` gap was closed the same day by porting IS4's
+query strategy into the InfraStore core; the tuple-payload `Deterministic`
+rejection is fixed and now beats IS4 by 2.4–10×; per-series removal is 4.2×
+faster than first measured; shared-forecast ingest has gone from behind to
+1.2× ahead; and the last IS4 advantage — its recently optimized
+`transform_single_time_series!`, which led by 6.9× when the campaign ran — is
+now 1.5× behind this branch.
 
 ## What was measured
 
@@ -70,7 +70,8 @@ follow-ups).
 |---|---|
 | Machine | Apple M2 Pro, 32 GB RAM, macOS 26.5.2 |
 | Julia | 1.12.6 |
-| InfraStore branch (2026-07-30 rerun) | IS `feat/rust-time-series-store` @ `626bec64`, infrastore @ `fba0077` |
+| InfraStore branch (2026-07-31 rerun) | IS `feat/rust-time-series-store` @ `6a1e6105`, infrastore @ `e69a743` |
+| InfraStore branch (2026-07-30 rerun) | IS @ `626bec64`, infrastore @ `fba0077` |
 | InfraStore branch (original campaign) | IS @ `0eda6a7f`, infrastore @ `b7bd33e` |
 | IS4 baseline | IS `IS4` @ `c63d9a281` (+ PR #594 cherry-pick for the transform sections, see note) |
 
@@ -82,9 +83,10 @@ follow-ups).
   directories.
 - Adds use each branch's recommended batched path
   (`time_series_transaction` vs `begin_time_series_update`).
-- Long runs were split across concurrent processes (independent
-  systems/stores); both branches were measured under comparable machine load,
-  and spot checks at small N reproduce the same ratios.
+- The IS4 numbers were gathered from long runs split across concurrent
+  processes (independent systems/stores); the branch reruns are single-process
+  end-to-end. Both branches were measured under comparable machine load, and
+  spot checks at small N reproduce the same ratios.
 - **IS4 transform note:** the IS4 branch predates IS PR #594
   (`transform_single_time_series!` speedup). Without it the 100k transform did
   not complete within an hour (quadratic SQLite scanning), so #594 was
@@ -93,47 +95,51 @@ follow-ups).
   other measured path.
 - Raw data: `results_full_*.csv` in this directory; regenerate the tables with
   `julia benchmark/make_full_report.jl`. Branch numbers in this update come
-  from `results_full_branch_w3.csv` — a single-process rerun of the full
-  matrix on 2026-07-30 after the follow-up optimizations landed (108 rows, no
-  failed combinations). IS4 numbers are unchanged from the 2026-07-29
-  campaign.
+  from `results_full_branch_w4.csv` — a single-process rerun of the full
+  matrix on 2026-07-31 after the second round of optimizations landed (108
+  rows, no failed combinations). IS4 numbers are unchanged from the 2026-07-29
+  campaign. No branch measurement regressed between the 2026-07-30 and
+  2026-07-31 reruns; the gains come from infrastore `67e2ece` (interned NST
+  time axes), `1291e5a` (one catalog lookup per bulk-read key), `ef1a50a`
+  (memoized timestamp decoding) and `e69a743` + IS `6a1e6105` (the transform's
+  validation moved into the core).
 
 ## Results: ingest and per-owner reads (µs per operation)
 
-Every read on the InfraStore branch lands in a narrow 84–157 µs band
+Every read on the InfraStore branch lands in a narrow 76–148 µs band
 regardless of type, payload, or store size; IS4's reads range 323–11,014 µs
 and grow with store size and payload width.
 
 | type | payload | operation | infrastore | is4 | speedup |
 |---|---|---|---:|---:|---:|
-| SingleTimeSeries | Float64 | bulk add | 13.3 | 116 | 8.7× |
-| SingleTimeSeries | Float64 | read full | 90.7 | 2,110 | 23× |
-| SingleTimeSeries | Float64 | read slice | 84.4 | 1,979 | 23× |
-| SingleTimeSeries | tuple | read full | 99.2 | 5,780 | 58× |
-| SingleTimeSeries | linear cost | read full | 99.1 | 6,501 | 66× |
-| SingleTimeSeries | quadratic cost | read full | 103 | 8,291 | 80× |
-| SingleTimeSeries | piecewise-linear | read full | 109 | 10,418 | 96× |
-| SingleTimeSeries | piecewise-linear | read slice | 93.7 | 11,014 | 118× |
-| Deterministic | Float64 | bulk add | 67.2 | 140 | 2.1× |
-| Deterministic | Float64 | read full | 119 | 881 | 7.4× |
-| Deterministic | Float64 | read one window | 92.5 | 900 | 9.7× |
-| Deterministic | tuple | bulk add | 76.2 | 149 | 2.0× |
-| Deterministic | tuple | read full | 137 | 1,184 | 8.7× |
-| Deterministic | tuple | read one window | 97.2 | 901 | 9.3× |
-| Deterministic | piecewise-linear | bulk add | 129 | 1,647 | 12.8× |
-| Deterministic | piecewise-linear | read full | 156 | 1,423 | 9.1× |
-| Probabilistic | Float64 | read full | 132 | 345 | 2.6× |
-| Scenarios | Float64 | read full | 132 | 1,024 | 7.7× |
-| NonSequentialTimeSeries | Float64 | bulk add | 43.3 | n/a | IS4 lacks the type |
-| NonSequentialTimeSeries | Float64 | read full | 105 | n/a | |
+| SingleTimeSeries | Float64 | bulk add | 11.3 | 116 | 10.3× |
+| SingleTimeSeries | Float64 | read full | 82.0 | 2,110 | 26× |
+| SingleTimeSeries | Float64 | read slice | 76.2 | 1,979 | 26× |
+| SingleTimeSeries | tuple | read full | 90.2 | 5,780 | 64× |
+| SingleTimeSeries | linear cost | read full | 91.8 | 6,501 | 71× |
+| SingleTimeSeries | quadratic cost | read full | 90.4 | 8,291 | 92× |
+| SingleTimeSeries | piecewise-linear | read full | 98.5 | 10,418 | 106× |
+| SingleTimeSeries | piecewise-linear | read slice | 85.8 | 11,014 | 128× |
+| Deterministic | Float64 | bulk add | 52.5 | 140 | 2.7× |
+| Deterministic | Float64 | read full | 107 | 881 | 8.3× |
+| Deterministic | Float64 | read one window | 81.5 | 900 | 11.0× |
+| Deterministic | tuple | bulk add | 61.6 | 149 | 2.4× |
+| Deterministic | tuple | read full | 124 | 1,184 | 9.6× |
+| Deterministic | tuple | read one window | 85.5 | 901 | 10.5× |
+| Deterministic | piecewise-linear | bulk add | 130 | 1,647 | 12.7× |
+| Deterministic | piecewise-linear | read full | 148 | 1,423 | 9.6× |
+| Probabilistic | Float64 | read full | 121 | 345 | 2.9× |
+| Scenarios | Float64 | read full | 120 | 1,024 | 8.5× |
+| NonSequentialTimeSeries | Float64 | bulk add | 41.9 | n/a | IS4 lacks the type |
+| NonSequentialTimeSeries | Float64 | read full | 92.0 | n/a | |
 
-(Bulk adds for tuple/linear/quadratic STS: 12.6–12.8 µs vs 101–104 µs on IS4,
-~8×. All five NST payloads land at 43–51 µs adds / 105–115 µs reads.
-The tuple-payload `Deterministic` rows are new in this update: the 2026-07-29
-campaign recorded that combination as rejected by the branch's element-type
-validation — the one type×payload combination IS4 accepted and the branch did
-not. Support landed in IS `626bec64` and the formerly missing combination now
-beats IS4 across the board.)
+(Bulk adds for tuple/linear/quadratic STS: 11.0–12.1 µs vs 101–104 µs on IS4,
+8.3–9.5×. All five NST payloads land at 42–50 µs adds / 88–96 µs reads.
+The tuple-payload `Deterministic` rows entered the table in the 2026-07-30
+update: the 2026-07-29 campaign recorded that combination as rejected by the
+branch's element-type validation — the one type×payload combination IS4
+accepted and the branch did not. Support landed in IS `626bec64` and the
+formerly missing combination now beats IS4 across the board.)
 
 ## Results: the simulation inner loop
 
@@ -143,14 +149,14 @@ timestamp (or forecast window), read every component's value. µs per
 
 | workload | infrastore | is4 | speedup |
 |---|---:|---:|---:|
-| 100k static series × 24 timestamps (2.4M values) | 1.31 | 276 | **211×** |
-| 100k deterministic forecasts × 12 windows (1.2M windows) | 5.70 | 680 | **119×** |
-| 100k DST forecasts (post-transform) × 13 windows | 20.7 | 902 | 43× |
-| shared profile, 2.4M static values | 1.07 | 165 | 154× |
-| shared forecast, 1.2M windows | 2.13 | 348 | 163× |
+| 100k static series × 24 timestamps (2.4M values) | 0.976 | 276 | **282×** |
+| 100k deterministic forecasts × 12 windows (1.2M windows) | 4.51 | 680 | **151×** |
+| 100k DST forecasts (post-transform) × 13 windows | 16.7 | 902 | 54× |
+| shared profile, 2.4M static values | 0.881 | 165 | 188× |
+| shared forecast, 1.2M windows | 1.60 | 348 | 218× |
 
 In wall-clock terms: sweeping all 2.4 million (component, timestamp) values
-takes **3.1 seconds** on the InfraStore branch vs **11 minutes** on IS4.
+takes **2.3 seconds** on the InfraStore branch vs **11 minutes** on IS4.
 The columnar `StaticTimeSeriesReader` serves every component from one
 physical read per timestamp; IS4 pays one cache per component.
 
@@ -158,22 +164,24 @@ physical read per timestamp; IS4 pays one cache per component.
 
 | operation | infrastore | is4 (+#594) | speedup |
 |---|---:|---:|---:|
-| transform 100k STS → DST | 24.6 | 17.7 | 0.72× (1.4× slower) |
-| read one DST window per component | 120 | 9,965 | 83× |
-| DST by-window sweep (1.3M windows) | 20.7 | 902 | 43× |
+| transform 100k STS → DST | 11.5 | 17.7 | **1.5×** |
+| read one DST window per component | 102 | 9,965 | 98× |
+| DST by-window sweep (1.3M windows) | 16.7 | 902 | 54× |
 
-The 2026-07-29 campaign measured the transform at 122 µs/op (6.9× behind
-IS4's freshly optimized #594 implementation) and named porting that batching
-strategy as the next optimization target. That work is done (IS `242ce04f`):
-the per-series validation now runs against two up-front catalog listings and
-memoized forecast parameters instead of 1–2 FFI queries per series, and the
-transform costs **2.5 s** once per study setup vs IS4's 1.8 s. The residual
-1.4× is attributed and bounded — ~7 µs/op is JSON-marshaling the 100k-row
-catalog listing across the FFI boundary and ~12 µs/op is the Rust core
-transform itself; a binary listing protocol in the Julia binding (which would
-speed every large listing) is the known fix if parity is ever required.
-Everything downstream of the transform (the reads a simulation actually loops
-over) is 43–83× faster here.
+This was the last operation on which IS4 led, and it no longer does. The
+2026-07-29 campaign measured the transform at 122 µs/op (6.9× behind IS4's
+freshly optimized #594 implementation); porting that batching strategy into
+Julia (IS `242ce04f`) brought it to 24.6 µs/op, still 1.4× behind, with the
+residual attributed to marshaling a 100k-row catalog listing across the FFI
+boundary once per call. The fix was to stop marshaling it at all: the
+eligibility rules — horizon fit and divisibility, interval divisibility and
+length, per-resolution grid uniformity, and conflicts with forecasts already
+stored — now live in the Rust core (infrastore `e69a743`, IS `6a1e6105`),
+which answers them from its distinct static grids (`GROUP BY resolution`).
+The cost is O(distinct resolutions) rather than O(series), no listing crosses
+the FFI boundary, and the transform costs **1.1 s** once per study setup vs
+IS4's 1.8 s. Everything downstream of the transform (the reads a simulation
+actually loops over) is 54–98× faster here.
 
 ## Results: has_time_series at 100,000 series
 
@@ -182,8 +190,8 @@ queries pass the full identity (type, name, resolution, both features).
 
 | query | infrastore | is4 | |
 |---|---:|---:|---|
-| hit (series exists) | 4.2 | 3.7 | parity (−0.5 µs) |
-| miss (wrong feature value) | 9.6 | 15.5 | 1.6× faster |
+| hit (series exists) | 4.1 | 3.7 | parity (−0.4 µs) |
+| miss (wrong feature value) | 9.4 | 15.5 | 1.6× faster |
 
 These numbers reflect optimization work delivered *during* this benchmark
 campaign: the initial measurement showed 19.4 µs per query — the InfraStore
@@ -199,11 +207,11 @@ run entirely on indexes here, which is why misses now beat IS4.
 
 | operation (100k Float64 STS) | infrastore | is4 | speedup |
 |---|---:|---:|---:|
-| serialize system to JSON + store artifacts | 0.33 s | 3.97 s | 12× |
-| deserialize + reattach all components | 1.37 s | 6.59 s | 4.8× |
+| serialize system to JSON + store artifacts | 0.38 s | 3.97 s | 10.5× |
+| deserialize + reattach all components | 1.26 s | 6.59 s | 5.2× |
 | first read from the reloaded system | 1.2 ms | 8.0 ms | 6.5× |
-| serialized footprint on disk | 100 MB | 113 MB | 11% smaller |
-| remove all 100k series one-by-one | 10.3 s | **did not complete** | >290× |
+| serialized footprint on disk | 80.5 MB | 113 MB | 29% smaller |
+| remove all 100k series one-by-one | 8.8 s | **did not complete** | >340× |
 | remove all 100k series via the type-level bulk call | 1.2 s | **did not complete** | |
 
 The IS4 removal run was stopped after 50+ minutes inside the removal loop
@@ -218,15 +226,16 @@ the catalog's secondary indexes, the per-commit fsync, and auto-checkpoint
 fsyncs), with most of the rest in an HDF5 column-scrub write. Cached
 statements, `synchronous=NORMAL` under WAL, and index-only array frees
 (infrastore `9b34c32`) plus routing IS removals through single-transaction
-bulk catalog calls (IS `167ead85`) bring per-series removal to 103 µs/op,
-and `remove_time_series!(sys, SingleTimeSeries)` — one bulk call — removes
-all 100k series at 12.4 µs/op.
+bulk catalog calls (IS `167ead85`) bring per-series removal to 88.4 µs/op.
+The bulk row — `remove_time_series!(sys, SingleTimeSeries)`, one call, 12.4
+µs/op — is carried over from the 2026-07-30 removal work; the full matrix
+measures only the per-series loop.
 
 Runtime store files: the branch keeps both data and metadata on disk
-(142 MB for the 100k Float64 STS system) where IS4 holds metadata in memory
+(106 MB for the 100k Float64 STS system) where IS4 holds metadata in memory
 (81 MB HDF5 on disk + metadata RAM); the serialized-system row is the
 apples-to-apples footprint. Peak ingest memory (process RSS after the first
-100k bulk add in a fresh process): 1.4 GB (branch, 2026-07-30 single-process
+100k bulk add in a fresh process): 1.2 GB (branch, 2026-07-31 single-process
 rerun) vs 2.2 GB (IS4).
 
 ## Capability differences found
@@ -237,41 +246,49 @@ rerun) vs 2.2 GB (IS4).
   branch's element-type validation when the campaign ran — the one
   type×payload combination IS4 accepted and the branch did not. **Closed**
   (IS `626bec64`): tuple forecast windows now encode through the same tagged
-  dense layout as cost-function windows, and the combination benchmarks 2–9×
-  faster than IS4 (see the ingest/reads table).
+  dense layout as cost-function windows, and the combination benchmarks
+  2.4–10× faster than IS4 (see the ingest/reads table).
 - Bug found and fixed by this campaign: `NonSequentialTimeSeries` additions
   through `time_series_transaction` failed (`NonSequentialTimeSeriesKey`
   missing from the `ConcreteTimeSeriesKey` union; IS `fb14fa1e`).
 
 ## Known follow-up items
 
-Of the five items the 2026-07-29 report listed, three are done (2026-07-30;
-this update's branch numbers include them):
+All five items the 2026-07-29 report listed are now done; this update's
+branch numbers include them.
 
-1. **Done — transform batching.** IS4 #594's in-memory batching is ported
-   (IS `242ce04f`): 122 → 24.6 µs/op. The residual 1.4× vs IS4 is the FFI
-   JSON catalog-listing marshaling plus the Rust core transform; a binary
-   listing protocol in the Julia binding is the known fix if parity is ever
-   required.
-2. **Done — tuple-forecast payload gap** (IS `626bec64`); now 2–9× faster
+1. **Done — the transform.** IS4 #594's in-memory batching was ported first
+   (IS `242ce04f`, 122 → 24.6 µs/op), then the eligibility rules moved into
+   the Rust core so no catalog listing crosses the FFI boundary at all
+   (infrastore `e69a743`, IS `6a1e6105`): **11.5 µs/op**, 1.5× ahead of IS4.
+2. **Done — tuple-forecast payload gap** (IS `626bec64`); now 2.4–10× faster
    than IS4.
 3. **Done — per-series removal** (infrastore `9b34c32`, IS `167ead85`):
-   369 → 103 µs/op per-series, and 12.4 µs/op through the type-level bulk
+   369 → 88.4 µs/op per-series, and 12.4 µs/op through the type-level bulk
    call.
+4. **Done — NST disk footprint.** Interning and packing NST series by their
+   shared time axis (infrastore `67e2ece`) cut every NST payload's store by
+   26–44% (Float64: 284 → 158 MB). NST still costs 1.5× the equivalent
+   regular series (158 vs 106 MB) rather than the previous 2.1×; the residual
+   is the timestamp column itself, and further compression is optional rather
+   than a gap.
+5. **Done — shared-forecast bulk add**, which trailed IS4 at 28.1 vs 22.3
+   µs/op, is now **18.7 µs/op — 1.2× ahead**.
 
-Still open:
-
-4. NST stores are disk-heavy (297 MB vs 142 MB for the same volume of regular
-   series) — per-series timestamp storage is a compression candidate.
-5. Shared-forecast bulk add trails IS4 slightly (28.1 vs 22.3 µs/op).
+One measurement moved the wrong way between the two branch reruns and is
+noted for completeness: `to_json` went from 3.25 to 3.79 µs/op (+17%). It was
+not profiled; the likeliest cause is the two per-series fields added in the
+interval (`units` and `element_type`). It remains 10.5× faster than IS4, and
+the serialized footprint fell 16% over the same interval.
 
 ## Conclusion
 
 At production scale the InfraStore backend is faster on every ingest, read,
 query, and serialization path measured, by factors that grow with store size —
-culminating in a 119–212× advantage on the access pattern that dominates
+culminating in a 151–282× advantage on the access pattern that dominates
 simulation runtimes — while adding irregular-series support. Every gap the
-campaign discovered has since been closed (has_time_series, tuple-payload
-forecasts, removals) or narrowed to a bounded residual with a known fix
-(the transform, now within 1.4× of IS4's best). The two remaining items are
-minor and enumerated above.
+campaign discovered has since been closed: `has_time_series`, tuple-payload
+forecasts, per-series removal, the NST disk footprint, shared-forecast
+ingest, and finally `transform_single_time_series!`, the last operation on
+which IS4 held a lead. The branch is now ahead of IS4 on every operation in
+the matrix except `has_time_series` hits, where the two are at parity.

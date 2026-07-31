@@ -39,6 +39,7 @@ series per `TestComponent`, disk-backed stores (defaults for both branches).
 | `results_full_branch.csv` | this branch's 100k full-matrix run |
 | `results_full_branch_w2.csv` | this branch's 100k dst/shared/serialize/remove run |
 | `results_full_branch_has_postfix.csv` | this branch's 100k `has` rerun after the has_time_series optimization (supersedes the `has_ts` rows in `results_full_branch.csv`) |
+| `results_full_branch_w4.csv` | **current** branch numbers: 2026-07-31 single-process rerun of the whole matrix (108 rows, 0 failures). It covers every key the three CSVs above do and supersedes them; `make_full_report.jl` reads files in `readdir` order, so this one lands last and wins. The duplicate-row warnings it prints are those stale files — delete them if the noise is not wanted. |
 | `results_full_is4_{sts,det,misc,sweep}.csv` | IS4's 100k full-matrix run (split across four processes) |
 | `results_full_is4_w2.csv` | IS4's 100k dst/shared/serialize run (no `remove` rows: IS4's 100k removal loop was stopped after 50+ min without completing — per-op SQLite deletes + HDF5 open-object iteration; the branch's run took 36.9 s) |
 | `REPORT.md` | funder-facing summary of the 100k full-matrix comparison |
