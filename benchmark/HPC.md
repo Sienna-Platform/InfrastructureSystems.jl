@@ -39,12 +39,13 @@ Consequence: in `results_full_is4_hpc.csv` the sections that ran late —
 so their speedup ratios are upper bounds too. `sts`, `nst`, `det`, `prob` and
 `scen` ran early and are clean.
 
-**Amend step 5 on the next run:** give IS4 one process per `BENCH_KINDS`
+**Amended into step 5 below.** IS4 now gets one process per `BENCH_KINDS`
 section (`sts`, `nst`, `det`, `prob`, `scen`, `sweep`, `has`, `dst`, `shared`,
-`serialize`), run *sequentially* — one at a time, so the exclusive-node
-property is preserved and only the process-lifetime accumulation is reset. The
-branch does not need this but should get the same treatment for symmetry. This
-costs no extra node time; it only changes where the process boundaries fall.
+`serialize`), run *sequentially* — one at a time, so the exclusive-node property
+is preserved and only the process-lifetime accumulation is reset. The branch
+gets the same treatment, so neither side can be argued to have benefited from
+the process structure itself. Per-section CSVs are stitched back into the
+canonical one-file-per-run layout before the gate and the report run.
 
 ## Read this first: the three things that invalidate an HPC run
 
@@ -110,7 +111,7 @@ Also set Julia's thread counts explicitly. The benchmark is single-threaded,
 but Julia sizes its **GC** thread pool from the core count by default, so an
 HPC node with 128 cores behaves differently from the 14-core laptop these
 results were last measured on. Pinning both makes the run reproducible and
-independent of which node you land on. The script below sets them.
+independent of which node you land on. `SLURM.sh` sets them.
 
 ## Step 0 — prerequisites on the cluster
 
@@ -267,10 +268,25 @@ claims are ratios where a few percent of node difference lands straight in the
 number. One node removes that error class instead of arguing it away. It costs
 ~30 min, since IS4 dominates either way.
 
-**Split IS4 by section.** The 2026-07-31 run put IS4's whole matrix in one
-process and its late sections came out inflated (see *Status* above). Loop
-`BENCH_KINDS` one section per process instead — sequentially, so the node stays
-undisturbed. The script below is the as-run version and does not do this yet.
+**Split both sides by section.** The 2026-07-31 run put IS4's whole matrix in
+one process and its late sections came out inflated (see *Status* above). The
+`SLURM.sh` loops `BENCH_KINDS` one section per process, sequentially, so the
+node stays undisturbed — and does the same for the branch, which does not need
+it but should not differ structurally from the side it is compared against.
+
+Do **not** run the sections concurrently to save wall time. That is what the
+2026-07-30 laptop run did — four concurrent IS4 processes against a solo branch
+process — and it is why `README.md` disowns that run's ratios: IS4's reads
+degraded 5.35× under concurrent load where the branch's degraded 1.08×, so the
+contention lands almost entirely on the side already being measured as slower.
+
+Each section pays Julia startup and JIT warmup — 46 processes over the job (10
+IS4 sections, 33 branch, 3 IS4 `remove` points) — which is why the wall-clock
+request below goes to 12 h. The warmup is
+untimed (`run_all(40)` writes to `devnull`), so it costs wall time and nothing
+else. Peak tmpfs use *falls*, since `run_with_tmp` releases each section's
+stores at process exit instead of letting them accumulate across the whole
+matrix — the 20 GB preflight is now conservative rather than tight.
 
 **Run IS4 first, the branch second.** Whatever runs second inherits a
 thermally soaked CPU and a written-on local disk. With the branch second, that
@@ -282,155 +298,33 @@ skeptical reviewer will probe.
 and give run-to-run variance measured on the actual node. That turns "every
 number is a single sample" into a quantified error bar for at least one side.
 
-```bash
-#!/bin/bash
-#SBATCH --job-name=bench-ts
-#SBATCH --nodes=1 --exclusive
-#SBATCH --time=10:00:00
-#SBATCH --output=bench-ts-%j.log
-# No --constraint on the first run: take whatever node the scheduler gives and
-# record it (env.txt below). To make a later run comparable, pin it then with
-# the ActiveFeatures string this one recorded.
+The script is [`SLURM.sh`](SLURM.sh) in this directory — submit it directly
+rather than copying it out of this file, which is why it no longer appears
+inline here:
 
-module load julia/1.12.6
-set -euo pipefail
-
-# --- fill this in: the directory holding wt-is-rust, wt-is4-bench, infrastore
-SIENNA=/path/to/your/sienna
-
-BRANCH=$SIENNA/wt-is-rust          # IS branch under test
-IS4=$SIENNA/wt-is4-bench           # IS4 baseline (c63d9a281 + PR #594)
-CORE=$SIENNA/infrastore            # Rust storage engine
-
-export INFRASTORE_LIB=$CORE/target/release/libinfrastore_ffi.so
-export JULIA_NUM_THREADS=1
-export JULIA_NUM_GC_THREADS=4
-
-RESULTS=$SIENNA/bench-results/$SLURM_JOB_ID
-mkdir -p "$RESULTS"
-
-# Stores live in tmpfs (RAM). The benchmark passes its store directory to
-# SystemData explicitly, so SIENNA_TIME_SERIES_DIRECTORY is ignored — TMPDIR is
-# the lever, because build_system() gets its directory from mktempdir().
-NODE_SCRATCH=/dev/shm
-
-# Preflight: tmpfs runs out of space by OOM-ing or ENOSPC mid-run, hours in.
-# Fail now instead. ~15 GB of stores accumulate per run (they are only released
-# at process exit), so require headroom before starting.
-need_gb=20
-free_gb=$(df -BG --output=avail "$NODE_SCRATCH" | tail -1 | tr -dc '0-9')
-if [ "${free_gb:-0}" -lt "$need_gb" ]; then
-  echo "FATAL: $NODE_SCRATCH has ${free_gb}G free, need ${need_gb}G." >&2
-  echo "Either raise the tmpfs limit or point NODE_SCRATCH at node-local disk." >&2
-  exit 1
-fi
-echo "scratch: $NODE_SCRATCH (${free_gb}G free)"
-
-run_with_tmp() {                     # run_with_tmp <tag> <cmd...>
-  export TMPDIR=$NODE_SCRATCH/$SLURM_JOB_ID-$1
-  mkdir -p "$TMPDIR"
-  "${@:2}"
-  rm -rf "$TMPDIR"                   # tmpfs holds RAM until deleted
-}
-# Reclaim tmpfs even if the job is cancelled or dies mid-run.
-trap 'rm -rf ${NODE_SCRATCH:?}/${SLURM_JOB_ID:?}-*' EXIT
-
-cd "$BRANCH"                         # benchmark scripts live here for both sides
-
-{ hostname; lscpu | head -20; free -g | head -2; julia --version
-  echo "IS   $(git -C "$BRANCH" rev-parse --short HEAD)"
-  echo "IS4  $(git -C "$IS4" rev-parse --short HEAD)"
-  echo "core $(git -C "$CORE" rev-parse --short HEAD)"
-  # Node identity and its scheduler feature tags. ActiveFeatures is literally
-  # what you pass to --constraint to land on this node type again.
-  echo "node $SLURMD_NODENAME  partition $SLURM_JOB_PARTITION"
-  scontrol show node "$SLURMD_NODENAME" | tr ' ' '\n' | grep -i 'Features='
-  scontrol show node "$SLURMD_NODENAME" | tr ' ' '\n' | grep -iE '^(CPUTot|RealMemory|Gres)='
-} > "$RESULTS"/env.txt
-
-# --- IS4 baseline first (~4-5 h), `remove` excluded ---
-BENCH_N=100000 \
-BENCH_KINDS=sts,nst,det,prob,scen,sweep,has,dst,shared,serialize \
-  run_with_tmp is4 julia --project="$IS4" \
-  benchmark/bench_full_is4.jl > "$RESULTS"/results_full_is4_hpc.csv
-
-for n in 2000 5000 10000; do
-  BENCH_N=$n BENCH_KINDS=remove \
-    run_with_tmp is4rm$n julia --project="$IS4" \
-    benchmark/bench_full_is4.jl > "$RESULTS"/results_full_is4_remove_$n.csv
-done
-
-# --- branch second (~30 min each), repeated for a variance estimate ---
-for rep in 1 2 3; do
-  BENCH_N=100000 BENCH_LABEL=infrastore \
-    run_with_tmp br$rep julia --project=test \
-    benchmark/bench_full_branch.jl > "$RESULTS"/results_full_branch_hpc_r$rep.csv
-done
-
-# ------------------------- post-processing -------------------------
-# Everything below is cheap and runs inside the allocation, so a failed run is
-# diagnosed here rather than after the node is released.
-
-# 1. Integrity gate. A truncated or error-laden CSV still looks like data, so
-#    check before anything downstream consumes it.
-fail=0
-for f in "$RESULTS"/results_full_*.csv; do
-  tail -1 "$f" | grep -q '^DONE ' || { echo "INCOMPLETE: $f"; fail=1; }
-  if awk -F, '$9 ~ /^error:/' "$f" | grep -q .; then
-    echo "ERROR ROWS in $f:"; awk -F, '$9 ~ /^error:/' "$f"; fail=1
-  fi
-done
-
-# IS4 legitimately reports exactly 5 unsupported rows (NonSequentialTimeSeries,
-# a type it does not have). Any other count means something else broke.
-nst=$(awk -F, '$9=="not_supported_on_branch"' \
-  "$RESULTS"/results_full_is4_hpc.csv | wc -l)
-[ "$nst" -eq 5 ] || { echo "UNEXPECTED: $nst nst-gap rows on is4 (want 5)"; fail=1; }
-
-[ "$fail" -eq 0 ] && echo "integrity: OK" \
-                  || echo "integrity: FAILURES ABOVE - do not publish these"
-
-# 2. Run-to-run variance across the three branch passes. This is the error bar;
-#    without it every number in the report is a single sample.
-awk -F, '
-  $1!="branch" && $9=="ok" && $4!="maxrss" && $4!="store_disk_bytes" {
-    k=$2"/"$3"/"$4; v=$7+0
-    if (!(k in lo) || v<lo[k]) lo[k]=v
-    if (!(k in hi) || v>hi[k]) hi[k]=v
-    s[k]+=v; c[k]++
-  }
-  END {
-    print "op,passes,mean_us,spread_pct"
-    for (k in c) {
-      m=s[k]/c[k]; sp=(m>0)?100*(hi[k]-lo[k])/m:0
-      printf "%s,%d,%.2f,%.1f\n", k, c[k], m, sp
-      tot+=sp; n++; if (sp>wv) { wv=sp; wk=k }
-    }
-    printf "# mean spread %.1f%% over %d ops; worst %s %.1f%%\n", tot/n, n, wk, wv
-  }' "$RESULTS"/results_full_branch_hpc_r*.csv > "$RESULTS"/branch_variance.csv
-tail -1 "$RESULTS"/branch_variance.csv
-
-# 3. Comparison table. Stage only this run's CSVs: make_full_report.jl globs
-#    every results_full_*.csv in the directory it is given, so pointing it at
-#    benchmark/ would silently mix in the laptop-era files.
-STAGE="$RESULTS"/report-input
-mkdir -p "$STAGE"
-cp "$RESULTS"/results_full_branch_hpc_r1.csv \
-   "$RESULTS"/results_full_is4_hpc.csv "$STAGE"/
-julia "$BRANCH"/benchmark/make_full_report.jl "$STAGE" > "$RESULTS"/comparison.md
-
-# 4. One archive to copy back.
-tar -czf "$RESULTS".tar.gz -C "$RESULTS" .
-echo "results: $RESULTS.tar.gz"
-
-# 5. Fail the job if the gate tripped, so sacct/emails show FAILED rather than
-#    COMPLETED. The artifacts above are still written either way.
-[ "$fail" -eq 0 ] || { echo "integrity gate failed - see log above"; exit 1; }
+```sh
+sbatch benchmark/SLURM.sh
 ```
 
-The job leaves you `hpc-<jobid>/` containing the raw CSVs, `comparison.md`
-(the branch-vs-IS4 table), `branch_variance.csv` (the error bar),
-`env-<jobid>.txt` (provenance), and a tarball of all of it.
+Three things to edit before submitting, all at the top of the file:
+
+| line | what |
+|---|---|
+| `SIENNA=` | the directory holding `wt-is-rust`, `wt-is4-bench`, `infrastore` (the script refuses to start until this changes) |
+| `--mail-user=` | your address, for BEGIN/END/FAIL notification |
+| `--constraint=` | absent by default; add it on a *re*run, using the `ActiveFeatures` string the first run recorded (step 6) |
+
+A FAIL mail is not only "the job crashed" — the integrity gate at the bottom
+exits non-zero when the data is bad, so it also means "do not publish these".
+
+The job leaves you `hpc-<jobid>/` containing the stitched CSVs, `sections/`
+(the per-section raw output they were built from), `comparison.md` (the
+branch-vs-IS4 table), `branch_variance.csv` (the error bar), `env-<jobid>.txt`
+(provenance), and a tarball of all of it.
+
+Keep `sections/`. It is what lets a later reader confirm which process each
+number came from — the thing the 2026-07-31 run could not answer about itself,
+and the reason the process-lifetime drift took a whole campaign to notice.
 
 Only pass `r1` to the report generator. It keys rows by
 `(branch, kind, eltype, op)`, so handing it all three branch passes would make
@@ -447,9 +341,11 @@ quadratic claim demonstrated rather than argued.
 
 Wall-time estimates come from the original campaign's per-op costs (~229 min
 of timed operations for the IS4 matrix, ~9 min per branch pass), plus JIT
-warmup and the untimed setup adds. The 10 h request is padded roughly 1.5×; a
-job killed at the wall clock loses everything, since results only land as the
-run proceeds.
+warmup and the untimed setup adds. The per-section split multiplies that warmup
+by the number of processes — 10 for IS4, 33 across the three branch passes (the
+branch also measures `remove` at full N, which IS4 cannot) — so the request goes
+to 12 h, padded roughly 1.5×. A job killed at the wall clock loses everything,
+since results only land as the run proceeds.
 
 ## Step 6 — record the environment
 
@@ -505,7 +401,9 @@ Not fixed by moving to HPC:
 - **Process-lifetime accumulation on IS4.** Discovered by the 2026-07-31 run
   and not a property of the machine: IS4's per-op cost grows over the life of
   a process, so a single-process matrix inflates whatever runs last. The fix
-  is process boundaries (one per `BENCH_KINDS` section), not a bigger node.
+  is process boundaries (one per `BENCH_KINDS` section), not a bigger node —
+  applied in `SLURM.sh`, but it bounds drift *within* a section rather than
+  eliminating it, since `sts` still runs five element types back to back.
 - **Single run per configuration.** Every number remains one sample. If a
   reviewer asks for error bars, the fix is repeats (`for rep in 1 2 3`, adding
   a rep column), not a bigger machine. Cheap for the branch, expensive for
