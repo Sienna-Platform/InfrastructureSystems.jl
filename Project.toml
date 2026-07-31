@@ -33,10 +33,10 @@ YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 # one needing to know where it lives. The path is relative to this file. Drop
 # this section once InfraStore is registered.
 [sources]
-InfraStore = {path = "../../infrastore/julia/InfraStore.jl"}
+InfraStore = {path = "../infrastore/julia/InfraStore.jl"}
 
 [compat]
-InfraStore = "0.3"
+InfraStore = "^0.4"
 DataFrames = "^1.7"
 DataStructures = "^0.18, ^0.19"
 Dates = "1"

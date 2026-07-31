@@ -2,8 +2,14 @@
 
 Comparison of `add_time_series!` / `get_time_series` between
 `feat/rust-time-series-store` (InfraStore backend) and the `IS4` branch
-(HDF5 + SQLite backend), measured 2026-07-25 on macOS (Julia 1.12.6).
+(HDF5 + SQLite backend).
 
+**Current results: the 2026-07-31 HPC run — see `REPORT.md` (summary),
+`comparison.md` (full table), `HPC.md` (methodology).** This README is the
+running lab notebook; the dated sections below record how the branch got there
+and are kept for the reasoning, not as current numbers.
+
+The first sections describe the 2026-07-25 macOS run (Julia 1.12.6).
 Workload: `SingleTimeSeries`, 24 steps, `Float64`, `Hour(1)` resolution, one
 series per `TestComponent`, disk-backed stores (defaults for both branches).
 
@@ -19,29 +25,58 @@ series per `TestComponent`, disk-backed stores (defaults for both branches).
 | `bench_branch.jl` | entry point for this branch (`julia --project=test`, needs `INFRASTORE_LIB`) |
 | `bench_is4.jl` | entry point for IS4 (needs an env with IS4 dev'd + TimeSeries) |
 | `bench_branch_scaling.jl` | chunked marginal-cost sweep for this branch (per-1000-op timing) |
-| `results_is4.csv` | IS4 full 100k-series run |
-| `results_scaling.csv` | this branch's 20k marginal-cost sweep (pre-fix, per-add path) |
 | `bench_bulk.jl` | post-fix benchmark: batched adds via `time_series_transaction` (AddBatch path) + reads |
-| `results_bulk_postfix.csv` | this branch's 100k run after the AddBatch/read-path fixes |
 | `bench_costs_common.jl` | shared driver for FunctionData (cost) payloads: STS + Deterministic, add/read |
 | `bench_costs_branch.jl` | cost-payload entry point for this branch (adds via `time_series_transaction`) |
 | `bench_costs_is4.jl` | cost-payload entry point for IS4 (adds via `begin_time_series_update`) |
-| `results_costs_branch.csv` | this branch's 10k cost-payload run (netcdf backend) |
-| `results_costs_is4.csv` | IS4's 10k cost-payload run |
-| `results_costs_hdf5.csv` | this branch's 10k cost-payload run, `INFRASTORE_BACKEND=hdf5` spike |
-| `results_bulk_hdf5.csv` | this branch's 100k float run, `INFRASTORE_BACKEND=hdf5` spike |
-| `results_scaling_hdf5.csv` | per-add (un-managed path) 20k sweep on the hdf5 backend |
-| `results_costs_postfix.csv` | 10k cost-payload run after netcdf removal + read fixes |
-| `results_costs_nbytes.csv` | 10k cost-payload run after the staged-add byte-accounting fix |
 | `bench_full_common.jl` | full-matrix driver: every TS type × eltype, add/read/slice, reader/cache sweeps, has_time_series (see below) |
 | `bench_full_branch.jl` | full-matrix entry point for this branch |
 | `bench_full_is4.jl` | full-matrix entry point for IS4 |
-| `results_full_branch.csv` | this branch's 100k full-matrix run |
-| `results_full_branch_w2.csv` | this branch's 100k dst/shared/serialize/remove run |
-| `results_full_branch_has_postfix.csv` | this branch's 100k `has` rerun after the has_time_series optimization (supersedes the `has_ts` rows in `results_full_branch.csv`) |
-| `results_full_is4_{sts,det,misc,sweep}.csv` | IS4's 100k full-matrix run (split across four processes) |
-| `results_full_is4_w2.csv` | IS4's 100k dst/shared/serialize run (no `remove` rows: IS4's 100k removal loop was stopped after 50+ min without completing — per-op SQLite deletes + HDF5 open-object iteration; the branch's run took 36.9 s) |
+| `make_full_report.jl` | merges the `results_full_*.csv` in a directory into the markdown comparison tables |
+| `HPC.md` | how to run the full matrix on a cluster; the job script that produced the current results |
+
+### Current results — 2026-07-31 HPC run (SLURM job 15438463)
+
+The published numbers. Both engines on one exclusive node, back-to-back as
+single undisturbed processes; branch repeated three times for an error bar.
+
+| file | purpose |
+|---|---|
 | `REPORT.md` | funder-facing summary of the 100k full-matrix comparison |
+| `comparison.md` | generated branch-vs-IS4 table (from `report-input/`) |
+| `results_full_is4_hpc.csv` | IS4's 100k full matrix, one process, `remove` excluded |
+| `results_full_branch_hpc_r{1,2,3}.csv` | three branch passes of the same matrix; `r1` feeds the tables, all three feed the variance |
+| `results_full_is4_remove_{2000,5000,10000}.csv` | IS4 removal growth curve — 100k does not finish, so `REPORT.md` extrapolates from these three points |
+| `branch_variance.csv` | run-to-run spread across the three branch passes (mean 3.0%, worst `reload_read_one` 24.7%) |
+| `env.txt` | node, CPU, RAM, Julia version, the three commit SHAs, scheduler feature tags |
+| `report-input/` | just `r1` + the IS4 matrix, staged for `make_full_report.jl` (it globs, so mixing runs collides on keys) |
+| `15438463.tar.gz` | the job's own archive of all of the above |
+| `is4-baseline-pr594.patch` | the IS4 `c63d9a281` + PR #594 conflict resolution, as a patch |
+
+Regenerate the comparison table with:
+
+```sh
+julia benchmark/make_full_report.jl report-input
+```
+
+Pass `report-input`, not `benchmark/` — `make_full_report.jl` globs every
+`results_full_*.csv` in the directory it is given and keys rows by
+`(branch, kind, eltype, op)`, so the three branch passes would collide and
+`readdir` order would pick the winner.
+
+### Superseded results
+
+The laptop-era CSVs — `results_is4.csv`, `results_scaling{,_hdf5}.csv`,
+`results_bulk_{postfix,hdf5}.csv`, `results_costs_*.csv`,
+`results_full_branch{,_w2,_w3,_has_postfix}.csv`,
+`results_full_is4_{sts,det,misc,sweep,w2}.csv` — were deleted on 2026-07-31,
+once the HPC run replaced them and their presence would have poisoned the
+report generator. They remain in git history (`git show
+HEAD:benchmark/<file>`), and the narrative sections below still cite them.
+
+`comparison_local_2026-07-30.md` is kept as a shape check only: it compares a
+single-process branch run against a four-process IS4 run on the same laptop,
+which inflates the branch's read advantage. Do not quote its ratios.
 
 ## Full-matrix suite (`bench_full_*.jl`)
 
@@ -87,16 +122,25 @@ BENCH_N=100000 julia --project=<is4-env> benchmark/bench_full_is4.jl
 ```
 
 The is4 env is a scratch project with the IS4 branch dev'd plus TimeSeries and
-DataStructures (2026-07-29 run: worktree `~/repos/sienna/is4-bench`, env
-`~/repos/sienna/is4-bench-env`).
+DataStructures. For the cluster layout, environment setup and job script, see
+`HPC.md`.
 
 Baseline note: the IS4 branch predates PR #594 (`transform_single_time_series!`
 speedup, merged to `main` only), and without it the 100k `dst` transform did
-not complete in an hour (O(N²) SQLite scans). The wave-2 run
-(`results_full_is4_w2.csv`) therefore uses IS4 + a cherry-pick of #594
-(`is4-bench` @ `f55c812dd`) so IS4 is measured with its best transform. #594
-does not touch the paths measured in wave 1 (its metadata-store diff is a
-cosmetic constant extraction).
+not complete in an hour (O(N²) SQLite scans). Every IS4 run that includes `dst`
+therefore uses IS4 `c63d9a281` + a cherry-pick of #594's merge commit
+`030ee942` (`is4-baseline-pr594.patch` here is that resolution; the HPC run
+used it as `320a5035`), so IS4 is measured with its best transform. #594 does
+not touch any other measured path — its metadata-store diff is a cosmetic
+constant extraction.
+
+Splitting the matrix across processes with `BENCH_KINDS` is not just a
+wall-clock convenience for IS4: IS4's per-op cost degrades over the life of a
+process, so sections that run late in a single-process run are inflated. The
+2026-07-31 HPC run measured 1,678 µs for a 100k Float64 STS full read in the
+first section and 7,209 µs for the same work in the `shared` section at the
+end; the branch was flat across the same span. Prefer one process per section
+for IS4.
 
 Run:
 

@@ -1,0 +1,3 @@
+branch,kind,eltype,op,n,total_s,us_per_op,bytes,status
+is4,remove,float64,remove_all,5000,35.480,7095.944,18288126336,ok
+DONE is4 full
