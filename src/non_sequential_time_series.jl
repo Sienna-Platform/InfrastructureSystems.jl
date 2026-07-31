@@ -3,6 +3,7 @@
         name::String
         timestamps::Vector{Dates.DateTime}
         data::Array{T, N}
+        units::Union{Nothing, String}
     end
 
 A single column of static time series data recorded at explicit, irregular
@@ -26,6 +27,9 @@ scalar-per-step case, `N >= 2` is multidimensional per-step values).
   - `name::String`: user-defined name
   - `timestamps::Vector{Dates.DateTime}`: strictly-increasing timestamps, one per value
   - `data::Array{T, N}`: value array (dimension 1 is time)
+  - `units::Union{Nothing, String}`: optional user-declared units label for the values
+    (e.g. `"MW"`). Set at construction and returned on read; IS neither interprets nor
+    validates it, and it is never part of the time series' identity.
 """
 struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
     "user-defined name"
@@ -34,6 +38,8 @@ struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
     timestamps::Vector{Dates.DateTime}
     "value array; dimension 1 is time (`N == 1` scalar-per-step, `N >= 2` multidimensional per-step)."
     data::Array{T, N}
+    "user-declared units label for the values (e.g. `\"MW\"`), or `nothing`"
+    units::Union{Nothing, String}
 
     # An explicit inner constructor (validating the timestamp/value count) suppresses
     # Julia's auto-generated default constructor, so every construction path funnels
@@ -42,13 +48,14 @@ struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
         name,
         timestamps::Vector{Dates.DateTime},
         data::Array{T, N},
+        units::Union{Nothing, AbstractString} = nothing,
     ) where {T, N}
         length(timestamps) == size(data, 1) || throw(
             ConflictingInputsError(
                 "timestamp count $(length(timestamps)) must match data length $(size(data, 1))",
             ),
         )
-        return new{T, N}(String(name), timestamps, data)
+        return new{T, N}(String(name), timestamps, data, _maybe_units(units))
     end
 end
 
@@ -58,7 +65,8 @@ end
 function NonSequentialTimeSeries(
     name,
     timestamps::AbstractVector,
-    data::AbstractArray,
+    data::AbstractArray;
+    units::Union{Nothing, AbstractString} = nothing,
 )
     arr = data isa Array ? data : Array(data)
     stamps = if timestamps isa Vector{Dates.DateTime}
@@ -66,20 +74,24 @@ function NonSequentialTimeSeries(
     else
         collect(Dates.DateTime, timestamps)
     end
-    return NonSequentialTimeSeries{eltype(arr), ndims(arr)}(String(name), stamps, arr)
+    return NonSequentialTimeSeries{eltype(arr), ndims(arr)}(
+        String(name), stamps, arr, units,
+    )
 end
 
 function NonSequentialTimeSeries(;
     name,
     data,
     normalization_factor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     if data isa TimeSeries.TimeArray
         norm = handle_normalization_factor(data, normalization_factor)
         return NonSequentialTimeSeries(
             name,
             collect(TimeSeries.timestamp(norm)),
-            TimeSeries.values(norm),
+            TimeSeries.values(norm);
+            units = units,
         )
     else
         throw(
@@ -106,7 +118,8 @@ function NonSequentialTimeSeries(
     src::NonSequentialTimeSeries,
     name::AbstractString,
 )
-    return NonSequentialTimeSeries(name, src.timestamps, src.data)
+    # `units` is carried over: it describes the values, and the values are shared.
+    return NonSequentialTimeSeries(name, src.timestamps, src.data; units = src.units)
 end
 
 """
@@ -127,6 +140,7 @@ function NonSequentialTimeSeries(
     data::Union{TimeSeries.TimeArray, DataFrames.DataFrame};
     normalization_factor::NormalizationFactor = 1.0,
     timestamp::Symbol = :timestamp,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     if data isa DataFrames.DataFrame
         ta = TimeSeries.TimeArray(data; timestamp = timestamp)
@@ -146,6 +160,7 @@ function NonSequentialTimeSeries(
         name = name,
         data = ta,
         normalization_factor = normalization_factor,
+        units = units,
     )
 end
 
@@ -156,10 +171,12 @@ function NonSequentialTimeSeries(
     time_series::NonSequentialTimeSeries,
     data::TimeSeries.TimeArray,
 )
+    # A subset of the same values keeps the same units label.
     return NonSequentialTimeSeries(
         get_name(time_series),
         collect(TimeSeries.timestamp(data)),
-        TimeSeries.values(data),
+        TimeSeries.values(data);
+        units = get_units(time_series),
     )
 end
 

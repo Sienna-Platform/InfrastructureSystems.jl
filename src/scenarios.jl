@@ -5,6 +5,7 @@
         interval::Dates.Period
         scenario_count::Int
         data::SortedDict
+        units::Union{Nothing, String}
         internal::InfrastructureSystemsInternal
     end
 
@@ -17,6 +18,9 @@ A Discrete Scenario Based time series for a particular data field in a Component
   - `interval::Dates.Period`: forecast interval
   - `scenario_count::Int`: Number of scenarios
   - `data::SortedDict`: timestamp - scalingfactor
+  - `units::Union{Nothing, String}`: optional user-declared units label for the values
+    (e.g. `"MW"`). Set at construction and returned on read; IS neither interprets nor
+    validates it, and it is never part of the time series' identity.
   - `internal::InfrastructureSystemsInternal`
 """
 struct Scenarios{T, N} <: Forecast{T}
@@ -30,6 +34,8 @@ struct Scenarios{T, N} <: Forecast{T}
     resolution::Dates.Period
     "forecast interval"
     interval::Dates.Period
+    "user-declared units label for the values (e.g. `\"MW\"`), or `nothing`"
+    units::Union{Nothing, String}
 end
 
 # Infer `{T, N}` — element type and per-window array rank — from the data.
@@ -38,7 +44,8 @@ function Scenarios(
     data::AbstractDict{Dates.DateTime},
     scenario_count::Int,
     resolution::Dates.Period,
-    interval::Dates.Period,
+    interval::Dates.Period;
+    units::Union{Nothing, AbstractString} = nothing,
 )
     sorted = data isa SortedDict ? data : SortedDict(data...)
     return Scenarios{_window_eltype(sorted), _window_ndims(sorted)}(
@@ -47,6 +54,7 @@ function Scenarios(
         scenario_count,
         resolution,
         interval,
+        _maybe_units(units),
     )
 end
 
@@ -57,6 +65,7 @@ function Scenarios(;
     resolution::Dates.Period,
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     data = handle_normalization_factor(data, normalization_factor)
 
@@ -69,7 +78,8 @@ function Scenarios(;
         data,
         scenario_count,
         resolution,
-        interval,
+        interval;
+        units = units,
     )
 end
 
@@ -93,6 +103,7 @@ function Scenarios(
     resolution::Dates.Period;
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     return Scenarios(;
         name = name,
@@ -101,6 +112,7 @@ function Scenarios(
         resolution = resolution,
         interval = interval,
         normalization_factor = normalization_factor,
+        units = units,
     )
 end
 
@@ -110,6 +122,7 @@ function Scenarios(
     resolution::Dates.Period;
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     return Scenarios(
         name,
@@ -117,6 +130,7 @@ function Scenarios(
         resolution;
         interval = interval,
         normalization_factor = normalization_factor,
+        units = units,
     )
 end
 
@@ -144,6 +158,7 @@ function Scenarios(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     data, res = convert_forecast_input_time_arrays(input_data; resolution = resolution)
     return Scenarios(;
@@ -153,6 +168,7 @@ function Scenarios(
         interval = interval,
         scenario_count = size(first(values(input_data)))[2],
         normalization_factor = normalization_factor,
+        units = units,
     )
 end
 
@@ -166,13 +182,15 @@ function Scenarios(
     src::Scenarios,
     name::AbstractString,
 )
-    # units and ext are not copied. No shared UUID under the key-centric model.
+    # `units` is carried over: it describes the values, and the values are shared.
+    # No shared UUID under the key-centric model.
     return Scenarios(
         name,
         src.data,
         src.scenario_count,
         src.resolution,
-        src.interval,
+        src.interval;
+        units = src.units,
     )
 end
 

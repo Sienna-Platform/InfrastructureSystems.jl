@@ -4,6 +4,7 @@
         initial_timestamp::Dates.DateTime
         resolution::Dates.Period
         data::Array{T, N}
+        units::Union{Nothing, String}
     end
 
 A single column of time series data for a particular data field in a Component.
@@ -27,6 +28,9 @@ scalar-per-step case, `N >= 2` is multidimensional per-step values).
   - `initial_timestamp::Dates.DateTime`: timestamp of the first value
   - `resolution::Dates.Period`: Time duration between steps in the time series. The resolution must be the same throughout the time series
   - `data::Array{T, N}`: value array (dimension 1 is time)
+  - `units::Union{Nothing, String}`: optional user-declared units label for the values
+    (e.g. `"MW"`). Set at construction and returned on read; IS neither interprets nor
+    validates it, and it is never part of the time series' identity.
 """
 struct SingleTimeSeries{T, N} <: StaticTimeSeries{T}
     "user-defined name"
@@ -37,6 +41,8 @@ struct SingleTimeSeries{T, N} <: StaticTimeSeries{T}
     resolution::Dates.Period
     "value array; dimension 1 is time (`N == 1` scalar-per-step, `N >= 2` multidimensional per-step)."
     data::Array{T, N}
+    "user-declared units label for the values (e.g. `\"MW\"`), or `nothing`"
+    units::Union{Nothing, String}
 end
 
 # Derive the regular timestamp range from the stored metadata.
@@ -70,7 +76,8 @@ function SingleTimeSeries(
     name,
     initial_timestamp::Dates.DateTime,
     resolution::Dates.Period,
-    data::AbstractArray,
+    data::AbstractArray;
+    units::Union{Nothing, AbstractString} = nothing,
 )
     arr = data isa Array ? data : Array(data)
     return SingleTimeSeries{eltype(arr), ndims(arr)}(
@@ -78,6 +85,7 @@ function SingleTimeSeries(
         initial_timestamp,
         resolution,
         arr,
+        _maybe_units(units),
     )
 end
 
@@ -87,6 +95,7 @@ function SingleTimeSeries(;
     initial_timestamp::Union{Nothing, Dates.DateTime} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     normalization_factor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     if data isa TimeSeries.TimeArray
         if isnothing(resolution)
@@ -100,7 +109,8 @@ function SingleTimeSeries(;
             name,
             TimeSeries.timestamp(data)[1],
             resolution,
-            TimeSeries.values(data),
+            TimeSeries.values(data);
+            units = units,
         )
     else
         # Plain-array form (e.g. deserialization, internal reconstruction):
@@ -111,7 +121,7 @@ function SingleTimeSeries(;
         isnothing(resolution) &&
             throw(ArgumentError("resolution is required when data is not a TimeArray"))
         arr = handle_normalization_factor(collect(data), normalization_factor)
-        return SingleTimeSeries(name, initial_timestamp, resolution, arr)
+        return SingleTimeSeries(name, initial_timestamp, resolution, arr; units = units)
     end
 end
 
@@ -135,11 +145,13 @@ function SingleTimeSeries(
     src::SingleTimeSeries,
     name::AbstractString,
 )
+    # `units` is carried over: it describes the values, and the values are shared.
     return SingleTimeSeries(
         name,
         src.initial_timestamp,
         src.resolution,
-        src.data,
+        src.data;
+        units = src.units,
     )
 end
 
@@ -165,6 +177,7 @@ function SingleTimeSeries(
     normalization_factor::NormalizationFactor = 1.0,
     timestamp::Symbol = :timestamp,
     resolution::Union{Nothing, Dates.Period} = nothing,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     if data isa DataFrames.DataFrame
         ta = TimeSeries.TimeArray(data; timestamp = timestamp)
@@ -185,6 +198,7 @@ function SingleTimeSeries(
         data = ta,
         resolution = resolution,
         normalization_factor = normalization_factor,
+        units = units,
     )
 end
 
@@ -196,9 +210,12 @@ function SingleTimeSeries(
     name::String,
     resolution::Dates.Period,
     initial_time::Dates.DateTime,
-    time_steps::Int,
+    time_steps::Int;
+    units::Union{Nothing, AbstractString} = nothing,
 )
-    return SingleTimeSeries(name, initial_time, resolution, ones(time_steps))
+    return SingleTimeSeries(
+        name, initial_time, resolution, ones(time_steps); units = units,
+    )
 end
 
 function SingleTimeSeries(time_series::AbstractVector{<:SingleTimeSeries})
@@ -211,6 +228,7 @@ function SingleTimeSeries(time_series::AbstractVector{<:SingleTimeSeries})
     time_series = SingleTimeSeries(;
         name = get_name(time_series[1]),
         data = ta,
+        units = get_units(time_series[1]),
     )
     @debug "concatenated time_series" LOG_GROUP_TIME_SERIES time_series
     return time_series

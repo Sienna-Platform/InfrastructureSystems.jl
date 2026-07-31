@@ -227,6 +227,45 @@ fields or an instance `add_time_series!` path.
 `N` is the array rank — per-window for forecasts, per-series for static — and is
 deliberately NOT lifted to the abstract parents, since its meaning varies by subtype.
 
+Every concrete type carries a `units::Union{Nothing, String}` field — a **user-declared**
+label (`"MW"`), read with `get_units`, defaulting to `nothing`. It is distinct from
+`element_type` (package-derived; a user never sets it) and from features (identity):
+
+- set at construction, **immutable** — do not add a setter;
+- **never** filterable: not on `TimeSeriesKey`, not a `get_time_series*` argument. Two
+  series differing only in their label are a duplicate, and `units` is in the store's
+  `RESERVED_FEATURE_NAMES` so it cannot be smuggled in as a feature;
+- carried over by every data-sharing constructor (`X(src, name)`, subset forms) and by a
+  derived `DeterministicSingleTimeSeries`;
+- IS neither interprets nor validates it — no units vocabulary in IS. `nothing` is left
+  alone; "unknown" vs "dimensionless" is the caller's convention.
+
+Not to be confused with the `RelativeUnits` system markers (`SU`/`DU`/`NU`) — a per-unit
+normalization base, not a physical dimension. Note the accessor-side `units::AbstractUnitSystem`
+kwarg documented under "Time series accessors" is **not present on this branch**
+(`default_units` in `src/units.jl` has no callers here); when that line merges, the two
+`units` spellings will collide by name and the accessor kwarg should be renamed, not this
+field. The store column already existed, so no `DATA_FORMAT_VERSION` bump.
+
+The same move was made in the Rust core: `units`, `ext`, and `element_type` are now fields
+on the five `TimeSeriesData` variants and are **gone from `AddRequest`** — one shape across
+IS.jl / InfraStore.jl / infrastore. Set them with the `with_units` / `with_ext` /
+`with_element_type` builders on the series (or `set_descriptors` on the enum); the write
+path reads them off the data, and `materialize_time_series` fills them back in from the
+catalog row on every read. `Store::add_time_series` and `BulkAdd::add` lost their trailing
+`units` parameter accordingly.
+
+Bulk and per-key reads agree: `Store::bulk_read` populates the three from the catalog row
+it already loads, the bulk-result FFI getters return them (`out_ext` / `out_element_type` /
+`out_units`, all nullable), and `InfraStore.jl`'s `_bulk_*` decoders put them on the
+reconstructed struct. The long-standing `ext`-drops-on-bulk-read gap is closed as part of
+this; there is a parity test in InfraStore.jl's suite — don't reintroduce a read path that
+skips them.
+
+**infrasys (Python) is deliberately not done**: its `units` column already holds a
+serialized `QuantityMetadata` blob derived from `pint.Quantity`; see
+`infrasys/UNITS_FIELD_NOTE.md`.
+
 `Base.eltype(::TimeSeriesData{T}) = T` is the only accessor.
 Prefer a signature constraint over a runtime check:
 

@@ -1,0 +1,178 @@
+@testset "Test units label round-trips for every time series type" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    other_time = initial_time + resolution
+    horizon_count = 24
+
+    # SingleTimeSeries: declared at construction, returned on read.
+    sts = IS.SingleTimeSeries("sts", initial_time, resolution, rand(24); units = "MW")
+    @test IS.get_units(sts) == "MW"
+    IS.add_time_series!(sys, component, sts)
+    @test IS.get_units(IS.get_time_series(IS.SingleTimeSeries, component, "sts")) == "MW"
+
+    # A sliced read describes the same values, so it keeps the label.
+    sliced = IS.get_time_series(
+        IS.SingleTimeSeries,
+        component,
+        "sts";
+        start_time = initial_time + Dates.Hour(2),
+        len = 4,
+    )
+    @test IS.get_units(sliced) == "MW"
+
+    # NonSequentialTimeSeries.
+    stamps = [initial_time, initial_time + Dates.Hour(1), initial_time + Dates.Hour(4)]
+    nts = IS.NonSequentialTimeSeries("nts", stamps, rand(3); units = "MWh")
+    @test IS.get_units(nts) == "MWh"
+    IS.add_time_series!(sys, component, nts)
+    @test IS.get_units(
+        IS.get_time_series(IS.NonSequentialTimeSeries, component, "nts"),
+    ) == "MWh"
+
+    # Deterministic.
+    one_dim = SortedDict(
+        initial_time => rand(horizon_count),
+        other_time => rand(horizon_count),
+    )
+    det = IS.Deterministic("det", one_dim, resolution; units = "MW")
+    @test IS.get_units(det) == "MW"
+    IS.add_time_series!(sys, component, det)
+    @test IS.get_units(IS.get_time_series(IS.Deterministic, component, "det")) == "MW"
+
+    # Probabilistic.
+    two_dim = SortedDict(
+        initial_time => rand(horizon_count, 3),
+        other_time => rand(horizon_count, 3),
+    )
+    prob = IS.Probabilistic("prob", two_dim, [0.1, 0.5, 0.9], resolution; units = "MW")
+    @test IS.get_units(prob) == "MW"
+    IS.add_time_series!(sys, component, prob)
+    @test IS.get_units(IS.get_time_series(IS.Probabilistic, component, "prob")) == "MW"
+
+    # Scenarios.
+    scen = IS.Scenarios("scen", two_dim, resolution; units = "MW")
+    @test IS.get_units(scen) == "MW"
+    IS.add_time_series!(sys, component, scen)
+    @test IS.get_units(IS.get_time_series(IS.Scenarios, component, "scen")) == "MW"
+end
+
+@testset "Test units defaults to nothing and is never inferred" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+
+    # Omitting the label leaves `nothing` end to end. IS does not fill it in or
+    # guess: `nothing` may mean "unknown" or "dimensionless", and which one is
+    # the caller's convention to establish.
+    ts = IS.SingleTimeSeries("unitless", initial_time, resolution, rand(24))
+    @test IS.get_units(ts) === nothing
+    IS.add_time_series!(sys, component, ts)
+    stored = IS.get_time_series(IS.SingleTimeSeries, component, "unitless")
+    @test IS.get_units(stored) === nothing
+
+    # There is deliberately no setter: the label is immutable after construction.
+    @test !isdefined(IS, :set_units!)
+end
+
+@testset "Test units is carried by data-sharing constructors" begin
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    other_time = initial_time + resolution
+    horizon_count = 24
+
+    # A constructor that shares another instance's data shares its label too --
+    # the label describes the values, and the values are the same values.
+    sts = IS.SingleTimeSeries("sts", initial_time, resolution, rand(24); units = "MW")
+    @test IS.get_units(IS.SingleTimeSeries(sts, "other_name")) == "MW"
+
+    stamps = [initial_time, initial_time + Dates.Hour(1), initial_time + Dates.Hour(4)]
+    nts = IS.NonSequentialTimeSeries("nts", stamps, rand(3); units = "MWh")
+    @test IS.get_units(IS.NonSequentialTimeSeries(nts, "other_name")) == "MWh"
+
+    one_dim = SortedDict(
+        initial_time => rand(horizon_count),
+        other_time => rand(horizon_count),
+    )
+    det = IS.Deterministic("det", one_dim, resolution; units = "MW")
+    @test IS.get_units(IS.Deterministic(det, "other_name")) == "MW"
+    # ...including the "existing instance plus a subset of data" form.
+    @test IS.get_units(IS.Deterministic(det, one_dim)) == "MW"
+
+    two_dim = SortedDict(
+        initial_time => rand(horizon_count, 3),
+        other_time => rand(horizon_count, 3),
+    )
+    prob = IS.Probabilistic("prob", two_dim, [0.1, 0.5, 0.9], resolution; units = "MW")
+    @test IS.get_units(IS.Probabilistic(prob, "other_name")) == "MW"
+
+    scen = IS.Scenarios("scen", two_dim, resolution; units = "MW")
+    @test IS.get_units(IS.Scenarios(scen, "other_name")) == "MW"
+end
+
+@testset "Test units is not part of a time series' identity" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    data = rand(24)
+
+    IS.add_time_series!(
+        sys,
+        component,
+        IS.SingleTimeSeries("dup", initial_time, resolution, data; units = "MW"),
+    )
+
+    # Two series differing only in their label are the same series, so the
+    # second add is a duplicate rather than a second association.
+    err = try
+        IS.add_time_series!(
+            sys,
+            component,
+            IS.SingleTimeSeries("dup", initial_time, resolution, data; units = "kW"),
+        )
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("duplicate attributes", sprint(showerror, err))
+
+    # The label appears on no key, so it cannot be filtered or addressed by.
+    key = only(IS.get_time_series_keys(component))
+    @test !(:units in fieldnames(typeof(key)))
+end
+
+@testset "Test units survives transform_single_time_series!" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+
+    IS.add_time_series!(
+        sys,
+        component,
+        IS.SingleTimeSeries("load", initial_time, resolution, rand(48); units = "MW"),
+    )
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Hour(24),
+        Dates.Hour(24),
+    )
+
+    # The derived view is the same data viewed as windows, so it reports the
+    # source's label.
+    derived = IS.get_time_series(IS.Deterministic, component, "load")
+    @test IS.get_units(derived) == "MW"
+end

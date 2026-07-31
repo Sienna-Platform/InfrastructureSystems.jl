@@ -346,7 +346,7 @@ end
 
 """
     serialize_single!(batch, owner_id, owner_type, owner_category, name, sts;
-                      features=Dict(), units=nothing)
+                      features=Dict(), units=get_units(sts))
 
 Stage a `SingleTimeSeries` (data + metadata) onto a `InfraStore.AddBatch` for a
 bulk commit (a direct add is a one-item batch). The array is content-addressed;
@@ -362,7 +362,7 @@ function serialize_single!(
     name::AbstractString,
     sts::SingleTimeSeries;
     features = Dict{String, Any}(),
-    units::Union{Nothing, AbstractString} = nothing,
+    units::Union{Nothing, AbstractString} = get_units(sts),
 )
     # Encode the values: scalars stay 1-D; FunctionData becomes a (length, k)
     # Float64 matrix. The element type drives reconstruction on read.
@@ -386,7 +386,7 @@ end
 
 """
     serialize_non_sequential!(batch, owner_id, owner_type, owner_category, name, nts;
-                              features=Dict(), units=nothing)
+                              features=Dict(), units=get_units(nts))
 
 Stage a `NonSequentialTimeSeries` (irregular timestamps + data) onto a
 `InfraStore.AddBatch` for a bulk commit (a direct add is a one-item batch). The
@@ -403,7 +403,7 @@ function serialize_non_sequential!(
     name::AbstractString,
     nts::NonSequentialTimeSeries;
     features = Dict{String, Any}(),
-    units::Union{Nothing, AbstractString} = nothing,
+    units::Union{Nothing, AbstractString} = get_units(nts),
 )
     # Same element encoding as SingleTimeSeries: scalars stay 1-D; FunctionData
     # becomes a (length, k) Float64 matrix, with the element type driving the
@@ -440,7 +440,9 @@ function get_non_sequential(
         owner_category, name; features = features)
     len = length(nts.timestamps)
     values = _decode_static_values(nts.data, nts.element_type, len)
-    return NonSequentialTimeSeries(String(name), nts.timestamps, values)
+    return NonSequentialTimeSeries(
+        String(name), nts.timestamps, values; units = nts.units,
+    )
 end
 
 function get_num_time_series(store::Store)
@@ -669,7 +671,9 @@ function _infrastore_read_single(
     else
         _decode_static_values(sts.data, sts.element_type, size(sts.data, 1))
     end
-    return SingleTimeSeries(String(name), sts.initial_timestamp, sts.resolution, values)
+    return SingleTimeSeries(
+        String(name), sts.initial_timestamp, sts.resolution, values; units = sts.units,
+    )
 end
 
 """
@@ -723,8 +727,10 @@ function _infrastore_read_non_sequential(
     end
     colons = ntuple(_ -> Colon(), ndims(full) - 1)
     vals = full[index:(index + n - 1), colons...]
+    # A slice is the same values over a shorter window, so it keeps the label.
     return NonSequentialTimeSeries(
-        String(get_name(key)), timestamps[index:(index + n - 1)], vals)
+        String(get_name(key)), timestamps[index:(index + n - 1)], vals;
+        units = get_units(nts))
 end
 
 # ---- Bulk staging ----------------------------------------------------------
@@ -897,7 +903,8 @@ function _infrastore_stage_data!(
     ) do initial, resolution, horizon, interval, name
         arr = _dense_forecast_array(ts, length(get_percentiles(ts)))
         prob = InfraStore.Probabilistic(initial, resolution, horizon, interval,
-            get_count(ts), Float64.(get_percentiles(ts)), arr, name)
+            get_count(ts), Float64.(get_percentiles(ts)), arr, name;
+            units = get_units(ts))
         return (prob, get_count(ts))
     end
 end
@@ -918,7 +925,8 @@ function _infrastore_stage_data!(
         windows = collect(values(get_data(ts)))
         arr, element_type = _storage_forecast_array(windows)
         det = InfraStore.Deterministic(initial, resolution, horizon, interval,
-            length(windows), arr, name; element_type = element_type)
+            length(windows), arr, name;
+            element_type = element_type, units = get_units(ts))
         return (det, length(windows))
     end
 end
@@ -936,7 +944,7 @@ function _infrastore_stage_data!(
     ) do initial, resolution, horizon, interval, name
         arr = _dense_forecast_array(ts, get_scenario_count(ts))
         scen = InfraStore.Scenarios(initial, resolution, horizon, interval,
-            get_count(ts), arr, name)
+            get_count(ts), arr, name; units = get_units(ts))
         return (scen, get_count(ts))
     end
 end
@@ -1114,7 +1122,7 @@ function _reconstruct_forecast(
     end
     return Probabilistic(; name = name, data = data,
         percentiles = p.percentiles, resolution = p.resolution,
-        interval = p.interval)
+        interval = p.interval, units = p.units)
 end
 
 _reconstruct_forecast(::Type{<:Deterministic}, args...) =
@@ -1155,7 +1163,7 @@ function _reconstruct_deterministic(
     window(i) = _truncate_window(_forecast_window(d.data, d.element_type, i), len)
     data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
     return Deterministic(; name = name, data = data,
-        resolution = d.resolution, interval = d.interval)
+        resolution = d.resolution, interval = d.interval, units = d.units)
 end
 
 function _reconstruct_forecast(
@@ -1182,7 +1190,7 @@ function _reconstruct_forecast(
     end
     return Scenarios(; name = name, data = data,
         scenario_count = s_ts.scenario_count, resolution = s_ts.resolution,
-        interval = s_ts.interval)
+        interval = s_ts.interval, units = s_ts.units)
 end
 
 # ---- ForecastReader --------------------------------------------------------

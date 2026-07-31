@@ -5,6 +5,7 @@
         interval::Dates.Period
         percentiles::Vector{Float64}
         data::SortedDict
+        units::Union{Nothing, String}
         internal::InfrastructureSystemsInternal
     end
 
@@ -17,6 +18,9 @@ A Probabilistic forecast for a particular data field in a Component.
   - `interval::Dates.Period`: forecast interval
   - `percentiles::Vector{Float64}`: Percentiles for the probabilistic forecast
   - `data::SortedDict`: timestamp - scalingfactor
+  - `units::Union{Nothing, String}`: optional user-declared units label for the values
+    (e.g. `"MW"`). Set at construction and returned on read; IS neither interprets nor
+    validates it, and it is never part of the time series' identity.
   - `internal::InfrastructureSystemsInternal`
 """
 struct Probabilistic{T, N} <: Forecast{T}
@@ -30,6 +34,8 @@ struct Probabilistic{T, N} <: Forecast{T}
     resolution::Dates.Period
     "forecast interval"
     interval::Dates.Period
+    "user-declared units label for the values (e.g. `\"MW\"`), or `nothing`"
+    units::Union{Nothing, String}
 end
 
 # Infer `{T, N}` — element type and per-window array rank — from the data.
@@ -38,7 +44,8 @@ function Probabilistic(
     data::AbstractDict{Dates.DateTime},
     percentiles,
     resolution::Dates.Period,
-    interval::Dates.Period,
+    interval::Dates.Period;
+    units::Union{Nothing, AbstractString} = nothing,
 )
     sorted = data isa SortedDict ? data : SortedDict(data...)
     return Probabilistic{_window_eltype(sorted), _window_ndims(sorted)}(
@@ -47,6 +54,7 @@ function Probabilistic(
         Vector{Float64}(percentiles),
         resolution,
         interval,
+        _maybe_units(units),
     )
 end
 
@@ -57,6 +65,7 @@ function Probabilistic(;
     interval::Union{Nothing, Dates.Period} = nothing,
     percentiles,
     normalization_factor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     data = handle_normalization_factor(convert_data(data), normalization_factor)
     quantile_count = size(first(values(data)))[2]
@@ -77,7 +86,8 @@ function Probabilistic(;
         data,
         percentiles,
         resolution,
-        interval,
+        interval;
+        units = units,
     )
 end
 
@@ -103,6 +113,7 @@ function Probabilistic(
     resolution::Dates.Period;
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     return Probabilistic(;
         name = name,
@@ -111,6 +122,7 @@ function Probabilistic(
         resolution = resolution,
         interval = interval,
         normalization_factor = normalization_factor,
+        units = units,
     )
 end
 
@@ -121,6 +133,7 @@ function Probabilistic(
     resolution::Dates.Period;
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     return Probabilistic(
         name,
@@ -129,6 +142,7 @@ function Probabilistic(
         resolution;
         interval = interval,
         normalization_factor = normalization_factor,
+        units = units,
     )
 end
 
@@ -158,6 +172,7 @@ function Probabilistic(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     data, res = convert_forecast_input_time_arrays(input_data; resolution = resolution)
     return Probabilistic(;
@@ -167,6 +182,7 @@ function Probabilistic(
         resolution = res,
         interval = interval,
         normalization_factor = normalization_factor,
+        units = units,
     )
 end
 
@@ -180,13 +196,15 @@ function Probabilistic(
     src::Probabilistic,
     name::AbstractString,
 )
-    # units and ext are not copied. No shared UUID under the key-centric model.
+    # `units` is carried over: it describes the values, and the values are shared.
+    # No shared UUID under the key-centric model.
     return Probabilistic(
         name,
         src.data,
         src.percentiles,
         src.resolution,
-        src.interval,
+        src.interval;
+        units = src.units,
     )
 end
 

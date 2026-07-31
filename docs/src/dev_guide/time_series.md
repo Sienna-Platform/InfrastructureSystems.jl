@@ -68,6 +68,34 @@ together with the forecast window parameters (`initial_timestamp`, `horizon`, `i
 `count`) and the array's content hash. A `DeterministicSingleTimeSeries` shares the underlying
 `SingleTimeSeries` array and synthesizes its forecast windows on read.
 
+### The `units` label
+
+Every time series type carries an optional `units` label — a user-declared string such as
+`"MW"`, read back with `get_units`:
+
+```julia
+ts = SingleTimeSeries("load", initial_timestamp, resolution, values; units = "MW")
+get_units(get_time_series(SingleTimeSeries, component, "load"))  # "MW"
+```
+
+It is deliberately *not* like `features`. Features are identity: they are part of the key
+and they filter a query. The label is a description of the values, so:
+
+  - it is set at construction and is **immutable** — there is no setter;
+  - it is **never** an argument to `get_time_series`, never filters, and never appears on a
+    `TimeSeriesKey`. Two series differing only in their label are the same series, and
+    adding both is a duplicate;
+  - it is carried over by constructors that share another instance's data, and by a derived
+    `DeterministicSingleTimeSeries`;
+  - it defaults to `nothing`, which IS never fills in — whether that means "unknown" or
+    "dimensionless" is the caller's convention.
+
+IS neither interprets nor validates it: there is no units vocabulary in IS, so a consumer
+that converts values on read owns both the vocabulary and the conversion. Do not confuse it
+with the unit *system* concept in `RelativeUnits` (`SU`/`DU`/`NU`), which selects a per-unit
+normalization base rather than naming a physical dimension. The two are independent: a
+series labeled `"MW"` may still be read against any normalization base.
+
 For the authoritative on-disk format — HDF5 dataset layout, hashing, the SQLite schema, and
 the `DATA_FORMAT_VERSION` compatibility contract — see the `InfraStore` repository's
 file-format reference.

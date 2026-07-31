@@ -4,6 +4,7 @@
         data::SortedDict
         resolution::Dates.Period
         interval::Dates.Period
+        units::Union{Nothing, String}
         internal::InfrastructureSystemsInternal
     end
 
@@ -15,6 +16,9 @@ A deterministic forecast for a particular data field in a Component.
   - `data::SortedDict`: timestamp - scalingfactor
   - `resolution::Dates.Period`: forecast resolution
   - `interval::Dates.Period`: forecast interval
+  - `units::Union{Nothing, String}`: optional user-declared units label for the values
+    (e.g. `"MW"`). Set at construction and returned on read; IS neither interprets nor
+    validates it, and it is never part of the time series' identity.
   - `internal::InfrastructureSystemsInternal`
 """
 struct Deterministic{T, N} <: AbstractDeterministic{T}
@@ -26,6 +30,8 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
     resolution::Dates.Period
     "forecast interval"
     interval::Dates.Period
+    "user-declared units label for the values (e.g. `\"MW\"`), or `nothing`"
+    units::Union{Nothing, String}
 
     # Inner constructor validates store-encodability on every construction (including
     # the inferring outer constructor below), so unsupported element types are
@@ -35,9 +41,10 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
         data::SortedDict{Dates.DateTime, Array{T, N}},
         resolution::Dates.Period,
         interval::Dates.Period,
+        units::Union{Nothing, AbstractString} = nothing,
     ) where {T, N}
         validate_time_series_data_for_backend(data)
-        return new{T, N}(String(name), data, resolution, interval)
+        return new{T, N}(String(name), data, resolution, interval, _maybe_units(units))
     end
 end
 
@@ -47,7 +54,8 @@ function Deterministic(
     name::AbstractString,
     data::AbstractDict{Dates.DateTime},
     resolution::Dates.Period,
-    interval::Dates.Period,
+    interval::Dates.Period;
+    units::Union{Nothing, AbstractString} = nothing,
 )
     sorted = data isa SortedDict ? data : SortedDict(data...)
     return Deterministic{_window_eltype(sorted), _window_ndims(sorted)}(
@@ -55,6 +63,7 @@ function Deterministic(
         sorted,
         resolution,
         interval,
+        units,
     )
 end
 
@@ -64,6 +73,7 @@ function Deterministic(;
     resolution,
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     if isnothing(interval)
         interval = get_interval_from_initial_times(get_sorted_keys(data))
@@ -74,7 +84,8 @@ function Deterministic(;
         name,
         data,
         resolution,
-        interval,
+        interval;
+        units = units,
     )
 end
 
@@ -84,12 +95,14 @@ function Deterministic(
     resolution::Dates.Period;
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     return Deterministic(;
         name = name,
         data = data,
         resolution = resolution,
         interval = interval,
+        units = units,
     )
 end
 
@@ -119,6 +132,7 @@ function Deterministic(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
+    units::Union{Nothing, AbstractString} = nothing,
 )
     data, res = convert_forecast_input_time_arrays(input_data; resolution = resolution)
     for (k, v) in input_data
@@ -133,6 +147,7 @@ function Deterministic(
         resolution = res,
         interval = interval,
         normalization_factor = normalization_factor,
+        units = units,
     )
 end
 
@@ -140,11 +155,13 @@ end
 Construct a new Deterministic from an existing instance and a subset of data.
 """
 function Deterministic(forecast::Deterministic, data)
+    # A subset of the same values keeps the same units label.
     return Deterministic(
         get_name(forecast),
         data,
         get_resolution(forecast),
-        get_interval(forecast),
+        get_interval(forecast);
+        units = get_units(forecast),
     )
 end
 
@@ -180,11 +197,13 @@ function Deterministic(
     src::Deterministic,
     name::AbstractString,
 )
+    # `units` is carried over: it describes the values, and the values are shared.
     return Deterministic(
         name,
         src.data,
         src.resolution,
-        src.interval,
+        src.interval;
+        units = src.units,
     )
 end
 
