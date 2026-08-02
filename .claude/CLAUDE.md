@@ -5,10 +5,7 @@
 
 ## Overview
 
-Foundational library for performance-critical simulation packages: SystemData, component containers, time series (HDF5/in-memory + SQLite metadata), serialization, struct codegen, and the `RelativeUnits` layer. For general Sienna coding practices see [.claude/Sienna.md](Sienna.md); for workspace wiring see the psy6 workspace root `CLAUDE.md`.
-
-> **Maintenance note:** Update this file whenever files, directories, or architectural
-> patterns change so it stays accurate.
+Foundational library for performance-critical simulation packages: SystemData, component containers, time series (HDF5/in-memory + SQLite metadata), serialization, struct codegen, and the `RelativeUnits` layer. General Sienna practices: the `sienna-psy6` skill. Workspace wiring: the psy6 workspace root `CLAUDE.md`.
 
 ## Downstream blast radius
 
@@ -20,33 +17,14 @@ julia --project=<psy6-workspace-root> -e 'using PowerSystems, PowerNetworkMatric
 
 (The psy5 line's PowerSimulations/PSID consume the *top-level* IS checkout on `main`, not this one.)
 
-## File Structure
+## Source layout — the non-obvious parts
 
-### `src/`
-
-Key files:
-- `InfrastructureSystems.jl` — main module; the only place exports are allowed (see Export policy)
-- `system_data.jl` — SystemData implementation
-- `time_series_interface.jl` — time series public API (accessors take a `units` kwarg; see Units layer)
-- `component.jl` — base component types
-- `value_curve.jl` — `ValueCurve{T<:FunctionData}` and static curve types (`InputOutputCurve`, `IncrementalCurve`, `AverageRateCurve`)
-- `time_series_value_curve.jl` — time-series-backed value curves + `build_static_curve` per-timestep resolution
-- `cost_aliases.jl` — user-facing curve aliases (`LinearCurve`, `PiecewiseIncrementalCurve`, …) and their `TimeSeries*` counterparts
-- `production_variable_cost_curve.jl` — `CostCurve{T,U}` / `FuelCurve{T,U}` (units in the type parameter)
-- `relative_units.jl` — `RelativeUnits` submodule: unit-system markers and `RelativeQuantity`
-- `outputs.jl` — abstract `Outputs` interface (not-implemented stubs for downstream packages)
-- `serialization.jl` — JSON-based serialization (stdlib-adjacent `JSON`; JSON3/StructTypes were removed)
-
-Subdirectories:
-- `function_data/` — `FunctionData` hierarchy, time-series-backed function data, convexity/validity checks
-- `utils/` — utility functions including `generate_structs.jl`
-- `generated/` — auto-generated struct files (**DO NOT EDIT directly**)
-- `descriptors/` — JSON descriptors for struct generation (`structs.json`)
-- `Optimization/` — abstract types only (~185 lines): container/key abstract types
-  (`VariableType`, `ConstraintType`, `ParameterType`, …), formulation abstract types,
-  construct stages, and enums. The concrete results/container machinery was removed in
-  IS4; the consumer defining concretes in this line is **InfrastructureOptimizationModels (IOM)**.
-- `Simulation/` — simulation utilities
+- `src/InfrastructureSystems.jl` — the **only** place exports are allowed (see Export policy).
+- `src/serialization.jl` — JSON-based; JSON3/StructTypes were removed in IS4.
+- `src/generated/` — auto-generated (**never edit**); `src/descriptors/structs.json` is its source.
+- `src/Optimization/` — **abstract types only** (~185 lines): container/key abstracts, formulation
+  abstracts, construct stages, enums. The concrete results/container machinery was removed in IS4;
+  the consumer defining concretes in this line is **InfrastructureOptimizationModels (IOM)**.
 
 ## Units Layer (RelativeUnits)
 
@@ -205,20 +183,6 @@ Do not add other exports.
 - **Missing validation descriptor → validation silently passes** (`validation.jl:~74`) — a named silent-failure pattern; new validation code must error loudly instead.
 - Containers expose `.data` and ~29 cross-file bare accesses exist — prefer accessor functions; do not add new direct reaches.
 
-## Core Abstractions
-
-- `InfrastructureSystemsComponent`
-- `InfrastructureSystemsType`
-- `InfrastructureSystemsContainer`
-- `SystemData`
-- `TimeSeriesData`
-- `ValueCurve` (static and `TimeSeries*` curves)
-- `ProductionVariableCostCurve` (`CostCurve{T,U}`, `FuelCurve{T,U}`)
-- `FunctionData` (`StaticFunctionData`, `TimeSeriesFunctionData`)
-- `RelativeUnits.AbstractUnitSystem` (`DU`, `SU`, `NU` singletons)
-- `ComponentSelector`
-- `Outputs`
-
 ## Testing
 
 - **Location:** `test/`
@@ -231,22 +195,9 @@ Do not add other exports.
 - If the package registry is unreachable (HTTP 403), prefix commands with `JULIA_PKG_SERVER=`.
 - Full-suite baseline (2026-07-05): 8,635 passing.
 
-## Common Tasks
-
-| Task | Command |
-|------|---------|
-| Run tests | `julia --project=test test/runtests.jl` |
-| Run one testset | `julia --project=test -e 'include("test/InfrastructureSystemsTests.jl"); run_tests("<name>")'` |
-| Compile check | `julia --project -e 'using InfrastructureSystems'` |
-| Build docs | `julia --project=docs docs/make.jl` |
-| Format code | `julia --project=scripts/formatter -e 'include("scripts/formatter/formatter_code.jl")'` |
-| Check format | `git diff --exit-code` |
-| Instantiate test env | `julia --project=test -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'` |
-| Generate structs | `julia bin/generate_structs.jl src/descriptors/structs.json src/generated/` |
-
 ## AI Agent Guidance
 
-**IMPORTANT:** Review [.claude/Sienna.md](Sienna.md) for general Sienna coding practices, performance requirements, and conventions.
+Platform-wide practices, performance requirements, and conventions: invoke the `sienna-psy6` skill.
 
 ### InfrastructureSystems-Specific Priorities
 
