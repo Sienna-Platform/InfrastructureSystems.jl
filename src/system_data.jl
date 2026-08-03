@@ -429,8 +429,8 @@ clear_time_series!(data::SystemData) = clear_time_series!(data.time_series_manag
 
 """
 Reclaim the space that removed time series left behind, returning an
-`InfraStore.CompactionReport` (`slots_reclaimed`, `datasets_dropped`,
-`feature_sets_reclaimed`, `timestamp_sets_reclaimed`, `bytes_reclaimed`).
+`InfraStore.CompactionReport` (`slots_reclaimed`, `feature_sets_reclaimed`,
+`timestamp_sets_reclaimed`, `bytes_reclaimed`).
 
 HDF5 cannot hand freed space back in place, so removing time series — including
 [`clear_time_series!`](@ref) — leaves the `.h5` file the same size. For a system

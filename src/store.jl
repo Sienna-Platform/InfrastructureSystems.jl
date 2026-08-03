@@ -62,7 +62,7 @@ mutable struct Store
 end
 
 """
-    Store(; in_memory=false, path=nothing, compression=CompressionSettings())
+    Store(; in_memory=false, path=nothing, compression=CompressionSettings(), catalog=nothing)
 
 Create a InfraStore-backed store (time series data plus component / supplemental-attribute
 associations). When `in_memory=false`, `path` is the base path for the on-disk artifacts
@@ -71,17 +71,25 @@ associations). When `in_memory=false`, `path` is the base path for the on-disk a
 `compression` is a [`CompressionSettings`](@ref). The InfraStore backend supports
 `DEFLATE` (with `level` 0-9 and `shuffle`) or no compression (`enabled=false`);
 `BLOSC` is not available and raises an error.
+
+`catalog` places the SQLite catalog: `:attached` makes it the `.sqlite` file, where every
+commit is durable, while `:memory` holds it in RAM so it reaches disk only through
+`serialize`/`persist!`. Arrays stream to the `.h5` either way, so `:memory` does not
+require the data to fit in memory. `nothing` (the default) lets InfraStore match the
+backend. A system's working store uses `:memory` — see [`TimeSeriesManager`](@ref).
 """
 function Store(;
     in_memory::Bool = false,
     path = nothing,
     compression::CompressionSettings = CompressionSettings(),
+    catalog = nothing,
 )
     kwargs = _infrastore_compression_kwargs(compression)
+    catalog_kwargs = isnothing(catalog) ? (;) : (; catalog = catalog)
     inner = if in_memory
-        InfraStore.Store(; in_memory = true, kwargs...)
+        InfraStore.Store(; in_memory = true, kwargs..., catalog_kwargs...)
     else
-        InfraStore.Store(; in_memory = false, path = path, kwargs...)
+        InfraStore.Store(; in_memory = false, path = path, kwargs..., catalog_kwargs...)
     end
     return Store(inner)
 end

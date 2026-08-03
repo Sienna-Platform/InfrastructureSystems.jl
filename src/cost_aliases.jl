@@ -318,8 +318,9 @@ is_cost_alias(
         Type{TimeSeriesPiecewiseIncrementalCurve},
     },
 ) = true
-simple_type_name(::TimeSeriesPiecewiseIncrementalCurve) =
-    "TimeSeriesPiecewiseIncrementalCurve"
+simple_type_name(
+    ::TimeSeriesPiecewiseIncrementalCurve,
+) = "TimeSeriesPiecewiseIncrementalCurve"
 
 TimeSeriesIncrementalCurve{TimeSeriesFunctionData{PiecewiseStepData}}(
     key::TimeSeriesKey,

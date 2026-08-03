@@ -18,13 +18,17 @@
 
 Open an existing on-disk InfraStore store from its `.h5` base path.
 """
-function open_infrastore_store(path::AbstractString; read_only::Bool = false)
+function open_infrastore_store(
+    path::AbstractString;
+    read_only::Bool = false,
+    catalog = :attached,
+)
     # Open with an absolute path so the InfraStore handle's backing path survives later
     # `cd`s (e.g. a deserialize that opens a relative basename, then a re-serialize
     # elsewhere). Opening relative leaves the handle resolving its source relative to
     # the cwd at open time, so a later `persist!` fails once the cwd changes.
     abs_path = abspath(String(path))
-    inner = InfraStore.open_store(abs_path; read_only = read_only)
+    inner = InfraStore.open_store(abs_path; read_only = read_only, catalog = catalog)
     return Store(inner)
 end
 
@@ -52,6 +56,11 @@ artifacts are opened in place. Otherwise the `.h5` (+ sidecar `.sqlite`) are
 copied to an isolated working location under `directory` (or `tempdir()`) and the
 copy is opened writable, so mutating the deserialized system cannot corrupt the
 source file (e.g. a cached system shared by later builds).
+
+The writable copy holds its catalog in memory: it is scratch, and the system it backs is
+itself in memory, so a crash loses both regardless. Changes reach disk only when the
+system is serialized. A read-only open leaves the catalog attached — nothing mutates it,
+so there is nothing to gain by reading it into RAM.
 """
 function open_deserialized_infrastore_store(
     source::AbstractString,
@@ -62,10 +71,12 @@ function open_deserialized_infrastore_store(
     dir = isnothing(directory) ? tempdir() : String(directory)
     mkpath(dir)
     dst = joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
+    # The `.sqlite` is copied so the open below has a catalog to read into memory; it
+    # is ignored from then on, and `serialize` writes a fresh pair.
     cp(source, dst; force = true)
     src_sqlite = source * ".sqlite"
     isfile(src_sqlite) && cp(src_sqlite, dst * ".sqlite"; force = true)
-    return open_infrastore_store(dst; read_only = false)
+    return open_infrastore_store(dst; read_only = false, catalog = :memory)
 end
 
 close!(store::Store) = InfraStore.close!(store.inner)
@@ -84,7 +95,10 @@ function Base.deepcopy_internal(store::Store, dict::IdDict)
     directory = isnothing(path) ? tempdir() : dirname(path)
     dst = joinpath(directory, string(UUIDs.uuid4()) * "_time_series.h5")
     InfraStore.persist!(store.inner, dst)
-    new_store = open_infrastore_store(dst; read_only = false)
+    # The copy inherits the original's catalog placement, so a deepcopy does not quietly
+    # change when the copy's changes become durable.
+    new_store =
+        open_infrastore_store(dst; read_only = false, catalog = catalog_mode(store))
     dict[store] = new_store
     return new_store
 end
@@ -451,6 +465,14 @@ function get_num_time_series(store::Store)
 end
 
 flush!(store::Store) = InfraStore.flush!(store.inner)
+
+"""
+    catalog_mode(store::Store)
+
+Where `store`'s SQLite catalog lives: `:attached` (the `.sqlite` file, durable on every
+commit) or `:memory` (RAM, durable only at `serialize`). See [`Store`](@ref).
+"""
+catalog_mode(store::Store) = InfraStore.catalog_mode(store.inner)
 
 # Association rows count: the store holds supplemental attribute associations as well as
 # time series, and `serialize(::SystemData)` skips writing the artifact entirely for an

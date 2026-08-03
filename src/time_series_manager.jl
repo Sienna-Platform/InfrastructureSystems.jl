@@ -32,6 +32,11 @@ function TimeSeriesManager(;
                 in_memory = in_memory,
                 path = path,
                 compression = compression,
+                # A system's working store is scratch: the artifacts sit in a temp
+                # directory and the system they back lives in memory, so a crash loses
+                # both. Journaling the catalog on every commit would buy durability
+                # nobody can consume; it is written out when the system is serialized.
+                catalog = :memory,
             )
     end
     return TimeSeriesManager(data_store, read_only)
