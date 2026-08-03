@@ -1,0 +1,6 @@
+report built by MAKE_REPORT.sh
+job none  host kl1
+results dir /projects/siennadev/acostare/bench-results-batch-2/15459992
+is4 baseline source ../../bench-results-batch/15438463/results_full_is4_hpc.csv
+is4 baseline -rw-rw---- 1 acostare siennadev 5628 Aug  3 08:59 /projects/siennadev/acostare/bench-results-batch-2/15459992/results_full_is4_hpc.csv
+report script f9e51321

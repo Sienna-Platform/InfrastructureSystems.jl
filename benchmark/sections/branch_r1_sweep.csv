@@ -1,0 +1,4 @@
+branch,kind,eltype,op,n,total_s,us_per_op,bytes,status
+infrastore,sts,float64,read_by_timestamp,2400000,3.194,1.331,1004826352,ok
+infrastore,det,float64,read_by_window,1200000,6.510,5.425,1300098984,ok
+DONE infrastore full

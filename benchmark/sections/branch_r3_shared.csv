@@ -1,0 +1,14 @@
+branch,kind,eltype,op,n,total_s,us_per_op,bytes,status
+infrastore,sts_shared,float64,bulk_add,100000,0.838,8.381,152995720,ok
+infrastore,sts_shared,float64,maxrss,1,0.000,0.000,812298240,ok
+infrastore,sts_shared,float64,store_disk_bytes,1,0.000,0.000,85369344,ok
+infrastore,sts_shared,float64,get_full,100000,4.758,47.581,1028742624,ok
+infrastore,sts_shared,float64,get_sliced,100000,4.782,47.817,1022342624,ok
+infrastore,sts_shared,float64,read_by_timestamp,2400000,3.022,1.259,1004826464,ok
+infrastore,det_shared,float64,bulk_add,100000,2.271,22.708,872025432,ok
+infrastore,det_shared,float64,maxrss,1,0.000,0.000,1196773376,ok
+infrastore,det_shared,float64,store_disk_bytes,1,0.000,0.000,91143804,ok
+infrastore,det_shared,float64,get_full,100000,5.957,59.567,2516750944,ok
+infrastore,det_shared,float64,get_window,100000,5.384,53.841,1359950944,ok
+infrastore,det_shared,float64,read_by_window,1200000,2.444,2.037,1011301280,ok
+DONE infrastore full

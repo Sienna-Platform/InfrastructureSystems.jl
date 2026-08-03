@@ -1,0 +1,22 @@
+branch,kind,eltype,op,n,total_s,us_per_op,bytes,status
+infrastore,nst,float64,bulk_add,100000,3.736,37.356,138595752,ok
+infrastore,nst,float64,maxrss,1,0.000,0.000,895307776,ok
+infrastore,nst,float64,store_disk_bytes,1,0.000,0.000,165729829,ok
+infrastore,nst,float64,get_full,100000,6.719,67.189,950350960,ok
+infrastore,nst,ntuple2,bulk_add,100000,4.446,44.463,269795816,ok
+infrastore,nst,ntuple2,maxrss,1,0.000,0.000,2293075968,ok
+infrastore,nst,ntuple2,store_disk_bytes,1,0.000,0.000,187210023,ok
+infrastore,nst,ntuple2,get_full,100000,7.532,75.316,1243150960,ok
+infrastore,nst,linear,bulk_add,100000,4.407,44.066,237795752,ok
+infrastore,nst,linear,maxrss,1,0.000,0.000,2334289920,ok
+infrastore,nst,linear,store_disk_bytes,1,0.000,0.000,187415423,ok
+infrastore,nst,linear,get_full,100000,7.273,72.729,1108750960,ok
+infrastore,nst,quadratic,bulk_add,100000,4.473,44.730,290595752,ok
+infrastore,nst,quadratic,maxrss,1,0.000,0.000,2338779136,ok
+infrastore,nst,quadratic,store_disk_bytes,1,0.000,0.000,207668845,ok
+infrastore,nst,quadratic,get_full,100000,7.384,73.843,1180750960,ok
+infrastore,nst,pwl,bulk_add,100000,5.265,52.651,750340168,ok
+infrastore,nst,pwl,maxrss,1,0.000,0.000,2620035072,ok
+infrastore,nst,pwl,store_disk_bytes,1,0.000,0.000,361232007,ok
+infrastore,nst,pwl,get_full,100000,8.559,85.593,2522294992,ok
+DONE infrastore full

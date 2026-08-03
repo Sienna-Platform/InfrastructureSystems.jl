@@ -1,0 +1,5 @@
+branch,kind,eltype,op,n,total_s,us_per_op,bytes,status
+infrastore,has_ts,float64,bulk_add,100000,1.208,12.083,329003992,ok
+infrastore,has_ts,float64,has_hit,100000,0.481,4.807,211036480,ok
+infrastore,has_ts,float64,has_miss,100000,1.075,10.750,211036480,ok
+DONE infrastore full

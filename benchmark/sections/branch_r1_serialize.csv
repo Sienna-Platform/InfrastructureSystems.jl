@@ -1,0 +1,7 @@
+branch,kind,eltype,op,n,total_s,us_per_op,bytes,status
+infrastore,serialize,float64,to_json,100000,0.504,5.044,478106120,ok
+infrastore,serialize,float64,maxrss,1,0.000,0.000,978919424,ok
+infrastore,serialize,float64,store_disk_bytes,1,0.000,0.000,84458572,ok
+infrastore,serialize,float64,from_json,100000,1.594,15.943,662732144,ok
+infrastore,serialize,float64,reload_read_one,1,0.002,1613.819,10688,ok
+DONE infrastore full

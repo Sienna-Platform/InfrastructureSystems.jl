@@ -1,0 +1,3 @@
+branch,kind,eltype,op,n,total_s,us_per_op,bytes,status
+infrastore,remove,float64,remove_all,100000,3.763,37.625,51191824,ok
+DONE infrastore full

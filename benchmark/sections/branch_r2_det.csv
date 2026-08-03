@@ -1,0 +1,27 @@
+branch,kind,eltype,op,n,total_s,us_per_op,bytes,status
+infrastore,det,float64,bulk_add,100000,5.066,50.657,872025384,ok
+infrastore,det,float64,maxrss,1,0.000,0.000,1533964288,ok
+infrastore,det,float64,store_disk_bytes,1,0.000,0.000,242264143,ok
+infrastore,det,float64,get_full,100000,8.780,87.803,2516750944,ok
+infrastore,det,float64,get_window,100000,5.464,54.639,1359950944,ok
+infrastore,det,ntuple2,bulk_add,100000,6.867,68.667,1808353208,ok
+infrastore,det,ntuple2,maxrss,1,0.000,0.000,2964869120,ok
+infrastore,det,ntuple2,store_disk_bytes,1,0.000,0.000,359168366,ok
+infrastore,det,ntuple2,get_full,100000,12.552,125.516,4547603616,ok
+infrastore,det,ntuple2,get_window,100000,6.369,63.693,1593550944,ok
+infrastore,det,linear,bulk_add,100000,6.551,65.508,1423701080,ok
+infrastore,det,linear,maxrss,1,0.000,0.000,3134988288,ok
+infrastore,det,linear,store_disk_bytes,1,0.000,0.000,360425414,ok
+infrastore,det,linear,get_full,100000,10.712,107.124,3050021664,ok
+infrastore,det,linear,get_window,100000,6.159,61.590,1468750944,ok
+infrastore,det,quadratic,bulk_add,100000,7.225,72.253,1904295288,ok
+infrastore,det,quadratic,maxrss,1,0.000,0.000,3149185024,ok
+infrastore,det,quadratic,store_disk_bytes,1,0.000,0.000,475977434,ok
+infrastore,det,quadratic,get_full,100000,11.031,110.309,3570794368,ok
+infrastore,det,quadratic,get_window,100000,5.979,59.793,1518350944,ok
+infrastore,det,pwl,bulk_add,100000,12.529,125.290,5570379000,ok
+infrastore,det,pwl,maxrss,1,0.000,0.000,6142488576,ok
+infrastore,det,pwl,store_disk_bytes,1,0.000,0.000,1397492434,ok
+infrastore,det,pwl,get_full,100000,16.880,168.797,11655524672,ok
+infrastore,det,pwl,get_window,100000,7.210,72.100,2187150944,ok
+DONE infrastore full
