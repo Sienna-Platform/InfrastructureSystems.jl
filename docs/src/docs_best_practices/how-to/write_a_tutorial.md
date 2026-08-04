@@ -10,7 +10,7 @@ Sienna.
     the [difference between a tutorial and how-to guide](https://diataxis.fr/tutorials-how-to/)
     to refresh your memory and refer back throughout the process.
   - Look at an example: `PowerSystems.jl`'s
-    [Working with Time Series](https://sienna-platform.github.io/PowerSystems.jl/stable/tutorials/working_with_time_series/)
+    [Working with Time Series](@extref PowerSystems :doc:`tutorials/generated_working_with_time_series`)
 
 !!! warning
     
@@ -56,7 +56,7 @@ code blocks.
 !!! tip "Do"
     
     Display all code, starting from `using SomeSiennaPackage`. Example: See
-    [Working with Time Series](https://sienna-platform.github.io/PowerSystems.jl/stable/tutorials/working_with_time_series/).
+    [Working with Time Series](@extref PowerSystems :doc:`tutorials/generated_working_with_time_series`).
 
 !!! warning "Don't"
     
