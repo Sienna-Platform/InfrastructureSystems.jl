@@ -463,6 +463,51 @@ end
     @test IS.get_power_units(zero(IS.FuelCurve)) == IS.NaturalUnit()
 end
 
+@testset "Test IS.LossCurve" begin
+    vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1.0, 2.0, 3.0))
+    lc = IS.LossCurve(vc)
+
+    @test lc isa IS.LossCurve{IS.QuadraticCurve, IS.NaturalUnit}
+    @test IS.get_value_curve(lc) == vc
+    @test IS.get_function_data(lc) == IS.QuadraticFunctionData(1.0, 2.0, 3.0)
+    @test IS.get_power_units(lc) == IS.NaturalUnit()
+    @test lc == IS.LossCurve(vc)
+    @test isequal(lc, IS.LossCurve(vc))
+    @test hash(lc) == hash(IS.LossCurve(vc))
+
+    # `power_units` is a type parameter, so curves that differ only in units are distinct
+    @test IS.LossCurve(vc, IS.SystemBaseUnit()) != lc
+
+    @test IS.LossCurve(vc, IS.SystemBaseUnit()) ==
+          IS.LossCurve(; value_curve = vc, power_units = IS.SystemBaseUnit())
+    @test IS.LossCurve(; value_curve = vc) == lc
+
+    @test sprint(show, "text/plain", lc) ==
+          "LossCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  power_units: NU"
+    @test sprint(show, "text/plain", lc; context = :compact => true) ==
+          "LossCurve with power_units NU, and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
+end
+
+@testset "LossCurve serialize round-trip all unit systems" begin
+    vc = IS.InputOutputCurve(IS.LinearFunctionData(1.5, 0.25))
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+        lc = IS.LossCurve(vc, U)
+        data = IS.serialize(lc)
+        @test data["power_units"] == string(nameof(typeof(U)))
+        lc_rt = IS.deserialize(IS.LossCurve, data)
+        @test lc_rt == lc
+        @test IS.get_power_units(lc_rt) == U
+    end
+end
+
+@testset "zero LossCurve preserves unit system" begin
+    vc = IS.InputOutputCurve(IS.LinearFunctionData(1.0, 1.0))
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+        @test IS.get_power_units(zero(IS.LossCurve(vc, U))) == U
+    end
+    @test IS.get_power_units(zero(IS.LossCurve)) == IS.NaturalUnit()
+end
+
 @testset "FuelCurve deserialize garbage fuel_cost (PVC-003)" begin
     fc_example = IS.FuelCurve(IS.InputOutputCurve(IS.LinearFunctionData(1.0, 0.0)), 2.5)
     bad_dict = merge(IS.serialize(fc_example), Dict("fuel_cost" => "oops"))
