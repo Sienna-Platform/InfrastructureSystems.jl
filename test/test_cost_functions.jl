@@ -472,10 +472,14 @@ end
         for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
     ]
     @test length(unique(hash.(curves))) == length(curves)
-    # Same unit system still hashes consistently with ==
-    @test IS.CostCurve(vc, IS.SystemBaseUnit()) == IS.CostCurve(vc, IS.SystemBaseUnit())
-    @test hash(IS.CostCurve(vc, IS.SystemBaseUnit())) ==
-          hash(IS.CostCurve(vc, IS.SystemBaseUnit()))
+    # Same unit system still satisfies the isequal => hash contract, including the
+    # NaN case where isequal and == deliberately diverge
+    for fd in (IS.LinearFunctionData(1.0, 1.0), IS.LinearFunctionData(NaN, 1.0))
+        a = IS.CostCurve(IS.InputOutputCurve(fd), IS.SystemBaseUnit())
+        b = IS.CostCurve(IS.InputOutputCurve(fd), IS.SystemBaseUnit())
+        @test isequal(a, b)
+        @test hash(a) == hash(b)
+    end
     # Distinct types with identical fields must not collide either
     @test hash(IS.CostCurve(vc, IS.NaturalUnit())) != hash(IS.FuelCurve(vc, 1.0))
     @test hash(IS.IncrementalCurve(IS.LinearFunctionData(1.0, 1.0), 1.0)) !=
