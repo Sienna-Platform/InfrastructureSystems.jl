@@ -132,6 +132,14 @@ Structs can be auto-generated from JSON descriptors using Mustache templates. Ge
 - **Generator:** `src/utils/generate_structs.jl`
 - **Command:** `julia bin/generate_structs.jl src/descriptors/structs.json src/generated/`
 
+**This generator is generic and serves IS's own structs only.** PowerSystems and PSIP each fork
+their own copy rather than extending this one, so a template edit here does **not** propagate —
+if the change is one PSY should also carry, port it to `PowerSystems.jl/src/generate_structs.jl`
+(module `PowerSystems.StructGeneration`) by hand in the same change set.
+
+No descriptor inside IS uses `needs_conversion`; PowerSystems is the first consumer, so that
+branch is covered only by the synthetic-descriptor test in `test/test_generate_structs.jl`.
+
 ### Workflow
 
 1. Edit the JSON descriptor file to define/modify struct fields
