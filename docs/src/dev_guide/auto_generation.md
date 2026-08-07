@@ -13,6 +13,12 @@ reasons to consider using this approach:
   - Provides consistent formatting of structs, fields, and constructors.
   - Provides consistent documentation of structs and fields.
 
+This generic mechanism is what `InfrastructureSystems.jl` uses for its own structs. Domain
+packages with extra, package-specific generation needs (e.g. `PowerSystems.jl`'s
+OpenAPI import-direction converters) fork their own copy of this generator rather than
+extending it here — see `PowerSystems.StructGeneration` (`PowerSystems.jl/src/generate_structs.jl`)
+for an example. What follows describes the generic core only.
+
 ## Instructions
 
 Refer to the docstrings for `generate_struct` and `generate_structs` and generate the files from the REPL.
