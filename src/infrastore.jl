@@ -359,6 +359,29 @@ end
 # ---- Operations (thin delegations to InfraStore) ----------------------
 
 """
+    make_add_batch() -> batch
+
+A client-side staging buffer for [`serialize_single!`](@ref) /
+[`serialize_non_sequential!`](@ref), committed with [`commit_batch!`](@ref).
+Exists so packages that write stores directly (e.g. a parser emitting a
+serialized system) never touch the InfraStore module themselves.
+"""
+make_add_batch() = InfraStore.AddBatch()
+
+"""
+    commit_batch!(store::Store, batch)
+
+Commit a staged batch to `store` as one all-or-nothing bulk add. The backend
+packs the arrays into batch-sized datasets written whole-chunk, so this is
+materially cheaper than the same adds issued one at a time.
+"""
+function commit_batch!(store::Store, batch::InfraStore.AddBatch)
+    InfraStore.add_time_series_bulk!(store.inner, batch)
+    flush!(store)
+    return
+end
+
+"""
     serialize_single!(batch, owner_id, owner_type, owner_category, name, sts;
                       features=Dict(), units=get_units(sts))
 
