@@ -283,6 +283,16 @@ end
 
 deserialize(::Type{Dates.DateTime}, val::AbstractString) = Dates.DateTime(val)
 
+# Mirror of the `deserialize(T::Union, data::Dict)` dispatcher above for string-valued data:
+# an optional field like `Union{Nothing, Dates.DateTime}` serializes to a JSON string, which
+# the concrete-type methods do not match. Drop `Nothing` and recurse to the remaining type's
+# string deserializer. The `nothing` case is handled by the generic path.
+function deserialize(T::Union, data::AbstractString)
+    non_nothing = filter(x -> x !== Nothing, Base.uniontypes(T))
+    length(non_nothing) == 1 && return deserialize(only(non_nothing), data)
+    throw(ArgumentError("Cannot pick which type of union $T to deserialize from a string"))
+end
+
 # The next methods fix serialization of UUIDs. The underlying type of a UUID is a UInt128.
 # JSON tries to encode this as a number in JSON. Encoding integers greater than can
 # be stored in a signed 64-bit integer sometimes does not work - at least when using
@@ -311,6 +321,9 @@ deserialize(::Type{Complex{T}}, data::Dict) where {T} =
     Complex(T(data["real"]), T(data["imag"]))
 
 deserialize(::Type{Vector{Symbol}}, data::Vector) = Symbol.(data)
+# JSON arrays parse to Vector{Any}; narrow to the declared element type for typed fields.
+# Explicit comprehension keeps the empty case concrete (`String.(Any[])` stays Vector{Any}).
+deserialize(::Type{Vector{String}}, data::Vector) = String[String(x) for x in data]
 serialize(value::Vector{Complex{T}}) where {T} =
     [Dict("real" => real(x), "imag" => imag(x)) for x in value]
 deserialize(::Type{Vector{Complex{T}}}, data::Array) where {T} =

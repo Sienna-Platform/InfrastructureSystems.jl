@@ -20,7 +20,14 @@ julia --project=<psy6-workspace-root> -e 'using PowerSystems, PowerNetworkMatric
 ## Source layout — the non-obvious parts
 
 - `src/InfrastructureSystems.jl` — the **only** place exports are allowed (see Export policy).
-- `src/serialization.jl` — JSON-based; JSON3/StructTypes were removed in IS4.
+- `src/serialization.jl` — JSON-based; JSON3/StructTypes were removed in IS4. Per-type
+  deserialize methods narrow JSON's loose types back to declared field types — optional
+  `DateTime` (`Union{Nothing, Dates.DateTime}`) and `Vector{String}` (JSON arrays parse to
+  `Vector{Any}`).
+- `src/geographic_supplemental_attribute.jl`, `src/data_source_supplemental_attribute.jl` —
+  the two hand-written supplemental attributes (`GeographicInfo`, `DataSource`); neither is
+  exported, and both are shared across components create-once/link-many via the association
+  store rather than owned by one component.
 - `src/generated/` — auto-generated (**never edit**); `src/descriptors/structs.json` is its source.
 - `src/Optimization/` — **abstract types only** (~185 lines): container/key abstracts, formulation
   abstracts, construct stages, enums. The concrete results/container machinery was removed in IS4;
