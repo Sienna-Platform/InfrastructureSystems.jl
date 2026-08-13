@@ -176,3 +176,170 @@ end
     derived = IS.get_time_series(IS.Deterministic, component, "load")
     @test IS.get_units(derived) == "MW"
 end
+
+@testset "Test quantity_kind and unit_system round-trip for every type" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    other_time = initial_time + resolution
+    horizon_count = 24
+    descriptors(x) = (IS.get_quantity_kind(x), IS.get_unit_system(x))
+
+    sts = IS.SingleTimeSeries(
+        "sts", initial_time, resolution, rand(24);
+        units = "MW", quantity_kind = "ActivePower", unit_system = IS.DU,
+    )
+    @test descriptors(sts) == ("ActivePower", IS.DU)
+    IS.add_time_series!(sys, component, sts)
+    @test descriptors(IS.get_time_series(IS.SingleTimeSeries, component, "sts")) ==
+          ("ActivePower", IS.DU)
+
+    # A sliced read describes the same values, so it keeps both.
+    sliced = IS.get_time_series(
+        IS.SingleTimeSeries, component, "sts";
+        start_time = initial_time + Dates.Hour(2), len = 4,
+    )
+    @test descriptors(sliced) == ("ActivePower", IS.DU)
+
+    stamps = [initial_time, initial_time + Dates.Hour(1), initial_time + Dates.Hour(4)]
+    nts = IS.NonSequentialTimeSeries(
+        "nts", stamps, rand(3);
+        quantity_kind = "Energy", unit_system = IS.NU,
+    )
+    IS.add_time_series!(sys, component, nts)
+    @test descriptors(IS.get_time_series(IS.NonSequentialTimeSeries, component, "nts")) ==
+          ("Energy", IS.NU)
+
+    one_dim = SortedDict(
+        initial_time => rand(horizon_count),
+        other_time => rand(horizon_count),
+    )
+    det = IS.Deterministic(
+        "det", one_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.DU,
+    )
+    IS.add_time_series!(sys, component, det)
+    @test descriptors(IS.get_time_series(IS.Deterministic, component, "det")) ==
+          ("ActivePower", IS.DU)
+
+    two_dim = SortedDict(
+        initial_time => rand(horizon_count, 3),
+        other_time => rand(horizon_count, 3),
+    )
+    prob = IS.Probabilistic(
+        "prob", two_dim, [0.1, 0.5, 0.9], resolution;
+        quantity_kind = "ActivePower", unit_system = IS.NU,
+    )
+    IS.add_time_series!(sys, component, prob)
+    @test descriptors(IS.get_time_series(IS.Probabilistic, component, "prob")) ==
+          ("ActivePower", IS.NU)
+
+    scen = IS.Scenarios(
+        "scen", two_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.DU,
+    )
+    IS.add_time_series!(sys, component, scen)
+    @test descriptors(IS.get_time_series(IS.Scenarios, component, "scen")) ==
+          ("ActivePower", IS.DU)
+end
+
+@testset "Test unset unit_system stays unspecified rather than NaturalUnit" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+
+    # Declaring nothing must read back as nothing. `NU` would be a claim the
+    # caller never made -- and per-unit values mislabeled as natural are wrong
+    # by the component's base, silently.
+    ts = IS.SingleTimeSeries("plain", initial_time, resolution, rand(24))
+    @test IS.get_quantity_kind(ts) === nothing
+    @test IS.get_unit_system(ts) === nothing
+    IS.add_time_series!(sys, component, ts)
+    stored = IS.get_time_series(IS.SingleTimeSeries, component, "plain")
+    @test IS.get_quantity_kind(stored) === nothing
+    @test IS.get_unit_system(stored) === nothing
+    @test IS.get_unit_system(stored) !== IS.NU
+
+    # Both are immutable, like the units label.
+    @test !isdefined(IS, :set_quantity_kind!)
+    @test !isdefined(IS, :set_unit_system!)
+end
+
+@testset "Test quantity_kind and unit_system are carried by data-sharing constructors" begin
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    other_time = initial_time + resolution
+    horizon_count = 24
+    descriptors(x) = (IS.get_quantity_kind(x), IS.get_unit_system(x))
+
+    sts = IS.SingleTimeSeries(
+        "sts", initial_time, resolution, rand(24);
+        quantity_kind = "ActivePower", unit_system = IS.DU,
+    )
+    @test descriptors(IS.SingleTimeSeries(sts, "other_name")) == ("ActivePower", IS.DU)
+
+    stamps = [initial_time, initial_time + Dates.Hour(1), initial_time + Dates.Hour(4)]
+    nts = IS.NonSequentialTimeSeries(
+        "nts", stamps, rand(3); quantity_kind = "Energy", unit_system = IS.NU,
+    )
+    @test descriptors(IS.NonSequentialTimeSeries(nts, "other_name")) == ("Energy", IS.NU)
+
+    one_dim = SortedDict(
+        initial_time => rand(horizon_count),
+        other_time => rand(horizon_count),
+    )
+    det = IS.Deterministic(
+        "det", one_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.DU,
+    )
+    @test descriptors(IS.Deterministic(det, "other_name")) == ("ActivePower", IS.DU)
+    @test descriptors(IS.Deterministic(det, one_dim)) == ("ActivePower", IS.DU)
+
+    two_dim = SortedDict(
+        initial_time => rand(horizon_count, 3),
+        other_time => rand(horizon_count, 3),
+    )
+    prob = IS.Probabilistic(
+        "prob", two_dim, [0.1, 0.5, 0.9], resolution;
+        quantity_kind = "ActivePower", unit_system = IS.DU,
+    )
+    @test descriptors(IS.Probabilistic(prob, "other_name")) == ("ActivePower", IS.DU)
+
+    scen = IS.Scenarios(
+        "scen", two_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.DU,
+    )
+    @test descriptors(IS.Scenarios(scen, "other_name")) == ("ActivePower", IS.DU)
+end
+
+@testset "Test SystemBaseUnit is rejected by the store rather than downgraded" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+
+    # IS names three bases; the store represents two. A system-base series is
+    # refused at the boundary instead of being written as device base or dropped
+    # to unspecified -- either would misreport the basis of every value to the
+    # next reader, unrecoverably.
+    ts = IS.SingleTimeSeries(
+        "su", initial_time, resolution, rand(24); unit_system = IS.SU,
+    )
+    @test IS.get_unit_system(ts) === IS.SU
+    @test_throws ArgumentError IS.add_time_series!(sys, component, ts)
+
+    # The two the store does represent go through.
+    for (name, marker) in (("du", IS.DU), ("nu", IS.NU))
+        ok = IS.SingleTimeSeries(
+            name, initial_time, resolution, rand(24); unit_system = marker,
+        )
+        IS.add_time_series!(sys, component, ok)
+        @test IS.get_unit_system(
+            IS.get_time_series(IS.SingleTimeSeries, component, name),
+        ) === marker
+    end
+end

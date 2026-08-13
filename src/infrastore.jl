@@ -105,6 +105,36 @@ end
 
 # ---- Conversions -----------------------------------------------------------
 
+# Unit system, between IS's `RelativeUnits` markers and the store's two-valued
+# enum.
+#
+# IS names three bases; the store represents only the component's own base and
+# natural units. `SystemBaseUnit` therefore has no storage spelling, and it is
+# rejected here rather than written as `ComponentBase` or dropped to
+# "unspecified": both would misreport the basis of every value in the series to
+# the next reader, and a per-unit series read against the wrong base is wrong by
+# a factor nobody can recover after the fact. The error names the two bases that
+# do round-trip so the caller can normalize before adding.
+_to_store_unit_system(::Nothing) = nothing
+_to_store_unit_system(::NaturalUnit) = InfraStore.NaturalUnits
+_to_store_unit_system(::DeviceBaseUnit) = InfraStore.ComponentBase
+_to_store_unit_system(::SystemBaseUnit) = throw(
+    ArgumentError(
+        "the time series store cannot represent SystemBaseUnit (SU): it records only " *
+        "natural units (NU) and the component's own base (DU). Normalize the values to " *
+        "one of those before adding the time series.",
+    ),
+)
+
+# The store's spelling never carries a system base, so the inverse is total over
+# what a read can actually produce.
+_from_store_unit_system(::Nothing) = nothing
+function _from_store_unit_system(unit_system::InfraStore.UnitSystem)
+    unit_system === InfraStore.NaturalUnits && return NU
+    unit_system === InfraStore.ComponentBase && return DU
+    throw(ArgumentError("unrecognized store unit system: $unit_system"))
+end
+
 # Owner category of an association owner, as the `InfraStore.OwnerCategory`
 # enum the binding takes everywhere. Accepts an owner instance or its type.
 get_owner_category(
@@ -383,7 +413,8 @@ end
 
 """
     serialize_single!(batch, owner_id, owner_type, owner_category, name, sts;
-                      features=Dict(), units=get_units(sts))
+                      features=Dict(), units=get_units(sts),
+                      quantity_kind=get_quantity_kind(sts), unit_system=get_unit_system(sts))
 
 Stage a `SingleTimeSeries` (data + metadata) onto a `InfraStore.AddBatch` for a
 bulk commit (a direct add is a one-item batch). The array is content-addressed;
@@ -400,6 +431,8 @@ function serialize_single!(
     sts::SingleTimeSeries;
     features = Dict{String, Any}(),
     units::Union{Nothing, AbstractString} = get_units(sts),
+    quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(sts),
+    unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(sts),
 )
     # Encode the values: scalars stay 1-D; FunctionData becomes a (length, k)
     # Float64 matrix. The element type drives reconstruction on read.
@@ -415,7 +448,9 @@ function serialize_single!(
         element_type = element_type,
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
-        owner_category, tss_ts; features = features, units = units)
+        owner_category, tss_ts; features = features, units = units,
+        quantity_kind = quantity_kind,
+        unit_system = _to_store_unit_system(unit_system))
     # The encoded array is what the batch keeps buffered; its exact byte size
     # drives the auto-flush accounting.
     return sizeof(arr)
@@ -423,7 +458,9 @@ end
 
 """
     serialize_non_sequential!(batch, owner_id, owner_type, owner_category, name, nts;
-                              features=Dict(), units=get_units(nts))
+                              features=Dict(), units=get_units(nts),
+                              quantity_kind=get_quantity_kind(nts),
+                              unit_system=get_unit_system(nts))
 
 Stage a `NonSequentialTimeSeries` (irregular timestamps + data) onto a
 `InfraStore.AddBatch` for a bulk commit (a direct add is a one-item batch). The
@@ -441,6 +478,8 @@ function serialize_non_sequential!(
     nts::NonSequentialTimeSeries;
     features = Dict{String, Any}(),
     units::Union{Nothing, AbstractString} = get_units(nts),
+    quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(nts),
+    unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(nts),
 )
     # Same element encoding as SingleTimeSeries: scalars stay 1-D; FunctionData
     # becomes a (length, k) Float64 matrix, with the element type driving the
@@ -453,7 +492,9 @@ function serialize_non_sequential!(
         element_type = element_type,
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
-        owner_category, tss_ts; features = features, units = units)
+        owner_category, tss_ts; features = features, units = units,
+        quantity_kind = quantity_kind,
+        unit_system = _to_store_unit_system(unit_system))
     # As in `serialize_single!`: the staged bytes are the encoded array plus the
     # explicit timestamps the association carries.
     return sizeof(arr) + sizeof(get_timestamps(nts))
@@ -479,6 +520,8 @@ function get_non_sequential(
     values = _decode_static_values(nts.data, nts.element_type, len)
     return NonSequentialTimeSeries(
         String(name), nts.timestamps, values; units = nts.units,
+        quantity_kind = nts.quantity_kind,
+        unit_system = _from_store_unit_system(nts.unit_system),
     )
 end
 
@@ -729,6 +772,8 @@ function _infrastore_read_single(
     end
     return SingleTimeSeries(
         String(name), sts.initial_timestamp, sts.resolution, values; units = sts.units,
+        quantity_kind = sts.quantity_kind,
+        unit_system = _from_store_unit_system(sts.unit_system),
     )
 end
 
@@ -786,7 +831,8 @@ function _infrastore_read_non_sequential(
     # A slice is the same values over a shorter window, so it keeps the label.
     return NonSequentialTimeSeries(
         String(get_name(key)), timestamps[index:(index + n - 1)], vals;
-        units = get_units(nts))
+        units = get_units(nts), quantity_kind = get_quantity_kind(nts),
+        unit_system = get_unit_system(nts))
 end
 
 # ---- Bulk staging ----------------------------------------------------------
@@ -960,7 +1006,8 @@ function _infrastore_stage_data!(
         arr = _dense_forecast_array(ts, length(get_percentiles(ts)))
         prob = InfraStore.Probabilistic(initial, resolution, horizon, interval,
             get_count(ts), Float64.(get_percentiles(ts)), arr, name;
-            units = get_units(ts))
+            units = get_units(ts), quantity_kind = get_quantity_kind(ts),
+            unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (prob, get_count(ts))
     end
 end
@@ -982,7 +1029,9 @@ function _infrastore_stage_data!(
         arr, element_type = _storage_forecast_array(windows)
         det = InfraStore.Deterministic(initial, resolution, horizon, interval,
             length(windows), arr, name;
-            element_type = element_type, units = get_units(ts))
+            element_type = element_type, units = get_units(ts),
+            quantity_kind = get_quantity_kind(ts),
+            unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (det, length(windows))
     end
 end
@@ -1000,7 +1049,9 @@ function _infrastore_stage_data!(
     ) do initial, resolution, horizon, interval, name
         arr = _dense_forecast_array(ts, get_scenario_count(ts))
         scen = InfraStore.Scenarios(initial, resolution, horizon, interval,
-            get_count(ts), arr, name; units = get_units(ts))
+            get_count(ts), arr, name; units = get_units(ts),
+            quantity_kind = get_quantity_kind(ts),
+            unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (scen, get_count(ts))
     end
 end
@@ -1178,7 +1229,8 @@ function _reconstruct_forecast(
     end
     return Probabilistic(; name = name, data = data,
         percentiles = p.percentiles, resolution = p.resolution,
-        interval = p.interval, units = p.units)
+        interval = p.interval, units = p.units, quantity_kind = p.quantity_kind,
+        unit_system = _from_store_unit_system(p.unit_system))
 end
 
 _reconstruct_forecast(::Type{<:Deterministic}, args...) =
@@ -1219,7 +1271,9 @@ function _reconstruct_deterministic(
     window(i) = _truncate_window(_forecast_window(d.data, d.element_type, i), len)
     data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
     return Deterministic(; name = name, data = data,
-        resolution = d.resolution, interval = d.interval, units = d.units)
+        resolution = d.resolution, interval = d.interval, units = d.units,
+        quantity_kind = d.quantity_kind,
+        unit_system = _from_store_unit_system(d.unit_system))
 end
 
 function _reconstruct_forecast(
@@ -1246,7 +1300,9 @@ function _reconstruct_forecast(
     end
     return Scenarios(; name = name, data = data,
         scenario_count = s_ts.scenario_count, resolution = s_ts.resolution,
-        interval = s_ts.interval, units = s_ts.units)
+        interval = s_ts.interval, units = s_ts.units,
+        quantity_kind = s_ts.quantity_kind,
+        unit_system = _from_store_unit_system(s_ts.unit_system))
 end
 
 # ---- ForecastReader --------------------------------------------------------

@@ -25,6 +25,16 @@ Base.eltype(::TimeSeriesData{T}) where {T} = T
 _maybe_units(::Nothing) = nothing
 _maybe_units(units::AbstractString) = String(units)
 
+# Same, for the quantity-kind label.
+_maybe_quantity_kind(::Nothing) = nothing
+_maybe_quantity_kind(kind::AbstractString) = String(kind)
+
+# The unit system is stored as one of the `RelativeUnits` marker instances
+# (`DU`/`SU`/`NU`), not a string, so it dispatches like every other unit-system
+# value in IS rather than becoming a second, stringly-typed vocabulary.
+_maybe_unit_system(::Nothing) = nothing
+_maybe_unit_system(unit_system::AbstractUnitSystem) = unit_system
+
 """
 Return the user-declared units label of a time series (e.g. `"MW"`), or `nothing` when it
 carries none.
@@ -39,8 +49,49 @@ It is **not** part of a time series' identity: it never appears in a [`TimeSerie
 never filters a query, and is never an argument to `get_time_series`. Two series that
 differ only in their label are the same series, and adding both is a duplicate.
 
-Not to be confused with the unit *system* concept in [`RelativeUnits`](@ref) (`SU`/`DU`/`NU`),
-which selects a per-unit normalization base rather than naming a physical dimension. The two
+Not to be confused with [`get_unit_system`](@ref), which names the per-unit normalization
+base the values are already expressed in rather than naming a physical dimension. The two
 are independent: a series labeled `"MW"` may still be read against any normalization base.
 """
 get_units(value::TimeSeriesData) = value.units
+
+"""
+Return the kind of physical quantity a time series measures (e.g. `"ActivePower"`), or
+`nothing` when it declares none.
+
+This sits *above* [`get_units`](@ref) rather than duplicating it. A units library's
+dimensional analysis cannot separate active from reactive power — both are `[M L^2 T^-3]` —
+but a quantity kind can. And when [`get_unit_system`](@ref) is a per-unit base the values
+are dimensionless, so this is the only surviving record of what they measure.
+
+IS neither interprets nor validates the string; the recommended vocabulary is a
+[QUDT](https://www.qudt.org/pages/QUDToverviewPage.html) `QuantityKind` local name. Like the
+units label it is immutable, is carried over by data-sharing constructors, and is never part
+of a time series' identity.
+"""
+get_quantity_kind(value::TimeSeriesData) = value.quantity_kind
+
+"""
+Return the unit system a time series' values are **already expressed in** — one of the
+[`RelativeUnits`](@ref) markers `NU` (natural units), `DU` (device base), or `SU` (system
+base) — or `nothing` when the series declares none.
+
+Note the direction: `SU`/`DU`/`NU` are used elsewhere in IS as a *target* to convert
+**to**, whereas here the marker records the basis the stored values are **in**. It is a
+declaration, not a conversion: IS rescales nothing on the strength of it, and converting
+per-unit values back to natural units needs the base that lives on the owning component
+(see [`get_base_value`](@ref)).
+
+`nothing` means *unspecified*, which is deliberately not the same as `NU`: a series that
+never declared a basis must not be read as though someone had said its values were natural.
+
+Like the units label it is immutable, is carried over by data-sharing constructors, and is
+never part of a time series' identity.
+
+!!! note
+
+    The backing store represents only `NU` and `DU`. A series declaring `SU` is rejected
+    when it is added — see [`get_time_series`](@ref) and the store adapter — rather than
+    being silently downgraded.
+"""
+get_unit_system(value::TimeSeriesData) = value.unit_system

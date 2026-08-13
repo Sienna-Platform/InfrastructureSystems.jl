@@ -6,6 +6,8 @@
         scenario_count::Int
         data::SortedDict
         units::Union{Nothing, String}
+        quantity_kind::Union{Nothing, String}
+        unit_system::Union{Nothing, AbstractUnitSystem}
         internal::InfrastructureSystemsInternal
     end
 
@@ -21,6 +23,13 @@ A Discrete Scenario Based time series for a particular data field in a Component
   - `units::Union{Nothing, String}`: optional user-declared units label for the values
     (e.g. `"MW"`). Set at construction and returned on read; IS neither interprets nor
     validates it, and it is never part of the time series' identity.
+  - `quantity_kind::Union{Nothing, String}`: optional label for the kind of physical
+    quantity the values measure (e.g. `"ActivePower"`). Sits above `units`: it separates
+    active from reactive power, which dimensional analysis cannot, and it is the only
+    record of what per-unit values measure.
+  - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
+    the values are already expressed in (`NU`, `DU`, or `SU`). A declaration, not a
+    conversion; `nothing` means unspecified, which is not the same as `NU`.
   - `internal::InfrastructureSystemsInternal`
 """
 struct Scenarios{T, N} <: Forecast{T}
@@ -36,6 +45,10 @@ struct Scenarios{T, N} <: Forecast{T}
     interval::Dates.Period
     "user-declared units label for the values (e.g. `\"MW\"`), or `nothing`"
     units::Union{Nothing, String}
+    "kind of physical quantity the values measure (e.g. `\"ActivePower\"`), or `nothing`"
+    quantity_kind::Union{Nothing, String}
+    "unit system the values are already expressed in (`NU`/`DU`/`SU`), or `nothing`"
+    unit_system::Union{Nothing, AbstractUnitSystem}
 end
 
 # Infer `{T, N}` — element type and per-window array rank — from the data.
@@ -46,6 +59,8 @@ function Scenarios(
     resolution::Dates.Period,
     interval::Dates.Period;
     units::Union{Nothing, AbstractString} = nothing,
+    quantity_kind::Union{Nothing, AbstractString} = nothing,
+    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
     sorted = data isa SortedDict ? data : SortedDict(data...)
     return Scenarios{_window_eltype(sorted), _window_ndims(sorted)}(
@@ -55,6 +70,8 @@ function Scenarios(
         resolution,
         interval,
         _maybe_units(units),
+        _maybe_quantity_kind(quantity_kind),
+        _maybe_unit_system(unit_system),
     )
 end
 
@@ -66,6 +83,8 @@ function Scenarios(;
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
+    quantity_kind::Union{Nothing, AbstractString} = nothing,
+    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
     data = handle_normalization_factor(data, normalization_factor)
 
@@ -80,6 +99,8 @@ function Scenarios(;
         resolution,
         interval;
         units = units,
+        quantity_kind = quantity_kind,
+        unit_system = unit_system,
     )
 end
 
@@ -104,6 +125,8 @@ function Scenarios(
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
+    quantity_kind::Union{Nothing, AbstractString} = nothing,
+    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
     return Scenarios(;
         name = name,
@@ -113,6 +136,8 @@ function Scenarios(
         interval = interval,
         normalization_factor = normalization_factor,
         units = units,
+        quantity_kind = quantity_kind,
+        unit_system = unit_system,
     )
 end
 
@@ -123,6 +148,8 @@ function Scenarios(
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
+    quantity_kind::Union{Nothing, AbstractString} = nothing,
+    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
     return Scenarios(
         name,
@@ -131,6 +158,8 @@ function Scenarios(
         interval = interval,
         normalization_factor = normalization_factor,
         units = units,
+        quantity_kind = quantity_kind,
+        unit_system = unit_system,
     )
 end
 
@@ -159,6 +188,8 @@ function Scenarios(
     interval::Union{Nothing, Dates.Period} = nothing,
     normalization_factor::NormalizationFactor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
+    quantity_kind::Union{Nothing, AbstractString} = nothing,
+    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
     data, res = convert_forecast_input_time_arrays(input_data; resolution = resolution)
     return Scenarios(;
@@ -169,6 +200,8 @@ function Scenarios(
         scenario_count = size(first(values(input_data)))[2],
         normalization_factor = normalization_factor,
         units = units,
+        quantity_kind = quantity_kind,
+        unit_system = unit_system,
     )
 end
 
@@ -191,6 +224,8 @@ function Scenarios(
         src.resolution,
         src.interval;
         units = src.units,
+        quantity_kind = src.quantity_kind,
+        unit_system = src.unit_system,
     )
 end
 
