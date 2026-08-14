@@ -41,12 +41,14 @@ end
 
 {{#needs_positional_constructor}}
 function {{constructor_func}}({{#parameters}}{{^internal_default}}{{name}}{{#default}}={{default}}{{/default}}, {{/internal_default}}{{/parameters}}){{{closing_constructor_text}}}
-    {{constructor_func}}({{#parameters}}{{^internal_default}}{{name}}, {{/internal_default}}{{/parameters}}{{#parameters}}{{#internal_default}}{{{internal_default}}}, {{/internal_default}}{{/parameters}})
+    {{#has_conversions}}_construction_fields = ({{#parameters}}{{^internal_default}}{{name}} = {{name}}, {{/internal_default}}{{/parameters}})
+    {{/has_conversions}}{{constructor_func}}({{#parameters}}{{^internal_default}}{{{constructor_value}}}, {{/internal_default}}{{/parameters}}{{#parameters}}{{#internal_default}}{{{internal_default}}}, {{/internal_default}}{{/parameters}})
 end
 {{/needs_positional_constructor}}
 
 function {{constructor_func}}(; {{#parameters}}{{name}}{{#kwarg_value}}{{{kwarg_value}}}{{/kwarg_value}}, {{/parameters}}){{{closing_constructor_text}}}
-    {{constructor_func}}({{#parameters}}{{name}}, {{/parameters}})
+    {{#has_conversions}}_construction_fields = ({{#parameters}}{{^internal_default}}{{name}} = {{name}}, {{/internal_default}}{{/parameters}})
+    {{/has_conversions}}{{constructor_func}}({{#parameters}}{{{constructor_value}}}, {{/parameters}})
 end
 
 {{#has_null_values}}
@@ -157,6 +159,23 @@ function generate_structs(directory, data::Vector; print_results = true)
             accessor_name = accessor_module * "get_" * param["name"]
             setter_name = accessor_module * "set_" * param["name"] * "!"
             conversion_unit = get(param, "conversion_unit", "nothing")
+            # `construct_value` (defined downstream) creates a temporary component.
+            # That way we can convert user input to DU via existing machinery:
+            # just call `get_foo!(temp, DU)`. raw float, no units attached -> assume DU. 
+            # `_construction_fields` collects user-provided conversion fields (base power).
+            param["constructor_value"] = if get(param, "needs_conversion", false)
+                string(
+                    "construct_value(",
+                    item["constructor_func"],
+                    ", _construction_fields, Val(:",
+                    param["name"],
+                    "), Val(",
+                    conversion_unit,
+                    "))",
+                )
+            else
+                param["name"]
+            end
             include_getter = !get(param, "exclude_getter", false)
             if include_getter
                 push!(
@@ -258,6 +277,10 @@ function generate_structs(directory, data::Vector; print_results = true)
         item["parameters"] = parameters
         item["accessors"] = accessors
         item["setters"] = setters
+        # Only structs with unit-bearing fields pay for the `_construction_fields`
+        # binding in their constructors.
+        item["has_conversions"] =
+            any(x -> get(x, "needs_conversion", false), parameters)
         # If all parameters have defaults then the positional constructor will
         # collide with the kwarg constructor.
         item["needs_positional_constructor"] = has_internal && has_non_default_values
