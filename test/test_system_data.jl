@@ -400,7 +400,9 @@ end
     attr1 = IS.TestSupplemental(; value = 1.0)
     attr2 = IS.TestSupplemental(; value = 2.0)
     geo_attr1 = IS.GeographicInfo()
-    geo_attr2 = IS.GeographicInfo(; geo_json = Dict{String, Any}("foo" => 5))
+    geo_attr2 = IS.GeographicInfo(;
+        geo_json = Dict{String, Any}("type" => "Point", "coordinates" => [5.0, 0.0]),
+    )
     components_to_attributes = Dict(
         (IS.TestComponent, "component1") => [geo_attr1, attr1],
         (IS.TestComponent, "component2") => [attr1],

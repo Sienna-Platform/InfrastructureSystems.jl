@@ -153,7 +153,8 @@ end
     resolution = Dates.Hour(1)
     ta = TimeSeries.TimeArray(range(initial_time; length = 24, step = resolution), rand(24))
     ts = IS.SingleTimeSeries(; data = ta, name = "test")
-    geo = IS.GeographicInfo(; geo_json = Dict("x" => 1.0, "y" => 2.0))
+    geo =
+        IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]))
 
     for i in 1:2
         name = "component_$(i)"

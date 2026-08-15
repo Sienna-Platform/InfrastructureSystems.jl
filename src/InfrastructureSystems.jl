@@ -23,6 +23,9 @@ import DataFrames
 import DataFrames: DataFrame
 import Dates
 import JSON
+import TimeZones
+import GeoJSON
+import PowerCoreOpenAPIModels
 import Logging
 import Random
 import Pkg
@@ -186,6 +189,7 @@ include("component_container.jl")
 include("component_uuids.jl")
 include("geographic_supplemental_attribute.jl")
 include("data_source_supplemental_attribute.jl")
+include("openapi_converters.jl")
 include("generated/includes.jl")
 include("time_series_parser.jl")
 include("single_time_series.jl")
