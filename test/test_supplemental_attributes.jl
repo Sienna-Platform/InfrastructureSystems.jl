@@ -15,8 +15,8 @@ end
 
 @testset "Test bulk addition of supplemental attributes" begin
     mgr = IS.SupplementalAttributeManager()
-    attr1 = IS.GeographicInfo(; geo_json = Dict("x" => 1.0))
-    attr2 = IS.GeographicInfo(; geo_json = Dict("x" => 2.0))
+    attr1 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [1.0, 0.0]))
+    attr2 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]))
     component = IS.TestComponent("component1", 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
@@ -30,7 +30,7 @@ end
 @testset "Test bulk addition of supplemental attributes with error" begin
     mgr = IS.SupplementalAttributeManager()
     attr1 = IS.TestSupplemental(; value = 1.0)
-    attr2 = IS.GeographicInfo(; geo_json = Dict("x" => 2.0))
+    attr2 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]))
     component = IS.TestComponent("component1", 1)
     @test_throws(
         ArgumentError,
@@ -47,7 +47,7 @@ end
 @testset "Test bulk addition of supplemental attributes with error, existing attrs" begin
     mgr = IS.SupplementalAttributeManager()
     attr1 = IS.TestSupplemental(; value = 1.0)
-    attr2 = IS.GeographicInfo(; geo_json = Dict("x" => 2.0))
+    attr2 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]))
     component = IS.TestComponent("component1", 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
@@ -55,7 +55,7 @@ end
     end
 
     attr3 = IS.TestSupplemental(; value = 3.0)
-    attr4 = IS.GeographicInfo(; geo_json = Dict("x" => 3.0))
+    attr4 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [3.0, 0.0]))
     @test_throws(
         ArgumentError,
         IS.begin_supplemental_attributes_update(mgr) do
@@ -74,7 +74,7 @@ end
     mgr = IS.SupplementalAttributeManager()
     attr1 = IS.TestSupplemental(; value = 1.0)
     attr2 = IS.TestSupplemental(; value = 2.0)
-    attr3 = IS.GeographicInfo(; geo_json = Dict("x" => 3.0))
+    attr3 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [3.0, 0.0]))
     component = IS.TestComponent("component1", 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
@@ -342,24 +342,28 @@ end
 
 @testset "supplemental attribute transaction rolls back in-place mutations" begin
     mgr = IS.SupplementalAttributeManager()
-    attr = IS.GeographicInfo(; geo_json = Dict{String, Any}("x" => 1.0))
+    attr = IS.GeographicInfo(;
+        geo_json = Dict{String, Any}("type" => "Point", "coordinates" => [1.0, 0.0]),
+    )
     component = IS.TestComponent("component1", 1)
     IS.add_supplemental_attribute!(mgr, component, attr)
 
     @test_throws ErrorException IS.begin_supplemental_attributes_update(mgr) do
         stored = IS.get_supplemental_attribute(mgr, IS.get_uuid(attr))
-        IS.get_geo_json(stored)["x"] = 999.0
+        IS.get_geo_json(stored)["coordinates"] = [999.0, 0.0]
         error("boom")
     end
 
     stored = IS.get_supplemental_attribute(mgr, IS.get_uuid(attr))
-    @test IS.get_geo_json(stored)["x"] == 1.0
+    @test IS.get_geo_json(stored)["coordinates"] == [1.0, 0.0]
 end
 
 @testset "supplemental attribute rollback does not clone the manager" begin
     data = IS.SystemData()
     mgr = data.supplemental_attribute_manager
-    attr = IS.GeographicInfo(; geo_json = Dict{String, Any}("x" => 1.0))
+    attr = IS.GeographicInfo(;
+        geo_json = Dict{String, Any}("type" => "Point", "coordinates" => [1.0, 0.0]),
+    )
     component = IS.TestComponent("component1", 1)
     IS.add_component!(data, component)
     IS.add_supplemental_attribute!(data, component, attr)

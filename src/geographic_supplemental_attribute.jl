@@ -12,6 +12,37 @@ Supplemental attribute to store geographic information about system components i
 struct GeographicInfo <: SupplementalAttribute
     geo_json::Dict{String, Any}
     internal::InfrastructureSystemsInternal
+
+    function GeographicInfo(geo_json::Dict{String, <:Any}, internal)
+        validate_geo_json(geo_json)
+        return new(geo_json, internal)
+    end
+end
+
+"""
+Check that `geo_json` is actually GeoJSON, by parsing it.
+
+An empty dictionary passes: it is the documented default and means no geographic information
+was recorded, which is different from recording something malformed. Anything else must parse
+as a GeoJSON object, so a typo'd `type` or a coordinate list of the wrong shape is caught
+where it is introduced rather than surfacing much later in whatever consumes the geometry.
+
+The parse result is discarded — `GeoJSON` reads coordinates as `Float32`, and the stored
+value stays the caller's own dictionary rather than a lossy round-trip of it.
+"""
+function validate_geo_json(geo_json::Dict{String, <:Any})
+    isempty(geo_json) && return nothing
+    try
+        GeoJSON.read(JSON.json(geo_json))
+    catch e
+        throw(
+            ArgumentError(
+                "GeographicInfo.geo_json is not valid GeoJSON: $(sprint(showerror, e)). " *
+                "Pass an empty dictionary to record no geographic information.",
+            ),
+        )
+    end
+    return nothing
 end
 
 """
