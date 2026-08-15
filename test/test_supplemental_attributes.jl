@@ -15,8 +15,10 @@ end
 
 @testset "Test bulk addition of supplemental attributes" begin
     mgr = IS.SupplementalAttributeManager()
-    attr1 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [1.0, 0.0]))
-    attr2 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]))
+    attr1 =
+        IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [1.0, 0.0]))
+    attr2 =
+        IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]))
     component = IS.TestComponent("component1", 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
@@ -30,7 +32,8 @@ end
 @testset "Test bulk addition of supplemental attributes with error" begin
     mgr = IS.SupplementalAttributeManager()
     attr1 = IS.TestSupplemental(; value = 1.0)
-    attr2 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]))
+    attr2 =
+        IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]))
     component = IS.TestComponent("component1", 1)
     @test_throws(
         ArgumentError,
@@ -47,7 +50,8 @@ end
 @testset "Test bulk addition of supplemental attributes with error, existing attrs" begin
     mgr = IS.SupplementalAttributeManager()
     attr1 = IS.TestSupplemental(; value = 1.0)
-    attr2 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]))
+    attr2 =
+        IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]))
     component = IS.TestComponent("component1", 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
@@ -55,7 +59,8 @@ end
     end
 
     attr3 = IS.TestSupplemental(; value = 3.0)
-    attr4 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [3.0, 0.0]))
+    attr4 =
+        IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [3.0, 0.0]))
     @test_throws(
         ArgumentError,
         IS.begin_supplemental_attributes_update(mgr) do
@@ -74,7 +79,8 @@ end
     mgr = IS.SupplementalAttributeManager()
     attr1 = IS.TestSupplemental(; value = 1.0)
     attr2 = IS.TestSupplemental(; value = 2.0)
-    attr3 = IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [3.0, 0.0]))
+    attr3 =
+        IS.GeographicInfo(; geo_json = Dict("type" => "Point", "coordinates" => [3.0, 0.0]))
     component = IS.TestComponent("component1", 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
