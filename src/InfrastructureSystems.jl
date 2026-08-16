@@ -22,6 +22,9 @@ import DataFrames
 import DataFrames: DataFrame
 import Dates
 import JSON
+import TimeZones
+import GeoJSON
+import PowerCoreOpenAPIModels
 import Logging
 import Random
 import Pkg
@@ -179,6 +182,8 @@ include("containers.jl")
 include("component_container.jl")
 include("component_ids.jl")
 include("geographic_supplemental_attribute.jl")
+include("data_source_supplemental_attribute.jl")
+include("openapi_converters.jl")
 
 # Time-series accessor exports. These getters/setters are defined on the time
 # series data types and on the `TimeSeriesKey` hierarchy. (They were previously

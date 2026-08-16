@@ -5,48 +5,33 @@
 
 ## Overview
 
-Foundational library for performance-critical simulation packages: SystemData, component containers, time series (HDF5/in-memory + SQLite metadata), serialization, struct codegen, and the `RelativeUnits` layer. For general Sienna coding practices see [.claude/Sienna.md](Sienna.md); for workspace wiring see `/home/jdlara/Sienna_work/psy6/CLAUDE.md`.
-
-> **Maintenance note:** Update this file whenever files, directories, or architectural
-> patterns change so it stays accurate.
+Foundational library for performance-critical simulation packages: SystemData, component containers, time series (HDF5/in-memory + SQLite metadata), serialization, struct codegen, and the `RelativeUnits` layer. General Sienna practices: the `sienna-psy6` skill. Workspace wiring: the psy6 workspace root `CLAUDE.md`.
 
 ## Downstream blast radius
 
 **Every psy6 package sits on IS**: PowerSystems, PowerNetworkMatrices, PowerFlows, PowerFlowFileParser, InfrastructureOptimizationModels, PowerOperationsModels, PowerSystemCaseBuilder. Any signature/behavior change ripples platform-wide; time-series, serialization, and units changes are the highest-risk classes — extend serialization round-trip tests when touching them. After an IS change, smoke the stack:
 
 ```sh
-julia --project=/home/jdlara/Sienna_work/psy6 -e 'using PowerSystems, PowerNetworkMatrices, PowerFlows, PowerOperationsModels, PowerSystemCaseBuilder'
+julia --project=<psy6-workspace-root> -e 'using PowerSystems, PowerNetworkMatrices, PowerFlows, PowerOperationsModels, PowerSystemCaseBuilder'
 ```
 
 (The psy5 line's PowerSimulations/PSID consume the *top-level* IS checkout on `main`, not this one.)
 
-## File Structure
+## Source layout — the non-obvious parts
 
-### `src/`
-
-Key files:
-- `InfrastructureSystems.jl` — main module; the only place exports are allowed (see Export policy)
-- `system_data.jl` — SystemData implementation
-- `time_series_interface.jl` — time series public API (accessors take a `units` kwarg; see Units layer)
-- `component.jl` — base component types
-- `value_curve.jl` — `ValueCurve{T<:FunctionData}` and static curve types (`InputOutputCurve`, `IncrementalCurve`, `AverageRateCurve`)
-- `time_series_value_curve.jl` — time-series-backed value curves + `build_static_curve` per-timestep resolution
-- `cost_aliases.jl` — user-facing curve aliases (`LinearCurve`, `PiecewiseIncrementalCurve`, …) and their `TimeSeries*` counterparts
-- `production_variable_cost_curve.jl` — `CostCurve{T,U}` / `FuelCurve{T,U}` (units in the type parameter)
-- `relative_units.jl` — `RelativeUnits` submodule: unit-system markers and `RelativeQuantity`
-- `outputs.jl` — abstract `Outputs` interface (not-implemented stubs for downstream packages)
-- `serialization.jl` — JSON-based serialization (stdlib-adjacent `JSON`; JSON3/StructTypes were removed)
-
-Subdirectories:
-- `function_data/` — `FunctionData` hierarchy, time-series-backed function data, convexity/validity checks
-- `utils/` — utility functions including `generate_structs.jl`
-- `generated/` — auto-generated struct files (**DO NOT EDIT directly**)
-- `descriptors/` — JSON descriptors for struct generation (`structs.json`)
-- `Optimization/` — abstract types only (~185 lines): container/key abstract types
-  (`VariableType`, `ConstraintType`, `ParameterType`, …), formulation abstract types,
-  construct stages, and enums. The concrete results/container machinery was removed in
-  IS4; the consumer defining concretes in this line is **InfrastructureOptimizationModels (IOM)**.
-- `Simulation/` — simulation utilities
+- `src/InfrastructureSystems.jl` — the **only** place exports are allowed (see Export policy).
+- `src/serialization.jl` — JSON-based; JSON3/StructTypes were removed in IS4. Per-type
+  deserialize methods narrow JSON's loose types back to declared field types — optional
+  `DateTime` (`Union{Nothing, Dates.DateTime}`) and `Vector{String}` (JSON arrays parse to
+  `Vector{Any}`).
+- `src/geographic_supplemental_attribute.jl`, `src/data_source_supplemental_attribute.jl` —
+  the two hand-written supplemental attributes (`GeographicInfo`, `DataSource`); neither is
+  exported, and both are shared across components create-once/link-many via the association
+  store rather than owned by one component.
+- `src/generated/` — auto-generated (**never edit**); `src/descriptors/structs.json` is its source.
+- `src/Optimization/` — **abstract types only** (~185 lines): container/key abstracts, formulation
+  abstracts, construct stages, enums. The concrete results/container machinery was removed in IS4;
+  the consumer defining concretes in this line is **InfrastructureOptimizationModels (IOM)**.
 
 ## Units Layer (RelativeUnits)
 
@@ -373,22 +358,9 @@ exists; the arg was never read — renamed to `time_series_transaction`),
 - Full-suite baseline (2026-07-29): 8,771 passing, 1 broken.
 - Requires `INFRASTORE_LIB` pointing at `libinfrastore_ffi` (see the InfraStore repo).
 
-## Common Tasks
-
-| Task | Command |
-|------|---------|
-| Run tests | `julia --project=test test/runtests.jl` |
-| Run one testset | `julia --project=test -e 'include("test/InfrastructureSystemsTests.jl"); run_tests("<name>")'` |
-| Compile check | `julia --project -e 'using InfrastructureSystems'` |
-| Build docs | `julia --project=docs docs/make.jl` |
-| Format code | `julia --project=scripts/formatter -e 'include("scripts/formatter/formatter_code.jl")'` |
-| Check format | `git diff --exit-code` |
-| Instantiate test env | `julia --project=test -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'` |
-| Generate structs | `julia bin/generate_structs.jl src/descriptors/structs.json src/generated/` |
-
 ## AI Agent Guidance
 
-**IMPORTANT:** Review [.claude/Sienna.md](Sienna.md) for general Sienna coding practices, performance requirements, and conventions.
+Platform-wide practices, performance requirements, and conventions: invoke the `sienna-psy6` skill.
 
 ### InfrastructureSystems-Specific Priorities
 

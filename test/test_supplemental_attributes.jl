@@ -24,8 +24,18 @@ end
 
 @testset "Test bulk addition of supplemental attributes" begin
     mgr = _attr_mgr()
-    attr1 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 1.0)), 2)
-    attr2 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 2.0)), 3)
+    attr1 = _id!(
+        IS.GeographicInfo(;
+            geo_json = Dict("type" => "Point", "coordinates" => [1.0, 0.0]),
+        ),
+        2,
+    )
+    attr2 = _id!(
+        IS.GeographicInfo(;
+            geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]),
+        ),
+        3,
+    )
     component = _id!(IS.TestComponent("component1", 1), 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
@@ -39,7 +49,12 @@ end
 @testset "Test bulk addition of supplemental attributes with error" begin
     mgr = _attr_mgr()
     attr1 = _id!(IS.TestSupplemental(; value = 1.0), 2)
-    attr2 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 2.0)), 3)
+    attr2 = _id!(
+        IS.GeographicInfo(;
+            geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]),
+        ),
+        3,
+    )
     component = _id!(IS.TestComponent("component1", 1), 1)
     @test_throws(
         ArgumentError,
@@ -56,7 +71,12 @@ end
 @testset "Test bulk addition of supplemental attributes with error, existing attrs" begin
     mgr = _attr_mgr()
     attr1 = _id!(IS.TestSupplemental(; value = 1.0), 2)
-    attr2 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 2.0)), 3)
+    attr2 = _id!(
+        IS.GeographicInfo(;
+            geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]),
+        ),
+        3,
+    )
     component = _id!(IS.TestComponent("component1", 1), 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
@@ -64,7 +84,12 @@ end
     end
 
     attr3 = _id!(IS.TestSupplemental(; value = 3.0), 4)
-    attr4 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 3.0)), 5)
+    attr4 = _id!(
+        IS.GeographicInfo(;
+            geo_json = Dict("type" => "Point", "coordinates" => [3.0, 0.0]),
+        ),
+        5,
+    )
     @test_throws(
         ArgumentError,
         IS.begin_supplemental_attributes_update(mgr) do
@@ -83,7 +108,12 @@ end
     mgr = _attr_mgr()
     attr1 = _id!(IS.TestSupplemental(; value = 1.0), 2)
     attr2 = _id!(IS.TestSupplemental(; value = 2.0), 3)
-    attr3 = _id!(IS.GeographicInfo(; geo_json = Dict("x" => 3.0)), 4)
+    attr3 = _id!(
+        IS.GeographicInfo(;
+            geo_json = Dict("type" => "Point", "coordinates" => [3.0, 0.0]),
+        ),
+        4,
+    )
     component = _id!(IS.TestComponent("component1", 1), 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
@@ -354,25 +384,29 @@ end
     # already-assigned ID).
     data = IS.SystemData()
     mgr = data.supplemental_attribute_manager
-    attr = IS.GeographicInfo(; geo_json = Dict{String, Any}("x" => 1.0))
+    attr = IS.GeographicInfo(;
+        geo_json = Dict{String, Any}("type" => "Point", "coordinates" => [1.0, 0.0]),
+    )
     component = IS.TestComponent("component1", 1)
     IS.add_component!(data, component)
     IS.add_supplemental_attribute!(data, component, attr)
 
     @test_throws ErrorException IS.begin_supplemental_attributes_update(mgr) do
         stored = IS.get_supplemental_attribute(mgr, IS.get_id(attr))
-        IS.get_geo_json(stored)["x"] = 999.0
+        IS.get_geo_json(stored)["coordinates"] = [999.0, 0.0]
         error("boom")
     end
 
     stored = IS.get_supplemental_attribute(mgr, IS.get_id(attr))
-    @test IS.get_geo_json(stored)["x"] == 1.0
+    @test IS.get_geo_json(stored)["coordinates"] == [1.0, 0.0]
 end
 
 @testset "supplemental attribute rollback does not clone the manager" begin
     data = IS.SystemData()
     mgr = data.supplemental_attribute_manager
-    attr = IS.GeographicInfo(; geo_json = Dict{String, Any}("x" => 1.0))
+    attr = IS.GeographicInfo(;
+        geo_json = Dict{String, Any}("type" => "Point", "coordinates" => [1.0, 0.0]),
+    )
     component = IS.TestComponent("component1", 1)
     IS.add_component!(data, component)
     IS.add_supplemental_attribute!(data, component, attr)
@@ -389,4 +423,120 @@ end
     @test refs === original_refs
     @test refs.supplemental_attribute_manager === mgr
     @test refs.time_series_manager === data.time_series_manager
+end
+
+@testset "DataSource construction and plain accessors" begin
+    ds = IS.DataSource(;
+        organization = "U.S. EIA",
+        retrieved_at = Dates.DateTime("2026-06-20T14:03:00"),
+        fields = ["operation_cost", "rating"],
+    )
+    @test IS.get_organization(ds) == "U.S. EIA"
+    @test IS.get_retrieved_at(ds) == Dates.DateTime("2026-06-20T14:03:00")
+    @test IS.get_fields(ds) == ["operation_cost", "rating"]
+    @test IS.get_dataset(ds) == ""
+    @test IS.get_url(ds) == ""
+    @test IS.get_version(ds) == ""
+    @test IS.get_confidence(ds) == ""
+    @test IS.get_extra(ds) == Dict{String, Any}()
+    @test IS.get_uuid(ds) == IS.get_uuid(IS.get_internal(ds))
+
+    IS.set_organization!(ds, "NREL")
+    IS.set_dataset!(ds, "EIA-860 2023, Schedule 3")
+    IS.set_url!(ds, "https://www.eia.gov/electricity/data/eia860/")
+    IS.set_version!(ds, "2023 final")
+    IS.set_confidence!(ds, "high")
+    IS.set_retrieved_at!(ds, Dates.DateTime("2026-06-21T00:00:00"))
+    IS.set_fields!(ds, ["rating"])
+    IS.set_extra!(ds, Dict{String, Any}("license" => "Public Domain"))
+    @test IS.get_organization(ds) == "NREL"
+    @test IS.get_dataset(ds) == "EIA-860 2023, Schedule 3"
+    @test IS.get_url(ds) == "https://www.eia.gov/electricity/data/eia860/"
+    @test IS.get_version(ds) == "2023 final"
+    @test IS.get_confidence(ds) == "high"
+    @test IS.get_retrieved_at(ds) == Dates.DateTime("2026-06-21T00:00:00")
+    @test IS.get_fields(ds) == ["rating"]
+    @test IS.get_extra(ds)["license"] == "Public Domain"
+end
+
+@testset "DataSource optional fields and add_field!" begin
+    ds = IS.DataSource(;
+        organization = "U.S. EIA",
+        retrieved_at = Dates.DateTime("2026-06-20T14:03:00"),
+        fields = String[],
+    )
+    @test IS.has_published_at(ds) == false
+    @test_throws ArgumentError IS.get_published_at(ds)
+    @test IS.has_recorded_by(ds) == false
+    @test_throws ArgumentError IS.get_recorded_by(ds)
+
+    IS.set_published_at!(ds, Dates.DateTime("2024-09-01T00:00:00"))
+    IS.set_recorded_by!(ds, "sienna-ingest@2.3.1")
+    @test IS.has_published_at(ds) == true
+    @test IS.get_published_at(ds) == Dates.DateTime("2024-09-01T00:00:00")
+    @test IS.has_recorded_by(ds) == true
+    @test IS.get_recorded_by(ds) == "sienna-ingest@2.3.1"
+
+    IS.add_field!(ds, "operation_cost")
+    IS.add_field!(ds, "rating")
+    @test IS.get_fields(ds) == ["operation_cost", "rating"]
+end
+
+@testset "DataSource shared across components" begin
+    data = IS.SystemData()
+    ds = IS.DataSource(;
+        organization = "U.S. EIA",
+        retrieved_at = Dates.DateTime("2026-06-20T14:03:00"),
+        fields = String[],
+    )
+    component1 = IS.TestComponent("component1", 5)
+    component2 = IS.TestComponent("component2", 7)
+    IS.add_component!(data, component1)
+    IS.add_component!(data, component2)
+    IS.add_supplemental_attribute!(data, component1, ds)
+    IS.add_supplemental_attribute!(data, component2, ds)
+    @test IS.get_num_supplemental_attributes(data) == 1
+    @test length(collect(IS.get_supplemental_attributes(IS.DataSource, data))) == 1
+
+    IS.remove_supplemental_attribute!(data, component1, ds)
+    @test IS.get_num_supplemental_attributes(data) == 1
+    IS.remove_supplemental_attribute!(data, component2, ds)
+    @test IS.get_num_supplemental_attributes(data) == 0
+end
+
+@testset "DataSource serialization round-trip" begin
+    ds = IS.DataSource(;
+        organization = "U.S. EIA",
+        retrieved_at = Dates.DateTime("2026-06-20T14:03:00"),
+        fields = ["operation_cost"],
+        dataset = "EIA-860 2023, Schedule 3",
+        url = "https://www.eia.gov/electricity/data/eia860/",
+        version = "2023 final",
+        published_at = Dates.DateTime("2024-09-01T00:00:00"),
+        confidence = "high",
+        recorded_by = "sienna-ingest@2.3.1",
+        extra = Dict{String, Any}("license" => "Public Domain"),
+    )
+    back = IS.from_json(IS.to_json(ds), IS.DataSource)
+    @test IS.get_organization(back) == IS.get_organization(ds)
+    @test IS.get_retrieved_at(back) == IS.get_retrieved_at(ds)
+    @test IS.get_dataset(back) == IS.get_dataset(ds)
+    @test IS.get_url(back) == IS.get_url(ds)
+    @test IS.get_version(back) == IS.get_version(ds)
+    @test IS.get_published_at(back) == IS.get_published_at(ds)
+    @test IS.get_confidence(back) == IS.get_confidence(ds)
+    @test IS.get_recorded_by(back) == IS.get_recorded_by(ds)
+    @test IS.get_fields(back) == IS.get_fields(ds)
+    @test IS.get_extra(back)["license"] == "Public Domain"
+    @test IS.get_uuid(back) == IS.get_uuid(ds)
+
+    ds2 = IS.DataSource(;
+        organization = "NREL",
+        retrieved_at = Dates.DateTime("2026-04-15T00:00:00"),
+        fields = String[],
+    )
+    back2 = IS.from_json(IS.to_json(ds2), IS.DataSource)
+    @test IS.has_published_at(back2) == false
+    @test IS.has_recorded_by(back2) == false
+    @test IS.get_fields(back2) == String[]
 end

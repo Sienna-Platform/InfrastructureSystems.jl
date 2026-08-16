@@ -613,11 +613,17 @@ double_equals_from_fields(a::T, b::T) where {T} =
 isequal_from_fields(a::T, b::T) where {T} =
     compare_over_fields(isequal, &, true, a, b)
 
-"Compute a hash of the instance `a` by combining hashes of all its fields"
+"""
+Compute a hash of the instance `a` by combining hashes of all its fields along with its
+concrete type. The type must be included because instances that differ only in type
+parameters carrying no field data -- e.g. the `U <: AbstractUnitSystem` marker of
+`CostCurve{T, U}` -- would otherwise hash identically while comparing unequal.
+"""
 hash_from_fields(a) = hash_from_fields(a, zero(UInt))
 
-function hash_from_fields(a, h::UInt)
-    for field in sort!(collect(fieldnames(typeof(a))))
+function hash_from_fields(a::T, h::UInt) where {T}
+    h = hash(T, h)
+    for field in sort!(collect(fieldnames(T)))
         h = hash(getfield(a, field), h)
     end
     return h

@@ -463,6 +463,29 @@ end
     @test IS.get_power_units(zero(IS.FuelCurve)) == IS.NaturalUnit()
 end
 
+@testset "hash distinguishes unit systems and curve types" begin
+    vc = IS.InputOutputCurve(IS.LinearFunctionData(1.0, 1.0))
+    # The unit system lives in a type parameter, not a field, so a field-only hash
+    # would collide across unit systems
+    curves = [
+        IS.CostCurve(vc, U)
+        for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+    ]
+    @test length(unique(hash.(curves))) == length(curves)
+    # Same unit system still satisfies the isequal => hash contract, including the
+    # NaN case where isequal and == deliberately diverge
+    for fd in (IS.LinearFunctionData(1.0, 1.0), IS.LinearFunctionData(NaN, 1.0))
+        a = IS.CostCurve(IS.InputOutputCurve(fd), IS.SystemBaseUnit())
+        b = IS.CostCurve(IS.InputOutputCurve(fd), IS.SystemBaseUnit())
+        @test isequal(a, b)
+        @test hash(a) == hash(b)
+    end
+    # Distinct types with identical fields must not collide either
+    @test hash(IS.CostCurve(vc, IS.NaturalUnit())) != hash(IS.FuelCurve(vc, 1.0))
+    @test hash(IS.IncrementalCurve(IS.LinearFunctionData(1.0, 1.0), 1.0)) !=
+          hash(IS.AverageRateCurve(IS.LinearFunctionData(1.0, 1.0), 1.0))
+end
+
 @testset "FuelCurve deserialize garbage fuel_cost (PVC-003)" begin
     fc_example = IS.FuelCurve(IS.InputOutputCurve(IS.LinearFunctionData(1.0, 0.0)), 2.5)
     bad_dict = merge(IS.serialize(fc_example), Dict("fuel_cost" => "oops"))

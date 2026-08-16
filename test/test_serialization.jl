@@ -207,7 +207,9 @@ end
             rand(24),
         )
         ts = IS.SingleTimeSeries(; data = ta, name = "test")
-        geo = IS.GeographicInfo(; geo_json = Dict("x" => 1.0, "y" => 2.0))
+        geo = IS.GeographicInfo(;
+            geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
+        )
 
         for i in 1:2
             name = "component_$(i)"
@@ -383,4 +385,9 @@ end
     else
         @test_skip false
     end
+end
+
+@testset "Deserialize optional DateTime field" begin
+    @test IS.deserialize(Union{Nothing, Dates.DateTime}, "2024-09-01T00:00:00") ==
+          Dates.DateTime("2024-09-01T00:00:00")
 end
