@@ -47,8 +47,8 @@ supports_supplemental_attributes(::MyComponent) = true
 
 *Notes*:
 
-  - [`InfrastructureSystems.get_uuid`](@ref) with argument `obj::InfrastructureSystemsComponent`
-    returns the component UUID.
+  - [`InfrastructureSystems.get_id`](@ref) with argument `obj::InfrastructureSystemsComponent`
+    returns the component ID.
   - The extension dictionary is not created until the first time `get_ext` is
     called.
 

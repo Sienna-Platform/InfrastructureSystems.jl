@@ -6,6 +6,7 @@ Unit tests can be executed in the REPL by executing the following:
 
 ```julia
 julia> ] test
+
 ```
 
 ## Interactive test execution
@@ -39,12 +40,14 @@ Load the tests through ReTest.jl and Revise.jl.
 
 ```julia
 julia> include("test/load_tests.jl")
+
 ```
 
 Run all tests.
 
 ```julia
 julia> run_tests()
+
 ```
 
 Run a subset of tests with a regular expression. This pattern matches multiple testset definitions.
@@ -60,14 +63,15 @@ information.
 ## Change logging levels
 
 ```julia
-julia> InfrastructureSystems.make_logging_config_file("logging_config.toml")
 julia> ENV["SIENNA_LOGGING_CONFIG"] = "logging_config.toml"
+InfrastructureSystems.make_logging_config_file("logging_config.toml")
 ```
 
 Edit the file to suit your preferences and rerun.
 
 ```julia
 julia> run_tests()
+
 ```
 
 **Note** that you can filter out noisy log groups in this file.

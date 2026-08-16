@@ -23,6 +23,7 @@ public or internal API. There may be multiple issues to iterate through:
 
       + **No**: add a new [`@autodocs` block](@extref) in the Public API .md file with that
         `*.jl` file as one of its `Pages`.
+
  3. Are these docstrings from `InfrastructureSystems.jl`? Follow how-to
     [selectively export docstrings from `InfrastructureSystems.jl`](@ref docs_from_is).
 
@@ -44,6 +45,7 @@ based on the end of a file path.
 
  2. Check whether that file is listed more than once in an `@autodocs` `Pages` list in the
     API markdown file (e.g., `PowerSimulations.md` or `public.md`). Remove duplicates.
+
  3. Also check for other files with the same partial ending in the `@autodocs` `Pages` lists
     in the API .md file. Specify more of that file path to distinguish it.
 

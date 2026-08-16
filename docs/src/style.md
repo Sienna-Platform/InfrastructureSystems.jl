@@ -13,14 +13,18 @@
 
   - Follow [Julia contribution guidelines](https://github.com/JuliaLang/julia/blob/main/CONTRIBUTING.md#general-formatting-guidelines-for-julia-code-contributions),
     notably its line length limit.
+
   - Follow [Julia guidelines for docstrings](https://docs.julialang.org/en/v1/manual/documentation/index.html).
+
   - Follow [JuMP coding standards](http://www.juliaopt.org/JuMP.jl/dev/style),
     including its deviations from the Julia style guide.  In particular, note its policies on
 
       + [whitespace](http://www.juliaopt.org/JuMP.jl/dev/style/#Whitespace-1)
       + [return statements](http://www.juliaopt.org/JuMP.jl/dev/style/#Return-statements-1)
       + [variable names](http://www.juliaopt.org/JuMP.jl/dev/style/#Use-of-underscores-within-names-1).
+
   - Read [The Zen of Python](https://www.python.org/dev/peps/pep-0020).
+
   - Consider using a plugin that configures your text editor to use [EditorConfig](https://editorconfig.org/) settings.
 
 ## Code Organization
@@ -46,7 +50,9 @@ Since Julia 1.6, language servers will recognize `import X as Y` where they fail
     the code itself.
 
   - Use complete sentences and proper grammar.
+
   - Include a space in between the "#" and the first word of the comment.
+
   - Use these tags in comments to describe known work:
 
       + TODO:  tasks that need to be done
@@ -86,9 +92,8 @@ Since Julia 1.6, language servers will recognize `import X as Y` where they fail
     `@assert_op` in optimized builds.
 
 ```julia
-julia> a = 3; b = 4;
 julia> @assert_op a == b
-ERROR: AssertionError: 3 == 4
+a = 3; b = 4;
 ```
 
 ## Globals
@@ -103,11 +108,11 @@ Julia code base uses this idiom frequently:  `<cond> && <statement>`
 [Example](https://docs.julialang.org/en/v1.0/manual/control-flow/#Short-Circuit-Evaluation-1):
 
 ```julia
-    function fact(n::Int)
-       n >= 0 || error("n must be non-negative")
-       n == 0 && return 1
-       n * fact(n-1)
-    end
+function fact(n::Int)
+    n >= 0 || error("n must be non-negative")
+    n == 0 && return 1
+    n * fact(n-1)
+end
 ```
 
 This is acceptable for simple code as in this example. However, in general,
@@ -119,7 +124,7 @@ judgement.
 Good:
 
 ```julia
-    y = x > 0 ? x : -x
+y = x > 0 ? x : -x
 ```
 
 There are many examples in our codebase that use the form `<cond> ? <statement> : <statement>`.
@@ -170,15 +175,15 @@ into main. This functionality is provided using Codecov
 Bad:
 
 ```julia
-    x   = 1
-    foo = 2
+x = 1
+foo = 2
 ```
 
 Good:
 
 ```julia
-    x = 1
-    foo = 2
+x = 1
+foo = 2
 ```
 
   - Define abstract types on one line. Given the lack of IDE support for Julia,
@@ -187,15 +192,13 @@ Good:
 Bad:
 
 ```julia
-    abstract type
-        Foo
-    end
+abstract type Foo end
 ```
 
 Good:
 
 ```julia
-    abstract type Foo end
+abstract type Foo end
 ```
 
 All Sienna packages perform tests using [JuliaFormatter](https://github.com/domluna/JuliaFormatter.jl)

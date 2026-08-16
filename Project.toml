@@ -30,20 +30,14 @@ TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
-# InfraStore is not registered yet, so consumers cannot resolve it from a
-# registry. Declaring it here means any downstream package that develops IS by
-# path (PowerSystems, PowerSystemCaseBuilder) resolves it too, instead of each
-# one needing to know where it lives. The path is relative to this file. Drop
-# this section once InfraStore is registered.
 [sources]
-InfraStore = {path = "../../infrastore/julia/InfraStore.jl"}
 # Git rev, not a sibling path: a relative path resolves only in a workspace checkout and
 # fails outright in CI, which clones this repo alone. Pinned to a branch rather than a
 # version because PowerOpenAPIModels is not registered.
 PowerCoreOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "PowerCoreOpenAPIModels.jl"}
 
 [compat]
-InfraStore = "0.5"
+InfraStore = "0.6"
 DataFrames = "^1.7"
 DataStructures = "^0.18, ^0.19"
 Dates = "1"

@@ -439,7 +439,7 @@ end
     @test IS.get_version(ds) == ""
     @test IS.get_confidence(ds) == ""
     @test IS.get_extra(ds) == Dict{String, Any}()
-    @test IS.get_uuid(ds) == IS.get_uuid(IS.get_internal(ds))
+    @test IS.get_id(ds) == IS.get_id(IS.get_internal(ds))
 
     IS.set_organization!(ds, "NREL")
     IS.set_dataset!(ds, "EIA-860 2023, Schedule 3")
@@ -528,7 +528,7 @@ end
     @test IS.get_recorded_by(back) == IS.get_recorded_by(ds)
     @test IS.get_fields(back) == IS.get_fields(ds)
     @test IS.get_extra(back)["license"] == "Public Domain"
-    @test IS.get_uuid(back) == IS.get_uuid(ds)
+    @test IS.get_id(back) == IS.get_id(ds)
 
     ds2 = IS.DataSource(;
         organization = "NREL",
