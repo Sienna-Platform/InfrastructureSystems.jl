@@ -37,7 +37,7 @@ YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 PowerCoreOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "PowerCoreOpenAPIModels.jl"}
 
 [compat]
-InfraStore = "0.6"
+InfraStore = "0.7"
 DataFrames = "^1.7"
 DataStructures = "^0.18, ^0.19"
 Dates = "1"
