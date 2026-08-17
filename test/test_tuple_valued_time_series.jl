@@ -80,29 +80,36 @@
                     time_series_directory = tmp,
                     time_series_in_memory = false,
                 )
-                comp = IS.TestComponent("gen", 5)
-                IS.add_component!(sys, comp)
+                # The store must be closed before the block exits: Windows refuses to
+                # delete the still-open HDF5 file, and `mktempdir`'s cleanup logs that
+                # failure at `Error` level, which fails the suite's log-error gate.
+                try
+                    comp = IS.TestComponent("gen", 5)
+                    IS.add_component!(sys, comp)
 
-                ta = TimeSeries.TimeArray(collect(timestamps), arity_vals)
-                sts = IS.SingleTimeSeries(; name = "tuple_ts", data = ta)
-                IS.add_time_series!(sys, comp, sts)
+                    ta = TimeSeries.TimeArray(collect(timestamps), arity_vals)
+                    sts = IS.SingleTimeSeries(; name = "tuple_ts", data = ta)
+                    IS.add_time_series!(sys, comp, sts)
 
-                key = only(IS.get_time_series_keys(comp))
-                resolve(t) = T(
-                    only(
-                        IS.get_time_series_values(
-                            comp, key; start_time = t, len = 1,
+                    key = only(IS.get_time_series_keys(comp))
+                    resolve(t) = T(
+                        only(
+                            IS.get_time_series_values(
+                                comp, key; start_time = t, len = 1,
+                            ),
                         ),
-                    ),
-                )
-                v_first = resolve(initial_time)
-                v_mid = resolve(initial_time + Dates.Hour(10))
-                v_last = resolve(initial_time + (horizon_count - 1) * resolution)
+                    )
+                    v_first = resolve(initial_time)
+                    v_mid = resolve(initial_time + Dates.Hour(10))
+                    v_last = resolve(initial_time + (horizon_count - 1) * resolution)
 
-                @test v_first isa T
-                @test v_first == T(arity_vals[1])
-                @test v_mid == T(arity_vals[11])
-                @test v_last == T(arity_vals[end])
+                    @test v_first isa T
+                    @test v_first == T(arity_vals[1])
+                    @test v_mid == T(arity_vals[11])
+                    @test v_last == T(arity_vals[end])
+                finally
+                    IS.close!(sys.time_series_manager.data_store)
+                end
             end
         end
     end
