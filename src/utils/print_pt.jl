@@ -79,10 +79,21 @@ end
 # of `(column, getter_func, arg)` tuples. The getter logic enables application of system
 # units in PowerSystems through its getter functions. Dict-form `additional_columns`
 # carry their own accessor closures, so there is nothing to resolve (returns `nothing`).
-# `units`, when given, overrides every column's own `display_units_arg` trait — but
-# never forces a units argument onto a getter that doesn't accept one (`ismissing`
-# trait fields, e.g. `get_name`, are left as plain 1-arg calls).
+# `units`, when given, overrides a column's own `display_units_arg` trait — either
+# uniformly (a single unit) or per column (a column→unit mapping) — but never forces
+# a units argument onto a getter that doesn't accept one (`ismissing` trait fields,
+# e.g. `get_name`, are left as plain 1-arg calls).
 _resolve_column_accessors(::Type, ::Dict; units = nothing) = nothing
+
+# Per-column units: `units` is either one unit applied to every column, or a
+# mapping from column name to that column's unit. A column missing from the
+# mapping keeps its own `display_units_arg` default rather than inheriting a
+# neighbour's unit.
+_column_units(::Nothing, _, trait_arg) = trait_arg
+_column_units(units::AbstractDict, column, trait_arg) = get(units, column, trait_arg)
+_column_units(units::NamedTuple, column, trait_arg) =
+    haskey(units, column) ? units[column] : trait_arg
+_column_units(units, _, _) = units
 
 function _resolve_column_accessors(
     component_type::Type,
@@ -102,7 +113,7 @@ function _resolve_column_accessors(
         end
         trait_arg = display_units_arg(getter_func, component_type)
         ismissing(trait_arg) && return (column, getter_func, missing)
-        arg = units === nothing ? trait_arg : units
+        arg = _column_units(units, column, trait_arg)
         # Route through the unit-tagged companion (e.g. `get_rating_unitful`)
         # so unit-converted columns print with an explicit unit suffix, not a
         # bare number.
@@ -134,8 +145,10 @@ end
 Vector-form `additional_columns` accepts `units` (e.g. `SU`, `DU`, or a
 domain-provided unit like `MW`) to force every unit-converted column to
 display in that unit system instead of each column's own `display_units_arg`
-default. Ignored for `Dict`-form `additional_columns`, whose closures compute
-their own values.
+default. To vary the unit by column, pass a mapping from column name to unit
+(an `AbstractDict` or `NamedTuple`, e.g. `Dict(:rating => MW, :active_power => SU)`);
+columns absent from the mapping keep their own default. Ignored for `Dict`-form
+`additional_columns`, whose closures compute their own values.
 """
 function show_components(
     io::IO,
