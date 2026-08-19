@@ -51,11 +51,7 @@ set_available!(::TestComponent, val) = nothing
 set_available!(::AdditionalTestComponent, val) = nothing
 set_available!(::SimpleTestComponent, val) = nothing
 get_val(component::TestComponent) = component.val
-# 2-arg form so this getter can be used as a `scaling_factor_multiplier`
-# (which `_make_time_array` invokes with a units marker).
-get_val(component::TestComponent, _) = component.val
 get_val2(component::TestComponent) = component.val2
-get_val2(component::TestComponent, _) = component.val2
 
 # Exercises the `display_units_arg`/`unitful_variant` machinery in
 # `show_components` tests without needing a domain-specific unit system:
