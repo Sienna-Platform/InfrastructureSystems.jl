@@ -112,13 +112,19 @@ function _time_series_transaction(
         auto_flush_bytes = auto_flush_bytes,
     )
     begin_transaction!(context)
+    # `commit!` must stay inside the protected region: buffered additions are only
+    # written (and validated by the store) at the final flush it performs, so a bad
+    # add in a small block throws here rather than at `add_time_series!` time. If it
+    # escaped the try, `discard!` would never run and the store transaction would be
+    # left open holding the write lock.
     result = try
-        func(context)
+        r = func(context)
+        commit!(context)
+        r
     catch
         discard!(context)
         rethrow()
     end
-    commit!(context)
     return result
 end
 

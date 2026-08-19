@@ -5675,6 +5675,40 @@ end
     @test length(IS.get_time_series_keys(component)) == 2
 end
 
+@testset "Test failed commit rolls back the store transaction" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    make_ts(name) = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = 8, step = resolution), collect(1.0:8.0),
+        ),
+        name = name,
+    )
+    store = sys.time_series_manager.data_store.inner
+
+    IS.add_time_series!(sys, component, make_ts("dup"))
+
+    # A staged duplicate is rejected only at the final flush, which runs inside
+    # `commit!` after the block has already returned. The failure must roll the
+    # store transaction back and release the write lock, not leak it open.
+    @test_throws ArgumentError IS.time_series_transaction(sys) do txn
+        IS.add_time_series!(txn, component, make_ts("dup"))
+    end
+    @test !IS.InfraStore.in_transaction(store)
+
+    # The store is not wedged: a subsequent block commits at the top level, not
+    # nested inside a leaked transaction.
+    IS.time_series_transaction(sys) do txn
+        IS.add_time_series!(txn, component, make_ts("after"))
+    end
+    @test !IS.InfraStore.in_transaction(store)
+    names = Set(IS.get_name(k) for k in IS.get_time_series_keys(component))
+    @test names == Set(["dup", "after"])
+end
+
 @testset "Test time series auto flush" begin
     sys = IS.SystemData()
     component = IS.TestComponent("Component1", 5)
