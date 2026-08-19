@@ -348,6 +348,7 @@ function get_time_series_array(
         owner,
         get_name(key);
         resolution = get_resolution(key),
+        interval = get_interval(key),
         start_time = start_time,
         len = len,
         features...,
@@ -554,6 +555,7 @@ function get_time_series_timestamps(
         owner,
         get_name(key);
         resolution = get_resolution(key),
+        interval = get_interval(key),
         start_time = start_time,
         len = len,
         features...,
@@ -763,6 +765,7 @@ function get_time_series_values(
         owner,
         get_name(key);
         resolution = get_resolution(key),
+        interval = get_interval(key),
         start_time = start_time,
         len = len,
         features...,
@@ -1008,6 +1011,7 @@ function _copy_time_series!(
             dst_type;
             new_name = new_name,
             resolution = get_resolution(ts_key),
+            interval = get_interval(ts_key),
             features = Dict{String, Any}(get_features(ts_key)),
         )
     end

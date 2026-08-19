@@ -321,6 +321,7 @@ function remove_time_series!(
         owner,
         get_name(key);
         resolution = get_resolution(key),
+        interval = get_interval(key),
         feats...,
     )
     return

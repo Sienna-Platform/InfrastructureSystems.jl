@@ -215,6 +215,57 @@ end
     end
 end
 
+@testset "Test forecasts differing only by interval" begin
+    # Two forecasts with the same name and resolution but different intervals are
+    # legal (the grid-compatibility check groups by (resolution, interval)). Every
+    # key-addressed path must forward the key's interval so it acts on exactly the
+    # keyed series.
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+    horizon_count = 24
+    name = "test"
+    data_1h = SortedDict(
+        initial_time => collect(1.0:24.0),
+        initial_time + Dates.Hour(1) => collect(101.0:124.0),
+    )
+    data_2h = SortedDict(
+        initial_time => collect(1001.0:1024.0),
+        initial_time + Dates.Hour(2) => collect(2001.0:2024.0),
+    )
+    forecast_1h = IS.Deterministic(; data = data_1h, name = name, resolution = resolution)
+    forecast_2h = IS.Deterministic(; data = data_2h, name = name, resolution = resolution)
+
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    IS.add_time_series!(sys, component, forecast_1h)
+    IS.add_time_series!(sys, component, forecast_2h)
+
+    ts_keys = IS.get_time_series_keys(component)
+    @test length(ts_keys) == 2
+    key_1h = only(filter(k -> IS.get_interval(k) == Dates.Hour(1), ts_keys))
+    key_2h = only(filter(k -> IS.get_interval(k) == Dates.Hour(2), ts_keys))
+
+    # Keyed reads resolve to the keyed series instead of failing as ambiguous.
+    @test IS.get_interval(IS.get_time_series(component, key_1h)) == Dates.Hour(1)
+    @test IS.get_time_series_values(component, key_1h)[1] == 1.0
+    @test IS.get_time_series_values(component, key_2h)[1] == 1001.0
+    @test IS.get_time_series_timestamps(component, key_2h)[1] == initial_time
+    @test TimeSeries.values(IS.get_time_series_array(component, key_2h))[1] == 1001.0
+
+    # A keyed copy transfers both series.
+    component2 = IS.TestComponent("Component2", 6)
+    IS.add_component!(sys, component2)
+    IS.copy_time_series!(component2, component)
+    @test length(IS.get_time_series_keys(component2)) == 2
+
+    # A keyed removal removes only the keyed series.
+    IS.remove_time_series!(sys, component, key_1h)
+    remaining = IS.get_time_series_keys(component)
+    @test length(remaining) == 1
+    @test IS.get_interval(only(remaining)) == Dates.Hour(2)
+end
+
 @testset "Test add forecast with irregular resolution and interval" begin
     sys = IS.SystemData()
     name = "Component1"
