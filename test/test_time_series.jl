@@ -97,6 +97,10 @@ end
     @test IS.get_initial_timestamp(forecast) == initial_time
     IS.add_time_series!(sys, component, forecast)
     @test IS.has_time_series(component)
+    # The name-only kwargs form matches any time series type, so it must find a
+    # name stored only as a forecast.
+    @test IS.has_time_series(component; name = name)
+    @test !IS.has_time_series(component; name = "nonexistent")
 
     data_ts = Dict(
         initial_time => TimeSeries.TimeArray(

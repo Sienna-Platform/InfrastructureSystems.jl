@@ -882,12 +882,7 @@ function has_time_series(owner::TimeSeriesOwners; kwargs...)
     name = pop!(kw, :name, nothing)
     T = pop!(kw, :time_series_type, TimeSeriesData)
     isnothing(name) && return infrastore_has_any(owner; time_series_type = T)
-    return infrastore_has_time_series(
-        T === TimeSeriesData ? SingleTimeSeries : T,
-        owner,
-        name;
-        kw...,
-    )
+    return infrastore_has_time_series(T, owner, name; kw...)
 end
 
 """
