@@ -334,8 +334,10 @@ function replace_component_id!(
     return
 end
 
-# The raw store rows. Used for the rollback snapshot and for comparison; callers that
-# just want a count should use `get_num_associations`.
+"""
+The raw store rows. Used for the rollback snapshot and for comparison; callers that
+just want a count should use [`get_num_associations`](@ref).
+"""
 _association_rows(associations::SupplementalAttributeAssociations) =
     InfraStore.list_supplemental_attribute_associations(_assoc_store(associations))
 

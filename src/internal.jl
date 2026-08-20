@@ -13,10 +13,8 @@ Unit system for component data values.
 """ UnitSystem
 
 """
-System-level manager references handed to a component or supplemental attribute
-when it is attached to a [`SystemData`](@ref), letting the owner reach its
-system's time series and supplemental attributes without a back-pointer to the
-whole system.
+Back-references from a component or supplemental attribute to the managers of the
+[`SystemData`](@ref) it is attached to. `nothing` in both fields until attachment.
 """
 @kwdef struct SharedSystemReferences <: InfrastructureSystemsType
     supplemental_attribute_manager::Union{Nothing, AbstractSupplementalAttributeManager} =

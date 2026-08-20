@@ -13,13 +13,10 @@
 ###############################
 
 """
-Domain-agnostic unit-system markers and the `RelativeQuantity` wrapper.
-
-The markers `DU` (device base), `SU` (system base), and `NU` (natural units)
-express how a value is normalized without assuming any particular physical
-domain; downstream packages (e.g. PowerSystems) attach domain-specific meaning
-and conversions. Values are tagged by multiplication (`0.6 * DU`), and
-cross-unit arithmetic or comparison throws rather than converting silently.
+Relative (per-unit) markers and the [`RelativeQuantity`](@ref) wrapper. Domain-agnostic:
+expresses "device base" / "system base" / "natural unit" without assuming any particular
+physical domain. Downstream packages (e.g. PowerSystems) attach domain-specific meaning
+via categories and conversions.
 """
 module RelativeUnits
 

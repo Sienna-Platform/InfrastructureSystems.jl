@@ -1357,9 +1357,10 @@ _get_secondary_basename(system_basename, name) = system_basename * "_" * name
 """
 $(TYPEDSIGNATURES)
 
-Attach `attribute` to `component`. An attribute is created once and may be
-attached to many components; the association is stored rather than a copy.
-The component must already be attached to `data`.
+Create a brand-new association between `component` and `attribute`, minting a fresh id
+for `attribute` and writing a new association row. Use [`attach_supplemental_attribute!`](@ref)
+instead when `attribute` already carries an id and the association row already exists,
+e.g. when adopting a document on import.
 """
 function add_supplemental_attribute!(data::SystemData, component, attribute; kwargs...)
     # Note that we do not support adding attributes to masked components

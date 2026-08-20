@@ -1,3 +1,16 @@
+# A context flushes on its own when its buffer reaches either limit below, whichever
+# comes first. Inside a transaction an early flush costs nothing in recoverability, so
+# these only split the I/O, never the atomicity.
+#
+# The count limit keeps the store's layout healthy: each flush becomes one HDF5
+# dataset whose chunk width equals the batch width, so 10,000 f64 series produce 80 KiB
+# chunks — near the store's 1 MiB chunk cap. The byte limit is what actually bounds
+# memory, which the count cannot do when individual arrays are long: the batch copies
+# each array at stage time and keeps it until the flush, so the buffer holds at most
+# ~AUTO_FLUSH_BYTES of array data no matter how large each series is.
+const AUTO_FLUSH_THRESHOLD = 10_000
+const AUTO_FLUSH_BYTES = 256 * 1024 * 1024
+
 """
 The transaction object for time series work.
 
@@ -32,25 +45,6 @@ object. An `add_time_series!` call that targets the system or manager instead ru
 on its own — it goes straight to the store, which is already atomic for a single
 operation. Read paths never allocate a context at all — a fresh context has an
 empty buffer and nothing to commit, and these accessors run in per-timestep loops.
-"""
-# A context flushes on its own when its buffer reaches either limit below, whichever
-# comes first. Inside a transaction an early flush costs nothing in recoverability, so
-# these only split the I/O, never the atomicity.
-#
-# The count limit keeps the store's layout healthy: each flush becomes one HDF5
-# dataset whose chunk width equals the batch width, so 10,000 f64 series produce 80 KiB
-# chunks — near the store's 1 MiB chunk cap. The byte limit is what actually bounds
-# memory, which the count cannot do when individual arrays are long: the batch copies
-# each array at stage time and keeps it until the flush, so the buffer holds at most
-# ~AUTO_FLUSH_BYTES of array data no matter how large each series is.
-const AUTO_FLUSH_THRESHOLD = 10_000
-const AUTO_FLUSH_BYTES = 256 * 1024 * 1024
-
-"""
-The API surface of a [`time_series_transaction`](@ref) block. Additions staged
-through it are buffered and written in bulk; when the block is transactional,
-everything it does commits or rolls back atomically with the block. Yielded by
-`time_series_transaction` — not constructed directly by users.
 """
 mutable struct TimeSeriesContext
     # Typed on the abstract supertype: this file is included before the concrete
