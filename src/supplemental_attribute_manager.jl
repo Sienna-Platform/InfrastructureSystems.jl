@@ -290,10 +290,7 @@ end
 
 function get_supplemental_attribute(mgr::SupplementalAttributeManager, id::Int)
     for attr_dict in values(mgr.data)
-        attribute = get(attr_dict, id, nothing)
-        if !isnothing(attribute)
-            return attribute
-        end
+        haskey(attr_dict, id) && return attr_dict[id]
     end
 
     throw(ArgumentError("No attribute with id = $id is stored"))

@@ -29,7 +29,19 @@ concrete type-name strings and knows nothing about the Julia type hierarchy, so
 """
 struct SupplementalAttributeAssociations
     store::Store
+    # Deferred-insert buffer for `begin_association_batch`. Empty and inactive otherwise;
+    # `pending_pairs` mirrors `pending` so the duplicate probe stays O(1) without re-scanning.
+    pending::Vector{InfraStore.SupplementalAttributeAssociation}
+    pending_pairs::Set{Tuple{Int, Int}}
+    deferring::Base.RefValue{Bool}
 end
+
+SupplementalAttributeAssociations(store::Store) = SupplementalAttributeAssociations(
+    store,
+    InfraStore.SupplementalAttributeAssociation[],
+    Set{Tuple{Int, Int}}(),
+    Ref(false),
+)
 
 # The store handle the queries below run against.
 _assoc_store(associations::SupplementalAttributeAssociations) = associations.store.inner
@@ -38,9 +50,21 @@ _assoc_store(associations::SupplementalAttributeAssociations) = associations.sto
 # `nothing` for "no filter". An abstract type with no concrete subtypes yields an empty
 # vector, which the store treats as "match nothing" — the same answer the old
 # `IN ()`-avoiding special case produced.
+#
+# The two ROOT abstract types are answered with "no filter" rather than by expansion. Every
+# stored row matches them by definition, so the filter would be a no-op — but building it
+# means an `InteractiveUtils.subtypes` walk of the whole hierarchy plus a fresh
+# `Vector{String}` on EVERY call, and these are exactly the shapes the per-component
+# accessors use (`get_supplemental_attributes(component)` passes `SupplementalAttribute`).
+# Callers that need every row at once should use `list_supplemental_attribute_association_rows`
+# instead of one query per component.
 _type_names(::Nothing) = nothing
-_type_names(type::Type{<:InfrastructureSystemsType}) =
-    isabstracttype(type) ? get_all_subtype_names(type) : [string(nameof(type))]
+_type_names(::Type{SupplementalAttribute}) = nothing
+_type_names(::Type{InfrastructureSystemsComponent}) = nothing
+function _type_names(type::Type{<:InfrastructureSystemsType})
+    isabstracttype(type) && return get_all_subtype_names(type)
+    return [string(nameof(type))]
+end
 
 """
 Add an association between a component and a supplemental attribute.
@@ -63,15 +87,56 @@ function add_association!(
         throw(ArgumentError("$(summary(attribute)) does not have an ID assigned"))
     end
 
-    InfraStore.add_supplemental_attribute_association!(
-        _assoc_store(associations),
-        InfraStore.SupplementalAttributeAssociation(
-            component_id,
-            string(nameof(typeof(component))),
-            attribute_id,
-            string(nameof(typeof(attribute))),
-        ),
+    row = InfraStore.SupplementalAttributeAssociation(
+        component_id,
+        string(nameof(typeof(component))),
+        attribute_id,
+        string(nameof(typeof(attribute))),
     )
+    if associations.deferring[]
+        push!(associations.pending, row)
+        push!(associations.pending_pairs, (component_id, attribute_id))
+        return
+    end
+    InfraStore.add_supplemental_attribute_association!(_assoc_store(associations), row)
+    return
+end
+
+"""
+Defer association inserts until `func` returns, then write them all in one store call.
+
+Attaching an attribute normally costs two store round trips: a [`has_association`](@ref)
+probe so the caller can raise a domain-specific error, and the insert itself. Replaying a
+document's whole association table pays that per row. Inside this block the probe reads the
+pending buffer as well as the store, and every buffered row lands in a single
+`add_supplemental_attribute_associations!`.
+
+WRITE-ONLY while open: counts, listings, and comparisons
+([`get_num_associations`](@ref), [`_association_rows`](@ref), …) read the store alone and do
+not see buffered rows. If `func` throws, nothing is written — the buffer is dropped, which
+also means the store needs no rollback.
+
+Not reentrant: a nested call errors rather than silently flattening two scopes into one.
+"""
+function begin_association_batch(
+    func::Function,
+    associations::SupplementalAttributeAssociations,
+)
+    associations.deferring[] && error(
+        "begin_association_batch: already inside a batch; nesting is not supported",
+    )
+    associations.deferring[] = true
+    try
+        func()
+        isempty(associations.pending) && return
+        InfraStore.add_supplemental_attribute_associations!(
+            _assoc_store(associations), associations.pending,
+        )
+    finally
+        associations.deferring[] = false
+        empty!(associations.pending)
+        empty!(associations.pending_pairs)
+    end
     return
 end
 
@@ -135,6 +200,28 @@ abstract).
 has_association(associations::SupplementalAttributeAssociations, args...) =
     InfraStore.has_supplemental_attribute_association(
         _assoc_store(associations); _assoc_query(args...)...)
+
+"""
+The exact `(component, attribute)` probe, which also sees rows buffered by
+[`begin_association_batch`](@ref).
+
+This is the shape `add_supplemental_attribute!` calls before every attach, and the only one
+a batch has to answer correctly: without it a document naming the same pair twice would be
+buffered twice and only rejected at flush, by the store, without naming the objects.
+"""
+function has_association(
+    associations::SupplementalAttributeAssociations,
+    component::InfrastructureSystemsComponent,
+    attribute::SupplementalAttribute,
+)
+    pair = (get_id(component), get_id(attribute))
+    associations.deferring[] && pair in associations.pending_pairs && return true
+    return InfraStore.has_supplemental_attribute_association(
+        _assoc_store(associations);
+        component_id = pair[1],
+        attribute_id = pair[2],
+    )
+end
 
 """
 Return the IDs of components associated with the given attribute or attribute type,

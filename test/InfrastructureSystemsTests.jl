@@ -15,12 +15,26 @@ import JSON
 
 import InfrastructureSystems
 import InfrastructureSystems as IS
+import OpenAPI
+import PowerCoreOpenAPIModels
+import PowerTimeSeriesOpenAPIModels
 
 import Aqua
 # Aqua's piracy check crashes on Julia 1.12+ (`Core.TypeName.mt` was removed) and the
 # fix is unreleased as of Aqua 0.8.11, the latest registered version. Skip only that
 # check on 1.12+; every other Aqua check still runs. Revert once Aqua ships the fix.
-Aqua.test_all(InfrastructureSystems; piracies = VERSION < v"1.12")
+#
+# `persistent_tasks` is skipped for a different reason, and not one Aqua can fix: it loads
+# the package in a throwaway project built by `Pkg.develop`, and `[sources]` applies only to
+# the TOP-LEVEL project — so that project cannot resolve PowerCoreOpenAPIModels or
+# PowerTimeSeriesOpenAPIModels, which are unregistered and pinned by git rev here. The check
+# fails while resolving, before it ever looks for a task. Re-enable once PowerOpenAPIModels
+# is registered.
+Aqua.test_all(
+    InfrastructureSystems;
+    piracies = VERSION < v"1.12",
+    persistent_tasks = false,
+)
 
 const BASE_DIR =
     abspath(joinpath(dirname(Base.find_package("InfrastructureSystems")), ".."))

@@ -25,6 +25,7 @@ import JSON
 import TimeZones
 import GeoJSON
 import PowerCoreOpenAPIModels
+import PowerTimeSeriesOpenAPIModels
 import Logging
 import Random
 import Pkg
@@ -223,6 +224,8 @@ include("iterators.jl")
 include("component.jl")
 include("serialization.jl")
 include("system_data.jl")
+# After system_data.jl: the bulk catalog reads take a `SystemData`.
+include("openapi_associations.jl")
 include("subsystems.jl")
 include("validation.jl")
 include("component_selector.jl")

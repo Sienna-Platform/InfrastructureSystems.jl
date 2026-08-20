@@ -1373,6 +1373,16 @@ function add_supplemental_attribute!(data::SystemData, component, attribute; kwa
     return
 end
 
+"""
+Defer supplemental-attribute association inserts until `func` returns, then write them in
+one store call. See [`begin_association_batch`](@ref) for the semantics and its limits.
+
+Use this around a bulk attach — replaying a document's association table, say — where the
+per-attach probe-then-insert pair would otherwise cost two store round trips per row.
+"""
+begin_association_batch(func::Function, data::SystemData) =
+    begin_association_batch(func, data.supplemental_attribute_manager.associations)
+
 function get_supplemental_attributes(
     filter_func::Function,
     ::Type{T},
