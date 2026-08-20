@@ -345,6 +345,56 @@ end
 
     # A key that names nothing stored is an error, not a silent no-op.
     @test_throws ArgumentError IS.remove_time_series!(sys, component, key_superset)
+
+    # A stale key — its series was removed above — is the accessors' documented
+    # ArgumentError, not the store's raw NotFoundError.
+    @test_throws ArgumentError IS.get_time_series(component, key_superset)
+    @test_throws ArgumentError IS.get_time_series_values(component, key_superset)
+    @test_throws ArgumentError IS.get_time_series_array(component, key_superset)
+    @test_throws ArgumentError IS.get_time_series_timestamps(component, key_superset)
+end
+
+@testset "Test has_time_series type and filter narrowing" begin
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+    name = "test"
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    forecast = IS.Deterministic(;
+        data = Dict(initial_time => ones(24), initial_time + resolution => ones(24)),
+        name = name,
+        resolution = resolution,
+    )
+    IS.add_time_series!(sys, component, forecast)
+
+    # A parameterized concrete query type matches no stored type; it must not
+    # degrade to an unfiltered probe that answers true for the wrong type.
+    @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}, name) == false
+    @test IS.has_time_series(
+        component;
+        time_series_type = IS.SingleTimeSeries{Float64, 1},
+    ) ==
+          false
+    @test IS.has_time_series(component, IS.Deterministic, name)
+    @test IS.has_time_series(component; time_series_type = IS.Deterministic)
+
+    # The name-less kwargs form must apply resolution/interval/feature filters
+    # instead of silently dropping them.
+    sts = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = 24, step = resolution), collect(1.0:24.0)),
+        name = "static")
+    IS.add_time_series!(sys, component, sts; scenario = "a")
+    @test IS.has_time_series(component; resolution = resolution)
+    @test IS.has_time_series(component; resolution = Dates.Minute(5)) == false
+    @test IS.has_time_series(component; scenario = "a")
+    @test IS.has_time_series(component; scenario = "b") == false
+    @test IS.has_time_series(
+        component;
+        time_series_type = IS.SingleTimeSeries,
+        resolution = resolution,
+    )
 end
 
 @testset "Test add forecast with irregular resolution and interval" begin

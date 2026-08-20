@@ -191,8 +191,18 @@ function discard!(context::TimeSeriesContext)
     try
         InfraStore.rollback_transaction!(context.mgr.data_store.inner)
     catch e
-        @error "Rolling back the time series transaction failed; the store may " *
-               "retain partial work from this block" exception = e
+        # `catch`-block exception inspection: InvalidParameterError is the
+        # store's "no transaction is open" — the store already ended it (e.g. a
+        # commit that became durable before `commit!` threw in later work), so
+        # there is no partial work to warn about, and erroring here would turn a
+        # correctly-propagated failure into a second, misleading one.
+        if e isa InfraStore.InvalidParameterError
+            @debug "No store transaction was open to roll back; it was already " *
+                   "ended by the store" exception = e
+        else
+            @error "Rolling back the time series transaction failed; the store may " *
+                   "retain partial work from this block" exception = e
+        end
     end
     return
 end

@@ -114,13 +114,29 @@ function get_time_series(
 )
     # The key is already fully resolved, so read key-addressed — no catalog
     # re-resolution by name.
-    return _get_time_series_by_key(
-        owner,
-        key;
-        start_time = start_time,
-        len = len,
-        count = count,
-    )
+    try
+        return _get_time_series_by_key(
+            owner,
+            key;
+            start_time = start_time,
+            len = len,
+            count = count,
+        )
+    catch e
+        # `catch`-block exception inspection: a stale key — the series was
+        # removed after the key was obtained — surfaces as the store's
+        # NotFoundError; keep the accessors' public ArgumentError contract.
+        if e isa InfraStore.NotFoundError
+            throw(
+                ArgumentError(
+                    "No time series matches the key $(summary(key)) with " *
+                    "name='$(get_name(key))' on $(summary(owner)); " *
+                    "it may have been removed.",
+                ),
+            )
+        end
+        rethrow()
+    end
 end
 
 _get_time_series_by_key(
@@ -865,7 +881,11 @@ function has_time_series(owner::TimeSeriesOwners; kwargs...)
     kw = Dict(kwargs)
     name = pop!(kw, :name, nothing)
     T = pop!(kw, :time_series_type, TimeSeriesData)
-    isnothing(name) && return infrastore_has_any(owner; time_series_type = T)
+    # With no name and no other filters, take the cheap any-series probe; any
+    # remaining kwargs (resolution/interval/features) must reach the store — the
+    # filtered probe accepts `name = nothing`.
+    isnothing(name) && isempty(kw) &&
+        return infrastore_has_any(owner; time_series_type = T)
     return infrastore_has_time_series(T, owner, name; kw...)
 end
 
