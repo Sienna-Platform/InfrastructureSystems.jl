@@ -647,6 +647,56 @@ function infrastore_remove_row!(store::Store, row)
     return
 end
 
+"""
+Remove exactly the association that a fully-resolved `TimeSeriesKey` names.
+
+The key carries the complete stored identity — type, name, resolution, interval,
+and the *whole* feature set — so this routes to the store's exact-key removal
+(the core matches the features by set hash) instead of the subset feature filter
+that the by-name removals use. A sibling series whose feature set is a strict
+superset of the key's therefore survives, which the subset filter would have
+deleted along with the keyed series.
+"""
+function infrastore_remove_time_series!(
+    store::Store,
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey,
+)
+    owner_id, _, category = _infrastore_owner_args(owner)
+    name = get_name(key)
+    try
+        InfraStore.remove_time_series!(
+            _infrastore_type(get_time_series_type(key)),
+            store.inner,
+            owner_id,
+            category,
+            name;
+            resolution = get_resolution(key),
+            interval = get_interval(key),
+            features = get_features(key),
+        )
+    catch e
+        # `catch`-block exception inspection: the core reports both conditions
+        # through its own error types, which IS maps to the errors callers
+        # dispatch on.
+        if e isa InfraStore.InvalidParameterError
+            throw(
+                ArgumentError(
+                    "Cannot remove SingleTimeSeries '$name' because it is attached to a " *
+                    "DeterministicSingleTimeSeries."),
+            )
+        elseif e isa InfraStore.NotFoundError
+            throw(
+                ArgumentError(
+                    "No time series matches the key $(summary(key)) with name='$name' " *
+                    "on $(summary(owner)); it may already have been removed."),
+            )
+        end
+        rethrow()
+    end
+    return
+end
+
 # The store handle / file path differ across a serialize→deserialize round-trip,
 # so compare structurally by counts. Element-level equality is covered by the
 # InfraStore integration tests.
@@ -1970,10 +2020,16 @@ function infrastore_get_time_series_key(
     return items[1]
 end
 
+# Whether a catalog row's interval satisfies the interval a key carries. A static
+# or non-sequential key has none (`nothing`), which constrains nothing; a forecast
+# key names one exactly, and two forecasts differing only by interval are legal.
+_infrastore_interval_matches(_, ::Nothing) = true
+_infrastore_interval_matches(row_interval, target::Dates.Period) = row_interval == target
+
 # Content hash (64-char lowercase hex, the documented public form of the
 # wrapper's 32-byte hash) of the array `key` resolves to under `owner`. Narrows
 # the catalog to the owner + the key's type/name in one query, then matches the
-# exact resolution + features in-memory.
+# exact resolution + interval + features in-memory.
 function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
     mgr = get_time_series_manager(owner)
     isnothing(mgr) &&
@@ -1985,10 +2041,12 @@ function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSerie
         owner_category = category,
         time_series_type = _infrastore_pushable_type(T), name = get_name(key))
     target_res = get_resolution(key)
+    target_interval = get_interval(key)
     target_feats = get_features(key)
     for row in rows
         _infrastore_type_matches(_infrastore_is_type(row.time_series_type), T) || continue
         row.resolution == target_res || continue
+        _infrastore_interval_matches(row.interval, target_interval) || continue
         row.features == target_feats || continue
         return bytes2hex(row.data_hash)
     end

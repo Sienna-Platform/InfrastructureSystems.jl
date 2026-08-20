@@ -308,22 +308,21 @@ function remove_time_series!(
     return
 end
 
+"""
+Remove exactly the time series that `key` identifies, and nothing else.
+
+A key is a fully-resolved identity, so this takes the store's exact-key removal
+path (whole-feature-set match) rather than the by-name subset filter: a sibling
+series of the same type/name/resolution/interval whose features are a strict
+superset of the key's is left in place.
+"""
 function remove_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     key::TimeSeriesKey,
 )
     _throw_if_read_only(mgr)
-    feats = (Symbol(k) => v for (k, v) in get_features(key))
-    remove_time_series!(
-        mgr,
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        interval = get_interval(key),
-        feats...,
-    )
+    infrastore_remove_time_series!(mgr.data_store::Store, owner, key)
     return
 end
 

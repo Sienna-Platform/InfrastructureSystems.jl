@@ -342,17 +342,12 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series_array(
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        interval = get_interval(key),
-        start_time = start_time,
-        len = len,
-        features...,
-    )
+    # Read key-addressed (exact identity, no catalog re-resolution) and hand the
+    # instance to the instance-form accessor. Unpacking the key back into by-name
+    # kwargs would re-resolve it through subset feature matching, which is
+    # ambiguous when a sibling's feature set is a superset of the key's.
+    ts = get_time_series(owner, key; start_time = start_time, len = len, count = 1)
+    return get_time_series_array(owner, ts; start_time = start_time, len = len)
 end
 
 """
@@ -549,17 +544,10 @@ function get_time_series_timestamps(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series_timestamps(
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        interval = get_interval(key),
-        start_time = start_time,
-        len = len,
-        features...,
-    )
+    # See `get_time_series_array(owner, key)`: read key-addressed, then delegate
+    # to the instance form.
+    ts = get_time_series(owner, key; start_time = start_time, len = len, count = 1)
+    return get_time_series_timestamps(owner, ts; start_time = start_time, len = len)
 end
 
 """
@@ -759,17 +747,10 @@ function get_time_series_values(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series_values(
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        interval = get_interval(key),
-        start_time = start_time,
-        len = len,
-        features...,
-    )
+    # See `get_time_series_array(owner, key)`: read key-addressed, then delegate
+    # to the instance form.
+    ts = get_time_series(owner, key; start_time = start_time, len = len, count = 1)
+    return get_time_series_values(owner, ts; start_time = start_time, len = len)
 end
 
 """

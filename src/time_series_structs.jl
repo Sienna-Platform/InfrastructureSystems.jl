@@ -3,16 +3,25 @@ const TimeSeriesOwners = Union{InfrastructureSystemsComponent, SupplementalAttri
 """
 Supertype for keys that can be used to access a desired time series dataset
 
-Concrete subtypes:
-- [`StaticTimeSeriesKey`](@ref)
-- [`NonSequentialTimeSeriesKey`](@ref)
-- [`ForecastKey`](@ref)
+The concrete subtypes are a closed set — [`StaticTimeSeriesKey`](@ref),
+[`NonSequentialTimeSeriesKey`](@ref), and [`ForecastKey`](@ref), collected in
+`ConcreteTimeSeriesKey` — because a key must name one stored association exactly,
+and the key-addressed paths (reads, removal, copy, hashing) call the whole
+interface below on every key with no abstract fallbacks.
 
 Required methods:
 - `get_name`
-- `get_resolution`
+- `get_resolution` — `nothing` for a key with no regular resolution
 - `get_time_series_type`
-The default methods rely on the field names `name` and `time_series_type`.
+- `get_interval` — `nothing` for a key that is not a forecast
+- `get_features`
+- `get_initial_timestamp` — `nothing` for a key with no regular initial timestamp
+- `get_count`, `Base.length`
+
+The default methods rely on the field names `name`, `time_series_type`,
+`resolution`, `initial_timestamp`, and `features`; a subtype without one of those
+fields must define the corresponding method (as
+[`NonSequentialTimeSeriesKey`](@ref) does).
 """
 abstract type TimeSeriesKey <: InfrastructureSystemsType end
 
