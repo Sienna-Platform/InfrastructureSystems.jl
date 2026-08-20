@@ -5,11 +5,13 @@ Supertype for keys that can be used to access a desired time series dataset
 
 The concrete subtypes are a closed set — [`StaticTimeSeriesKey`](@ref),
 [`NonSequentialTimeSeriesKey`](@ref), and [`ForecastKey`](@ref), collected in
-`ConcreteTimeSeriesKey` — because a key must name one stored association exactly,
-and the key-addressed paths (reads, removal, copy, hashing) call the whole
-interface below on every key with no abstract fallbacks.
+`ConcreteTimeSeriesKey`. Keys are produced by IS (e.g. `add_time_series!`,
+`get_time_series_keys`), never constructed by users, and key-carrying structs
+store the `ConcreteTimeSeriesKey` union, so a foreign subtype cannot flow
+through the key-addressed paths (reads, removal, copy, hashing).
 
-Required methods:
+Every concrete key implements the interface below, which generic key-consuming
+code may call on any key:
 - `get_name`
 - `get_resolution` — `nothing` for a key with no regular resolution
 - `get_time_series_type`
@@ -19,9 +21,9 @@ Required methods:
 - `get_count`, `Base.length`
 
 The default methods rely on the field names `name`, `time_series_type`,
-`resolution`, `initial_timestamp`, and `features`; a subtype without one of those
-fields must define the corresponding method (as
-[`NonSequentialTimeSeriesKey`](@ref) does).
+`resolution`, `initial_timestamp`, and `features`; each concrete key defines
+the methods its fields don't cover (as [`NonSequentialTimeSeriesKey`](@ref)
+does).
 """
 abstract type TimeSeriesKey <: InfrastructureSystemsType end
 
