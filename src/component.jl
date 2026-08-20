@@ -128,7 +128,7 @@ function _get_supplemental_attributes(
     component::InfrastructureSystemsComponent,
 )
     mgr = _get_supplemental_attributes_manager(component)
-    isnothing(mgr) && return [supplemental_attribute_type]
+    isnothing(mgr) && return supplemental_attribute_type[]
     attrs = Vector{supplemental_attribute_type}()
     for id in list_associated_supplemental_attribute_ids(
         mgr.associations,

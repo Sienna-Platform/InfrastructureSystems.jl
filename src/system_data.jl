@@ -23,8 +23,16 @@ mutable struct SystemData <: ComponentContainer
     masked_components::Components
     "Maps the integer id of every attached component, regular and masked, to the component."
     component_ids::Dict{Int, <:InfrastructureSystemsComponent}
-    "Next integer id to assign. Components and supplemental attributes draw from this one
-    stream, so an id identifies exactly one object of either kind. Starts at 1."
+    """
+    Next integer id to assign. Components and supplemental attributes draw from this one
+    stream, so an id identifies exactly one object of either kind. Starts at 1.
+
+    IS unifies the streams because OpenAPI documents and SiennaGridDB's `entities` table have
+    a single id space: one id must mean one thing across every entity kind. `owner_category`
+    remains the disambiguator between "this id names a component" and "this id names a
+    supplemental attribute" in store and document rows alike; unifying the counter only
+    removes the possibility of the two kinds colliding on the same number.
+    """
     next_id::Int
     "User-defined subsystems. Components can be regular or masked."
     subsystems::Dict{String, Set{Int}}
@@ -854,9 +862,10 @@ end
 Assign an integer id to a component or supplemental attribute being attached to `data`.
 
 A freshly constructed object has [`UNASSIGNED_ID`](@ref) and receives the next id. An object
-that already carries an id (for example, one restored during deserialization) keeps it; the
-counter is advanced past it so future ids do not collide. Components and supplemental
-attributes draw from the same stream, so an id is unique across both kinds.
+that already carries an id (for example, one restored during deserialization, or one an
+importer set explicitly with [`set_id!`](@ref) from a document) keeps it; the counter is
+advanced past it so future ids do not collide. Components and supplemental attributes draw
+from the same stream, so an id is unique across both kinds.
 """
 function assign_id!(
     data::SystemData,
@@ -1375,13 +1384,29 @@ end
 
 """
 Defer supplemental-attribute association inserts until `func` returns, then write them in
-one store call. See [`begin_association_batch`](@ref) for the semantics and its limits.
+one store call. See [`begin_association_batch`](@ref) for the write-buffering mechanics and
+its read-side limits.
+
+Unlike the associations-level form, this SystemData form is fully transactional over BOTH the
+attribute manager and the store: it runs inside
+[`begin_supplemental_attributes_update`](@ref), which snapshots `mgr.data` (deep-copying each
+attribute already stored) before `func` runs and restores it, together with the association
+rows, if `func` throws. That closes a gap the associations-level form leaves open on its own —
+`add_supplemental_attribute!` attaches the attribute to `mgr.data` *before* buffering its
+association row, so a throw partway through a batch (a duplicate pair, say) would otherwise
+leave an attribute attached in `mgr.data` with no association row for it, and no way to reach
+it back out. The snapshot costs O(attributes already stored) — zero on the common import path,
+where the manager starts empty.
 
 Use this around a bulk attach — replaying a document's association table, say — where the
 per-attach probe-then-insert pair would otherwise cost two store round trips per row.
 """
 begin_association_batch(func::Function, data::SystemData) =
-    begin_association_batch(func, data.supplemental_attribute_manager.associations)
+    begin_supplemental_attributes_update(data.supplemental_attribute_manager) do
+        begin_association_batch(
+            func, data.supplemental_attribute_manager.associations,
+        )
+    end
 
 function get_supplemental_attributes(
     filter_func::Function,

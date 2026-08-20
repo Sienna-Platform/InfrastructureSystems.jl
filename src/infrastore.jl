@@ -541,10 +541,13 @@ function serialize_non_sequential!(
 end
 
 """
-    get_non_sequential(store, owner_id, owner_category, name; features=Dict()) -> NonSequentialTimeSeries
+    get_non_sequential(store, owner_id, owner_category, name; features=Dict(), time_range=nothing) -> NonSequentialTimeSeries
 
 Reconstruct a `NonSequentialTimeSeries` (timestamps + decoded array) from the InfraStore
 store. A non-sequential series is addressed by name + features (it has no resolution).
+`time_range`, if given, is a half-open `[start, stop)` window on the (irregular) timestamp
+axis, sliced server-side — the same pushdown `_infrastore_read_single` uses for a
+`SingleTimeSeries` grid window.
 """
 function get_non_sequential(
     store::Store,
@@ -552,10 +555,11 @@ function get_non_sequential(
     owner_category::InfraStore.OwnerCategory,
     name::AbstractString;
     features = Dict{String, Any}(),
+    time_range::Union{Nothing, Tuple{Dates.DateTime, Dates.DateTime}} = nothing,
 )
     nts = InfraStore.get_time_series(InfraStore.NonSequentialTimeSeries, store.inner,
         owner_id,
-        owner_category, name; features = features)
+        owner_category, name; features = features, time_range = time_range)
     values = _decode_stored_values(nts.data, _element_encoding(nts.element_type))
     return NonSequentialTimeSeries(
         String(name), nts.timestamps, values; units = nts.units,
@@ -887,9 +891,15 @@ function infrastore_get_time_series(
     return _infrastore_read_non_sequential(owner, key; start_time = start_time, len = len)
 end
 
-# Key-addressed NonSequentialTimeSeries read (no catalog re-resolution). The
-# timestamps are irregular, so `start_time`/`len` slice on the materialized
-# series in Julia; the read itself is one store call.
+# Key-addressed NonSequentialTimeSeries read (no catalog re-resolution). The timestamps are
+# irregular, so only `start_time` can be pushed down as a store-side lower bound: `len` is a
+# POINT COUNT, and translating it into an end timestamp needs to know which timestamps exist
+# in the first place -- exactly what the read is for. When `start_time` is given, the store
+# is asked for the `[start_time, _FAR_FUTURE)` suffix -- there is no store sentinel for "no
+# upper bound" (and `typemax(DateTime)` overflows the FFI's millisecond range check), so a
+# date far beyond any real time series stands in for one; `len`, if also given, still slices
+# that (now much smaller) result client-side below, same as before.
+const _FAR_FUTURE_DATETIME = Dates.DateTime(9999, 12, 31, 23, 59, 59)
 function _infrastore_read_non_sequential(
     owner::TimeSeriesOwners,
     key::NonSequentialTimeSeriesKey;
@@ -900,11 +910,19 @@ function _infrastore_read_non_sequential(
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(key))
-    nts = get_non_sequential(store, owner_id, category, get_name(key); features = feats)
+    time_range = isnothing(start_time) ? nothing : (start_time, _FAR_FUTURE_DATETIME)
+    nts = get_non_sequential(
+        store, owner_id, category, get_name(key);
+        features = feats, time_range = time_range,
+    )
     (isnothing(start_time) && isnothing(len)) && return nts
 
     # Slice on the explicit, strictly-increasing timestamps. The values are sliced
-    # directly (not via a TimeArray) so FunctionData / N-D series slice too.
+    # directly (not via a TimeArray) so FunctionData / N-D series slice too. When
+    # `start_time` was given, `nts` is already the store-side `[start_time, +inf)` suffix, so
+    # this is slicing what the store already narrowed, not re-deriving the whole window: the
+    # exact-match check below still runs against what the store actually returned, so a
+    # `start_time` that isn't a real timestamp is rejected exactly as before.
     timestamps = get_timestamps(nts)
     full = get_array(nts)
     total = size(full, 1)

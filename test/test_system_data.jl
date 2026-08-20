@@ -595,7 +595,7 @@ end
     @test !(id1 in IS.get_component_ids(data, subsystem_name))
 end
 
-@testset "Test single integer id stream" begin
+@testset "Test unified component/supplemental-attribute id stream" begin
     data = IS.SystemData()
     component1 = IS.TestComponent("component1", 5)
     component2 = IS.TestComponent("component2", 6)
@@ -620,14 +620,39 @@ end
     IS.add_component!(data, component3)
     @test IS.get_id(component3) == 5
 
-    # Ids are unique across components and attributes together.
-    component_ids = IS.get_id.(IS.get_components(IS.TestComponent, data))
-    attribute_ids = vcat(
-        IS.get_id.(IS.get_supplemental_attributes(IS.GeographicInfo, data)),
-        IS.get_id.(IS.get_supplemental_attributes(IS.TestSupplemental, data)),
+    # Ids are unique across BOTH kinds together, not merely within each: a component and a
+    # supplemental attribute in the same SystemData can never share an id.
+    component_ids = Set(IS.get_id.(IS.get_components(IS.TestComponent, data)))
+    attribute_ids = Set(
+        vcat(
+            IS.get_id.(IS.get_supplemental_attributes(IS.GeographicInfo, data)),
+            IS.get_id.(IS.get_supplemental_attributes(IS.TestSupplemental, data)),
+        ),
     )
-    all_ids = vcat(component_ids, attribute_ids)
-    @test length(all_ids) == length(unique(all_ids))
+    @test length(component_ids) + length(attribute_ids) ==
+          length(union(component_ids, attribute_ids))
+    @test isempty(intersect(component_ids, attribute_ids))
+
+    # `assign_id!` for a component keeps a pre-set id (e.g. one an importer set explicitly
+    # from a document before attaching) and bumps the shared counter past it.
+    component4 = IS.TestComponent("component4", 8)
+    IS.set_id!(component4, 100)
+    IS.add_component!(data, component4)
+    @test IS.get_id(component4) == 100
+    @test data.next_id == 101
+
+    # `assign_id!` for a supplemental attribute is symmetric: same keep-if-set,
+    # bump-past-it behavior.
+    attr3 = IS.TestSupplemental(; value = 2.0)
+    IS.set_id!(attr3, 200)
+    IS.add_supplemental_attribute!(data, component1, attr3)
+    @test IS.get_id(attr3) == 200
+    @test data.next_id == 201
+
+    # The next freshly assigned id, of either kind, continues from the bumped counter.
+    component5 = IS.TestComponent("component5", 9)
+    IS.add_component!(data, component5)
+    @test IS.get_id(component5) == 201
 end
 
 @testset "Test bulk add of time series" begin

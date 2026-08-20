@@ -113,8 +113,23 @@ pending buffer as well as the store, and every buffered row lands in a single
 
 WRITE-ONLY while open: counts, listings, and comparisons
 ([`get_num_associations`](@ref), [`_association_rows`](@ref), …) read the store alone and do
-not see buffered rows. If `func` throws, nothing is written — the buffer is dropped, which
-also means the store needs no rollback.
+not see buffered rows. Nor do ordinary component-level queries —
+[`get_supplemental_attributes`](@ref), `has_supplemental_attributes`,
+[`list_associated_supplemental_attribute_ids`](@ref), and every [`has_association`](@ref)
+shape OTHER than the exact `(component, attribute)` pair — they too read the store alone and
+will not see rows buffered in an open batch. Only the `(component, attribute)` pair overload
+of `has_association` also checks the pending buffer, because it is the probe
+`add_supplemental_attribute!` calls before every attach.
+
+If `func` throws, this store-only form drops the buffer without writing it — no rollback is
+needed here because nothing was ever written. That is NOT the same as leaving no trace: by
+the time a duplicate-pair throw reaches here, `add_supplemental_attribute!` has already
+attached the attribute to the manager's `mgr.data` (attaching happens before the association
+is buffered), so calling this form directly on a `SupplementalAttributeAssociations` can leave
+an orphaned, attached-but-unassociated attribute behind. Callers that need the manager rolled
+back too — which is almost always what's wanted — should use the `SystemData`-level
+[`begin_association_batch`](@ref), which wraps this one inside
+[`begin_supplemental_attributes_update`](@ref) for exactly that reason.
 
 Not reentrant: a nested call errors rather than silently flattening two scopes into one.
 """
@@ -196,6 +211,10 @@ _assoc_query(args...) = (p for arg in args for p in _assoc_filters(arg))
 Return true if there is at least one association matching the arguments: a component,
 an attribute, both, or a component together with an attribute type (which may be
 abstract).
+
+Reads the store alone. Inside an open [`begin_association_batch`](@ref) this does NOT see
+rows buffered but not yet flushed — only the exact `(component, attribute)` pair overload,
+below, checks the pending buffer too.
 """
 has_association(associations::SupplementalAttributeAssociations, args...) =
     InfraStore.has_supplemental_attribute_association(
@@ -332,17 +351,28 @@ get_num_associations(associations::SupplementalAttributeAssociations) =
 """
 Replace every association row with `rows`.
 
-This is the rollback primitive for [`begin_supplemental_attributes_update`](@ref): the
-store has no transaction, so a failed update restores the rows captured on entry.
-Unlike undoing only the newly added rows, this also puts back rows the update removed.
+This is the rollback primitive for [`begin_supplemental_attributes_update`](@ref): a failed
+update restores the rows captured on entry. Unlike undoing only the newly added rows, this
+also puts back rows the update removed.
+
+The clear and the re-add run inside one `InfraStore.transaction`, so a failure partway
+through — the re-add throwing, say — cannot leave the store cleared with nothing put back.
+`InfraStore.transaction` nests (only the outermost commit/rollback is real), so this is safe
+even called from inside another open transaction, and it preserves the error that caused the
+rollback rather than replacing it with one about the rollback itself.
 """
 function restore_associations!(
     associations::SupplementalAttributeAssociations,
     rows::AbstractVector,
 )
-    clear_associations!(associations)
-    isempty(rows) && return
-    InfraStore.add_supplemental_attribute_associations!(_assoc_store(associations), rows)
+    InfraStore.transaction(_assoc_store(associations)) do
+        clear_associations!(associations)
+        isempty(rows) && return
+        InfraStore.add_supplemental_attribute_associations!(
+            _assoc_store(associations),
+            rows,
+        )
+    end
     return
 end
 

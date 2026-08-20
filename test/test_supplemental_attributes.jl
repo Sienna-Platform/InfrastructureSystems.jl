@@ -22,6 +22,18 @@ _attr_mgr() = IS.SupplementalAttributeManager(IS.Store(; in_memory = true))
     )
 end
 
+@testset "Test get_supplemental_attributes filter_func variant with no manager" begin
+    # A component never attached to a SystemData has no shared_system_references, so
+    # `_get_supplemental_attributes_manager` returns `nothing`. Regression test: this used to
+    # return `[supplemental_attribute_type]` -- a one-element `Vector{DataType}` holding the
+    # type itself -- instead of an empty `Vector{T}`.
+    component = IS.TestComponent("component1", 1)
+    @test isnothing(IS._get_supplemental_attributes_manager(component))
+    result = IS.get_supplemental_attributes(_ -> true, IS.GeographicInfo, component)
+    @test result == IS.GeographicInfo[]
+    @test result isa Vector{IS.GeographicInfo}
+end
+
 @testset "Test bulk addition of supplemental attributes" begin
     mgr = _attr_mgr()
     attr1 = _id!(

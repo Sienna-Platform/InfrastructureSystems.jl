@@ -222,6 +222,41 @@ end
     end
 end
 
+@testset "_openapi_duration matches InfraStore's own ISO-8601 spellings" begin
+    # Direct unit assertions for the period kinds the schema allows down to the
+    # one-millisecond floor, plus a calendar span. Values chosen to match
+    # `InfraStore._period_to_iso` / `_fixed_ms_to_iso` byte-for-byte.
+    @test IS._openapi_duration(Dates.Millisecond(500)) == "PT0.5S"
+    @test IS._openapi_duration(Dates.Minute(5)) == "PT300S"
+    @test IS._openapi_duration(Dates.Hour(1)) == "PT3600S"
+    @test IS._openapi_duration(Dates.Month(1)) == "P1M"
+    @test IS._openapi_duration(Dates.Year(1)) == "P1Y"
+    @test IS._openapi_duration(Dates.Quarter(1)) == "P3M"
+    # A period the schema/store cannot represent errors loudly rather than truncating.
+    @test_throws MethodError IS._openapi_duration(Dates.Week(1) + Dates.Day(1))
+end
+
+@testset "to_openapi: a sub-second resolution round trips through the document" begin
+    # `_openapi_duration` used to throw `InexactError` converting a sub-second period to
+    # `Dates.Second`; the schema's `Period` allows fixed spans down to PT0.001S.
+    data, component = _openapi_ts_fixture()
+    initial = Dates.DateTime(2024, 1, 1)
+    resolution = Dates.Millisecond(500)
+    IS.add_time_series!(
+        data, component,
+        IS.SingleTimeSeries(
+            "subsecond",
+            TimeSeries.TimeArray(
+                [initial + resolution * (i - 1) for i in 1:4], collect(1.0:4.0),
+            );
+            units = "MW", quantity_kind = "ActivePower",
+        ),
+    )
+    row = _openapi_convert(data, "subsecond")
+    @test row.resolution == "PT0.5S"
+    @test OpenAPI.check_required(row)
+end
+
 function _openapi_attr_fixture()
     data = IS.SystemData()
     first_component = IS.TestComponent("component1", 5)
@@ -241,16 +276,17 @@ end
     rows = IS.list_supplemental_attribute_association_rows(data)
     row = only(filter(r -> r.component_id == IS.get_id(first_component), rows))
 
-    # Document ids, not store ids: an attribute's document id is assigned fresh from the
-    # document counter, so neither end is read off the row.
-    assoc = IS.to_openapi(row; attribute_id = 77, entity_id = 3)
+    # Document ids, not store ids: both ends are the caller's, so neither is read off the
+    # row.
+    assoc = IS.to_openapi(row; attribute_id = 77, component_id = 3)
     @test assoc isa PowerCoreOpenAPIModels.SupplementalAttributeAssociation
     @test assoc.attribute_id == 77
-    @test assoc.entity_id == 3
-    # `attribute_type` DOES come off the row — the store recorded it at attach time, so it
-    # matches the attribute without being re-derived from the object.
+    @test assoc.component_id == 3
+    # The type labels DO come off the row — the store recorded both at attach time, so they
+    # match the objects without being re-derived from them.
     @test assoc.attribute_type == "GeographicInfo"
     @test assoc.attribute_type == string(nameof(typeof(shared)))
+    @test assoc.component_type == string(nameof(typeof(first_component)))
     @test OpenAPI.check_required(assoc)
 end
 
@@ -260,11 +296,12 @@ end
     # One attribute, two attachments: the association table is what fans out, and the
     # document's attribute id is shared across both rows.
     assocs = [
-        IS.to_openapi(r; attribute_id = 50, entity_id = Int(r.component_id)) for r in rows
+        IS.to_openapi(r; attribute_id = 50, component_id = Int(r.component_id)) for
+        r in rows
     ]
     @test length(assocs) == 2
     @test all(a -> a.attribute_id == 50, assocs)
-    @test Set(a.entity_id for a in assocs) ==
+    @test Set(a.component_id for a in assocs) ==
           Set([IS.get_id(first_component), IS.get_id(second_component)])
     @test all(a -> a.attribute_type == "GeographicInfo", assocs)
 end
@@ -312,6 +349,12 @@ end
     end
     # The failed batch wrote nothing, so there is no half-applied association table.
     @test IS.get_num_associations(data.supplemental_attribute_manager.associations) == 0
+    # Regression guard for the orphan bug: the first `add_supplemental_attribute!` attaches
+    # `shared` to the manager's `mgr.data` before buffering its association row, so without a
+    # rollback of the manager too, `shared` would be left attached with no association
+    # pointing at it. The SystemData-level `begin_association_batch` wraps the batch in
+    # `begin_supplemental_attributes_update`, which must undo that attach on failure.
+    @test isempty(collect(IS.iterate_supplemental_attributes(data)))
 end
 
 @testset "begin_association_batch does not nest" begin

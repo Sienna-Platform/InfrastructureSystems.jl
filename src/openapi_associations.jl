@@ -43,10 +43,31 @@ list_supplemental_attribute_association_rows(data::SystemData) =
 
 # ── column conversions ──────────────────────────────────────────────────────────
 
-"""ISO 8601 duration for a stored period. Whole seconds: every period the catalog records
-is a resolution, horizon, or interval, none of which is sub-second."""
+"""ISO 8601 duration for a stored period.
+
+Dispatches on the period's kind rather than branching on its value, mirroring InfraStore's
+own encoder (`InfraStore._period_to_iso` / `_fixed_ms_to_iso`) so a round trip through the
+document is byte-identical to what the store would emit for the same period. Fixed spans
+(`Week`/`Day`/`Hour`/`Minute`/`Second`/`Millisecond`) go through milliseconds, emitting
+whole-second `PT<n>S` or fractional-second `PT<n>.<frac>S` down to the one-millisecond floor
+the schema allows; calendar spans (`Month`/`Year`, and `Quarter` as a multiple of `Month`)
+emit their own calendar spelling. Anything else is not a period the store or the schema can
+represent, and errors rather than silently truncating."""
+_openapi_duration(period::Dates.FixedPeriod) = _openapi_fixed_duration(Dates.toms(period))
+_openapi_duration(period::Dates.Year) = string("P", Dates.value(period), "Y")
+_openapi_duration(period::Dates.Month) = string("P", Dates.value(period), "M")
+_openapi_duration(period::Dates.Quarter) = string("P", 3 * Dates.value(period), "M")
 _openapi_duration(period::Dates.Period) =
-    string("PT", Dates.value(Dates.Second(period)), "S")
+    error("no ISO-8601 duration mapping for period $period ($(typeof(period)))")
+
+# Millisecond -> ISO-8601 "PT<seconds>S", matching `InfraStore._fixed_ms_to_iso`'s spelling
+# exactly (including the no-trailing-zero fractional form) so both sides agree byte-for-byte.
+function _openapi_fixed_duration(ms::Integer)
+    iszero(ms % 1000) && return string("PT", ms ÷ 1000, "S")
+    whole = ms ÷ 1000
+    frac = rstrip(lpad(ms % 1000, 3, '0'), '0')
+    return string("PT", whole, ".", frac, "S")
+end
 
 """
 The document's `owner_category` spelling.
@@ -225,22 +246,22 @@ end
 Convert one attachment row into its `SupplementalAttributeAssociation`.
 
 The counterpart of the `TimeSeriesMetadata` method below, and the same contract: `attribute_id`
-and `entity_id` are the DOCUMENT's ids, which only the caller holds. A component's document id
-is its own id, but an attribute's is assigned fresh from the document counter, so neither is
-read off the row.
+and `component_id` are the DOCUMENT's ids, which only the caller holds, so neither is read off
+the row.
 
-`attribute_type` IS taken from the row. The store recorded it when the attachment was made, so
-it is the same string on both sides by construction; re-deriving it from the attribute object
-would be a second source of truth for a column the store already answers.
+`attribute_type` and `component_type` ARE taken from the row. The store recorded both when the
+attachment was made, so they are the same strings on both sides by construction; re-deriving
+them from the objects would be a second source of truth for columns the store already answers.
 """
 function to_openapi(
     row::InfraStore.SupplementalAttributeAssociation;
     attribute_id::Int,
-    entity_id::Int,
+    component_id::Int,
 )
     return PowerCoreOpenAPIModels.SupplementalAttributeAssociation(;
+        component_id = component_id,
+        component_type = row.component_type,
         attribute_id = attribute_id,
-        entity_id = entity_id,
         attribute_type = row.attribute_type,
     )
 end
