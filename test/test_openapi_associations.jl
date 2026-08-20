@@ -1,7 +1,8 @@
 # The catalog-backed document rows: one bulk read per table, and one row type per stored
 # time series type. The point of every testset here is that the ROW MATCHES THE CATALOG —
-# nothing is re-derived from the series objects, because the columns the schema requires
-# (`element_type`, `element_shape`) only the store knows.
+# InfraStore's own `openapi` module owns every column mapping and wire spelling; these tests
+# assert through the JSON/typed wrappers `IS.openapi_time_series_association_*` and
+# `IS.openapi_supplemental_attribute_association_*`, not a Julia-side re-derivation of them.
 
 const _OPENAPI_TS_ADDRESS = "system_time_series.h5"
 
@@ -12,16 +13,25 @@ function _openapi_ts_fixture()
     return data, component
 end
 
-_openapi_row(data, name) = only(
-    filter(m -> m.name == name, IS.list_time_series_metadata(data)),
+_openapi_row_json(data, name; kwargs...) = only(
+    filter(
+        r -> r["name"] == name,
+        JSON.parse(
+            IS.openapi_time_series_association_json(
+                data; address = _OPENAPI_TS_ADDRESS, kwargs...,
+            ),
+        ),
+    ),
 )
 
-function _openapi_convert(data, name; id = 1, owner_id = 1)
-    return IS.to_openapi(
-        _openapi_row(data, name);
-        id = id,
-        owner_id = owner_id,
-        address = _OPENAPI_TS_ADDRESS,
+function _openapi_row(data, name; kwargs...)
+    return only(
+        filter(
+            m -> m.value.name == name,
+            IS.openapi_time_series_association_rows(
+                data; address = _OPENAPI_TS_ADDRESS, kwargs...,
+            ),
+        ),
     ).value
 end
 
@@ -55,9 +65,19 @@ end
     # The store handle is reachable directly too, for a writer staging into a scratch store
     # before any SystemData exists.
     @test length(IS.list_time_series_metadata(data.time_series_manager.data_store)) == 2
+    # Filter pushdown to InfraStore.list_time_series.
+    @test length(IS.list_time_series_metadata(data; name = "static")) == 1
+    @test only(IS.list_time_series_metadata(data; name = "static")).name == "static"
+    @test isempty(IS.list_time_series_metadata(data; name = "nonexistent"))
+    @test length(
+        IS.list_time_series_metadata(data; time_series_type = IS.InfraStore.Deterministic),
+    ) == 1
+    @test length(
+        IS.list_time_series_metadata(data; owner_category = IS.InfraStore.Component),
+    ) == 2
 end
 
-@testset "to_openapi: SingleTimeSeries carries the grid and the element typing" begin
+@testset "openapi_time_series_association_rows: SingleTimeSeries carries the grid and the element typing" begin
     data, component = _openapi_ts_fixture()
     initial = Dates.DateTime(2024, 1, 1)
     resolution = Dates.Hour(1)
@@ -72,16 +92,16 @@ end
         ),
     )
 
-    row = _openapi_convert(data, "static"; id = 42, owner_id = 7)
+    row = _openapi_row(data, "static")
     @test row isa PowerTimeSeriesOpenAPIModels.SingleTimeSeries
     @test row.time_series_type == "SingleTimeSeries"
-    @test row.id == 42
-    # The DOCUMENT's owner id, not the store's: the caller owns that mapping.
-    @test row.owner_id == 7
+    # The id is the store catalog's rowid, not a document-minted counter.
+    @test row.id isa Integer && row.id > 0
+    @test row.owner_id == IS.get_id(component)
     @test row.owner_type == "TestComponent"
     @test row.owner_category == "Component"
     @test row.name == "static"
-    @test row.resolution == "PT3600S"
+    @test row.resolution == "PT1H"
     @test row.length == 6
     @test row.address == _OPENAPI_TS_ADDRESS
     @test row.units == "MW"
@@ -94,7 +114,7 @@ end
     @test OpenAPI.check_required(row)
 end
 
-@testset "to_openapi: NonSequentialTimeSeries declares no grid at all" begin
+@testset "openapi_time_series_association_rows: NonSequentialTimeSeries declares no grid at all" begin
     data, component = _openapi_ts_fixture()
     stamps = [
         Dates.DateTime(2024, 1, 1),
@@ -108,7 +128,7 @@ end
         ),
     )
 
-    row = _openapi_convert(data, "irregular")
+    row = _openapi_row(data, "irregular")
     @test row isa PowerTimeSeriesOpenAPIModels.NonSequentialTimeSeries
     @test row.length == 3
     # ABSENT, not null: an irregular series has no `initial + k * resolution` grid, and the
@@ -119,7 +139,7 @@ end
     @test OpenAPI.check_required(row)
 end
 
-@testset "to_openapi: every forecast type carries its own window geometry" begin
+@testset "openapi_time_series_association_rows: every forecast type carries its own window geometry" begin
     data, component = _openapi_ts_fixture()
     initial = Dates.DateTime(2024, 1, 1)
     resolution = Dates.Hour(1)
@@ -147,22 +167,22 @@ end
         IS.Scenarios("scen", SortedDict(w => rand(4, 5) for w in windows), resolution),
     )
 
-    det = _openapi_convert(data, "det")
+    det = _openapi_row(data, "det")
     @test det isa PowerTimeSeriesOpenAPIModels.Deterministic
-    @test det.horizon == "PT14400S"
-    @test det.interval == "PT3600S"
+    @test det.horizon == "PT4H"
+    @test det.interval == "PT1H"
     @test det.count == 2
     # A forecast's shape is horizon/interval/count; `length` is not one of its columns.
     @test !hasfield(typeof(det), :length)
 
-    prob = _openapi_convert(data, "prob")
+    prob = _openapi_row(data, "prob")
     @test prob isa PowerTimeSeriesOpenAPIModels.Probabilistic
     @test prob.percentiles == [0.1, 0.5, 0.9]
     @test prob.count == 2
 
     # `scenario_count` is the stored array's leading axis, which the catalog reports as
     # `length` — the same column a Probabilistic spends on its percentile count.
-    scen = _openapi_convert(data, "scen")
+    scen = _openapi_row(data, "scen")
     @test scen isa PowerTimeSeriesOpenAPIModels.Scenarios
     @test scen.scenario_count == 5
     @test scen.count == 2
@@ -172,7 +192,7 @@ end
     end
 end
 
-@testset "to_openapi: transform_single_time_series! rows keep their own discriminator" begin
+@testset "openapi_time_series_association_rows: transform_single_time_series! rows keep their own discriminator, distinct from Deterministic" begin
     data, component = _openapi_ts_fixture()
     initial = Dates.DateTime(2024, 1, 1)
     resolution = Dates.Hour(1)
@@ -189,8 +209,9 @@ end
         Dates.Hour(2), Dates.Hour(1))
 
     rows = [
-        IS.to_openapi(m; id = i, owner_id = 1, address = _OPENAPI_TS_ADDRESS).value
-        for (i, m) in enumerate(IS.list_time_series_metadata(data))
+        row.value for row in IS.openapi_time_series_association_rows(
+            data; address = _OPENAPI_TS_ADDRESS,
+        )
     ]
     derived = only(
         filter(r -> r isa PowerTimeSeriesOpenAPIModels.DeterministicSingleTimeSeries, rows),
@@ -199,13 +220,23 @@ end
     # Deterministic under the discriminator.
     @test derived.time_series_type == "DeterministicSingleTimeSeries"
     @test derived.count == 3
+    @test !any(r -> r isa PowerTimeSeriesOpenAPIModels.Deterministic, rows)
     @test OpenAPI.check_required(derived)
 end
 
-@testset "to_openapi: the unit system a series declares round trips" begin
+@testset "openapi_time_series_association_rows: the unit system a series declares round trips, unset stays absent" begin
     data, component = _openapi_ts_fixture()
     initial = Dates.DateTime(2024, 1, 1)
     resolution = Dates.Hour(1)
+    IS.add_time_series!(
+        data, component,
+        IS.SingleTimeSeries(
+            "series_unset",
+            TimeSeries.TimeArray(
+                [initial + resolution * (i - 1) for i in 1:3], [1.0, 2.0, 3.0],
+            ),
+        ),
+    )
     for (basis, spelling) in ((IS.NU, "NATURAL_UNITS"), (IS.DU, "COMPONENT_BASE"))
         IS.add_time_series!(
             data, component,
@@ -217,28 +248,13 @@ end
                 unit_system = basis,
             ),
         )
-        row = _openapi_convert(data, string("series_", spelling))
+        row = _openapi_row(data, string("series_", spelling))
         @test row.unit_system == spelling
     end
+    @test isnothing(_openapi_row(data, "series_unset").unit_system)
 end
 
-@testset "_openapi_duration matches InfraStore's own ISO-8601 spellings" begin
-    # Direct unit assertions for the period kinds the schema allows down to the
-    # one-millisecond floor, plus a calendar span. Values chosen to match
-    # `InfraStore._period_to_iso` / `_fixed_ms_to_iso` byte-for-byte.
-    @test IS._openapi_duration(Dates.Millisecond(500)) == "PT0.5S"
-    @test IS._openapi_duration(Dates.Minute(5)) == "PT300S"
-    @test IS._openapi_duration(Dates.Hour(1)) == "PT3600S"
-    @test IS._openapi_duration(Dates.Month(1)) == "P1M"
-    @test IS._openapi_duration(Dates.Year(1)) == "P1Y"
-    @test IS._openapi_duration(Dates.Quarter(1)) == "P3M"
-    # A period the schema/store cannot represent errors loudly rather than truncating.
-    @test_throws MethodError IS._openapi_duration(Dates.Week(1) + Dates.Day(1))
-end
-
-@testset "to_openapi: a sub-second resolution round trips through the document" begin
-    # `_openapi_duration` used to throw `InexactError` converting a sub-second period to
-    # `Dates.Second`; the schema's `Period` allows fixed spans down to PT0.001S.
+@testset "openapi_time_series_association_rows: a sub-second resolution round trips through the document" begin
     data, component = _openapi_ts_fixture()
     initial = Dates.DateTime(2024, 1, 1)
     resolution = Dates.Millisecond(500)
@@ -252,9 +268,58 @@ end
             units = "MW", quantity_kind = "ActivePower",
         ),
     )
-    row = _openapi_convert(data, "subsecond")
+    row = _openapi_row(data, "subsecond")
     @test row.resolution == "PT0.5S"
     @test OpenAPI.check_required(row)
+end
+
+@testset "openapi_time_series_association_json: raw JSON matches the typed rows field-for-field" begin
+    data, component = _openapi_ts_fixture()
+    initial = Dates.DateTime(2024, 1, 1)
+    IS.add_time_series!(
+        data, component,
+        IS.SingleTimeSeries(
+            "static", TimeSeries.TimeArray([initial, initial + Dates.Hour(1)], [1.0, 2.0]),
+        ),
+    )
+    raw = _openapi_row_json(data, "static")
+    typed = _openapi_row(data, "static")
+    @test raw["id"] == typed.id
+    @test raw["owner_id"] == typed.owner_id
+    @test raw["resolution"] == typed.resolution
+    @test raw["address"] == _OPENAPI_TS_ADDRESS
+end
+
+@testset "openapi_time_series_association_rows: export is deterministic regardless of insert order" begin
+    initial = Dates.DateTime(2024, 1, 1)
+    resolution = Dates.Hour(1)
+    names = ["c", "a", "b"]
+
+    function _build(order)
+        data = IS.SystemData()
+        component = IS.TestComponent("component1", 5)
+        IS.add_component!(data, component)
+        for name in order
+            IS.add_time_series!(
+                data, component,
+                IS.SingleTimeSeries(
+                    name,
+                    TimeSeries.TimeArray(
+                        [initial + resolution * (i - 1) for i in 1:3], [1.0, 2.0, 3.0],
+                    ),
+                ),
+            )
+        end
+        return IS.openapi_time_series_association_json(data; address = _OPENAPI_TS_ADDRESS)
+    end
+
+    # The store assigns `id` from its own rowid counter, so it tracks INSERT order, not sort
+    # order — two stores built by inserting the same series in a different sequence get
+    # different rowids and are not byte-identical. What "the store sorts" guarantees is the
+    # ROW ORDER in the export, by the identity tuple, independent of insertion order.
+    forward = [row["name"] for row in JSON.parse(_build(names))]
+    shuffled = [row["name"] for row in JSON.parse(_build(reverse(names)))]
+    @test forward == shuffled == sort(names)
 end
 
 function _openapi_attr_fixture()
@@ -271,39 +336,199 @@ function _openapi_attr_fixture()
     return data, first_component, second_component, shared
 end
 
-@testset "to_openapi: a supplemental attribute association row" begin
-    data, first_component, _second, shared = _openapi_attr_fixture()
-    rows = IS.list_supplemental_attribute_association_rows(data)
-    row = only(filter(r -> r.component_id == IS.get_id(first_component), rows))
-
-    # Document ids, not store ids: both ends are the caller's, so neither is read off the
-    # row.
-    assoc = IS.to_openapi(row; attribute_id = 77, component_id = 3)
-    @test assoc isa PowerCoreOpenAPIModels.SupplementalAttributeAssociation
-    @test assoc.attribute_id == 77
-    @test assoc.component_id == 3
-    # The type labels DO come off the row — the store recorded both at attach time, so they
-    # match the objects without being re-derived from them.
-    @test assoc.attribute_type == "GeographicInfo"
-    @test assoc.attribute_type == string(nameof(typeof(shared)))
-    @test assoc.component_type == string(nameof(typeof(first_component)))
-    @test OpenAPI.check_required(assoc)
+@testset "openapi_supplemental_attribute_association_rows: a shared attribute makes one row per component" begin
+    data, first_component, second_component, shared = _openapi_attr_fixture()
+    rows = IS.openapi_supplemental_attribute_association_rows(data)
+    @test length(rows) == 2
+    @test all(r -> r isa PowerCoreOpenAPIModels.SupplementalAttributeAssociation, rows)
+    # Document/store ids agree by construction now: the association row's ids ARE the IS ids.
+    @test Set(r.component_id for r in rows) ==
+          Set([IS.get_id(first_component), IS.get_id(second_component)])
+    @test all(r -> r.attribute_id == IS.get_id(shared), rows)
+    @test all(r -> r.attribute_type == "GeographicInfo", rows)
+    @test all(r -> r.component_type == "TestComponent", rows)
+    for row in rows
+        @test OpenAPI.check_required(row)
+    end
 end
 
-@testset "to_openapi: one attribute shared by two components makes two rows" begin
-    data, first_component, second_component, _shared = _openapi_attr_fixture()
+@testset "list_supplemental_attribute_association_rows reads the whole table" begin
+    data, first_component, second_component, shared = _openapi_attr_fixture()
     rows = IS.list_supplemental_attribute_association_rows(data)
-    # One attribute, two attachments: the association table is what fans out, and the
-    # document's attribute id is shared across both rows.
-    assocs = [
-        IS.to_openapi(r; attribute_id = 50, component_id = Int(r.component_id)) for
-        r in rows
-    ]
-    @test length(assocs) == 2
-    @test all(a -> a.attribute_id == 50, assocs)
-    @test Set(a.component_id for a in assocs) ==
+    @test length(rows) == 2
+    @test all(r -> r.attribute_id == IS.get_id(shared), rows)
+    @test Set(r.component_id for r in rows) ==
           Set([IS.get_id(first_component), IS.get_id(second_component)])
-    @test all(a -> a.attribute_type == "GeographicInfo", assocs)
+    @test all(r -> r.attribute_type == "GeographicInfo", rows)
+    @test all(r -> r.component_type == "TestComponent", rows)
+end
+
+@testset "import_supplemental_attribute_association_rows!: SA import round trip" begin
+    data, first_component, second_component, _shared = _openapi_attr_fixture()
+    json = IS.openapi_supplemental_attribute_association_json(data)
+
+    fresh = IS.SystemData()
+    IS.add_component!(fresh, IS.TestComponent("component1", 5))
+    IS.add_component!(fresh, IS.TestComponent("component2", 6))
+    n = IS.import_supplemental_attribute_association_rows!(fresh, json)
+    @test n == 2
+    @test IS.get_num_associations(fresh.supplemental_attribute_manager.associations) == 2
+    reimported = IS.list_supplemental_attribute_association_rows(fresh)
+    @test length(reimported) == 2
+    @test Set((r.component_id, r.attribute_id) for r in reimported) ==
+          Set(
+        (r.component_id, r.attribute_id) for
+        r in IS.list_supplemental_attribute_association_rows(data)
+    )
+end
+
+@testset "reconcile_time_series_association_rows!: strict mode is a no-op on an unmodified export" begin
+    data, component = _openapi_ts_fixture()
+    initial = Dates.DateTime(2024, 1, 1)
+    IS.add_time_series!(
+        data, component,
+        IS.SingleTimeSeries(
+            "static", TimeSeries.TimeArray([initial, initial + Dates.Hour(1)], [1.0, 2.0]),
+        ),
+    )
+    json = IS.openapi_time_series_association_json(data; address = _OPENAPI_TS_ADDRESS)
+    report = IS.reconcile_time_series_association_rows!(
+        data, json; policy = :strict, expected_address = _OPENAPI_TS_ADDRESS,
+    )
+    @test report.matched == 1
+    @test report.updated == 0
+    @test report.missing_in_store == 0
+    @test report.unmatched_in_store == 0
+    @test isempty(report.conflicts)
+end
+
+@testset "reconcile_time_series_association_rows!: strict mode catches descriptive drift" begin
+    data, component = _openapi_ts_fixture()
+    initial = Dates.DateTime(2024, 1, 1)
+    IS.add_time_series!(
+        data, component,
+        IS.SingleTimeSeries(
+            "static", TimeSeries.TimeArray([initial, initial + Dates.Hour(1)], [1.0, 2.0]);
+            units = "MW",
+        ),
+    )
+    rows = JSON.parse(
+        IS.openapi_time_series_association_json(data; address = _OPENAPI_TS_ADDRESS),
+    )
+    rows[1]["units"] = "kW"
+    drifted = JSON.json(rows)
+    @test_throws IS.InfraStore.ReconcileConflictError IS.reconcile_time_series_association_rows!(
+        data, drifted; policy = :strict,
+    )
+end
+
+@testset "reconcile_time_series_association_rows!: strict mode catches a row missing in the store" begin
+    data, component = _openapi_ts_fixture()
+    initial = Dates.DateTime(2024, 1, 1)
+    IS.add_time_series!(
+        data, component,
+        IS.SingleTimeSeries(
+            "static", TimeSeries.TimeArray([initial, initial + Dates.Hour(1)], [1.0, 2.0]),
+        ),
+    )
+    rows = JSON.parse(
+        IS.openapi_time_series_association_json(data; address = _OPENAPI_TS_ADDRESS),
+    )
+    rows[1]["name"] = "phantom"
+    missing_json = JSON.json(rows)
+    @test_throws IS.InfraStore.ReconcileConflictError IS.reconcile_time_series_association_rows!(
+        data, missing_json; policy = :strict,
+    )
+end
+
+@testset "reconcile_time_series_association_rows!: update_descriptive rewrites descriptive drift and reports it" begin
+    data, component = _openapi_ts_fixture()
+    initial = Dates.DateTime(2024, 1, 1)
+    IS.add_time_series!(
+        data, component,
+        IS.SingleTimeSeries(
+            "static", TimeSeries.TimeArray([initial, initial + Dates.Hour(1)], [1.0, 2.0]);
+            units = "MW",
+        ),
+    )
+    rows = JSON.parse(
+        IS.openapi_time_series_association_json(data; address = _OPENAPI_TS_ADDRESS),
+    )
+    rows[1]["units"] = "kW"
+    drifted = JSON.json(rows)
+    report = IS.reconcile_time_series_association_rows!(
+        data, drifted; policy = :update_descriptive,
+    )
+    @test report.matched == 1
+    @test report.updated == 1
+    # `conflicts` doubles as a notes field under `:update_descriptive`: a rewritten row is
+    # reported here, not silently applied.
+    @test length(report.conflicts) == 1
+    @test occursin("updated", only(report.conflicts))
+    @test only(IS.list_time_series_metadata(data)).units == "kW"
+end
+
+@testset "attach_supplemental_attribute!: attaches in memory without writing an association row" begin
+    data = IS.SystemData()
+    component = IS.TestComponent("component1", 5)
+    IS.add_component!(data, component)
+    attribute = IS.GeographicInfo(;
+        geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
+    )
+    IS.set_id!(attribute, 12345)
+    before = IS.get_num_associations(data.supplemental_attribute_manager.associations)
+
+    IS.attach_supplemental_attribute!(data, component, attribute)
+
+    @test IS.get_num_associations(data.supplemental_attribute_manager.associations) ==
+          before
+    @test IS.is_attached(attribute, data.supplemental_attribute_manager)
+    @test only(collect(IS.iterate_supplemental_attributes(data))) === attribute
+end
+
+@testset "attach_supplemental_attribute!: errors loudly on an unassigned attribute id" begin
+    data = IS.SystemData()
+    component = IS.TestComponent("component1", 5)
+    IS.add_component!(data, component)
+    attribute = IS.GeographicInfo(;
+        geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
+    )
+    @test IS.get_id(attribute) == IS.UNASSIGNED_ID
+    @test_throws ArgumentError IS.attach_supplemental_attribute!(data, component, attribute)
+end
+
+@testset "attach_supplemental_attribute!: respects allow_existing_time_series" begin
+    data = IS.SystemData()
+    component = IS.TestComponent("component1", 5)
+    IS.add_component!(data, component)
+    # GeographicInfo does not support time series at all; TestSupplemental does.
+    attribute = IS.TestSupplemental(; value = 1.0)
+    IS.set_id!(attribute, 55)
+    # Simulate an importer adopting a sidecar that already carries a time series owned by
+    # this (not-yet-attached) attribute: wire the manager reference the way
+    # `attach_supplemental_attribute!` itself would, then add the series through the
+    # manager-level API, which needs only an owner id/category, not an association row.
+    IS.set_shared_system_references!(
+        attribute,
+        IS.SharedSystemReferences(;
+            supplemental_attribute_manager = data.supplemental_attribute_manager,
+            time_series_manager = data.time_series_manager,
+        ),
+    )
+    IS.add_time_series!(
+        data.time_series_manager, attribute,
+        IS.SingleTimeSeries(
+            "static",
+            TimeSeries.TimeArray(
+                [Dates.DateTime(2024, 1, 1), Dates.DateTime(2024, 1, 1, 1)], [1.0, 2.0],
+            ),
+        ),
+    )
+    @test_throws ArgumentError IS.attach_supplemental_attribute!(data, component, attribute)
+    IS.attach_supplemental_attribute!(
+        data, component, attribute; allow_existing_time_series = true,
+    )
+    @test IS.is_attached(attribute, data.supplemental_attribute_manager)
 end
 
 @testset "begin_association_batch defers the inserts and writes them once" begin
@@ -362,26 +587,4 @@ end
     @test_throws ErrorException IS.begin_association_batch(data) do
         IS.begin_association_batch(() -> nothing, data)
     end
-end
-
-@testset "list_supplemental_attribute_association_rows reads the whole table" begin
-    data = IS.SystemData()
-    first_component = IS.TestComponent("component1", 5)
-    second_component = IS.TestComponent("component2", 6)
-    IS.add_component!(data, first_component)
-    IS.add_component!(data, second_component)
-    # One attribute shared by two components: two rows, one attribute.
-    shared = IS.GeographicInfo(;
-        geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
-    )
-    IS.add_supplemental_attribute!(data, first_component, shared)
-    IS.add_supplemental_attribute!(data, second_component, shared)
-
-    rows = IS.list_supplemental_attribute_association_rows(data)
-    @test length(rows) == 2
-    @test all(r -> r.attribute_id == IS.get_id(shared), rows)
-    @test Set(r.component_id for r in rows) ==
-          Set([IS.get_id(first_component), IS.get_id(second_component)])
-    @test all(r -> r.attribute_type == "GeographicInfo", rows)
-    @test all(r -> r.component_type == "TestComponent", rows)
 end

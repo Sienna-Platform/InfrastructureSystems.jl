@@ -100,9 +100,8 @@ end
             vector["leading_dims"] == 1 || continue
 
             arr = _vector_storage_array(vector)
-            got = IS._decode_static_values(
-                arr, vector["element_type"], size(arr, 1),
-            )
+            encoding = IS._element_encoding(vector["element_type"])
+            got = IS._decode_static_values(arr, encoding, size(arr, 1))
             @test got == expected
             checked += 1
         end
