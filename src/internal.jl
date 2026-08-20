@@ -12,6 +12,12 @@ Unit system for component data values.
 - `NATURAL_UNITS`: Values in natural units (e.g., MW, MVAR)
 """ UnitSystem
 
+"""
+System-level manager references handed to a component or supplemental attribute
+when it is attached to a [`SystemData`](@ref), letting the owner reach its
+system's time series and supplemental attributes without a back-pointer to the
+whole system.
+"""
 @kwdef struct SharedSystemReferences <: InfrastructureSystemsType
     supplemental_attribute_manager::Union{Nothing, AbstractSupplementalAttributeManager} =
         nothing

@@ -12,6 +12,15 @@
 # downstream call sites (`IS.SU`, `IS._strip_units`, …) keep working.
 ###############################
 
+"""
+Domain-agnostic unit-system markers and the `RelativeQuantity` wrapper.
+
+The markers `DU` (device base), `SU` (system base), and `NU` (natural units)
+express how a value is normalized without assuming any particular physical
+domain; downstream packages (e.g. PowerSystems) attach domain-specific meaning
+and conversions. Values are tagged by multiplication (`0.6 * DU`), and
+cross-unit arithmetic or comparison throws rather than converting silently.
+"""
 module RelativeUnits
 
 export AbstractUnitSystem, AbstractRelativeUnit

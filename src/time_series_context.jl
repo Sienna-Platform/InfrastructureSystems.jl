@@ -46,6 +46,12 @@ empty buffer and nothing to commit, and these accessors run in per-timestep loop
 const AUTO_FLUSH_THRESHOLD = 10_000
 const AUTO_FLUSH_BYTES = 256 * 1024 * 1024
 
+"""
+The API surface of a [`time_series_transaction`](@ref) block. Additions staged
+through it are buffered and written in bulk; when the block is transactional,
+everything it does commits or rolls back atomically with the block. Yielded by
+`time_series_transaction` — not constructed directly by users.
+"""
 mutable struct TimeSeriesContext
     # Typed on the abstract supertype: this file is included before the concrete
     # `TimeSeriesManager`, which needs `TimeSeriesContext` in its own signatures.

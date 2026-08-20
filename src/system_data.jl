@@ -1367,6 +1367,13 @@ get_forecast_summary_table(data::SystemData) =
 _get_system_basename(system_file) = splitext(basename(system_file))[1]
 _get_secondary_basename(system_basename, name) = system_basename * "_" * name
 
+"""
+$(TYPEDSIGNATURES)
+
+Attach `attribute` to `component`. An attribute is created once and may be
+attached to many components; the association is stored rather than a copy.
+The component must already be attached to `data`.
+"""
 function add_supplemental_attribute!(data::SystemData, component, attribute; kwargs...)
     # Note that we do not support adding attributes to masked components
     # and this check doesn't look at those.

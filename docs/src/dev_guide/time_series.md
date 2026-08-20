@@ -102,7 +102,7 @@ file-format reference.
 
 ## Identifying and retrieving a time series
 
-Address a stored time series by its [`TimeSeriesKey`](@ref) — a `StaticTimeSeriesKey` or
+Address a stored time series by its [`InfrastructureSystems.TimeSeriesKey`](@ref) — a `StaticTimeSeriesKey` or
 `ForecastKey` — which captures `name`, `resolution`, `features`, and the concrete type
 (forecasts additionally capture `horizon`, `interval`, and `count`). Combined with the owner,
 this is the unique identity of an association:

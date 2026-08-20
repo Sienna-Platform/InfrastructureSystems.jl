@@ -1,3 +1,11 @@
+"""
+Manages a system's time series data.
+
+Wraps the [`Store`](@ref) holding both the arrays and their catalog (owner
+associations and metadata) and enforces read-only mode. Owned by a `SystemData`;
+user code reaches it through the system-level time series API rather than
+directly.
+"""
 mutable struct TimeSeriesManager <: AbstractTimeSeriesManager
     data_store::Store
     read_only::Bool
