@@ -1383,6 +1383,47 @@ function add_supplemental_attribute!(data::SystemData, component, attribute; kwa
 end
 
 """
+$(TYPEDSIGNATURES)
+
+Attach `attribute` to `component` when the store's `supplemental_attribute_associations`
+table ALREADY holds this exact pairing — the shape an importer adopting a sidecar store
+needs, as opposed to [`add_supplemental_attribute!`](@ref), which mints a fresh id for
+`attribute` and writes a new association row.
+
+Does everything [`add_supplemental_attribute!`](@ref) does EXCEPT `assign_id!` and any
+association-table write or probe: `attribute` must already carry an id (call [`set_id!`](@ref)
+on it from the document before attaching, mirroring how components are adopted on import) —
+an `UNASSIGNED_ID` is always a caller bug here and throws `ArgumentError`. Because no
+association row is written, `attribute` ends up attached to `data` without a matching
+`(component, attribute)` row unless the caller already put one in the store; this function
+does not check that either.
+
+Use [`add_supplemental_attribute!`](@ref) instead when creating a brand-new attribute and its
+association for the first time.
+"""
+function attach_supplemental_attribute!(
+    data::SystemData,
+    component::InfrastructureSystemsComponent,
+    attribute::SupplementalAttribute;
+    allow_existing_time_series::Bool = false,
+)
+    throw_if_not_attached(data.components, component)
+    _attach_attribute!(
+        data.supplemental_attribute_manager,
+        attribute;
+        allow_existing_time_series = allow_existing_time_series,
+    )
+    set_shared_system_references!(
+        attribute,
+        SharedSystemReferences(;
+            supplemental_attribute_manager = data.supplemental_attribute_manager,
+            time_series_manager = data.time_series_manager,
+        ),
+    )
+    return
+end
+
+"""
 Defer supplemental-attribute association inserts until `func` returns, then write them in
 one store call. See [`begin_association_batch`](@ref) for the write-buffering mechanics and
 its read-side limits.

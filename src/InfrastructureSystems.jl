@@ -24,6 +24,7 @@ import Dates
 import JSON
 import TimeZones
 import GeoJSON
+import OpenAPI
 import PowerCoreOpenAPIModels
 import PowerTimeSeriesOpenAPIModels
 import Logging

@@ -55,11 +55,11 @@ function begin_supplemental_attributes_update(
         orig_data[key] = snapshot
     end
 
-    # The store exposes no transaction primitive, so snapshot the association rows and
-    # restore them wholesale on failure. Rows are small metadata and a system holds far
-    # fewer of them than time series, so a full clear-and-reload is cheap — and unlike a
-    # diff of newly added rows it also undoes REMOVALS, which is what the SQLite
-    # transaction this replaced did.
+    # `InfraStore.transaction` exists (see `restore_associations!`) but only covers writes
+    # made through it; this snapshot instead survives arbitrary Julia-level failures across
+    # `func` — including ones that never touch the store at all. Rows are small metadata and
+    # a system holds far fewer of them than time series, so a full clear-and-reload is cheap
+    # — and unlike a diff of newly added rows it also undoes REMOVALS.
     orig_associations = _association_rows(mgr.associations)
 
     try
@@ -131,8 +131,10 @@ function _attach_attribute!(
     if id == UNASSIGNED_ID
         throw(
             ArgumentError(
-                "$(summary(attribute)) has an unassigned ID; attach it through " *
-                "`add_supplemental_attribute!` on `SystemData` so an ID is assigned first.",
+                "$(summary(attribute)) has an unassigned ID; call `add_supplemental_attribute!` " *
+                "on `SystemData` to have one assigned automatically, or, when adopting an " *
+                "attribute whose id is already fixed by a document, call `set_id!` first and " *
+                "attach it with `attach_supplemental_attribute!`.",
             ),
         )
     end

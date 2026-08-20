@@ -1,36 +1,58 @@
-# OpenAPI serde for the time series and supplemental-attribute association catalogs.
+# ---- OpenAPI-row association serde -----------------------------------------
 #
-# Both tables live in one InfraStore store, and both are read here in BULK: one catalog
-# query returns every row, rather than one query per owner. That is not only a speed
-# choice. `TimeSeriesAssociation` requires `element_type`, `element_shape`, and `address`,
-# and none of the three is reachable from a `TimeSeriesKey` — `element_type` is derived by
-# InfraStore from the stored array on write, and duplicating that derivation here would put
-# a second source of truth behind the one field the schema says the writing package owns.
-# The catalog row carries all three, so the row IS the document row.
-#
-# Reading them per owner also meant materializing every series: `units`, `quantity_kind`
-# and `unit_system` are declared on the `TimeSeriesData` object, so a caller walking keys
-# had to load each array out of HDF5 to reach three scalar labels the catalog already
-# stores as columns.
-#
-# Document ids are supplied by the caller, matching `to_openapi(::GeographicInfo, ::Int)`:
-# the counter belongs to the document, which is a domain-package concern.
+# Thin wrappers over InfraStore's own OpenAPI-row serde
+# (`infrastore_core::openapi`, exposed by `InfraStore.jl`'s
+# `export_time_series_associations_openapi` / `export_supplemental_attribute_associations_openapi`
+# / `import_supplemental_attribute_associations_openapi!` /
+# `reconcile_time_series_associations_openapi!`). The store owns every column mapping and wire
+# spelling now (id/owner_id, `owner_category`, ISO durations, plain-scalar features,
+# `unit_system` labels, per-type timing columns, sort order); this file only bridges
+# `SystemData`/`Store` to the store handle they already hold and parses the store's JSON into
+# the generated OpenAPI model types, the same way `PowerOpenAPIModels.document_from_json` does
+# (`OpenAPI.from_json` on the raw row dict; the oneOf wrapper picks its concrete member type
+# from the row's own discriminator field, so no dispatch is needed here).
 
 """
-Metadata for every time series in a store, in one catalog query.
+$(TYPEDSIGNATURES)
+
+Metadata for every time series in a store matching the (all-optional, independent) filters —
+the same filter keywords as `InfraStore.list_time_series`/`InfraStore.list_keys` — in one
+catalog query.
 
 Takes the store directly as well as a `SystemData`, because a writer that stages series into
 a scratch store — a parser building a document, say — needs the same rows before any
 `SystemData` exists.
-
-The rows carry the columns [`to_openapi`](@ref) needs to emit a `TimeSeriesAssociation`
-without reading a single stored array.
 """
-list_time_series_metadata(store::Store) = InfraStore.list_time_series(store.inner)
-list_time_series_metadata(data::SystemData) =
-    list_time_series_metadata(data.time_series_manager.data_store)
+function list_time_series_metadata(
+    store::Store;
+    owner_id = nothing,
+    owner_category = nothing,
+    time_series_type = nothing,
+    name = nothing,
+    resolution = nothing,
+    interval = nothing,
+    features = Dict{String, Any}(),
+    component_field = nothing,
+)
+    return InfraStore.list_time_series(
+        store.inner;
+        owner_id = owner_id,
+        owner_category = owner_category,
+        time_series_type = time_series_type,
+        name = name,
+        resolution = resolution,
+        interval = interval,
+        features = features,
+        component_field = component_field,
+    )
+end
+
+list_time_series_metadata(data::SystemData; kwargs...) =
+    list_time_series_metadata(data.time_series_manager.data_store; kwargs...)
 
 """
+$(TYPEDSIGNATURES)
+
 Every `(component_id, component_type, attribute_id, attribute_type)` association row in
 `data`, in one catalog query.
 
@@ -41,249 +63,132 @@ component.
 list_supplemental_attribute_association_rows(data::SystemData) =
     _association_rows(data.supplemental_attribute_manager.associations)
 
-# ── column conversions ──────────────────────────────────────────────────────────
-
-"""ISO 8601 duration for a stored period.
-
-Dispatches on the period's kind rather than branching on its value, mirroring InfraStore's
-own encoder (`InfraStore._period_to_iso` / `_fixed_ms_to_iso`) so a round trip through the
-document is byte-identical to what the store would emit for the same period. Fixed spans
-(`Week`/`Day`/`Hour`/`Minute`/`Second`/`Millisecond`) go through milliseconds, emitting
-whole-second `PT<n>S` or fractional-second `PT<n>.<frac>S` down to the one-millisecond floor
-the schema allows; calendar spans (`Month`/`Year`, and `Quarter` as a multiple of `Month`)
-emit their own calendar spelling. Anything else is not a period the store or the schema can
-represent, and errors rather than silently truncating."""
-_openapi_duration(period::Dates.FixedPeriod) = _openapi_fixed_duration(Dates.toms(period))
-_openapi_duration(period::Dates.Year) = string("P", Dates.value(period), "Y")
-_openapi_duration(period::Dates.Month) = string("P", Dates.value(period), "M")
-_openapi_duration(period::Dates.Quarter) = string("P", 3 * Dates.value(period), "M")
-_openapi_duration(period::Dates.Period) =
-    error("no ISO-8601 duration mapping for period $period ($(typeof(period)))")
-
-# Millisecond -> ISO-8601 "PT<seconds>S", matching `InfraStore._fixed_ms_to_iso`'s spelling
-# exactly (including the no-trailing-zero fractional form) so both sides agree byte-for-byte.
-function _openapi_fixed_duration(ms::Integer)
-    iszero(ms % 1000) && return string("PT", ms ÷ 1000, "S")
-    whole = ms ÷ 1000
-    frac = rstrip(lpad(ms % 1000, 3, '0'), '0')
-    return string("PT", whole, ".", frac, "S")
-end
+# ── typed OpenAPI rows ──────────────────────────────────────────────────────────
 
 """
-The document's `owner_category` spelling.
+$(TYPEDSIGNATURES)
 
-Not dispatched, and deliberately not: `InfraStore.OwnerCategory` is an `@enum`, whose values
-are instances of ONE type, so there is nothing for multiple dispatch to select on. The two
-ways to fake it are both worse than this comparison — returning the owner's abstract type
-makes the result infer as `Type`, and `Val(category)` on a runtime value is a dynamic
-dispatch. Every branch here returns a `String`, so the function is type-stable as written.
+The raw, already schema-conformant JSON array InfraStore's `openapi` module produces for
+`time_series_associations` matching the filter (the same filter keywords as
+[`list_time_series_metadata`](@ref)), each row stamped with `address` verbatim. For a caller
+that embeds the JSON verbatim (into a document, say) rather than round-tripping it through the
+generated model types; see [`openapi_time_series_association_rows`](@ref) for that.
 """
-function _openapi_owner_category(category::InfraStore.OwnerCategory)
-    category === InfraStore.Component && return "Component"
-    category === InfraStore.SupplementalAttribute && return "SupplementalAttribute"
-    throw(ArgumentError("unrecognized store owner category: $category"))
-end
-
-"""The document's `unit_system` spelling.
-
-`nothing` stays `nothing`: unspecified is deliberately not `NATURAL_UNITS`, and asserting a
-basis nobody declared would be worse than omitting the field. There is no system-base
-spelling on either side — per-unit data historically on the system base records that base in
-the component's own `base_power` and rides as `COMPONENT_BASE`, which is also why no
-`SystemBaseUnit` method exists: a read cannot produce one."""
-_openapi_unit_system(::Nothing) = nothing
-_openapi_unit_system(::NaturalUnit) = "NATURAL_UNITS"
-_openapi_unit_system(::DeviceBaseUnit) = "COMPONENT_BASE"
-
-"""`features` as the schema's `{name: value}` map."""
-function _openapi_features(features::AbstractDict)
-    return Dict{String, Any}(
-        String(k) => PowerTimeSeriesOpenAPIModels.TimeSeriesFeatureValue(v)
-        for (k, v) in features
-    )
-end
-
-"""
-A total ordering key for the catalog rows, so a document written twice from the same store
-lists its series in the same order.
-
-The series' full identity, not just `(owner, name)`: two series on one owner may share a
-name and differ only by resolution, interval, or a feature value.
-"""
-function openapi_row_sort_key(meta::InfraStore.TimeSeriesMetadata)
-    return (
-        meta.owner_id,
-        meta.name,
-        string(nameof(meta.time_series_type)),
-        string(meta.resolution),
-        string(meta.interval),
-        sort!([string(k) => string(v) for (k, v) in meta.features]),
-    )
-end
-
-# The columns every association type carries, whatever its timing shape.
-function _openapi_common(
-    meta::InfraStore.TimeSeriesMetadata,
-    id::Int,
-    owner_id::Int,
+function openapi_time_series_association_json(
+    store::Store;
     address::AbstractString,
+    kwargs...,
 )
-    return (;
-        id = id,
-        owner_id = owner_id,
-        owner_type = meta.owner_type,
-        owner_category = _openapi_owner_category(meta.owner_category),
-        name = meta.name,
-        features = _openapi_features(meta.features),
-        address = String(address),
-        element_type = meta.element_type,
-        element_shape = collect(Int64, meta.element_shape),
-        units = meta.units,
-        quantity_kind = meta.quantity_kind,
-        unit_system = _openapi_unit_system(_from_store_unit_system(meta.unit_system)),
-        component_field = meta.component_field,
-        application_data = meta.application_data,
+    return InfraStore.export_time_series_associations_openapi(
+        store.inner; address = address, kwargs...,
     )
 end
 
-# The forecast window geometry, shared by all four forecast types.
-function _openapi_forecast_columns(meta::InfraStore.TimeSeriesMetadata)
-    return (;
-        initial_timestamp = TimeZones.ZonedDateTime(
-            meta.initial_timestamp, TimeZones.TimeZone("UTC"),
-        ),
-        resolution = _openapi_duration(meta.resolution),
-        horizon = _openapi_duration(meta.horizon),
-        interval = _openapi_duration(meta.interval),
-        count = meta.count,
-    )
-end
-
-# ── per-type rows ───────────────────────────────────────────────────────────────
-#
-# One method per stored type rather than one row with every field nullable: the type
-# decides which timing columns exist, which is exactly why the schemas are six documents
-# and not one. `meta.time_series_type` is the InfraStore type, so these dispatch on it.
-#
-# `meta.length` is `size(array, 1)`, which each type spends differently: the timestep count
-# for a static series, the horizon count for a `Deterministic`, the percentile count for a
-# `Probabilistic`, and the scenario count for a `Scenarios`. Only the readings the schema
-# asks for are emitted.
-
-function _openapi_association(
-    ::Type{InfraStore.SingleTimeSeries},
-    meta::InfraStore.TimeSeriesMetadata,
-    common::NamedTuple,
-)
-    return PowerTimeSeriesOpenAPIModels.SingleTimeSeries(;
-        common...,
-        initial_timestamp = TimeZones.ZonedDateTime(
-            meta.initial_timestamp, TimeZones.TimeZone("UTC"),
-        ),
-        resolution = _openapi_duration(meta.resolution),
-        length = meta.length,
-    )
-end
-
-function _openapi_association(
-    ::Type{InfraStore.NonSequentialTimeSeries},
-    meta::InfraStore.TimeSeriesMetadata,
-    common::NamedTuple,
-)
-    # No grid columns at all: an irregular series has no `initial + k * resolution` to
-    # describe, and its explicit timestamp vector stays in the store.
-    return PowerTimeSeriesOpenAPIModels.NonSequentialTimeSeries(;
-        common...,
-        length = meta.length,
-    )
-end
-
-function _openapi_association(
-    ::Type{InfraStore.Deterministic},
-    meta::InfraStore.TimeSeriesMetadata,
-    common::NamedTuple,
-)
-    return PowerTimeSeriesOpenAPIModels.Deterministic(;
-        common..., _openapi_forecast_columns(meta)...,
-    )
-end
-
-function _openapi_association(
-    ::Type{InfraStore.DeterministicSingleTimeSeries},
-    meta::InfraStore.TimeSeriesMetadata,
-    common::NamedTuple,
-)
-    return PowerTimeSeriesOpenAPIModels.DeterministicSingleTimeSeries(;
-        common..., _openapi_forecast_columns(meta)...,
-    )
-end
-
-function _openapi_association(
-    ::Type{InfraStore.Probabilistic},
-    meta::InfraStore.TimeSeriesMetadata,
-    common::NamedTuple,
-)
-    return PowerTimeSeriesOpenAPIModels.Probabilistic(;
-        common...,
-        _openapi_forecast_columns(meta)...,
-        percentiles = meta.percentiles,
-    )
-end
-
-function _openapi_association(
-    ::Type{InfraStore.Scenarios},
-    meta::InfraStore.TimeSeriesMetadata,
-    common::NamedTuple,
-)
-    return PowerTimeSeriesOpenAPIModels.Scenarios(;
-        common...,
-        _openapi_forecast_columns(meta)...,
-        scenario_count = meta.length,
-    )
-end
+openapi_time_series_association_json(data::SystemData; kwargs...) =
+    openapi_time_series_association_json(data.time_series_manager.data_store; kwargs...)
 
 """
-Convert one attachment row into its `SupplementalAttributeAssociation`.
+$(TYPEDSIGNATURES)
 
-The counterpart of the `TimeSeriesMetadata` method below, and the same contract: `attribute_id`
-and `component_id` are the DOCUMENT's ids, which only the caller holds, so neither is read off
-the row.
-
-`attribute_type` and `component_type` ARE taken from the row. The store recorded both when the
-attachment was made, so they are the same strings on both sides by construction; re-deriving
-them from the objects would be a second source of truth for columns the store already answers.
+The rows of [`openapi_time_series_association_json`](@ref), deserialized into
+`PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation` — the oneOf wrapper whose `.value` picks
+its concrete per-type struct (`SingleTimeSeries`, `Deterministic`, ...) from each row's own
+`time_series_type` discriminator, via `OpenAPI.from_json`. This is the same mechanism
+`PowerOpenAPIModels.document_from_json` uses to build a `SystemDocument`'s own
+`time_series_associations`.
 """
-function to_openapi(
-    row::InfraStore.SupplementalAttributeAssociation;
-    attribute_id::Int,
-    component_id::Int,
-)
-    return PowerCoreOpenAPIModels.SupplementalAttributeAssociation(;
-        component_id = component_id,
-        component_type = row.component_type,
-        attribute_id = attribute_id,
-        attribute_type = row.attribute_type,
-    )
-end
-
-"""
-Convert one catalog metadata row into its `TimeSeriesAssociation`.
-
-`id` and `owner_id` are the DOCUMENT's ids, not the store's: the document numbers every
-component and attribute from one counter, and only the caller holds that mapping. `address`
-names the store the values live in — for a Sienna bundle, the sidecar's basename.
-"""
-function to_openapi(
-    meta::InfraStore.TimeSeriesMetadata;
-    id::Int,
-    owner_id::Int,
+function openapi_time_series_association_rows(
+    store::Store;
     address::AbstractString,
+    kwargs...,
 )
-    return PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation(
-        _openapi_association(
-            meta.time_series_type,
-            meta,
-            _openapi_common(meta, id, owner_id, address),
-        ),
+    json = openapi_time_series_association_json(store; address = address, kwargs...)
+    return PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation[
+        OpenAPI.from_json(
+            PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation, Dict{String, Any}(row),
+        ) for row in JSON.parse(json)
+    ]
+end
+
+openapi_time_series_association_rows(data::SystemData; kwargs...) =
+    openapi_time_series_association_rows(data.time_series_manager.data_store; kwargs...)
+
+"""
+$(TYPEDSIGNATURES)
+
+The raw JSON array InfraStore's `openapi` module produces for the whole
+`supplemental_attribute_associations` table, sorted by `(component_id, attribute_id)`. See
+[`openapi_supplemental_attribute_association_rows`](@ref) for the typed form.
+"""
+openapi_supplemental_attribute_association_json(store::Store) =
+    InfraStore.export_supplemental_attribute_associations_openapi(store.inner)
+
+openapi_supplemental_attribute_association_json(data::SystemData) =
+    openapi_supplemental_attribute_association_json(data.time_series_manager.data_store)
+
+"""
+$(TYPEDSIGNATURES)
+
+The rows of [`openapi_supplemental_attribute_association_json`](@ref), deserialized into
+`PowerCoreOpenAPIModels.SupplementalAttributeAssociation` via `OpenAPI.from_json`.
+"""
+function openapi_supplemental_attribute_association_rows(store::Store)
+    json = openapi_supplemental_attribute_association_json(store)
+    return PowerCoreOpenAPIModels.SupplementalAttributeAssociation[
+        OpenAPI.from_json(
+            PowerCoreOpenAPIModels.SupplementalAttributeAssociation, Dict{String, Any}(row),
+        ) for row in JSON.parse(json)
+    ]
+end
+
+openapi_supplemental_attribute_association_rows(data::SystemData) =
+    openapi_supplemental_attribute_association_rows(data.time_series_manager.data_store)
+
+"""
+$(TYPEDSIGNATURES)
+
+Bulk-ingest a JSON array of supplemental-attribute association OpenAPI rows into the store's
+`supplemental_attribute_associations` table in one all-or-nothing transaction. Passthrough to
+`InfraStore.import_supplemental_attribute_associations_openapi!`; returns the number of rows
+inserted.
+"""
+import_supplemental_attribute_association_rows!(store::Store, json::AbstractString) =
+    InfraStore.import_supplemental_attribute_associations_openapi!(store.inner, json)
+
+import_supplemental_attribute_association_rows!(data::SystemData, json::AbstractString) =
+    import_supplemental_attribute_association_rows!(
+        data.time_series_manager.data_store, json,
+    )
+
+"""
+$(TYPEDSIGNATURES)
+
+Reconcile a JSON array of time-series association OpenAPI rows against the store's catalog:
+match by identity, apply `policy` (`:strict` or `:update_descriptive`) to any descriptive
+drift, and throw `InfraStore.ReconcileConflictError` for anything neither policy can resolve.
+`expected_address`, when given, must match every row's own `address` field. Passthrough to
+`InfraStore.reconcile_time_series_associations_openapi!`; see there for the full policy
+semantics.
+"""
+function reconcile_time_series_association_rows!(
+    store::Store,
+    json::AbstractString;
+    policy::Symbol = :strict,
+    expected_address::Union{Nothing, AbstractString} = nothing,
+)
+    return InfraStore.reconcile_time_series_associations_openapi!(
+        store.inner, json; policy = policy, expected_address = expected_address,
+    )
+end
+
+function reconcile_time_series_association_rows!(
+    data::SystemData,
+    json::AbstractString;
+    policy::Symbol = :strict,
+    expected_address::Union{Nothing, AbstractString} = nothing,
+)
+    return reconcile_time_series_association_rows!(
+        data.time_series_manager.data_store, json;
+        policy = policy, expected_address = expected_address,
     )
 end
