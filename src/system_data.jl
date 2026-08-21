@@ -23,10 +23,9 @@ mutable struct SystemData <: ComponentContainer
     masked_components::Components
     "Maps the integer id of every attached component, regular and masked, to the component."
     component_ids::Dict{Int, <:InfrastructureSystemsComponent}
-    "Next integer id to assign to a component. Independent of the supplemental attribute id stream. Starts at 1."
-    next_component_id::Int
-    "Next integer id to assign to a supplemental attribute. Independent of the component id stream. Starts at 1."
-    next_supplemental_attribute_id::Int
+    "Next integer id to assign. Components and supplemental attributes draw from this one
+    stream, so an id identifies exactly one object of either kind. Starts at 1."
+    next_id::Int
     "User-defined subsystems. Components can be regular or masked."
     subsystems::Dict{String, Set{Int}}
     supplemental_attribute_manager::SupplementalAttributeManager
@@ -74,7 +73,6 @@ function SystemData(;
         masked_components,
         Dict{Int, InfrastructureSystemsComponent}(),
         1,
-        1,
         Dict{String, Set{Int}}(),
         supplemental_attribute_mgr,
         time_series_mgr,
@@ -86,8 +84,7 @@ end
 function SystemData(
     validation_descriptors,
     time_series_manager,
-    next_component_id,
-    next_supplemental_attribute_id,
+    next_id,
     subsystems,
     supplemental_attribute_manager,
     internal,
@@ -98,8 +95,7 @@ function SystemData(
         components,
         masked_components,
         Dict{Int, InfrastructureSystemsComponent}(),
-        next_component_id,
-        next_supplemental_attribute_id,
+        next_id,
         subsystems,
         supplemental_attribute_manager,
         time_series_manager,
@@ -109,21 +105,12 @@ function SystemData(
 end
 
 """
-Return the next integer id to assign to a component and advance the component counter.
+Return the next integer id and advance the counter. Components and supplemental attributes
+share this one stream.
 """
-function get_next_component_id!(data::SystemData)
-    id = data.next_component_id
-    data.next_component_id += 1
-    return id
-end
-
-"""
-Return the next integer id to assign to a supplemental attribute and advance the
-supplemental attribute counter.
-"""
-function get_next_supplemental_attribute_id!(data::SystemData)
-    id = data.next_supplemental_attribute_id
-    data.next_supplemental_attribute_id += 1
+function get_next_id!(data::SystemData)
+    id = data.next_id
+    data.next_id += 1
     return id
 end
 
@@ -340,12 +327,11 @@ function compare_values(
             # the components.
             continue
         end
-        if !compare_uuids && name in (:next_component_id, :next_supplemental_attribute_id)
-            # These counters are derived from the identities they hand out, so they only
-            # mean anything when the identities themselves are being compared. Reassigning
-            # ids (`assign_new_ids`) advances them past the originals while leaving the
-            # data identical — the same reason `id` itself is skipped unless
-            # `compare_uuids`.
+        if !compare_uuids && name == :next_id
+            # This counter is derived from the identities it hands out, so it only means
+            # anything when the identities themselves are being compared. Reassigning ids
+            # (`assign_new_ids`) advances it past the originals while leaving the data
+            # identical — the same reason `id` itself is skipped unless `compare_uuids`.
             continue
         end
         val_x = getproperty(x, name)
@@ -695,8 +681,7 @@ function to_dict(data::SystemData)
             (
             :components,
             :masked_components,
-            :next_component_id,
-            :next_supplemental_attribute_id,
+            :next_id,
             :subsystems,
             :supplemental_attribute_manager,
             :internal,
@@ -801,8 +786,16 @@ function deserialize(
         )
     end
     subsystems = Dict(k => Set(Int.(v)) for (k, v) in raw["subsystems"])
-    next_component_id = Int(get(raw, "next_component_id", 1))
-    next_supplemental_attribute_id = Int(get(raw, "next_supplemental_attribute_id", 1))
+    if !haskey(raw, "next_id")
+        throw(
+            DataFormatError(
+                "The serialized system predates the single id stream (it carries " *
+                "`next_component_id`/`next_supplemental_attribute_id`); regenerate it " *
+                "with this version of InfrastructureSystems.",
+            ),
+        )
+    end
+    next_id = Int(raw["next_id"])
     supplemental_attribute_manager = deserialize(
         SupplementalAttributeManager,
         get(
@@ -822,8 +815,7 @@ function deserialize(
     sys = SystemData(
         validation_descriptors,
         time_series_manager,
-        next_component_id,
-        next_supplemental_attribute_id,
+        next_id,
         subsystems,
         supplemental_attribute_manager,
         internal,
@@ -859,37 +851,23 @@ end
 # Redirect functions to Components
 
 """
-Assign an integer id to a component being attached to `data`, drawn from the component id
-stream.
+Assign an integer id to a component or supplemental attribute being attached to `data`.
 
-A freshly constructed component has [`UNASSIGNED_ID`](@ref) and receives the next component
-id. A component that already carries an id (for example, one restored during
-deserialization) keeps it; the counter is advanced past it so future ids do not collide.
-Components and supplemental attributes have independent id streams, so a component and an
-attribute may share a numeric id.
+A freshly constructed object has [`UNASSIGNED_ID`](@ref) and receives the next id. An object
+that already carries an id (for example, one restored during deserialization) keeps it; the
+counter is advanced past it so future ids do not collide. Components and supplemental
+attributes draw from the same stream, so an id is unique across both kinds.
 """
-function assign_id!(data::SystemData, component::InfrastructureSystemsComponent)
-    id = get_id(component)
+function assign_id!(
+    data::SystemData,
+    obj::Union{InfrastructureSystemsComponent, SupplementalAttribute},
+)
+    id = get_id(obj)
     if id == UNASSIGNED_ID
-        id = get_next_component_id!(data)
-        set_id!(component, id)
-    elseif id >= data.next_component_id
-        data.next_component_id = id + 1
-    end
-    return id
-end
-
-"""
-Assign an integer id to a supplemental attribute being attached to `data`, drawn from the
-supplemental attribute id stream (independent of the component id stream).
-"""
-function assign_id!(data::SystemData, attribute::SupplementalAttribute)
-    id = get_id(attribute)
-    if id == UNASSIGNED_ID
-        id = get_next_supplemental_attribute_id!(data)
-        set_id!(attribute, id)
-    elseif id >= data.next_supplemental_attribute_id
-        data.next_supplemental_attribute_id = id + 1
+        id = get_next_id!(data)
+        set_id!(obj, id)
+    elseif id >= data.next_id
+        data.next_id = id + 1
     end
     return id
 end

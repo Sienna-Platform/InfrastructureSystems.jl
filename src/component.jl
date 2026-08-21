@@ -5,7 +5,7 @@ subsystem membership sets.
 """
 function assign_new_id_internal!(data, component::InfrastructureSystemsComponent)
     old_id = get_id(component)
-    new_id = get_next_component_id!(data)
+    new_id = get_next_id!(data)
     mgr = get_time_series_manager(component)
     if !isnothing(mgr)
         InfraStore.replace_owner!(

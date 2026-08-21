@@ -35,7 +35,8 @@ Internal storage common to [`InfrastructureSystemsType`](@ref)s.
 
 Components and supplemental attributes are identified by an integer `id` assigned by the
 owning [`SystemData`](@ref) when they are attached (see [`get_id`](@ref)); it is
-[`UNASSIGNED_ID`](@ref) until then. Each instance also holds optional
+[`UNASSIGNED_ID`](@ref) until then. Both kinds draw from one id stream, so an id names
+exactly one object within a system. Each instance also holds optional
 [`SharedSystemReferences`](@ref) when attached to a system, optional unit metadata, and an
 optional user extension dictionary accessed through [`get_ext`](@ref).
 """
