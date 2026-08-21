@@ -595,7 +595,7 @@ end
     @test !(id1 in IS.get_component_ids(data, subsystem_name))
 end
 
-@testset "Test independent integer id streams" begin
+@testset "Test single integer id stream" begin
     data = IS.SystemData()
     component1 = IS.TestComponent("component1", 5)
     component2 = IS.TestComponent("component2", 6)
@@ -606,23 +606,28 @@ end
     @test IS.get_id(component1) == 1
     @test IS.get_id(component2) == 2
 
-    # Components and supplemental attributes have independent id streams, each starting at 1,
-    # so a component and an attribute may share a numeric id.
+    # Components and supplemental attributes draw from the same stream, so attributes
+    # continue where the components left off instead of restarting at 1.
     attr1 = IS.GeographicInfo()
     attr2 = IS.TestSupplemental(; value = 1.0)
     IS.add_supplemental_attribute!(data, component1, attr1)
     IS.add_supplemental_attribute!(data, component1, attr2)
-    @test IS.get_id(attr1) == 1
-    @test IS.get_id(attr2) == 2
+    @test IS.get_id(attr1) == 3
+    @test IS.get_id(attr2) == 4
 
-    # Component ids are unique among components; attribute ids unique among attributes.
+    # The next component added continues the same stream.
+    component3 = IS.TestComponent("component3", 7)
+    IS.add_component!(data, component3)
+    @test IS.get_id(component3) == 5
+
+    # Ids are unique across components and attributes together.
     component_ids = IS.get_id.(IS.get_components(IS.TestComponent, data))
-    @test length(component_ids) == length(unique(component_ids))
     attribute_ids = vcat(
         IS.get_id.(IS.get_supplemental_attributes(IS.GeographicInfo, data)),
         IS.get_id.(IS.get_supplemental_attributes(IS.TestSupplemental, data)),
     )
-    @test length(attribute_ids) == length(unique(attribute_ids))
+    all_ids = vcat(component_ids, attribute_ids)
+    @test length(all_ids) == length(unique(all_ids))
 end
 
 @testset "Test bulk add of time series" begin
