@@ -4,7 +4,7 @@
 # assert through the JSON/typed wrappers `IS.openapi_time_series_association_*` and
 # `IS.openapi_supplemental_attribute_association_*`, not a Julia-side re-derivation of them.
 
-const _OPENAPI_TS_ADDRESS = "system_time_series.h5"
+const _HEX_HASH_RE = r"^[0-9a-f]{64}$"
 
 function _openapi_ts_fixture()
     data = IS.SystemData()
@@ -16,11 +16,7 @@ end
 _openapi_row_json(data, name; kwargs...) = only(
     filter(
         r -> r["name"] == name,
-        JSON.parse(
-            IS.openapi_time_series_association_json(
-                data; address = _OPENAPI_TS_ADDRESS, kwargs...,
-            ),
-        ),
+        JSON.parse(IS.openapi_time_series_association_json(data; kwargs...)),
     ),
 )
 
@@ -28,9 +24,7 @@ function _openapi_row(data, name; kwargs...)
     return only(
         filter(
             m -> m.value.name == name,
-            IS.openapi_time_series_association_rows(
-                data; address = _OPENAPI_TS_ADDRESS, kwargs...,
-            ),
+            IS.openapi_time_series_association_rows(data; kwargs...),
         ),
     ).value
 end
@@ -103,7 +97,10 @@ end
     @test row.name == "static"
     @test row.resolution == "PT1H"
     @test row.length == 6
-    @test row.address == _OPENAPI_TS_ADDRESS
+    # `uri` and `data_hash` are the store's own content hash, never a caller-supplied
+    # locator — the same hex string in both fields.
+    @test occursin(_HEX_HASH_RE, row.uri)
+    @test row.data_hash == row.uri
     @test row.units == "MW"
     @test row.quantity_kind == "ActivePower"
     # Declared by nobody stays unset: unspecified is deliberately not NATURAL_UNITS.
@@ -208,11 +205,7 @@ end
     IS.transform_single_time_series!(data, IS.DeterministicSingleTimeSeries,
         Dates.Hour(2), Dates.Hour(1))
 
-    rows = [
-        row.value for row in IS.openapi_time_series_association_rows(
-            data; address = _OPENAPI_TS_ADDRESS,
-        )
-    ]
+    rows = [row.value for row in IS.openapi_time_series_association_rows(data)]
     derived = only(
         filter(r -> r isa PowerTimeSeriesOpenAPIModels.DeterministicSingleTimeSeries, rows),
     )
@@ -287,7 +280,8 @@ end
     @test raw["id"] == typed.id
     @test raw["owner_id"] == typed.owner_id
     @test raw["resolution"] == typed.resolution
-    @test raw["address"] == _OPENAPI_TS_ADDRESS
+    @test raw["uri"] == typed.uri
+    @test raw["data_hash"] == typed.data_hash
 end
 
 @testset "openapi_time_series_association_rows: export is deterministic regardless of insert order" begin
@@ -310,7 +304,7 @@ end
                 ),
             )
         end
-        return IS.openapi_time_series_association_json(data; address = _OPENAPI_TS_ADDRESS)
+        return IS.openapi_time_series_association_json(data)
     end
 
     # The store assigns `id` from its own rowid counter, so it tracks INSERT order, not sort
@@ -391,10 +385,8 @@ end
             "static", TimeSeries.TimeArray([initial, initial + Dates.Hour(1)], [1.0, 2.0]),
         ),
     )
-    json = IS.openapi_time_series_association_json(data; address = _OPENAPI_TS_ADDRESS)
-    report = IS.reconcile_time_series_association_rows!(
-        data, json; policy = :strict, expected_address = _OPENAPI_TS_ADDRESS,
-    )
+    json = IS.openapi_time_series_association_json(data)
+    report = IS.reconcile_time_series_association_rows!(data, json; policy = :strict)
     @test report.matched == 1
     @test report.updated == 0
     @test report.missing_in_store == 0
@@ -413,7 +405,7 @@ end
         ),
     )
     rows = JSON.parse(
-        IS.openapi_time_series_association_json(data; address = _OPENAPI_TS_ADDRESS),
+        IS.openapi_time_series_association_json(data),
     )
     rows[1]["units"] = "kW"
     drifted = JSON.json(rows)
@@ -432,7 +424,7 @@ end
         ),
     )
     rows = JSON.parse(
-        IS.openapi_time_series_association_json(data; address = _OPENAPI_TS_ADDRESS),
+        IS.openapi_time_series_association_json(data),
     )
     rows[1]["name"] = "phantom"
     missing_json = JSON.json(rows)
@@ -452,7 +444,7 @@ end
         ),
     )
     rows = JSON.parse(
-        IS.openapi_time_series_association_json(data; address = _OPENAPI_TS_ADDRESS),
+        IS.openapi_time_series_association_json(data),
     )
     rows[1]["units"] = "kW"
     drifted = JSON.json(rows)

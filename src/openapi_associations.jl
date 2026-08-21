@@ -70,18 +70,13 @@ $(TYPEDSIGNATURES)
 
 The raw, already schema-conformant JSON array InfraStore's `openapi` module produces for
 `time_series_associations` matching the filter (the same filter keywords as
-[`list_time_series_metadata`](@ref)), each row stamped with `address` verbatim. For a caller
-that embeds the JSON verbatim (into a document, say) rather than round-tripping it through the
-generated model types; see [`openapi_time_series_association_rows`](@ref) for that.
+[`list_time_series_metadata`](@ref)), each row stamped with the store's own `uri` and
+`data_hash`. For a caller that embeds the JSON verbatim (into a document, say) rather than
+round-tripping it through the generated model types; see
+[`openapi_time_series_association_rows`](@ref) for that.
 """
-function openapi_time_series_association_json(
-    store::Store;
-    address::AbstractString,
-    kwargs...,
-)
-    return InfraStore.export_time_series_associations_openapi(
-        store.inner; address = address, kwargs...,
-    )
+function openapi_time_series_association_json(store::Store; kwargs...)
+    return InfraStore.export_time_series_associations_openapi(store.inner; kwargs...)
 end
 
 openapi_time_series_association_json(data::SystemData; kwargs...) =
@@ -97,12 +92,8 @@ its concrete per-type struct (`SingleTimeSeries`, `Deterministic`, ...) from eac
 `PowerOpenAPIModels.document_from_json` uses to build a `SystemDocument`'s own
 `time_series_associations`.
 """
-function openapi_time_series_association_rows(
-    store::Store;
-    address::AbstractString,
-    kwargs...,
-)
-    json = openapi_time_series_association_json(store; address = address, kwargs...)
+function openapi_time_series_association_rows(store::Store; kwargs...)
+    json = openapi_time_series_association_json(store; kwargs...)
     return PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation[
         OpenAPI.from_json(
             PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation, Dict{String, Any}(row),
@@ -166,7 +157,7 @@ $(TYPEDSIGNATURES)
 Reconcile a JSON array of time-series association OpenAPI rows against the store's catalog:
 match by identity, apply `policy` (`:strict` or `:update_descriptive`) to any descriptive
 drift, and throw `InfraStore.ReconcileConflictError` for anything neither policy can resolve.
-`expected_address`, when given, must match every row's own `address` field. Passthrough to
+Each row's `uri`/`data_hash` are informational and never checked. Passthrough to
 `InfraStore.reconcile_time_series_associations_openapi!`; see there for the full policy
 semantics.
 """
@@ -174,10 +165,9 @@ function reconcile_time_series_association_rows!(
     store::Store,
     json::AbstractString;
     policy::Symbol = :strict,
-    expected_address::Union{Nothing, AbstractString} = nothing,
 )
     return InfraStore.reconcile_time_series_associations_openapi!(
-        store.inner, json; policy = policy, expected_address = expected_address,
+        store.inner, json; policy = policy,
     )
 end
 
@@ -185,10 +175,8 @@ function reconcile_time_series_association_rows!(
     data::SystemData,
     json::AbstractString;
     policy::Symbol = :strict,
-    expected_address::Union{Nothing, AbstractString} = nothing,
 )
     return reconcile_time_series_association_rows!(
-        data.time_series_manager.data_store, json;
-        policy = policy, expected_address = expected_address,
+        data.time_series_manager.data_store, json; policy = policy,
     )
 end
