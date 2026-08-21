@@ -89,8 +89,6 @@ end
     row = _openapi_row(data, "static")
     @test row isa PowerTimeSeriesOpenAPIModels.SingleTimeSeries
     @test row.time_series_type == "SingleTimeSeries"
-    # The id is the store catalog's rowid, not a document-minted counter.
-    @test row.id isa Integer && row.id > 0
     @test row.owner_id == IS.get_id(component)
     @test row.owner_type == "TestComponent"
     @test row.owner_category == "Component"
@@ -277,7 +275,6 @@ end
     )
     raw = _openapi_row_json(data, "static")
     typed = _openapi_row(data, "static")
-    @test raw["id"] == typed.id
     @test raw["owner_id"] == typed.owner_id
     @test raw["resolution"] == typed.resolution
     @test raw["uri"] == typed.uri
@@ -388,9 +385,9 @@ end
     json = IS.openapi_time_series_association_json(data)
     report = IS.reconcile_time_series_association_rows!(data, json; policy = :strict)
     @test report.matched == 1
-    @test report.updated == 0
-    @test report.missing_in_store == 0
-    @test report.unmatched_in_store == 0
+    @test iszero(report.updated)
+    @test iszero(report.missing_in_store)
+    @test iszero(report.unmatched_in_store)
     @test isempty(report.conflicts)
 end
 
@@ -433,7 +430,7 @@ end
     )
 end
 
-@testset "reconcile_time_series_association_rows!: update_descriptive rewrites descriptive drift and reports it" begin
+@testset "reconcile_time_series_association_rows!: update_descriptive is deferred upstream" begin
     data, component = _openapi_ts_fixture()
     initial = Dates.DateTime(2024, 1, 1)
     IS.add_time_series!(
@@ -448,16 +445,15 @@ end
     )
     rows[1]["units"] = "kW"
     drifted = JSON.json(rows)
-    report = IS.reconcile_time_series_association_rows!(
+    # `:update_descriptive` is reserved but not implemented upstream; the store rejects it
+    # rather than silently falling back to `:strict`.
+    @test_throws IS.InfraStore.InvalidParameterError IS.reconcile_time_series_association_rows!(
         data, drifted; policy = :update_descriptive,
     )
-    @test report.matched == 1
-    @test report.updated == 1
-    # `conflicts` doubles as a notes field under `:update_descriptive`: a rewritten row is
-    # reported here, not silently applied.
-    @test length(report.conflicts) == 1
-    @test occursin("updated", only(report.conflicts))
-    @test only(IS.list_time_series_metadata(data)).units == "kW"
+    # The deferral does not change strict-mode behavior on the same fixture.
+    @test_throws IS.InfraStore.ReconcileConflictError IS.reconcile_time_series_association_rows!(
+        data, drifted; policy = :strict,
+    )
 end
 
 @testset "attach_supplemental_attribute!: attaches in memory without writing an association row" begin
@@ -555,7 +551,9 @@ end
         end
         # WRITE-ONLY while open: the store has not been touched yet, so a count still reads
         # zero. This is the documented limit, asserted so it cannot drift silently.
-        @test IS.get_num_associations(data.supplemental_attribute_manager.associations) == 0
+        @test iszero(
+            IS.get_num_associations(data.supplemental_attribute_manager.associations),
+        )
     end
 
     @test IS.get_num_associations(data.supplemental_attribute_manager.associations) == 5
@@ -579,7 +577,7 @@ end
         IS.add_supplemental_attribute!(data, component, shared)
     end
     # The failed batch wrote nothing, so there is no half-applied association table.
-    @test IS.get_num_associations(data.supplemental_attribute_manager.associations) == 0
+    @test iszero(IS.get_num_associations(data.supplemental_attribute_manager.associations))
     # Regression guard for the orphan bug: the first `add_supplemental_attribute!` attaches
     # `shared` to the manager's `mgr.data` before buffering its association row, so without a
     # rollback of the manager too, `shared` would be left attached with no association

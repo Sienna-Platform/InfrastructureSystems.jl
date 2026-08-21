@@ -155,9 +155,10 @@ import_supplemental_attribute_association_rows!(data::SystemData, json::Abstract
 $(TYPEDSIGNATURES)
 
 Reconcile a JSON array of time-series association OpenAPI rows against the store's catalog:
-match by identity, apply `policy` (`:strict` or `:update_descriptive`) to any descriptive
-drift, and throw `InfraStore.ReconcileConflictError` for anything neither policy can resolve.
-Each row's `uri`/`data_hash` are informational and never checked. Passthrough to
+match by identity and throw `InfraStore.ReconcileConflictError` for any descriptive drift
+`policy` cannot resolve. Only `policy = :strict` is implemented; `:update_descriptive` is
+reserved upstream and raises `InfraStore.InvalidParameterError`. Each row's `uri`/`data_hash`
+are informational and never checked. Passthrough to
 `InfraStore.reconcile_time_series_associations_openapi!`; see there for the full policy
 semantics.
 """
