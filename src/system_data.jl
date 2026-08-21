@@ -859,6 +859,18 @@ end
 # Redirect functions to Components
 
 """
+Advance `data`'s shared id counter past `id` if `id` has not already been passed. Called
+whenever an entity (component or supplemental attribute) enters `data` carrying a pre-set id,
+so a later fresh mint from [`get_next_id!`](@ref) can never collide with it.
+"""
+function _advance_next_id_past!(data::SystemData, id::Int)
+    if id >= data.next_id
+        data.next_id = id + 1
+    end
+    return
+end
+
+"""
 Assign an integer id to a component or supplemental attribute being attached to `data`.
 
 A freshly constructed object has [`UNASSIGNED_ID`](@ref) and receives the next id. An object
@@ -875,8 +887,8 @@ function assign_id!(
     if id == UNASSIGNED_ID
         id = get_next_id!(data)
         set_id!(obj, id)
-    elseif id >= data.next_id
-        data.next_id = id + 1
+    else
+        _advance_next_id_past!(data, id)
     end
     return id
 end
@@ -1414,6 +1426,9 @@ function attach_supplemental_attribute!(
         attribute;
         allow_existing_time_series = allow_existing_time_series,
     )
+    # `attribute` already carries its id (checked by `_attach_attribute!`); advance the
+    # shared counter past it exactly like `assign_id!` does for the minted-fresh path.
+    _advance_next_id_past!(data, get_id(attribute))
     set_shared_system_references!(
         attribute,
         SharedSystemReferences(;

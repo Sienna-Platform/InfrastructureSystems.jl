@@ -478,6 +478,20 @@ end
     @test only(collect(IS.iterate_supplemental_attributes(data))) === attribute
 end
 
+@testset "attach_supplemental_attribute!: advances next_id past the attribute's id" begin
+    data = IS.SystemData()
+    component = IS.TestComponent("component1", 5)
+    IS.add_component!(data, component)
+    attribute = IS.GeographicInfo(;
+        geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
+    )
+    IS.set_id!(attribute, 12345)
+
+    IS.attach_supplemental_attribute!(data, component, attribute)
+
+    @test IS.get_next_id!(data) > IS.get_id(attribute)
+end
+
 @testset "attach_supplemental_attribute!: errors loudly on an unassigned attribute id" begin
     data = IS.SystemData()
     component = IS.TestComponent("component1", 5)
