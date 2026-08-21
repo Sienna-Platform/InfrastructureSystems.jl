@@ -1875,7 +1875,11 @@ function _infrastore_pushable_type(::Type{T}) where {T <: TimeSeriesData}
 end
 
 # True iff `owner` has any time series, optionally restricted to type `T`.
-function infrastore_has_any(owner; time_series_type::Union{Nothing, Type} = nothing)
+# `time_series_type` is deliberately untyped: annotating it `Union{Nothing, Type}`
+# widens the passed `Type{T}` constant to abstract `Type`, which defeats constant
+# propagation through `_infrastore_query_types` and boxes this function's return as
+# `Any` instead of `Bool` — real cost on the `has_time_series` hot path.
+function infrastore_has_any(owner; time_series_type = nothing)
     mgr = get_time_series_manager(owner)
     store = mgr.data_store::Store
     owner_id, _, category = _infrastore_owner_args(owner)

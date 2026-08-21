@@ -873,21 +873,10 @@ function get_time_series_values(
 end
 
 """
-Return true if the component or supplemental attribute has time series data.
+$(TYPEDSIGNATURES)
+Return true if the component or supplemental attribute has any time series data.
 """
-function has_time_series(owner::TimeSeriesOwners; kwargs...)
-    mgr = get_time_series_manager(owner)
-    isnothing(mgr) && return false
-    kw = Dict(kwargs)
-    name = pop!(kw, :name, nothing)
-    T = pop!(kw, :time_series_type, TimeSeriesData)
-    # With no name and no other filters, take the cheap any-series probe; any
-    # remaining kwargs (resolution/interval/features) must reach the store — the
-    # filtered probe accepts `name = nothing`.
-    isnothing(name) && isempty(kw) &&
-        return infrastore_has_any(owner; time_series_type = T)
-    return infrastore_has_time_series(T, owner, name; kw...)
-end
+has_time_series(owner::TimeSeriesOwners) = has_time_series(owner, TimeSeriesData)
 
 """
 Return true if the component or supplemental attribute has time series data of type T.
@@ -914,6 +903,28 @@ function has_time_series(
     return infrastore_has_time_series(
         T, val, name;
         resolution = resolution, interval = interval, features...,
+    )
+end
+
+"""
+$(TYPEDSIGNATURES)
+Return true if the component or supplemental attribute has time series data named
+`name`, optionally narrowed by `resolution`, `interval`, or `features`.
+"""
+function has_time_series(
+    owner::TimeSeriesOwners,
+    name::AbstractString;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features...,
+)
+    return has_time_series(
+        owner,
+        TimeSeriesData,
+        name;
+        resolution = resolution,
+        interval = interval,
+        features...,
     )
 end
 

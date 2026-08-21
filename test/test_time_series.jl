@@ -97,10 +97,10 @@ end
     @test IS.get_initial_timestamp(forecast) == initial_time
     IS.add_time_series!(sys, component, forecast)
     @test IS.has_time_series(component)
-    # The name-only kwargs form matches any time series type, so it must find a
+    # The (owner, name) form matches any time series type, so it must find a
     # name stored only as a forecast.
-    @test IS.has_time_series(component; name = name)
-    @test !IS.has_time_series(component; name = "nonexistent")
+    @test IS.has_time_series(component, name)
+    @test !IS.has_time_series(component, "nonexistent")
 
     data_ts = Dict(
         initial_time => TimeSeries.TimeArray(
@@ -371,30 +371,32 @@ end
     # A parameterized concrete query type matches no stored type; it must not
     # degrade to an unfiltered probe that answers true for the wrong type.
     @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}, name) == false
-    @test IS.has_time_series(
-        component;
-        time_series_type = IS.SingleTimeSeries{Float64, 1},
-    ) ==
-          false
+    @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}) == false
     @test IS.has_time_series(component, IS.Deterministic, name)
-    @test IS.has_time_series(component; time_series_type = IS.Deterministic)
+    @test IS.has_time_series(component, IS.Deterministic)
 
-    # The name-less kwargs form must apply resolution/interval/feature filters
+    # The (owner, name) form must apply resolution/interval/feature filters
     # instead of silently dropping them.
     sts = IS.SingleTimeSeries(;
         data = TimeSeries.TimeArray(
             range(initial_time; length = 24, step = resolution), collect(1.0:24.0)),
         name = "static")
     IS.add_time_series!(sys, component, sts; scenario = "a")
-    @test IS.has_time_series(component; resolution = resolution)
-    @test IS.has_time_series(component; resolution = Dates.Minute(5)) == false
-    @test IS.has_time_series(component; scenario = "a")
-    @test IS.has_time_series(component; scenario = "b") == false
+    @test IS.has_time_series(component, "static"; resolution = resolution)
+    @test IS.has_time_series(component, "static"; resolution = Dates.Minute(5)) == false
+    @test IS.has_time_series(component, "static"; scenario = "a")
+    @test IS.has_time_series(component, "static"; scenario = "b") == false
     @test IS.has_time_series(
-        component;
-        time_series_type = IS.SingleTimeSeries,
+        component,
+        IS.SingleTimeSeries,
+        "static";
         resolution = resolution,
     )
+
+    # The redesign's whole point is static `Bool` inference; the deleted
+    # kwargs catch-all boxed its type filter as `Any` and broke this.
+    @test Base.return_types(IS.has_time_series, (typeof(component),)) == [Bool]
+    @test Base.return_types(IS.has_time_series, (typeof(component), String)) == [Bool]
 end
 
 @testset "Test add forecast with irregular resolution and interval" begin
@@ -979,8 +981,8 @@ end
     ) isa IS.SingleTimeSeries
     @test IS.has_time_series(component, IS.SingleTimeSeries)
     @test IS.has_time_series(component, IS.SingleTimeSeries, ts_name)
-    @test IS.has_time_series(component; name = ts_name)
-    @test IS.has_time_series(component; name = ts_name, resolution = resolution)
+    @test IS.has_time_series(component, ts_name)
+    @test IS.has_time_series(component, ts_name; resolution = resolution)
     @test IS.has_time_series(component, IS.SingleTimeSeries, ts_name, scenario = "low")
     @test IS.has_time_series(
         component,
@@ -4309,24 +4311,24 @@ end
         resolution = Dates.Minute(1),
     )
 
-    @test IS.has_time_series(component, resolution = resolution1)
-    @test IS.has_time_series(component, resolution = resolution2)
+    @test IS.has_time_series(component, ts_name; resolution = resolution1)
+    @test IS.has_time_series(component, ts_name; resolution = resolution2)
     @test IS.has_time_series(
         component,
-        time_series_type = IS.SingleTimeSeries,
-        name = ts_name,
+        IS.SingleTimeSeries,
+        ts_name;
         resolution = resolution1,
     )
     @test IS.has_time_series(
         component,
-        time_series_type = IS.SingleTimeSeries,
-        name = ts_name,
+        IS.SingleTimeSeries,
+        ts_name;
         resolution = resolution2,
     )
     @test !IS.has_time_series(
-        component;
-        time_series_type = IS.SingleTimeSeries,
-        name = ts_name,
+        component,
+        IS.SingleTimeSeries,
+        ts_name;
         resolution = Dates.Minute(1),
     )
 
@@ -4426,24 +4428,24 @@ end
         resolution = Dates.Minute(1),
     )
 
-    @test IS.has_time_series(component, resolution = resolution1)
-    @test IS.has_time_series(component, resolution = resolution2)
+    @test IS.has_time_series(component, f_name; resolution = resolution1)
+    @test IS.has_time_series(component, f_name; resolution = resolution2)
     @test IS.has_time_series(
         component,
-        time_series_type = IS.Deterministic,
-        name = f_name,
+        IS.Deterministic,
+        f_name;
         resolution = resolution1,
     )
     @test IS.has_time_series(
         component,
-        time_series_type = IS.Deterministic,
-        name = f_name,
+        IS.Deterministic,
+        f_name;
         resolution = resolution2,
     )
     @test !IS.has_time_series(
-        component;
-        time_series_type = IS.Deterministic,
-        name = f_name,
+        component,
+        IS.Deterministic,
+        f_name;
         resolution = Dates.Minute(1),
     )
 
