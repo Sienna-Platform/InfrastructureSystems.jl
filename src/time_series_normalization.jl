@@ -24,26 +24,25 @@ get_max_value(ta::Vector) = maximum(ta)
 
 function handle_normalization_factor(
     ta::Union{TimeSeries.AbstractTimeSeries, AbstractArray},
-    normalization_factor::NormalizationFactor,
+    normalization_factor::NormalizationTypes,
 )
-    if normalization_factor isa NormalizationTypes
-        if normalization_factor == NormalizationTypes.MAX
-            max_value = get_max_value(ta)
-            if max_value == 0.0
-                error("normalization_factor = max with a max value of 0.0 is not supported")
-            end
-            ta = ta ./ max_value
-        else
-            error("support for normalization_factor=$normalization_factor not implemented")
-        end
-    else
-        if normalization_factor == 0.0
-            error("A normalization_factor of 0.0 is not supported.")
-        end
-        if normalization_factor != 1.0
-            ta = ta ./ normalization_factor
-        end
+    if normalization_factor != NormalizationTypes.MAX
+        error("support for normalization_factor=$normalization_factor not implemented")
     end
+    max_value = get_max_value(ta)
+    if iszero(max_value)
+        error("normalization_factor = max with a max value of 0.0 is not supported")
+    end
+    return ta ./ max_value
+end
 
-    return ta
+function handle_normalization_factor(
+    ta::Union{TimeSeries.AbstractTimeSeries, AbstractArray},
+    normalization_factor::Float64,
+)
+    if iszero(normalization_factor)
+        error("A normalization_factor of 0.0 is not supported.")
+    end
+    isone(normalization_factor) && return ta
+    return ta ./ normalization_factor
 end

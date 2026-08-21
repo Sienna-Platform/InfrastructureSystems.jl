@@ -3,13 +3,19 @@ Assign a new integer ID to the component, drawn from the system counter, and upd
 references to its old ID in the time series store, supplemental attribute associations, and
 subsystem membership sets.
 """
-function assign_new_id_internal!(data, component::InfrastructureSystemsComponent)
+# `data` is a `SystemData`, but this file is included before it is defined, so the
+# annotation names the widest available supertype.
+function assign_new_id_internal!(
+    data::ComponentContainer,
+    component::InfrastructureSystemsComponent,
+)
     old_id = get_id(component)
     new_id = get_next_id!(data)
     mgr = get_time_series_manager(component)
     if !isnothing(mgr)
+        # TODO: needs an `infrastore.jl` wrapper; this is a direct reach into the store.
         InfraStore.replace_owner!(
-            mgr.data_store.inner,
+            get_data_store(mgr).inner,
             old_id,
             new_id,
             InfraStore.Component,
@@ -21,13 +27,7 @@ function assign_new_id_internal!(data, component::InfrastructureSystemsComponent
         replace_component_id!(associations, old_id, new_id)
     end
 
-    for ids in values(data.subsystems)
-        if old_id in ids
-            pop!(ids, old_id)
-            push!(ids, new_id)
-        end
-    end
-
+    replace_component_id_in_subsystems!(data, old_id, new_id)
     set_id!(get_internal(component), new_id)
     return
 end

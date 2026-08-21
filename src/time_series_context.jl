@@ -1,13 +1,6 @@
-# A context flushes on its own when its buffer reaches either limit below, whichever
-# comes first. Inside a transaction an early flush costs nothing in recoverability, so
-# these only split the I/O, never the atomicity.
-#
-# The count limit keeps the store's layout healthy: each flush becomes one HDF5
-# dataset whose chunk width equals the batch width, so 10,000 f64 series produce 80 KiB
-# chunks — near the store's 1 MiB chunk cap. The byte limit is what actually bounds
-# memory, which the count cannot do when individual arrays are long: the batch copies
-# each array at stage time and keeps it until the flush, so the buffer holds at most
-# ~AUTO_FLUSH_BYTES of array data no matter how large each series is.
+# A flush becomes one HDF5 dataset whose chunk width equals the batch width, so this count
+# keeps chunks near the store's 1 MiB cap; the byte limit is what bounds memory when
+# individual arrays are long.
 const AUTO_FLUSH_THRESHOLD = 10_000
 const AUTO_FLUSH_BYTES = 256 * 1024 * 1024
 
@@ -34,10 +27,9 @@ Removals roll back too, which they cannot outside a transaction: the store defer
 freeing an array until the outermost commit, so the bytes are still there if the
 catalog rewinds.
 
-Unlike the Python counterpart, there is no staged metadata overlay, because IS
-keeps no in-memory association index — the store is the single source of truth. A
-read inside a block flushes the buffer and then asks the store, which sees the
-uncommitted rows through the same connection.
+There is no staged metadata overlay, because IS keeps no in-memory association index —
+the store is the single source of truth. A read inside a block flushes the buffer and
+then asks the store, which sees the uncommitted rows through the same connection.
 
 The context is the block's API surface: `add_time_series!` dispatches on it as the
 first argument, the Julia shape of calling methods on the yielded transaction
@@ -46,10 +38,8 @@ on its own — it goes straight to the store, which is already atomic for a sing
 operation. Read paths never allocate a context at all — a fresh context has an
 empty buffer and nothing to commit, and these accessors run in per-timestep loops.
 """
-mutable struct TimeSeriesContext
-    # Typed on the abstract supertype: this file is included before the concrete
-    # `TimeSeriesManager`, which needs `TimeSeriesContext` in its own signatures.
-    mgr::AbstractTimeSeriesManager
+mutable struct TimeSeriesContext{M <: AbstractTimeSeriesManager, V}
+    mgr::M
     "Created on the first stage; a context that never adds never allocates one."
     batch::Union{Nothing, InfraStore.AddBatch}
     "Keys for the buffered additions, in stage order."
@@ -65,9 +55,9 @@ mutable struct TimeSeriesContext
     """
     Validates each add's owner against the layer that opened the block. A block
     opened on a `SystemData` checks that the owner is stored in that system; one
-    opened on a bare manager has no system to check against.
+    opened on a bare manager has no system to check against and gets the no-op.
     """
-    owner_validator::Union{Nothing, Function}
+    owner_validator::V
     "Staged additions to buffer before flushing on its own."
     auto_flush_threshold::Int
     "Bytes of staged array data to buffer before flushing on its own."
@@ -76,9 +66,12 @@ mutable struct TimeSeriesContext
     staged_bytes::Int
 end
 
+# A block opened on a bare manager has no system to check the owner against.
+no_owner_validation(::TimeSeriesOwners) = nothing
+
 function TimeSeriesContext(
     mgr::AbstractTimeSeriesManager,
-    owner_validator::Union{Nothing, Function} = nothing;
+    owner_validator = no_owner_validation;
     auto_flush_threshold::Int = AUTO_FLUSH_THRESHOLD,
     auto_flush_bytes::Int = AUTO_FLUSH_BYTES,
 )
@@ -132,7 +125,15 @@ would be wasted work — and would fail outright on a read-only store.
 function begin_transaction!(context::TimeSeriesContext)
     _throw_if_closed(context)
     context.transactional = true
-    InfraStore.begin_transaction!(context.mgr.data_store.inner)
+    InfraStore.begin_transaction!(get_data_store(context.mgr).inner)
+    return
+end
+
+function _reset_buffer!(context::TimeSeriesContext)
+    context.batch = nothing
+    empty!(context.keys)
+    empty!(context.params_cache)
+    context.staged_bytes = 0
     return
 end
 
@@ -141,9 +142,8 @@ Write buffered additions to the store in one bulk call. A no-op when nothing is
 buffered.
 
 Any operation needing the arrays physically present — a read, a reader build, a
-removal — flushes first. Inside a
-transactional context that is free of consequence: the write lands in the open
-transaction and rolls back with it.
+removal — flushes first. Inside a transactional context that is free of consequence:
+the write lands in the open transaction and rolls back with it.
 """
 function flush!(context::TimeSeriesContext)
     _throw_if_closed(context)
@@ -151,10 +151,7 @@ function flush!(context::TimeSeriesContext)
     batch = context.batch
     # Reset before writing so a failed write cannot leave the entries buffered a
     # second time, and so the context stays usable for further additions.
-    context.batch = nothing
-    empty!(context.keys)
-    empty!(context.params_cache)
-    context.staged_bytes = 0
+    _reset_buffer!(context)
     _infrastore_commit_batch!(context.mgr, batch)
     return
 end
@@ -166,7 +163,7 @@ function commit!(context::TimeSeriesContext)
     try
         flush!(context)
         context.transactional &&
-            InfraStore.commit_transaction!(context.mgr.data_store.inner)
+            InfraStore.commit_transaction!(get_data_store(context.mgr).inner)
     finally
         context.closed = true
     end
@@ -185,14 +182,11 @@ exception is already propagating, and the error that caused the unwind is the on
 the caller needs to see.
 """
 function discard!(context::TimeSeriesContext)
-    context.batch = nothing
-    empty!(context.keys)
-    empty!(context.params_cache)
-    context.staged_bytes = 0
+    _reset_buffer!(context)
     context.closed = true
     context.transactional || return
     try
-        InfraStore.rollback_transaction!(context.mgr.data_store.inner)
+        InfraStore.rollback_transaction!(get_data_store(context.mgr).inner)
     catch e
         # `catch`-block exception inspection: InvalidParameterError is the
         # store's "no transaction is open" — the store already ended it (e.g. a

@@ -1,3 +1,7 @@
+# Type claims by dispatch: `isa` is not house style.
+_is_deterministic(::IS.Deterministic) = true
+_is_deterministic(::Any) = false
+
 @testset "Test add forecasts on the fly from dict" begin
     sys = IS.SystemData()
     name = "Component1"
@@ -802,8 +806,6 @@ end
     ts1 = IS.SingleTimeSeries(; data = data, name = ts_name, resolution = resolution)
     IS.add_time_series!(sys, component, ts1)
 
-    # The store now preserves calendar periods (`Month`/`Year`) via the
-    # calendar-aware `Period` type, so an irregular resolution round-trips exactly.
     ts2_full = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
     @test IS.get_data(ts2_full) == IS.get_data(ts1)
 end
@@ -816,7 +818,7 @@ end
     # TimeArray with the correct timestamps, and get_data aliases get_time_array.
     vals = collect(1.0:24.0)
     ts = IS.SingleTimeSeries("scalar", initial_time, resolution, vals)
-    @test ts isa IS.SingleTimeSeries{Float64, 1}
+    @test typeof(ts) === IS.SingleTimeSeries{Float64, 1}
     @test IS.get_array(ts) === ts.data
     @test IS.get_array(ts) == vals
     @test IS.get_data_type(ts) == "Float64"
@@ -830,7 +832,7 @@ end
 
     # Non-Float64 dtype is preserved through {T, N}.
     its = IS.SingleTimeSeries("ints", initial_time, resolution, Int64[1, 2, 3, 4])
-    @test its isa IS.SingleTimeSeries{Int64, 1}
+    @test typeof(its) === IS.SingleTimeSeries{Int64, 1}
     @test IS.get_data_type(its) == "Int64"
     @test eltype(IS.get_array(its)) == Int64
 
@@ -838,7 +840,7 @@ end
     # matrix-valued TimeArray.
     mat = reshape(collect(1.0:8.0), 4, 2)
     mts = IS.SingleTimeSeries("matrix", initial_time, resolution, mat)
-    @test mts isa IS.SingleTimeSeries{Float64, 2}
+    @test typeof(mts) === IS.SingleTimeSeries{Float64, 2}
     @test IS.get_array(mts) == mat
     mta = IS.get_time_array(mts)
     @test TimeSeries.values(mta) == mat
@@ -847,19 +849,19 @@ end
     # N > 2 has no TimeArray representation: get_time_array errors, get_array works.
     cube = reshape(collect(1.0:24.0), 4, 2, 3)
     cts = IS.SingleTimeSeries("cube", initial_time, resolution, cube)
-    @test cts isa IS.SingleTimeSeries{Float64, 3}
+    @test typeof(cts) === IS.SingleTimeSeries{Float64, 3}
     @test IS.get_array(cts) == cube
     @test_throws ArgumentError IS.get_time_array(cts)
 
     # Function-data (non-numeric T, N = 1) round-trips through the accessors.
     fd = [IS.LinearFunctionData(Float64(i), Float64(i + 1)) for i in 1:5]
     fts = IS.SingleTimeSeries("fd", initial_time, resolution, fd)
-    @test fts isa IS.SingleTimeSeries{IS.LinearFunctionData, 1}
+    @test typeof(fts) === IS.SingleTimeSeries{IS.LinearFunctionData, 1}
     @test IS.get_data_type(fts) == string(IS.LinearFunctionData)
     @test IS.get_array(fts) == fd
     @test TimeSeries.values(IS.get_time_array(fts)) == fd
 
-    # Reimplemented slicing/truncation ops keep {T, N} and the right timestamps.
+    # Slicing/truncation ops keep {T, N} and the right timestamps.
     @test IS.get_array(IS.head(ts, 3)) == vals[1:3]
     @test IS.get_initial_timestamp(IS.head(ts, 3)) == initial_time
     @test IS.get_array(IS.tail(ts, 2)) == vals[(end - 1):end]
@@ -871,7 +873,7 @@ end
     renamed = IS.SingleTimeSeries(ts, "renamed")
     @test IS.get_name(renamed) == "renamed"
     @test IS.get_array(renamed) == vals
-    @test renamed isa IS.SingleTimeSeries{Float64, 1}
+    @test typeof(renamed) === IS.SingleTimeSeries{Float64, 1}
 end
 
 @testset "Test forecast {T, N} parameters" begin
@@ -884,8 +886,8 @@ end
         initial_time + resolution => [3.0, 4.0],
     )
     det = IS.Deterministic("d", det_data, resolution, resolution)
-    @test det isa IS.Deterministic{Float64, 1}
-    @test IS.Deterministic(det, "d2") isa IS.Deterministic{Float64, 1}
+    @test typeof(det) === IS.Deterministic{Float64, 1}
+    @test typeof(IS.Deterministic(det, "d2")) === IS.Deterministic{Float64, 1}
 
     # Probabilistic / Scenarios windows are matrices -> N = 2.
     mat = reshape(collect(1.0:6.0), 3, 2)
@@ -895,7 +897,7 @@ end
         resolution = resolution,
         percentiles = [0.1, 0.9],
     )
-    @test prob isa IS.Probabilistic{Float64, 2}
+    @test typeof(prob) === IS.Probabilistic{Float64, 2}
 
     scen = IS.Scenarios(;
         name = "s",
@@ -903,7 +905,7 @@ end
         scenario_count = 2,
         resolution = resolution,
     )
-    @test scen isa IS.Scenarios{Float64, 2}
+    @test typeof(scen) === IS.Scenarios{Float64, 2}
 end
 
 @testset "Test add SingleTimeSeries with features" begin
@@ -923,7 +925,6 @@ end
     ts = IS.SingleTimeSeries(; data = data, name = ts_name)
     IS.add_time_series!(sys, component, ts; scenario = "low", model_year = "2030")
     # get_time_series with partial query works if there is only 1.
-    # `.data` is now a raw `Array`; compare the rebuilt `TimeArray` via get_data.
     @test IS.get_data(IS.get_time_series(IS.SingleTimeSeries, component, ts_name)) == data
     @test IS.get_data(
         IS.get_time_series(
@@ -1350,7 +1351,7 @@ end
         @test length(forecasts) == 1
         # A DeterministicSingleTimeSeries is an internal storage type; reads
         # materialize it into a regular Deterministic.
-        @test forecasts[1] isa IS.Deterministic
+        @test _is_deterministic(forecasts[1])
 
         # Must start on a window.
         @test_throws ArgumentError IS.get_time_series(
@@ -1359,9 +1360,7 @@ end
             name;
             start_time = dates[2],
         )
-        # A partial horizon is now supported for a DST-backed read: each window is
-        # truncated to its first `len` steps (this was previously rejected because a
-        # DST was returned as a non-truncatable view).
+        # A DST-backed read truncates each window to its first `len` steps.
         truncated = IS.get_time_series(
             IS.Deterministic,
             component,
@@ -1839,7 +1838,7 @@ end
         forecast = IS.get_time_series(IS.Deterministic, component, name)
         # Stored as a DeterministicSingleTimeSeries, but reads materialize it
         # into a regular Deterministic.
-        @test forecast isa IS.Deterministic
+        @test _is_deterministic(forecast)
     end
 end
 
@@ -2205,7 +2204,7 @@ end
     end
 
     ts_storage = sys.time_series_manager.data_store
-    @test ts_storage isa IS.Store
+    @test typeof(ts_storage) === IS.Store
     @test IS.get_num_time_series(sys) == 1
 end
 
@@ -2556,7 +2555,7 @@ end
     # the transformed forecast is still stored as a DeterministicSingleTimeSeries; reads
     # materialize it into a regular Deterministic like any other DST-backed read.
     time_series = IS.get_time_series(IS.DeterministicSingleTimeSeries, component2, name)
-    @test time_series isa IS.Deterministic
+    @test _is_deterministic(time_series)
     @test IS.get_initial_timestamp(time_series) == dates[1]
     @test IS.get_name(time_series) == name
 end
@@ -2954,7 +2953,7 @@ function _test_dst_get_time_series_slices(in_memory, make_value)
 
     # A DST read returns a materialized Deterministic covering every window.
     full = IS.get_time_series(IS.Deterministic, component, name)
-    @test full isa IS.Deterministic
+    @test _is_deterministic(full)
     @test IS.get_count(full) == window_count
     @test IS.get_initial_timestamp(full) == dates[1]
     @test IS.get_horizon_count(full) == horizon_count
@@ -3102,29 +3101,30 @@ end
     @test IS.get_time_series_values(IS.SingleTimeSeries, component, name) == data
 end
 
+# Irregular timestamps: no constant resolution.
+const IRREGULAR_TIMESTAMPS = [
+    Dates.DateTime("2020-01-01T00:00:00"),
+    Dates.DateTime("2020-01-01T04:00:00"),
+    Dates.DateTime("2020-01-03T00:00:00"),
+    Dates.DateTime("2020-01-10T00:00:00"),
+]
+
 @testset "Test add NonSequentialTimeSeries" begin
     sys = IS.SystemData()
     component = IS.TestComponent("Component1", 5)
     IS.add_component!(sys, component)
 
-    # Deliberately irregular timestamps (no constant resolution).
-    timestamps = [
-        Dates.DateTime("2020-01-01T00:00:00"),
-        Dates.DateTime("2020-01-01T04:00:00"),
-        Dates.DateTime("2020-01-03T00:00:00"),
-        Dates.DateTime("2020-01-10T00:00:00"),
-    ]
+    timestamps = IRREGULAR_TIMESTAMPS
     values = [10.0, 20.0, 30.0, 40.0]
     name = "events"
     ts = IS.NonSequentialTimeSeries(name, timestamps, values)
-    @test ts isa IS.NonSequentialTimeSeries{Float64, 1}
+    @test typeof(ts) === IS.NonSequentialTimeSeries{Float64, 1}
     @test IS.get_resolution(ts) === nothing
     @test IS.get_initial_timestamp(ts) == timestamps[1]
     @test IS.length(ts) == 4
     @test IS.get_timestamps(ts) == timestamps
     @test IS.get_array(ts) == values
-    @test eltype(ts) == Float64
-    @test ts isa IS.TimeSeriesData{Float64}
+    @test eltype(ts) === Float64
     IS.add_time_series!(sys, component, ts)
 
     got = IS.get_time_series(IS.NonSequentialTimeSeries, component, name)
@@ -3170,7 +3170,7 @@ end
     keys = collect(IS.get_time_series_keys(component))
     @test length(keys) == 1
     key = keys[1]
-    @test key isa IS.NonSequentialTimeSeriesKey
+    @test typeof(key) === IS.NonSequentialTimeSeriesKey
     @test IS.get_resolution(key) === nothing
     @test IS.get_name(key) == name
     @test IS.length(key) == 4
@@ -3206,17 +3206,12 @@ end
 end
 
 @testset "Test NonSequentialTimeSeries slicing helpers" begin
-    timestamps = [
-        Dates.DateTime("2020-01-01T00:00:00"),
-        Dates.DateTime("2020-01-01T04:00:00"),
-        Dates.DateTime("2020-01-03T00:00:00"),
-        Dates.DateTime("2020-01-10T00:00:00"),
-    ]
+    timestamps = IRREGULAR_TIMESTAMPS
     values = [10.0, 20.0, 30.0, 40.0]
     ts = IS.NonSequentialTimeSeries("events", timestamps, values)
 
     h = IS.head(ts, 2)
-    @test h isa IS.NonSequentialTimeSeries
+    @test typeof(h) === typeof(ts)
     @test IS.get_timestamps(h) == timestamps[1:2]
     @test IS.get_array(h) == values[1:2]
 
@@ -3231,7 +3226,7 @@ end
     @test IS.get_timestamps(to) == timestamps[1:2]
 
     ta = IS.get_time_array(ts)
-    @test ta isa TimeSeries.TimeArray
+    @test eltype(ta) === Tuple{Dates.DateTime, Float64}
     @test TimeSeries.timestamp(ta) == timestamps
     @test TimeSeries.values(ta) == values
 end
@@ -3241,19 +3236,14 @@ end
     component = IS.TestComponent("Component1", 5)
     IS.add_component!(sys, component)
 
-    timestamps = [
-        Dates.DateTime("2020-01-01T00:00:00"),
-        Dates.DateTime("2020-01-01T04:00:00"),
-        Dates.DateTime("2020-01-03T00:00:00"),
-        Dates.DateTime("2020-01-10T00:00:00"),
-    ]
+    timestamps = IRREGULAR_TIMESTAMPS
     values = collect(1.0:4.0)
     name = "events"
     ts = IS.NonSequentialTimeSeries(name, timestamps, values)
     IS.add_time_series!(sys, component, ts)
 
     ta = IS.get_time_series_array(IS.NonSequentialTimeSeries, component, name)
-    @test ta isa TimeSeries.TimeArray
+    @test eltype(ta) === Tuple{Dates.DateTime, Float64}
     @test TimeSeries.timestamp(ta) == timestamps
     @test TimeSeries.values(ta) == values
     @test IS.get_time_series_timestamps(IS.NonSequentialTimeSeries, component, name) ==
@@ -4518,16 +4508,18 @@ end
     ) == 1
 end
 
-function setup_for_multi_interval_tests()
+# KNOWN PARITY GAP (InfraStore backend): the store's uniqueness key omits `interval`, so
+# two forecasts that share name/resolution/features but differ only by interval cannot
+# coexist. Every testset built on this pair stays broken/skipped until the store key
+# includes interval (a core schema/key change).
+function setup_for_multi_interval_tests(; f_name = "test_det", horizon_count = 24)
     sys = IS.SystemData()
     name = "Component1"
-    f_name = "test_det"
     component = IS.TestComponent(name, 1)
     IS.add_component!(sys, component)
 
     initial_time = Dates.DateTime("2020-09-01")
     resolution = Dates.Minute(5)
-    horizon_count = 24
 
     # Forecast with hourly interval (windows every hour)
     interval1 = Dates.Hour(1)
@@ -4576,10 +4568,7 @@ function setup_for_multi_interval_tests()
 end
 
 @testset "Test Deterministic with multiple intervals" begin
-    # KNOWN PARITY GAP (InfraStore backend): the InfraStore's uniqueness key omits
-    # `interval`, so two forecasts that share name/resolution/features but differ
-    # only by interval cannot coexist. Re-enable when the store key includes
-    # interval (a core schema/key change).
+    # KNOWN PARITY GAP: see setup_for_multi_interval_tests.
     params = try
         setup_for_multi_interval_tests()
     catch
@@ -4770,12 +4759,14 @@ end
             params.sts_name,
             resolution = params.resolution1,
         )
-        @test IS.get_time_series(
-            IS.DeterministicSingleTimeSeries,
-            params.component,
-            params.sts_name;
-            resolution = params.resolution1,
-        ) isa IS.Deterministic
+        @test _is_deterministic(
+            IS.get_time_series(
+                IS.DeterministicSingleTimeSeries,
+                params.component,
+                params.sts_name;
+                resolution = params.resolution1,
+            ),
+        )
 
         # The original should still be readable.
         @test IS.has_time_series(
@@ -4805,44 +4796,19 @@ end
 end
 
 @testset "Test Deterministic retrieval with multiple intervals" begin
-    # KNOWN PARITY GAP (InfraStore backend): the InfraStore key omits `interval`,
-    # so two forecasts differing only by interval cannot coexist. Re-enable when
-    # the store key includes interval (a core schema/key change).
+    # KNOWN PARITY GAP: see setup_for_multi_interval_tests.
     try
-        sys = IS.SystemData()
-        component = IS.TestComponent("Component1", 1)
-        IS.add_component!(sys, component)
-
-        initial_time = Dates.DateTime("2020-09-01")
-        resolution = Dates.Minute(5)
-        horizon_count = 12
-        f_name = "max_active_power"
-
-        # Two forecasts with same resolution/name/horizon but different intervals.
-        # Both must have the same window count and initial_timestamp for system compatibility.
-        interval1 = Dates.Hour(1)
-        interval2 = Dates.Day(1)
-
-        times1 = [initial_time, initial_time + interval1]
-        data1 = SortedDict(t => rand(horizon_count) for t in times1)
-        f1 = IS.Deterministic(;
-            data = data1,
-            name = f_name,
-            resolution = resolution,
-            interval = interval1,
+        params = setup_for_multi_interval_tests(;
+            f_name = "max_active_power",
+            horizon_count = 12,
         )
-
-        times2 = [initial_time, initial_time + interval2]
-        data2 = SortedDict(t => rand(horizon_count) for t in times2)
-        f2 = IS.Deterministic(;
-            data = data2,
-            name = f_name,
-            resolution = resolution,
-            interval = interval2,
-        )
-
-        IS.add_time_series!(sys, component, f1)
-        IS.add_time_series!(sys, component, f2)
+        component = params.component
+        f_name = params.f_name
+        interval1 = params.interval1
+        interval2 = params.interval2
+        f1 = params.forecast1
+        f2 = params.forecast2
+        horizon_count = length(first(values(IS.get_data(f1))))
 
         # Retrieve by interval returns correct data
         ts1 = IS.get_time_series(
@@ -4918,16 +4884,12 @@ end
 end
 
 @testset "Test DeterministicSingleTimeSeries with multiple intervals" begin
-    # KNOWN PARITY GAP (InfraStore backend): the InfraStore key omits the forecast
-    # interval, so one SingleTimeSeries cannot become DSTs with multiple intervals.
-    # Re-enable when the store key includes interval (a core schema/key change).
+    # KNOWN PARITY GAP: see setup_for_multi_interval_tests.
     @test_skip "multiple-interval DSTs need interval in the InfraStore store key"
 end
 
 @testset "Test ForecastCache with multiple intervals" begin
-    # KNOWN PARITY GAP (InfraStore backend): see "Test Deterministic with multiple
-    # intervals" — the store key omits `interval`, so interval-only-distinct
-    # forecasts cannot coexist. Re-enable when the store key includes interval.
+    # KNOWN PARITY GAP: see setup_for_multi_interval_tests.
     params = try
         setup_for_multi_interval_tests()
     catch
@@ -5394,12 +5356,12 @@ end
             [(Float64(w), Float64(w + i)) for i in 1:horizon_count] for w in 1:3
     )
     det = IS.Deterministic(name, data, resolution, interval)
-    @test det isa IS.Deterministic{NTuple{2, Float64}, 1}
+    @test typeof(det) === IS.Deterministic{NTuple{2, Float64}, 1}
     IS.add_time_series!(sys, component, det)
 
     # Full read round-trips every window with tuple values intact.
     read_full = IS.get_time_series(IS.Deterministic, component, name)
-    @test read_full isa IS.Deterministic{NTuple{2, Float64}, 1}
+    @test typeof(read_full) === IS.Deterministic{NTuple{2, Float64}, 1}
     @test IS.get_data(read_full) == data
 
     # Sliced read returns the selected window.
@@ -5451,7 +5413,7 @@ end
     h3 = IS.get_time_series_hash(c3, k3)
 
     # Hashes identify the stored array: shared data hashes equal, distinct differs.
-    @test h1 isa String
+    @test typeof(h1) === String
     @test length(h1) == 64
     @test h1 == h2
     @test h1 != h3
@@ -5469,12 +5431,12 @@ end
     # Array A is shared by c1 and c2; array B is c3's alone and so is excluded.
     # The derived DeterministicSingleTimeSeries are excluded everywhere.
     groups = IS.get_time_series_array_groups(sys)
-    @test groups isa Dict
+    @test keytype(groups) === String
     @test Set(keys(groups)) == Set([h1])
     @test Set(IS.get_name(o) for (o, _) in groups[h1]) == Set(["c1", "c2"])
     @test length(groups[h1]) == 2
     for (o, k) in groups[h1]
-        @test k isa IS.TimeSeriesKey
+        @test typeof(k) === IS.StaticTimeSeriesKey
         @test IS.get_time_series_type(k) === IS.SingleTimeSeries
         @test IS.get_time_series_hash(o, k) == h1
     end
@@ -5525,7 +5487,7 @@ end
     # One catalog query resolves the whole collection; owners with no matching
     # series are absent, and every returned hash agrees with the per-owner call.
     hashes = IS.get_time_series_hashes((c1, c2, c3, c4), IS.SingleTimeSeries, "load")
-    @test hashes isa Dict{Int, String}
+    @test typeof(hashes) === Dict{Int, String}
     @test Set(keys(hashes)) == Set((id(c1), id(c2), id(c3)))
     @test hashes[id(c1)] == IS.get_time_series_hash(c1, k1)
     @test hashes[id(c1)] == hashes[id(c2)]
@@ -5611,13 +5573,20 @@ end
     )
 end
 
-@testset "Test ForecastReader with shared forecasts" begin
-    sys = IS.SystemData()
-    comps = [IS.TestComponent("c$i", 5) for i in 1:4]
-    foreach(c -> IS.add_component!(sys, c), comps)
+# Every reader test starts from a system of components named c1..cn on one grid.
+const READER_T0 = Dates.DateTime("2020-01-01")
+const READER_RES = Dates.Hour(1)
 
-    t0 = Dates.DateTime("2020-01-01")
-    res = Dates.Hour(1)
+function _create_reader_system(n)
+    sys = IS.SystemData()
+    comps = [IS.TestComponent("c$i", 5) for i in 1:n]
+    foreach(c -> IS.add_component!(sys, c), comps)
+    return sys, comps
+end
+
+@testset "Test ForecastReader with shared forecasts" begin
+    sys, comps = _create_reader_system(4)
+    t0, res = READER_T0, READER_RES
     # Two windows (interval 1h), horizon 2. c1-c3 add identical data (deduped to one
     # array); c4 is distinct.
     shared = SortedDict(t0 => [10.0, 11.0], t0 + res => [20.0, 21.0])
@@ -5643,7 +5612,7 @@ end
     @test IS.get_num_forecast_slots(reader) == 2
     # Entries are bound to their owner objects.
     @test Set(IS.get_name(e.owner) for e in entries) == Set(["c1", "c2", "c3", "c4"])
-    @test all(e.key isa IS.ForecastKey for e in entries)
+    @test all(typeof(e.key) === IS.ForecastKey for e in entries)
 
     # Reading window values requires a prior read.
     @test_throws ArgumentError IS.get_forecast_window(reader, 1)
@@ -5680,12 +5649,8 @@ end
 end
 
 @testset "Test ForecastReader includes DeterministicSingleTimeSeries sharing" begin
-    sys = IS.SystemData()
-    comps = [IS.TestComponent("c$i", 5) for i in 1:3]
-    foreach(c -> IS.add_component!(sys, c), comps)
-
-    t0 = Dates.DateTime("2020-01-01")
-    res = Dates.Hour(1)
+    sys, comps = _create_reader_system(3)
+    t0, res = READER_T0, READER_RES
     sts_vals = collect(1.0:12.0)
     mk(vals) = IS.SingleTimeSeries(;
         data = TimeSeries.TimeArray(
@@ -5723,12 +5688,9 @@ end
 end
 
 @testset "Test ForecastReader Probabilistic window orientation" begin
-    sys = IS.SystemData()
-    c = IS.TestComponent("c1", 5)
-    IS.add_component!(sys, c)
-
-    t0 = Dates.DateTime("2020-01-01")
-    res = Dates.Hour(1)
+    sys, comps = _create_reader_system(1)
+    c = only(comps)
+    t0, res = READER_T0, READER_RES
     horizon, percentiles = 2, [0.1, 0.5, 0.9]
     # Per-window matrices are (horizon, percentile).
     w0 = Float64[h * 10 + p for h in 1:horizon, p in 1:length(percentiles)]
@@ -5748,12 +5710,8 @@ end
 end
 
 @testset "Test StaticTimeSeriesReader" begin
-    sys = IS.SystemData()
-    comps = [IS.TestComponent("c$i", 5) for i in 1:3]
-    foreach(c -> IS.add_component!(sys, c), comps)
-
-    t0 = Dates.DateTime("2020-01-01")
-    res = Dates.Hour(1)
+    sys, comps = _create_reader_system(3)
+    t0, res = READER_T0, READER_RES
     len = 24
     timestamps = range(t0; length = len, step = res)
     arrays = [collect(1.0:len) .* i for i in 1:3]
@@ -5770,7 +5728,7 @@ end
             name = "load_5min"))
 
     reader = IS.build_static_time_series_reader(sys; resolution = res)
-    @test reader isa IS.StaticTimeSeriesReader
+    @test typeof(reader) === IS.StaticTimeSeriesReader
     @test length(reader) == 3
 
     grid = IS.get_static_time_series_reader_grid(reader)
@@ -5780,7 +5738,7 @@ end
 
     entries = IS.get_static_time_series_reader_entries(reader)
     @test Set(IS.get_name(e.owner) for e in entries) == Set(["c1", "c2", "c3"])
-    @test all(e.key isa IS.StaticTimeSeriesKey for e in entries)
+    @test all(typeof(e.key) === IS.StaticTimeSeriesKey for e in entries)
     # All three scalar series pack into one columnar group: one read per step.
     @test IS.get_num_static_time_series_groups(reader) == 1
 
@@ -5807,12 +5765,9 @@ end
 end
 
 @testset "Test StaticTimeSeriesReader with FunctionData elements" begin
-    sys = IS.SystemData()
-    c = IS.TestComponent("c1", 5)
-    IS.add_component!(sys, c)
-
-    t0 = Dates.DateTime("2020-01-01")
-    res = Dates.Hour(1)
+    sys, comps = _create_reader_system(1)
+    c = only(comps)
+    t0, res = READER_T0, READER_RES
     len = 4
     fds = [IS.LinearFunctionData(1.0 * i, 2.0 * i) for i in 1:len]
     IS.add_time_series!(sys, c, IS.SingleTimeSeries("cost", t0, res, fds))

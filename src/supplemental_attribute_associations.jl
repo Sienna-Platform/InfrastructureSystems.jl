@@ -1,20 +1,6 @@
-# Design note:
-# Supplemental attribute associations live in InfraStore, in its
-# `supplemental_attribute_associations` table, alongside the time series catalog. They
-# used to be kept in a separate in-memory SQLite database owned by this package and
-# serialized into the system JSON; both are gone.
-#
-# Consequences worth knowing:
-#   - Associations are persisted by the store's `<path>.h5` / `<path>.sqlite` pair, so a
-#     system with supplemental attributes but no time series now produces a storage
-#     artifact where it previously produced none. `isempty(::Store)`
-#     accounts for association rows so `serialize` writes that artifact.
-#   - The store enforces uniqueness on the `(component_id, attribute_id)` pair. The old
-#     table had no constraint and relied on callers checking first; callers still check,
-#     so the error message can name the objects, but a missed check is now caught.
-#   - There is no reader for the `associations` key older system JSON carries. A system
-#     serialized before this change does not load, matching the equivalent break in
-#     ../infrasys; regenerate it with a build from before the move if you need the data.
+# Associations live in the store's `supplemental_attribute_associations` table, not in the
+# system JSON, so a system with attributes but no time series still produces a storage
+# artifact; the store enforces uniqueness on `(component_id, attribute_id)`.
 
 """
 Tracks which supplemental attributes are attached to which components.
@@ -42,6 +28,12 @@ SupplementalAttributeAssociations(store::Store) = SupplementalAttributeAssociati
     Set{Tuple{Int, Int}}(),
     Ref(false),
 )
+
+"""
+The [`Store`](@ref) holding these association rows. Shared with the system's
+[`TimeSeriesManager`](@ref).
+"""
+get_data_store(associations::SupplementalAttributeAssociations) = associations.store
 
 # The store handle the queries below run against.
 _assoc_store(associations::SupplementalAttributeAssociations) = associations.store.inner
@@ -105,31 +97,10 @@ end
 """
 Defer association inserts until `func` returns, then write them all in one store call.
 
-Attaching an attribute normally costs two store round trips: a [`has_association`](@ref)
-probe so the caller can raise a domain-specific error, and the insert itself. Replaying a
-document's whole association table pays that per row. Inside this block the probe reads the
-pending buffer as well as the store, and every buffered row lands in a single
-`add_supplemental_attribute_associations!`.
-
-WRITE-ONLY while open: counts, listings, and comparisons
-([`get_num_associations`](@ref), [`_association_rows`](@ref), …) read the store alone and do
-not see buffered rows. Nor do ordinary component-level queries —
-[`get_supplemental_attributes`](@ref), `has_supplemental_attributes`,
-[`list_associated_supplemental_attribute_ids`](@ref), and every [`has_association`](@ref)
-shape OTHER than the exact `(component, attribute)` pair — they too read the store alone and
-will not see rows buffered in an open batch. Only the `(component, attribute)` pair overload
-of `has_association` also checks the pending buffer, because it is the probe
-`add_supplemental_attribute!` calls before every attach.
-
-If `func` throws, this store-only form drops the buffer without writing it — no rollback is
-needed here because nothing was ever written. That is NOT the same as leaving no trace: by
-the time a duplicate-pair throw reaches here, `add_supplemental_attribute!` has already
-attached the attribute to the manager's `mgr.data` (attaching happens before the association
-is buffered), so calling this form directly on a `SupplementalAttributeAssociations` can leave
-an orphaned, attached-but-unassociated attribute behind. Callers that need the manager rolled
-back too — which is almost always what's wanted — should use the `SystemData`-level
-[`begin_association_batch`](@ref), which wraps this one inside
-[`begin_supplemental_attributes_update`](@ref) for exactly that reason.
+WRITE-ONLY while open: every read except the exact `(component, attribute)`
+[`has_association`](@ref) probe sees the store alone, not the buffered rows; and a throw
+drops the buffer without rolling back the attributes already attached to `mgr.data`, so use
+the `SystemData`-level [`begin_association_batch`](@ref) when the manager must roll back too.
 
 Not reentrant: a nested call errors rather than silently flattening two scopes into one.
 """
@@ -403,10 +374,10 @@ function compare_values(
     match_fn::Union{Function, Nothing},
     x::SupplementalAttributeAssociations,
     y::SupplementalAttributeAssociations;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
-    !compare_uuids && return true
+    !compare_ids && return true
     sort_key = row -> (row.attribute_id, row.component_id)
     table_x = sort(_association_rows(x); by = sort_key)
     table_y = sort(_association_rows(y); by = sort_key)

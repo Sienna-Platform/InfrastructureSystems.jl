@@ -17,6 +17,21 @@ function get_value end
 function set_value end
 export get_value, set_value
 
+# Time-series accessor exports. These getters/setters are defined on the time
+# series data types and on the `TimeSeriesKey` hierarchy.
+export get_count
+export get_features
+export get_horizon
+export get_initial_timestamp
+export get_interval
+export get_length
+export get_name
+export get_percentiles
+export get_resolution
+export get_scenario_count
+export get_time_series_type
+export set_name!
+
 import Base: @kwdef
 import DataFrames
 import DataFrames: DataFrame
@@ -186,22 +201,6 @@ include("component_ids.jl")
 include("geographic_supplemental_attribute.jl")
 include("data_source_supplemental_attribute.jl")
 include("openapi_converters.jl")
-
-# Time-series accessor exports. These getters/setters are defined on the time
-# series data types and on the `TimeSeriesKey` hierarchy. (They were previously
-# emitted by the generated metadata structs, which have been removed.)
-export get_count
-export get_features
-export get_horizon
-export get_initial_timestamp
-export get_interval
-export get_length
-export get_name
-export get_percentiles
-export get_resolution
-export get_scenario_count
-export get_time_series_type
-export set_name!
 include("time_series_normalization.jl")
 include("single_time_series.jl")
 include("non_sequential_time_series.jl")
@@ -209,7 +208,6 @@ include("deterministic_single_time_series.jl")
 include("deterministic.jl")
 include("probabilistic.jl")
 include("scenarios.jl")
-include("deterministic_metadata.jl")
 include("time_series_structs.jl")
 include("function_data/time_series_function_data.jl")
 include("time_series_context.jl")

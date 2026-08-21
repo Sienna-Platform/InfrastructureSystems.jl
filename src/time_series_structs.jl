@@ -21,9 +21,9 @@ code may call on any key:
 - `get_count`, `Base.length`
 
 The default methods rely on the field names `name`, `time_series_type`,
-`resolution`, `initial_timestamp`, and `features`; each concrete key defines
-the methods its fields don't cover (as [`NonSequentialTimeSeriesKey`](@ref)
-does).
+`resolution`, `initial_timestamp`, `features`, and `length`, and default to a
+single window with no interval; each concrete key defines the methods its
+fields don't cover (as [`NonSequentialTimeSeriesKey`](@ref) does).
 """
 abstract type TimeSeriesKey <: InfrastructureSystemsType end
 
@@ -32,6 +32,12 @@ get_resolution(key::TimeSeriesKey) = key.resolution
 get_time_series_type(key::TimeSeriesKey) = key.time_series_type
 get_initial_timestamp(key::TimeSeriesKey) = key.initial_timestamp
 get_features(key::TimeSeriesKey) = key.features
+get_length(key::TimeSeriesKey) = key.length
+
+# A key represents a single window unless it is a forecast.
+get_interval(::TimeSeriesKey) = nothing
+get_count(::TimeSeriesKey) = 1
+Base.length(key::TimeSeriesKey) = get_length(key)
 
 function deserialize_struct(T::Type{<:TimeSeriesKey}, data::Dict)
     vals = Dict{Symbol, Any}()
@@ -62,12 +68,6 @@ See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::
     features::Dict{String, Any}
 end
 
-# A static key has no forecast interval and represents a single window.
-get_length(key::StaticTimeSeriesKey) = key.length
-get_interval(::StaticTimeSeriesKey) = nothing
-get_count(::StaticTimeSeriesKey) = 1
-Base.length(key::StaticTimeSeriesKey) = get_length(key)
-
 """
 A unique key to identify and retrieve a [`NonSequentialTimeSeries`](@ref)
 
@@ -85,14 +85,9 @@ See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::
     features::Dict{String, Any}
 end
 
-# A non-sequential key is irregular: no resolution, no regular initial timestamp,
-# no forecast interval; it represents a single window.
-get_length(key::NonSequentialTimeSeriesKey) = key.length
+# A non-sequential key is irregular: it has neither field.
 get_resolution(::NonSequentialTimeSeriesKey) = nothing
 get_initial_timestamp(::NonSequentialTimeSeriesKey) = nothing
-get_interval(::NonSequentialTimeSeriesKey) = nothing
-get_count(::NonSequentialTimeSeriesKey) = 1
-Base.length(key::NonSequentialTimeSeriesKey) = get_length(key)
 
 """
 A unique key to identify and retrieve a [`Forecast`](@ref)

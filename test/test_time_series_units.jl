@@ -1,7 +1,6 @@
 @testset "Test units label round-trips for every time series type" begin
-    sys = IS.SystemData()
-    component = IS.TestComponent("Component1", 5)
-    IS.add_component!(sys, component)
+    sys = create_system_data()
+    component = IS.get_component(IS.TestComponent, sys, "Component1")
 
     initial_time = Dates.DateTime("2020-09-01")
     resolution = Dates.Hour(1)
@@ -61,9 +60,8 @@
 end
 
 @testset "Test units defaults to nothing and is never inferred" begin
-    sys = IS.SystemData()
-    component = IS.TestComponent("Component1", 5)
-    IS.add_component!(sys, component)
+    sys = create_system_data()
+    component = IS.get_component(IS.TestComponent, sys, "Component1")
 
     initial_time = Dates.DateTime("2020-09-01")
     resolution = Dates.Hour(1)
@@ -117,9 +115,8 @@ end
 end
 
 @testset "Test units is not part of a time series' identity" begin
-    sys = IS.SystemData()
-    component = IS.TestComponent("Component1", 5)
-    IS.add_component!(sys, component)
+    sys = create_system_data()
+    component = IS.get_component(IS.TestComponent, sys, "Component1")
 
     initial_time = Dates.DateTime("2020-09-01")
     resolution = Dates.Hour(1)
@@ -143,7 +140,7 @@ end
     catch e
         e
     end
-    @test err isa ArgumentError
+    @test typeof(err) === ArgumentError
     @test occursin("duplicate attributes", sprint(showerror, err))
 
     # The label appears on no key, so it cannot be filtered or addressed by.
@@ -152,9 +149,8 @@ end
 end
 
 @testset "Test units survives transform_single_time_series!" begin
-    sys = IS.SystemData()
-    component = IS.TestComponent("Component1", 5)
-    IS.add_component!(sys, component)
+    sys = create_system_data()
+    component = IS.get_component(IS.TestComponent, sys, "Component1")
 
     initial_time = Dates.DateTime("2020-09-01")
     resolution = Dates.Hour(1)
@@ -178,9 +174,8 @@ end
 end
 
 @testset "Test quantity_kind and unit_system round-trip for every type" begin
-    sys = IS.SystemData()
-    component = IS.TestComponent("Component1", 5)
-    IS.add_component!(sys, component)
+    sys = create_system_data()
+    component = IS.get_component(IS.TestComponent, sys, "Component1")
 
     initial_time = Dates.DateTime("2020-09-01")
     resolution = Dates.Hour(1)
@@ -245,9 +240,8 @@ end
 end
 
 @testset "Test unset unit_system stays unspecified rather than NaturalUnit" begin
-    sys = IS.SystemData()
-    component = IS.TestComponent("Component1", 5)
-    IS.add_component!(sys, component)
+    sys = create_system_data()
+    component = IS.get_component(IS.TestComponent, sys, "Component1")
 
     initial_time = Dates.DateTime("2020-09-01")
     resolution = Dates.Hour(1)
@@ -315,9 +309,8 @@ end
 end
 
 @testset "Test SystemBaseUnit is rejected by the store rather than downgraded" begin
-    sys = IS.SystemData()
-    component = IS.TestComponent("Component1", 5)
-    IS.add_component!(sys, component)
+    sys = create_system_data()
+    component = IS.get_component(IS.TestComponent, sys, "Component1")
 
     initial_time = Dates.DateTime("2020-09-01")
     resolution = Dates.Hour(1)

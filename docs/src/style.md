@@ -92,8 +92,9 @@ Since Julia 1.6, language servers will recognize `import X as Y` where they fail
     `@assert_op` in optimized builds.
 
 ```julia
+julia> a = 3; b = 4;
 julia> @assert_op a == b
-a = 3; b = 4;
+ERROR: AssertionError: 3 == 4
 ```
 
 ## Globals
@@ -175,7 +176,7 @@ into main. This functionality is provided using Codecov
 Bad:
 
 ```julia
-x = 1
+x   = 1
 foo = 2
 ```
 
@@ -192,7 +193,9 @@ foo = 2
 Bad:
 
 ```julia
-abstract type Foo end
+abstract type
+    Foo
+end
 ```
 
 Good:

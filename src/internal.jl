@@ -145,12 +145,12 @@ function compare_values(
     match_fn::Union{Function, Nothing},
     x::InfrastructureSystemsInternal,
     y::InfrastructureSystemsInternal;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
     match = true
     for name in fieldnames(InfrastructureSystemsInternal)
-        if name in exclude || (name == :id && !compare_uuids) ||
+        if name in exclude || (name == :id && !compare_ids) ||
            name == :shared_system_references
             continue
         end
@@ -171,7 +171,7 @@ function compare_values(
                 match_fn,
                 val1,
                 val2;
-                compare_uuids = compare_uuids,
+                compare_ids = compare_ids,
                 exclude = exclude,
             )
                 @error "ext does not match" val1 val2
@@ -181,7 +181,7 @@ function compare_values(
             match_fn,
             getproperty(x, name),
             getproperty(y, name);
-            compare_uuids = compare_uuids,
+            compare_ids = compare_ids,
             exclude = exclude,
         )
             @error "InfrastructureSystemsInternal field=$name does not match"

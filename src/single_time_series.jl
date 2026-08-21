@@ -31,15 +31,13 @@ scalar-per-step case, `N >= 2` is multidimensional per-step values).
   - `resolution::Dates.Period`: Time duration between steps in the time series. The resolution must be the same throughout the time series
   - `data::Array{T, N}`: value array (dimension 1 is time)
   - `units::Union{Nothing, String}`: optional user-declared units label for the values
-    (e.g. `"MW"`). Set at construction and returned on read; IS neither interprets nor
-    validates it, and it is never part of the time series' identity.
+    (e.g. `"MW"`)
   - `quantity_kind::Union{Nothing, String}`: optional label for the kind of physical
-    quantity the values measure (e.g. `"ActivePower"`). Sits above `units`: it separates
-    active from reactive power, which dimensional analysis cannot, and it is the only
-    record of what per-unit values measure.
+    quantity the values measure (e.g. `"ActivePower"`)
   - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
-    the values are already expressed in (`NU`, `DU`, or `SU`). A declaration, not a
-    conversion; `nothing` means unspecified, which is not the same as `NU`.
+    the values are already expressed in (`NU`, `DU`, or `SU`)
+
+See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref).
 """
 struct SingleTimeSeries{T, N} <: StaticTimeSeries{T}
     "user-defined name"
@@ -62,8 +60,8 @@ end
 _get_timestamps(ts::SingleTimeSeries) =
     range(ts.initial_timestamp; step = ts.resolution, length = size(ts.data, 1))
 
-# Validate that user-provided timestamps are regular at `resolution`, raising the
-# same helpful message as the legacy `check_time_series_data` when they are not.
+# Validate that user-provided timestamps are regular at `resolution`, pointing at the
+# keyword-argument escape hatch for irregular periods when they are not.
 function _validate_single_resolution(timestamps, resolution::Dates.Period)
     try
         check_resolution(timestamps, resolution)
@@ -82,9 +80,7 @@ function _validate_single_resolution(timestamps, resolution::Dates.Period)
 end
 
 # The element/rank parameters `{T, N}` are inferred from the value array so callers
-# never have to spell them out. `SingleTimeSeries{T, N}(...)` (the inner
-# constructor) remains available for explicit typing. Views/ranges are normalized
-# to a concrete `Array` (copy-free when already one).
+# never have to spell them out.
 function SingleTimeSeries(
     name,
     initial_timestamp::Dates.DateTime,
@@ -94,15 +90,50 @@ function SingleTimeSeries(
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
-    arr = data isa Array ? data : Array(data)
+    arr = _ensure_array(data)
     return SingleTimeSeries{eltype(arr), ndims(arr)}(
         String(name),
         initial_timestamp,
         resolution,
         arr,
-        _maybe_units(units),
-        _maybe_quantity_kind(quantity_kind),
-        _maybe_unit_system(unit_system),
+        _maybe_string(units),
+        _maybe_string(quantity_kind),
+        unit_system,
+    )
+end
+
+# Normalize the `data` keyword to `(initial_timestamp, resolution, values)`. A
+# `TimeArray` carries its own timestamps; a plain array requires both explicitly.
+function _single_time_series_args(
+    data::TimeSeries.TimeArray,
+    initial_timestamp,
+    resolution,
+    normalization_factor,
+)
+    if isnothing(resolution)
+        resolution = get_resolution(data)
+    end
+    normalized = handle_normalization_factor(data, normalization_factor)
+    # Validated here, while the original timestamps are still available; only
+    # `initial_timestamp` survives on the struct.
+    _validate_single_resolution(TimeSeries.timestamp(normalized), resolution)
+    return (
+        TimeSeries.timestamp(normalized)[1],
+        resolution,
+        TimeSeries.values(normalized),
+    )
+end
+
+function _single_time_series_args(data, initial_timestamp, resolution, normalization_factor)
+    isnothing(initial_timestamp) && throw(
+        ArgumentError("initial_timestamp is required when data is not a TimeArray"),
+    )
+    isnothing(resolution) &&
+        throw(ArgumentError("resolution is required when data is not a TimeArray"))
+    return (
+        initial_timestamp,
+        resolution,
+        handle_normalization_factor(collect(data), normalization_factor),
     )
 end
 
@@ -116,37 +147,16 @@ function SingleTimeSeries(;
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
-    if data isa TimeSeries.TimeArray
-        if isnothing(resolution)
-            resolution = get_resolution(data)
-        end
-        data = handle_normalization_factor(data, normalization_factor)
-        # Regularity is validated here (while the original timestamps are still
-        # available); only `initial_timestamp` survives on the struct.
-        _validate_single_resolution(TimeSeries.timestamp(data), resolution)
-        return SingleTimeSeries(
-            name,
-            TimeSeries.timestamp(data)[1],
-            resolution,
-            TimeSeries.values(data);
-            units = units,
-            quantity_kind = quantity_kind,
-            unit_system = unit_system,
-        )
-    else
-        # Plain-array form (e.g. deserialization, internal reconstruction):
-        # `initial_timestamp` and `resolution` must be supplied explicitly.
-        isnothing(initial_timestamp) && throw(
-            ArgumentError("initial_timestamp is required when data is not a TimeArray"),
-        )
-        isnothing(resolution) &&
-            throw(ArgumentError("resolution is required when data is not a TimeArray"))
-        arr = handle_normalization_factor(collect(data), normalization_factor)
-        return SingleTimeSeries(
-            name, initial_timestamp, resolution, arr;
-            units = units, quantity_kind = quantity_kind, unit_system = unit_system,
-        )
-    end
+    first_timestamp, res, arr = _single_time_series_args(
+        data,
+        initial_timestamp,
+        resolution,
+        normalization_factor,
+    )
+    return SingleTimeSeries(
+        name, first_timestamp, res, arr;
+        units = units, quantity_kind = quantity_kind, unit_system = unit_system,
+    )
 end
 
 """
@@ -161,15 +171,11 @@ Construct SingleTimeSeries that shares the data from an existing instance.
 
 This is useful in cases where you want a component to use the same time series data for
 two different attribtues.
-
-Under the key-centric model the time-series identity is the array content hash, so
-no UUID is shared; the new instance simply reuses the data with a different `name`.
 """
 function SingleTimeSeries(
     src::SingleTimeSeries,
     name::AbstractString,
 )
-    # `units` is carried over: it describes the values, and the values are shared.
     return SingleTimeSeries(
         name,
         src.initial_timestamp,
@@ -182,12 +188,12 @@ function SingleTimeSeries(
 end
 
 """
-Construct SingleTimeSeries from a TimeArray or DataFrame.
+Construct SingleTimeSeries from a TimeArray.
 
 # Arguments
 
   - `name::AbstractString`: user-defined name
-  - `data::Union{TimeSeries.TimeArray, DataFrames.DataFrame}`: time series data
+  - `data::TimeSeries.TimeArray`: time series data
   - `normalization_factor::NormalizationFactor = 1.0`: optional normalization factor to apply
     to each data entry
   - `timestamp::Symbol = :timestamp`: If a DataFrame is passed then this must be the column name that
@@ -199,7 +205,7 @@ Construct SingleTimeSeries from a TimeArray or DataFrame.
 """
 function SingleTimeSeries(
     name::AbstractString,
-    data::Union{TimeSeries.TimeArray, DataFrames.DataFrame};
+    data::TimeSeries.TimeArray;
     normalization_factor::NormalizationFactor = 1.0,
     timestamp::Symbol = :timestamp,
     resolution::Union{Nothing, Dates.Period} = nothing,
@@ -207,25 +213,41 @@ function SingleTimeSeries(
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
-    if data isa DataFrames.DataFrame
-        ta = TimeSeries.TimeArray(data; timestamp = timestamp)
-    elseif data isa TimeSeries.TimeArray
-        ta = data
-    else
-        error("fatal: $(typeof(data))")
-    end
     # TimeArray's table integration (correctly) returns a Matrix as values, even if size in column dimension is 1 (julia +1.13)
     # As the rest expects a single valued timeseries, we slice to the only columns available to obtain the appropriate Vector value
-    length(TimeSeries.colnames(ta)) == 1 || throw(
+    length(TimeSeries.colnames(data)) == 1 || throw(
         ArgumentError("The input data should have a single column other than $(timestamp)"),
     )
-    ta = ta[first(TimeSeries.colnames(ta))]
-
     return SingleTimeSeries(;
         name = name,
-        data = ta,
+        data = data[first(TimeSeries.colnames(data))],
         resolution = resolution,
         normalization_factor = normalization_factor,
+        units = units,
+        quantity_kind = quantity_kind,
+        unit_system = unit_system,
+    )
+end
+
+"""
+Construct SingleTimeSeries from a DataFrame whose `timestamp` column holds the timestamps.
+"""
+function SingleTimeSeries(
+    name::AbstractString,
+    data::DataFrames.DataFrame;
+    normalization_factor::NormalizationFactor = 1.0,
+    timestamp::Symbol = :timestamp,
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    units::Union{Nothing, AbstractString} = nothing,
+    quantity_kind::Union{Nothing, AbstractString} = nothing,
+    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+)
+    return SingleTimeSeries(
+        name,
+        TimeSeries.TimeArray(data; timestamp = timestamp);
+        normalization_factor = normalization_factor,
+        timestamp = timestamp,
+        resolution = resolution,
         units = units,
         quantity_kind = quantity_kind,
         unit_system = unit_system,
@@ -246,33 +268,37 @@ function SingleTimeSeries(
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
     return SingleTimeSeries(
-        name, initial_time, resolution, ones(time_steps); units = units,
+        name, initial_time, resolution, ones(time_steps);
+        units = units, quantity_kind = quantity_kind, unit_system = unit_system,
     )
 end
 
 function SingleTimeSeries(time_series::AbstractVector{<:SingleTimeSeries})
     @assert !isempty(time_series)
-    timestamps =
-        collect(Iterators.flatten((collect(_get_timestamps(x)) for x in time_series)))
-    data = collect(Iterators.flatten((x.data for x in time_series)))
-    ta = TimeSeries.TimeArray(timestamps, data)
-
-    time_series = SingleTimeSeries(;
-        name = get_name(time_series[1]),
-        data = ta,
-        units = get_units(time_series[1]),
-        quantity_kind = get_quantity_kind(time_series[1]),
-        unit_system = get_unit_system(time_series[1]),
+    src = first(time_series)
+    resolution = get_resolution(src)
+    # The segments must join into one regular series; validate before discarding
+    # the per-segment timestamps.
+    _validate_single_resolution(
+        collect(Iterators.flatten(_get_timestamps(x) for x in time_series)),
+        resolution,
     )
-    @debug "concatenated time_series" LOG_GROUP_TIME_SERIES time_series
-    return time_series
+    concatenated = SingleTimeSeries(
+        get_name(src),
+        get_initial_timestamp(src),
+        resolution,
+        collect(Iterators.flatten(get_array(x) for x in time_series));
+        units = get_units(src),
+        quantity_kind = get_quantity_kind(src),
+        unit_system = get_unit_system(src),
+    )
+    @debug "concatenated time_series" LOG_GROUP_TIME_SERIES concatenated
+    return concatenated
 end
 
 function check_time_series_data(ts::SingleTimeSeries)
     len = size(ts.data, 1)
     len < 2 && throw(ArgumentError("data array length must be at least 2: $len"))
-    # Regularity is enforced at construction (against the original timestamps);
-    # the stored `(initial_timestamp, resolution)` are regular by construction.
     return
 end
 
@@ -307,10 +333,8 @@ end
 """
 Get [`SingleTimeSeries`](@ref) `data` as a `TimeArray`.
 
-!!! warning "Deprecated"
-    `get_data` is a temporary back-compatibility alias of [`get_time_array`](@ref).
-    Prefer [`get_array`](@ref) (raw `Array`) or [`get_time_array`](@ref) (built
-    `TimeArray`) in new code.
+An alias of [`get_time_array`](@ref). Prefer [`get_array`](@ref) (raw `Array`) when a
+`TimeArray` is not needed.
 """
 get_data(value::SingleTimeSeries) = get_time_array(value)
 
@@ -321,78 +345,6 @@ get_resolution(value::SingleTimeSeries) = value.resolution
 
 get_initial_timestamp(time_series::SingleTimeSeries) = time_series.initial_timestamp
 
-Base.length(time_series::SingleTimeSeries) = size(time_series.data, 1)
-
-function Base.getindex(time_series::SingleTimeSeries, args...)
-    return SingleTimeSeries(time_series, getindex(get_time_array(time_series), args...))
-end
-
-Base.first(time_series::SingleTimeSeries) = head(time_series, 1)
-
-Base.last(time_series::SingleTimeSeries) = tail(time_series, 1)
-
-Base.firstindex(time_series::SingleTimeSeries) = firstindex(get_time_array(time_series))
-
-Base.lastindex(time_series::SingleTimeSeries) = lastindex(get_time_array(time_series))
-
-Base.lastindex(time_series::SingleTimeSeries, d) = lastindex(get_time_array(time_series), d)
-
-Base.eachindex(time_series::SingleTimeSeries) = eachindex(get_time_array(time_series))
-
-Base.iterate(time_series::SingleTimeSeries, n = 1) = iterate(get_time_array(time_series), n)
-
-"""
-Refer to TimeSeries.when(). Underlying data is copied.
-"""
-function when(time_series::SingleTimeSeries, period::Function, t::Integer)
-    return SingleTimeSeries(
-        time_series,
-        TimeSeries.when(get_time_array(time_series), period, t),
-    )
-end
-
-"""
-Return a time_series truncated starting with timestamp.
-"""
-function from(time_series::SingleTimeSeries, timestamp)
-    return SingleTimeSeries(
-        time_series,
-        TimeSeries.from(get_time_array(time_series), timestamp),
-    )
-end
-
-"""
-Return a time_series truncated after timestamp.
-"""
-function to(time_series::SingleTimeSeries, timestamp)
-    return SingleTimeSeries(
-        time_series,
-        TimeSeries.to(get_time_array(time_series), timestamp),
-    )
-end
-
-"""
-Return a time_series with only the first num values.
-"""
-function head(time_series::SingleTimeSeries)
-    return SingleTimeSeries(time_series, TimeSeries.head(get_time_array(time_series)))
-end
-
-function head(time_series::SingleTimeSeries, num)
-    return SingleTimeSeries(time_series, TimeSeries.head(get_time_array(time_series), num))
-end
-
-"""
-Return a time_series with only the ending num values.
-"""
-function tail(time_series::SingleTimeSeries)
-    return SingleTimeSeries(time_series, TimeSeries.tail(get_time_array(time_series)))
-end
-
-function tail(time_series::SingleTimeSeries, num)
-    return SingleTimeSeries(time_series, TimeSeries.tail(get_time_array(time_series), num))
-end
-
 """
 Creates a new SingleTimeSeries from an existing instance and a subset of data.
 """
@@ -401,9 +353,16 @@ function SingleTimeSeries(time_series::SingleTimeSeries, data::TimeSeries.TimeAr
         get_name(time_series),
         TimeSeries.timestamp(data)[1],
         get_resolution(time_series),
-        TimeSeries.values(data),
+        TimeSeries.values(data);
+        units = get_units(time_series),
+        quantity_kind = get_quantity_kind(time_series),
+        unit_system = get_unit_system(time_series),
     )
 end
+
+# Hook for the shared `StaticTimeSeries` slicing methods.
+_from_time_array(ts::SingleTimeSeries, data::TimeSeries.TimeArray) =
+    SingleTimeSeries(ts, data)
 
 function make_time_array(
     time_series::SingleTimeSeries,

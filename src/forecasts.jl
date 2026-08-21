@@ -70,6 +70,10 @@ end
 _window_eltype(data::AbstractDict) = eltype(valtype(data))
 _window_ndims(data::AbstractDict) = ndims(valtype(data))
 
+# Normalize a window dict to a `SortedDict`; copy-free when it already is one.
+_ensure_sorted_dict(data::SortedDict) = data
+_ensure_sorted_dict(data::AbstractDict) = SortedDict(data)
+
 # This method requires that the forecast type implement a `get_data` method like
 # Deterministic.
 function get_count(forecast::Forecast)

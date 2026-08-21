@@ -14,9 +14,8 @@
         ta3 = TimeSeries.TimeArray(collect(timestamps), vals3)
         sts3 = IS.SingleTimeSeries(; name = "su_stages", data = ta3)
 
-        sys3 = IS.SystemData(; time_series_in_memory = true)
-        comp3 = IS.TestComponent("c3", 5)
-        IS.add_component!(sys3, comp3)
+        sys3 = create_system_data(; time_series_in_memory = true)
+        comp3 = IS.get_component(IS.TestComponent, sys3, "Component1")
         IS.add_time_series!(sys3, comp3, sts3)
 
         key3 = only(IS.get_time_series_keys(comp3))
@@ -34,7 +33,7 @@
                 ),
             ),
         )
-        @test s0 isa StartUpStages
+        @test typeof(s0) === StartUpStages
         @test s0 == (hot = 1.0, warm = 11.0, cold = 21.0)
         @test s5 == (hot = 6.0, warm = 16.0, cold = 26.0)
 
@@ -43,9 +42,8 @@
         ta2 = TimeSeries.TimeArray(collect(timestamps), vals2)
         sts2 = IS.SingleTimeSeries(; name = "min_max", data = ta2)
 
-        sys2 = IS.SystemData(; time_series_in_memory = true)
-        comp2 = IS.TestComponent("c2", 5)
-        IS.add_component!(sys2, comp2)
+        sys2 = create_system_data(; time_series_in_memory = true)
+        comp2 = IS.get_component(IS.TestComponent, sys2, "Component1")
         IS.add_time_series!(sys2, comp2, sts2)
 
         key2 = only(IS.get_time_series_keys(comp2))
@@ -56,7 +54,7 @@
                 ),
             ),
         )
-        @test mm isa MinMax
+        @test typeof(mm) === MinMax
         @test mm == (min = 8.0, max = 108.0)
     end
 
@@ -103,7 +101,7 @@
                     v_mid = resolve(initial_time + Dates.Hour(10))
                     v_last = resolve(initial_time + (horizon_count - 1) * resolution)
 
-                    @test v_first isa T
+                    @test typeof(v_first) === T
                     @test v_first == T(arity_vals[1])
                     @test v_mid == T(arity_vals[11])
                     @test v_last == T(arity_vals[end])

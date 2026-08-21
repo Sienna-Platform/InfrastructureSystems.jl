@@ -7,6 +7,17 @@ _id!(obj, id) = (IS.set_id!(obj, id); obj)
 # one from. Give each manager-direct test its own in-memory store.
 _attr_mgr() = IS.SupplementalAttributeManager(IS.Store(; in_memory = true))
 
+function _geo(x, id)
+    geo_json = Dict("type" => "Point", "coordinates" => [x, 0.0])
+    return _id!(IS.GeographicInfo(; geo_json = geo_json), id)
+end
+
+# The TestSupplemental/GeographicInfo pair with consecutive ids that the bulk-update tests
+# attach.
+function _make_attr_pair(value, x, first_id)
+    return _id!(IS.TestSupplemental(; value = value), first_id), _geo(x, first_id + 1)
+end
+
 @testset "Test add_supplemental_attribute" begin
     mgr = _attr_mgr()
     geo_supplemental_attribute = _id!(IS.GeographicInfo(), 2)
@@ -31,23 +42,13 @@ end
     @test isnothing(IS._get_supplemental_attributes_manager(component))
     result = IS.get_supplemental_attributes(_ -> true, IS.GeographicInfo, component)
     @test result == IS.GeographicInfo[]
-    @test result isa Vector{IS.GeographicInfo}
+    @test typeof(result) === Vector{IS.GeographicInfo}
 end
 
 @testset "Test bulk addition of supplemental attributes" begin
     mgr = _attr_mgr()
-    attr1 = _id!(
-        IS.GeographicInfo(;
-            geo_json = Dict("type" => "Point", "coordinates" => [1.0, 0.0]),
-        ),
-        2,
-    )
-    attr2 = _id!(
-        IS.GeographicInfo(;
-            geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]),
-        ),
-        3,
-    )
+    attr1 = _geo(1.0, 2)
+    attr2 = _geo(2.0, 3)
     component = _id!(IS.TestComponent("component1", 1), 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
@@ -60,13 +61,7 @@ end
 
 @testset "Test bulk addition of supplemental attributes with error" begin
     mgr = _attr_mgr()
-    attr1 = _id!(IS.TestSupplemental(; value = 1.0), 2)
-    attr2 = _id!(
-        IS.GeographicInfo(;
-            geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]),
-        ),
-        3,
-    )
+    attr1, attr2 = _make_attr_pair(1.0, 2.0, 2)
     component = _id!(IS.TestComponent("component1", 1), 1)
     @test_throws(
         ArgumentError,
@@ -82,26 +77,14 @@ end
 
 @testset "Test bulk addition of supplemental attributes with error, existing attrs" begin
     mgr = _attr_mgr()
-    attr1 = _id!(IS.TestSupplemental(; value = 1.0), 2)
-    attr2 = _id!(
-        IS.GeographicInfo(;
-            geo_json = Dict("type" => "Point", "coordinates" => [2.0, 0.0]),
-        ),
-        3,
-    )
+    attr1, attr2 = _make_attr_pair(1.0, 2.0, 2)
     component = _id!(IS.TestComponent("component1", 1), 1)
     IS.begin_supplemental_attributes_update(mgr) do
         IS.add_supplemental_attribute!(mgr, component, attr1)
         IS.add_supplemental_attribute!(mgr, component, attr2)
     end
 
-    attr3 = _id!(IS.TestSupplemental(; value = 3.0), 4)
-    attr4 = _id!(
-        IS.GeographicInfo(;
-            geo_json = Dict("type" => "Point", "coordinates" => [3.0, 0.0]),
-        ),
-        5,
-    )
+    attr3, attr4 = _make_attr_pair(3.0, 3.0, 4)
     @test_throws(
         ArgumentError,
         IS.begin_supplemental_attributes_update(mgr) do
@@ -252,7 +235,7 @@ end
     IS.add_supplemental_attribute!(data, component, geo_supplemental_attribute)
     mgr = data.supplemental_attribute_manager
     serialized = IS.serialize(mgr)
-    @test serialized isa Dict
+    @test keytype(serialized) === String
     @test length(serialized["attributes"]) == 1
     # Associations are persisted by the time series store's `.sqlite` sidecar, not by
     # this dict, so the serialized form deliberately carries no "associations" key.
@@ -304,8 +287,9 @@ end
     IS.add_supplemental_attribute!(data, component1, geo)
     IS.add_supplemental_attribute!(data, component1, other)
     IS.assign_new_id!(data, component1)
-    @test IS.get_supplemental_attribute(component1, IS.get_id(geo)) isa IS.GeographicInfo
-    @test IS.get_supplemental_attribute(component1, IS.get_id(other)) isa
+    @test typeof(IS.get_supplemental_attribute(component1, IS.get_id(geo))) ===
+          IS.GeographicInfo
+    @test typeof(IS.get_supplemental_attribute(component1, IS.get_id(other))) ===
           IS.TestSupplemental
     geo_attrs = collect(IS.get_supplemental_attributes(IS.GeographicInfo, component1))
     @test length(geo_attrs) == 1

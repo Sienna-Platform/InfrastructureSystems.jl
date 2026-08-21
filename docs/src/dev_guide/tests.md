@@ -63,8 +63,8 @@ information.
 ## Change logging levels
 
 ```julia
+julia> InfrastructureSystems.make_logging_config_file("logging_config.toml")
 julia> ENV["SIENNA_LOGGING_CONFIG"] = "logging_config.toml"
-InfrastructureSystems.make_logging_config_file("logging_config.toml")
 ```
 
 Edit the file to suit your preferences and rerun.

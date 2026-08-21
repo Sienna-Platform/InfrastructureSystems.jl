@@ -358,12 +358,22 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    # Read key-addressed (exact identity, no catalog re-resolution) and hand the
-    # instance to the instance-form accessor. Unpacking the key back into by-name
-    # kwargs would re-resolve it through subset feature matching, which is
-    # ambiguous when a sibling's feature set is a superset of the key's.
-    ts = get_time_series(owner, key; start_time = start_time, len = len, count = 1)
+    ts = _read_for_key(owner, key; start_time = start_time, len = len)
     return get_time_series_array(owner, ts; start_time = start_time, len = len)
+end
+
+# Read key-addressed (exact identity, no catalog re-resolution) so the by-key accessors can
+# hand the instance to their instance-form counterpart. Unpacking the key back into by-name
+# kwargs would re-resolve it through subset feature matching, which is ambiguous when a
+# sibling's feature set is a superset of the key's. `count = 1` because a key names one
+# series, and for a forecast the accessors want the single window at `start_time`.
+function _read_for_key(
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey;
+    start_time::Union{Nothing, Dates.DateTime} = nothing,
+    len::Union{Nothing, Int} = nothing,
+)
+    return get_time_series(owner, key; start_time = start_time, len = len, count = 1)
 end
 
 """
@@ -410,7 +420,11 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len = nothing,
 )
-    initial_time = isnothing(start_time) ? get_initial_timestamp(forecast) : start_time
+    initial_time = if isnothing(start_time)
+        get_initial_timestamp(forecast)
+    else
+        start_time
+    end
     return make_time_array(forecast, initial_time; len = len)
 end
 
@@ -560,9 +574,7 @@ function get_time_series_timestamps(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    # See `get_time_series_array(owner, key)`: read key-addressed, then delegate
-    # to the instance form.
-    ts = get_time_series(owner, key; start_time = start_time, len = len, count = 1)
+    ts = _read_for_key(owner, key; start_time = start_time, len = len)
     return get_time_series_timestamps(owner, ts; start_time = start_time, len = len)
 end
 
@@ -763,9 +775,7 @@ function get_time_series_values(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    # See `get_time_series_array(owner, key)`: read key-addressed, then delegate
-    # to the instance form.
-    ts = get_time_series(owner, key; start_time = start_time, len = len, count = 1)
+    ts = _read_for_key(owner, key; start_time = start_time, len = len)
     return get_time_series_values(owner, ts; start_time = start_time, len = len)
 end
 
@@ -976,7 +986,6 @@ function copy_time_series!(
     end
 end
 
-# Return a copy of `ts` carrying `new_name`. Every time-series type is immutable, so a
 function _copy_time_series!(
     dst::TimeSeriesOwners,
     src::TimeSeriesOwners;
@@ -992,9 +1001,9 @@ function _copy_time_series!(
         )
     end
 
-    store = mgr.data_store::Store
+    store = get_data_store(mgr)
     dst_id, dst_type, _ = _infrastore_owner_args(dst)
-    src_id, _, category = _infrastore_owner_args(src)
+    src_id, category = _infrastore_owner_id_category(src)
 
     # The copy happens entirely inside the store: it clones the association row
     # against the same content-addressed array. Nothing is read into Julia, so no
@@ -1002,31 +1011,37 @@ function _copy_time_series!(
     # DeterministicSingleTimeSeries stays one instead of being materialized into a
     # dense Deterministic, which is what a get/add round-trip through the Julia
     # types would produce.
-    for ts_key in get_time_series_keys(src)
-        name = get_name(ts_key)
-        new_name = name
-        if !isnothing(name_mapping)
-            new_name = get(name_mapping, (get_name(src), name), nothing)
-            if isnothing(new_name)
-                @debug "Skip copying ts_key" _group = LOG_GROUP_TIME_SERIES name
-                continue
+    #
+    # One transaction for the whole set, so a failure part-way through does not leave
+    # `dst` holding a subset of `src`'s series.
+    time_series_transaction(mgr) do _
+        for ts_key in get_time_series_keys(src)
+            name = get_name(ts_key)
+            new_name = name
+            if !isnothing(name_mapping)
+                new_name = get(name_mapping, (get_name(src), name), nothing)
+                if isnothing(new_name)
+                    @debug "Skip copying ts_key" _group = LOG_GROUP_TIME_SERIES name
+                    continue
+                end
+                @debug "Copy ts_key with" _group = LOG_GROUP_TIME_SERIES new_name
             end
-            @debug "Copy ts_key with" _group = LOG_GROUP_TIME_SERIES new_name
+            InfraStore.copy_time_series!(
+                _infrastore_type(get_time_series_type(ts_key)),
+                store.inner,
+                src_id,
+                category,
+                name,
+                dst_id,
+                dst_type;
+                new_name = new_name,
+                resolution = get_resolution(ts_key),
+                interval = get_interval(ts_key),
+                features = Dict{String, Any}(get_features(ts_key)),
+            )
         end
-        InfraStore.copy_time_series!(
-            _infrastore_type(get_time_series_type(ts_key)),
-            store.inner,
-            src_id,
-            category,
-            name,
-            dst_id,
-            dst_type;
-            new_name = new_name,
-            resolution = get_resolution(ts_key),
-            interval = get_interval(ts_key),
-            features = Dict{String, Any}(get_features(ts_key)),
-        )
     end
+    return
 end
 
 """

@@ -16,8 +16,6 @@ supplemental attributes and that data. Reasons to consider using it:
     SHA-256 hash, so multiple components or supplemental attributes that share the same data
     cost a single array on disk.
   - Supports serialization and deserialization.
-  - Supports parsing raw data files of several formats as well as data stored in
-    `TimeSeries.TimeArray` and `DataFrames.DataFrame` objects.
 
 ## On-disk artifact
 

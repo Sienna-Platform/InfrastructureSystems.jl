@@ -21,33 +21,34 @@ Base.eltype(::TimeSeriesData{T}) where {T} = T
 # - get_resolution
 # - make_time_array
 
-# Normalize a user-supplied units label to the stored `Union{Nothing, String}`.
-_maybe_units(::Nothing) = nothing
-_maybe_units(units::AbstractString) = String(units)
+# Normalize an optional user-supplied label (units, quantity kind) to the stored
+# `Union{Nothing, String}`.
+_maybe_string(::Nothing) = nothing
+_maybe_string(value::AbstractString) = String(value)
 
-# Same, for the quantity-kind label.
-_maybe_quantity_kind(::Nothing) = nothing
-_maybe_quantity_kind(kind::AbstractString) = String(kind)
+# Normalize an arbitrary array (view, range, ...) to a concrete `Array`; copy-free
+# when it already is one.
+_ensure_array(data::Array) = data
+_ensure_array(data::AbstractArray) = Array(data)
 
-# The unit system is stored as one of the `RelativeUnits` marker instances
-# (`DU`/`SU`/`NU`), not a string, so it dispatches like every other unit-system
-# value in IS rather than becoming a second, stringly-typed vocabulary.
-_maybe_unit_system(::Nothing) = nothing
-_maybe_unit_system(unit_system::AbstractUnitSystem) = unit_system
+_ensure_datetime_vector(timestamps::Vector{Dates.DateTime}) = timestamps
+_ensure_datetime_vector(timestamps) = collect(Dates.DateTime, timestamps)
 
 """
 Return the user-declared units label of a time series (e.g. `"MW"`), or `nothing` when it
 carries none.
 
-The label is set at construction, is returned unchanged on read, and is immutable —
-there is deliberately no setter. It describes the values, so a constructor that shares
-another instance's data carries it over. IS neither interprets nor validates it: there is
-no units vocabulary in IS, and `nothing` may mean either "unknown" or "dimensionless" —
-that is the caller's convention to establish.
+IS neither interprets nor validates the label: there is no units vocabulary in IS, and
+`nothing` may mean either "unknown" or "dimensionless" — that is the caller's convention
+to establish.
 
-It is **not** part of a time series' identity: it never appears in a [`TimeSeriesKey`](@ref),
-never filters a query, and is never an argument to `get_time_series`. Two series that
-differ only in their label are the same series, and adding both is a duplicate.
+This label, [`get_quantity_kind`](@ref), and [`get_unit_system`](@ref) share one contract.
+All three are set at construction and are immutable — there is deliberately no setter.
+They describe the values, so every constructor that shares another instance's data carries
+all three over. And none of them is part of a time series' identity: they never appear in a
+[`TimeSeriesKey`](@ref), never filter a query, and are never arguments to
+`get_time_series`. Two series that differ only in these labels are the same series, and
+adding both is a duplicate.
 
 Not to be confused with [`get_unit_system`](@ref), which names the per-unit normalization
 base the values are already expressed in rather than naming a physical dimension. The two
@@ -65,9 +66,8 @@ but a quantity kind can. And when [`get_unit_system`](@ref) is a per-unit base t
 are dimensionless, so this is the only surviving record of what they measure.
 
 IS neither interprets nor validates the string; the recommended vocabulary is a
-[QUDT](https://www.qudt.org/pages/QUDToverviewPage.html) `QuantityKind` local name. Like the
-units label it is immutable, is carried over by data-sharing constructors, and is never part
-of a time series' identity.
+[QUDT](https://www.qudt.org/pages/QUDToverviewPage.html) `QuantityKind` local name. See
+[`get_units`](@ref) for the immutability and identity contract the three labels share.
 """
 get_quantity_kind(value::TimeSeriesData) = value.quantity_kind
 
@@ -85,8 +85,7 @@ per-unit values back to natural units needs the base that lives on the owning co
 `nothing` means *unspecified*, which is deliberately not the same as `NU`: a series that
 never declared a basis must not be read as though someone had said its values were natural.
 
-Like the units label it is immutable, is carried over by data-sharing constructors, and is
-never part of a time series' identity.
+See [`get_units`](@ref) for the immutability and identity contract the three labels share.
 
 !!! note
 
