@@ -1,8 +1,5 @@
-# The catalog-backed document rows: one bulk read per table, and one row type per stored
-# time series type. The point of every testset here is that the ROW MATCHES THE CATALOG —
-# InfraStore's own `openapi` module owns every column mapping and wire spelling; these tests
-# assert through the JSON/typed wrappers `IS.openapi_time_series_association_*` and
-# `IS.openapi_supplemental_attribute_association_*`, not a Julia-side re-derivation of them.
+# Asserts the catalog-backed document rows match the catalog, through the
+# `IS.openapi_*_association_*` wrappers.
 
 const _HEX_HASH_RE = r"^[0-9a-f]{64}$"
 
@@ -87,7 +84,7 @@ end
     )
 
     row = _openapi_row(data, "static")
-    @test row isa PowerTimeSeriesOpenAPIModels.SingleTimeSeries
+    @test typeof(row) === PowerTimeSeriesOpenAPIModels.SingleTimeSeries
     @test row.time_series_type == "SingleTimeSeries"
     @test row.owner_id == IS.get_id(component)
     @test row.owner_type == "TestComponent"
@@ -124,7 +121,7 @@ end
     )
 
     row = _openapi_row(data, "irregular")
-    @test row isa PowerTimeSeriesOpenAPIModels.NonSequentialTimeSeries
+    @test typeof(row) === PowerTimeSeriesOpenAPIModels.NonSequentialTimeSeries
     @test row.length == 3
     # ABSENT, not null: an irregular series has no `initial + k * resolution` grid, and the
     # schema says so by not declaring the fields on this type.
@@ -163,7 +160,7 @@ end
     )
 
     det = _openapi_row(data, "det")
-    @test det isa PowerTimeSeriesOpenAPIModels.Deterministic
+    @test typeof(det) === PowerTimeSeriesOpenAPIModels.Deterministic
     @test det.horizon == "PT4H"
     @test det.interval == "PT1H"
     @test det.count == 2
@@ -171,14 +168,14 @@ end
     @test !hasfield(typeof(det), :length)
 
     prob = _openapi_row(data, "prob")
-    @test prob isa PowerTimeSeriesOpenAPIModels.Probabilistic
+    @test typeof(prob) === PowerTimeSeriesOpenAPIModels.Probabilistic
     @test prob.percentiles == [0.1, 0.5, 0.9]
     @test prob.count == 2
 
     # `scenario_count` is the stored array's leading axis, which the catalog reports as
     # `length` — the same column a Probabilistic spends on its percentile count.
     scen = _openapi_row(data, "scen")
-    @test scen isa PowerTimeSeriesOpenAPIModels.Scenarios
+    @test typeof(scen) === PowerTimeSeriesOpenAPIModels.Scenarios
     @test scen.scenario_count == 5
     @test scen.count == 2
 
@@ -205,13 +202,17 @@ end
 
     rows = [row.value for row in IS.openapi_time_series_association_rows(data)]
     derived = only(
-        filter(r -> r isa PowerTimeSeriesOpenAPIModels.DeterministicSingleTimeSeries, rows),
+        filter(
+            r ->
+                typeof(r) === PowerTimeSeriesOpenAPIModels.DeterministicSingleTimeSeries,
+            rows,
+        ),
     )
     # The derived forecast is its own stored type, so it does not collide with a real
     # Deterministic under the discriminator.
     @test derived.time_series_type == "DeterministicSingleTimeSeries"
     @test derived.count == 3
-    @test !any(r -> r isa PowerTimeSeriesOpenAPIModels.Deterministic, rows)
+    @test !any(r -> typeof(r) === PowerTimeSeriesOpenAPIModels.Deterministic, rows)
     @test OpenAPI.check_required(derived)
 end
 
@@ -331,7 +332,10 @@ end
     data, first_component, second_component, shared = _openapi_attr_fixture()
     rows = IS.openapi_supplemental_attribute_association_rows(data)
     @test length(rows) == 2
-    @test all(r -> r isa PowerCoreOpenAPIModels.SupplementalAttributeAssociation, rows)
+    @test all(
+        r -> typeof(r) === PowerCoreOpenAPIModels.SupplementalAttributeAssociation,
+        rows,
+    )
     # Document/store ids agree by construction now: the association row's ids ARE the IS ids.
     @test Set(r.component_id for r in rows) ==
           Set([IS.get_id(first_component), IS.get_id(second_component)])
@@ -373,93 +377,27 @@ end
     )
 end
 
-@testset "reconcile_time_series_association_rows!: strict mode is a no-op on an unmodified export" begin
+@testset "add_time_series!: a declared scenario_count disagreeing with the data errors loudly and writes nothing" begin
     data, component = _openapi_ts_fixture()
     initial = Dates.DateTime(2024, 1, 1)
-    IS.add_time_series!(
-        data, component,
-        IS.SingleTimeSeries(
-            "static", TimeSeries.TimeArray([initial, initial + Dates.Hour(1)], [1.0, 2.0]),
-        ),
+    resolution = Dates.Hour(1)
+    windows = [initial, initial + resolution]
+    # The explicit-`scenario_count` constructor takes the count independently of the
+    # per-window matrices, so it can disagree with their actual width (3 here, not 5) —
+    # the geometry-vs-association mismatch the store now rejects at addition.
+    mismatched = IS.Scenarios(
+        "scen_mismatch",
+        SortedDict(w => rand(4, 3) for w in windows),
+        5,
+        resolution,
+        resolution,
     )
-    json = IS.openapi_time_series_association_json(data)
-    report = IS.reconcile_time_series_association_rows!(data, json; policy = :strict)
-    @test report.matched == 1
-    @test iszero(report.updated)
-    @test iszero(report.missing_in_store)
-    @test iszero(report.unmatched_in_store)
-    @test isempty(report.conflicts)
-end
-
-@testset "reconcile_time_series_association_rows!: strict mode catches descriptive drift" begin
-    data, component = _openapi_ts_fixture()
-    initial = Dates.DateTime(2024, 1, 1)
-    IS.add_time_series!(
-        data, component,
-        IS.SingleTimeSeries(
-            "static", TimeSeries.TimeArray([initial, initial + Dates.Hour(1)], [1.0, 2.0]);
-            units = "MW",
-        ),
-    )
-    rows = JSON.parse(
-        IS.openapi_time_series_association_json(data),
-    )
-    rows[1]["units"] = "kW"
-    drifted = JSON.json(rows)
-    @test_throws IS.InfraStore.ReconcileConflictError IS.reconcile_time_series_association_rows!(
-        data, drifted; policy = :strict,
-    )
-end
-
-@testset "reconcile_time_series_association_rows!: strict mode catches a row missing in the store" begin
-    data, component = _openapi_ts_fixture()
-    initial = Dates.DateTime(2024, 1, 1)
-    IS.add_time_series!(
-        data, component,
-        IS.SingleTimeSeries(
-            "static", TimeSeries.TimeArray([initial, initial + Dates.Hour(1)], [1.0, 2.0]),
-        ),
-    )
-    rows = JSON.parse(
-        IS.openapi_time_series_association_json(data),
-    )
-    rows[1]["name"] = "phantom"
-    missing_json = JSON.json(rows)
-    @test_throws IS.InfraStore.ReconcileConflictError IS.reconcile_time_series_association_rows!(
-        data, missing_json; policy = :strict,
-    )
-end
-
-@testset "reconcile_time_series_association_rows!: update_descriptive is deferred upstream" begin
-    data, component = _openapi_ts_fixture()
-    initial = Dates.DateTime(2024, 1, 1)
-    IS.add_time_series!(
-        data, component,
-        IS.SingleTimeSeries(
-            "static", TimeSeries.TimeArray([initial, initial + Dates.Hour(1)], [1.0, 2.0]);
-            units = "MW",
-        ),
-    )
-    rows = JSON.parse(
-        IS.openapi_time_series_association_json(data),
-    )
-    rows[1]["units"] = "kW"
-    drifted = JSON.json(rows)
-    # `:update_descriptive` is reserved but not implemented upstream; the store rejects it
-    # rather than silently falling back to `:strict`.
-    @test_throws IS.InfraStore.InvalidParameterError IS.reconcile_time_series_association_rows!(
-        data, drifted; policy = :update_descriptive,
-    )
-    # The deferral does not change strict-mode behavior on the same fixture.
-    @test_throws IS.InfraStore.ReconcileConflictError IS.reconcile_time_series_association_rows!(
-        data, drifted; policy = :strict,
-    )
+    @test_throws DimensionMismatch IS.add_time_series!(data, component, mismatched)
+    @test isempty(IS.list_time_series_metadata(data))
 end
 
 @testset "attach_supplemental_attribute!: attaches in memory without writing an association row" begin
-    data = IS.SystemData()
-    component = IS.TestComponent("component1", 5)
-    IS.add_component!(data, component)
+    data, component = _openapi_ts_fixture()
     attribute = IS.GeographicInfo(;
         geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
     )
@@ -475,9 +413,7 @@ end
 end
 
 @testset "attach_supplemental_attribute!: advances next_id past the attribute's id" begin
-    data = IS.SystemData()
-    component = IS.TestComponent("component1", 5)
-    IS.add_component!(data, component)
+    data, component = _openapi_ts_fixture()
     attribute = IS.GeographicInfo(;
         geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
     )
@@ -489,9 +425,7 @@ end
 end
 
 @testset "attach_supplemental_attribute!: errors loudly on an unassigned attribute id" begin
-    data = IS.SystemData()
-    component = IS.TestComponent("component1", 5)
-    IS.add_component!(data, component)
+    data, component = _openapi_ts_fixture()
     attribute = IS.GeographicInfo(;
         geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
     )
@@ -500,9 +434,7 @@ end
 end
 
 @testset "attach_supplemental_attribute!: respects allow_existing_time_series" begin
-    data = IS.SystemData()
-    component = IS.TestComponent("component1", 5)
-    IS.add_component!(data, component)
+    data, component = _openapi_ts_fixture()
     # GeographicInfo does not support time series at all; TestSupplemental does.
     attribute = IS.TestSupplemental(; value = 1.0)
     IS.set_id!(attribute, 55)
@@ -564,9 +496,7 @@ end
 end
 
 @testset "begin_association_batch still rejects a duplicate pair by name" begin
-    data = IS.SystemData()
-    component = IS.TestComponent("component1", 5)
-    IS.add_component!(data, component)
+    data, component = _openapi_ts_fixture()
     shared = IS.GeographicInfo(;
         geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
     )

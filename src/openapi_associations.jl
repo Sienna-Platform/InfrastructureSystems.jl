@@ -1,16 +1,6 @@
-# ---- OpenAPI-row association serde -----------------------------------------
-#
-# Thin wrappers over InfraStore's own OpenAPI-row serde
-# (`infrastore_core::openapi`, exposed by `InfraStore.jl`'s
-# `export_time_series_associations_openapi` / `export_supplemental_attribute_associations_openapi`
-# / `import_supplemental_attribute_associations_openapi!` /
-# `reconcile_time_series_associations_openapi!`). The store owns every column mapping and wire
-# spelling (id/owner_id, `owner_category`, ISO durations, plain-scalar features, `unit_system`
-# labels, per-type timing columns, sort order); this file only bridges
-# `SystemData`/`Store` to the store handle they already hold and parses the store's JSON into
-# the generated OpenAPI model types, the same way `PowerOpenAPIModels.document_from_json` does
-# (`OpenAPI.from_json` on the raw row dict; the oneOf wrapper picks its concrete member type
-# from the row's own discriminator field, so no dispatch is needed here).
+# Thin wrappers over InfraStore's own OpenAPI-row serde: the store owns every column mapping
+# and wire spelling, so this file only bridges `SystemData`/`Store` to the store handle and
+# parses the store's JSON into the generated OpenAPI model types.
 
 """
 $(TYPEDSIGNATURES)
@@ -23,32 +13,11 @@ Takes the store directly as well as a `SystemData`, because a writer that stages
 a scratch store — a parser building a document, say — needs the same rows before any
 `SystemData` exists.
 """
-function list_time_series_metadata(
-    store::Store;
-    owner_id = nothing,
-    owner_category = nothing,
-    time_series_type = nothing,
-    name = nothing,
-    resolution = nothing,
-    interval = nothing,
-    features = Dict{String, Any}(),
-    component_field = nothing,
-)
-    return InfraStore.list_time_series(
-        store.inner;
-        owner_id = owner_id,
-        owner_category = owner_category,
-        time_series_type = time_series_type,
-        name = name,
-        resolution = resolution,
-        interval = interval,
-        features = features,
-        component_field = component_field,
-    )
-end
+list_time_series_metadata(store::Store; kwargs...) =
+    InfraStore.list_time_series(store.inner; kwargs...)
 
 list_time_series_metadata(data::SystemData; kwargs...) =
-    list_time_series_metadata(data.time_series_manager.data_store; kwargs...)
+    list_time_series_metadata(get_data_store(data); kwargs...)
 
 """
 $(TYPEDSIGNATURES)
@@ -65,6 +34,13 @@ list_supplemental_attribute_association_rows(data::SystemData) =
 
 # ── typed OpenAPI rows ──────────────────────────────────────────────────────────
 
+# `JSON.parse` yields `AbstractDict{String, Any}` rows, which `OpenAPI.from_json` takes
+# as-is. A oneOf wrapper picks its concrete member type from the row's own discriminator
+# field, so no dispatch is needed here.
+function _openapi_rows(::Type{T}, json::AbstractString) where {T}
+    return T[OpenAPI.from_json(T, row) for row in JSON.parse(json)]
+end
+
 """
 $(TYPEDSIGNATURES)
 
@@ -80,7 +56,7 @@ function openapi_time_series_association_json(store::Store; kwargs...)
 end
 
 openapi_time_series_association_json(data::SystemData; kwargs...) =
-    openapi_time_series_association_json(data.time_series_manager.data_store; kwargs...)
+    openapi_time_series_association_json(get_data_store(data); kwargs...)
 
 """
 $(TYPEDSIGNATURES)
@@ -88,21 +64,17 @@ $(TYPEDSIGNATURES)
 The rows of [`openapi_time_series_association_json`](@ref), deserialized into
 `PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation` — the oneOf wrapper whose `.value` picks
 its concrete per-type struct (`SingleTimeSeries`, `Deterministic`, ...) from each row's own
-`time_series_type` discriminator, via `OpenAPI.from_json`. This is the same mechanism
-`PowerOpenAPIModels.document_from_json` uses to build a `SystemDocument`'s own
-`time_series_associations`.
+`time_series_type` discriminator.
 """
 function openapi_time_series_association_rows(store::Store; kwargs...)
-    json = openapi_time_series_association_json(store; kwargs...)
-    return PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation[
-        OpenAPI.from_json(
-            PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation, Dict{String, Any}(row),
-        ) for row in JSON.parse(json)
-    ]
+    return _openapi_rows(
+        PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation,
+        openapi_time_series_association_json(store; kwargs...),
+    )
 end
 
 openapi_time_series_association_rows(data::SystemData; kwargs...) =
-    openapi_time_series_association_rows(data.time_series_manager.data_store; kwargs...)
+    openapi_time_series_association_rows(get_data_store(data); kwargs...)
 
 """
 $(TYPEDSIGNATURES)
@@ -115,25 +87,27 @@ openapi_supplemental_attribute_association_json(store::Store) =
     InfraStore.export_supplemental_attribute_associations_openapi(store.inner)
 
 openapi_supplemental_attribute_association_json(data::SystemData) =
-    openapi_supplemental_attribute_association_json(data.time_series_manager.data_store)
+    openapi_supplemental_attribute_association_json(
+        get_data_store(data.supplemental_attribute_manager),
+    )
 
 """
 $(TYPEDSIGNATURES)
 
 The rows of [`openapi_supplemental_attribute_association_json`](@ref), deserialized into
-`PowerCoreOpenAPIModels.SupplementalAttributeAssociation` via `OpenAPI.from_json`.
+`PowerCoreOpenAPIModels.SupplementalAttributeAssociation`.
 """
 function openapi_supplemental_attribute_association_rows(store::Store)
-    json = openapi_supplemental_attribute_association_json(store)
-    return PowerCoreOpenAPIModels.SupplementalAttributeAssociation[
-        OpenAPI.from_json(
-            PowerCoreOpenAPIModels.SupplementalAttributeAssociation, Dict{String, Any}(row),
-        ) for row in JSON.parse(json)
-    ]
+    return _openapi_rows(
+        PowerCoreOpenAPIModels.SupplementalAttributeAssociation,
+        openapi_supplemental_attribute_association_json(store),
+    )
 end
 
 openapi_supplemental_attribute_association_rows(data::SystemData) =
-    openapi_supplemental_attribute_association_rows(data.time_series_manager.data_store)
+    openapi_supplemental_attribute_association_rows(
+        get_data_store(data.supplemental_attribute_manager),
+    )
 
 """
 $(TYPEDSIGNATURES)
@@ -148,36 +122,5 @@ import_supplemental_attribute_association_rows!(store::Store, json::AbstractStri
 
 import_supplemental_attribute_association_rows!(data::SystemData, json::AbstractString) =
     import_supplemental_attribute_association_rows!(
-        data.time_series_manager.data_store, json,
+        get_data_store(data.supplemental_attribute_manager), json,
     )
-
-"""
-$(TYPEDSIGNATURES)
-
-Reconcile a JSON array of time-series association OpenAPI rows against the store's catalog:
-match by identity and throw `InfraStore.ReconcileConflictError` for any descriptive drift
-`policy` cannot resolve. Only `policy = :strict` is implemented; `:update_descriptive` is
-reserved upstream and raises `InfraStore.InvalidParameterError`. Each row's `uri`/`data_hash`
-are informational and never checked. Passthrough to
-`InfraStore.reconcile_time_series_associations_openapi!`; see there for the full policy
-semantics.
-"""
-function reconcile_time_series_association_rows!(
-    store::Store,
-    json::AbstractString;
-    policy::Symbol = :strict,
-)
-    return InfraStore.reconcile_time_series_associations_openapi!(
-        store.inner, json; policy = policy,
-    )
-end
-
-function reconcile_time_series_association_rows!(
-    data::SystemData,
-    json::AbstractString;
-    policy::Symbol = :strict,
-)
-    return reconcile_time_series_association_rows!(
-        data.time_series_manager.data_store, json; policy = policy,
-    )
-end
