@@ -1458,7 +1458,7 @@ forecast array (and read plan) report the same `slot`.
 """
 struct ForecastReaderEntry
     owner::TimeSeriesOwners
-    key::TimeSeriesKey
+    key::ForecastKey
     slot::Int
 end
 
@@ -2005,7 +2005,7 @@ function _infrastore_list_keys(
             owner_category = owner_category, time_series_type = type_filter,
             name = name, resolution = resolution, interval = interval,
             features = feats)
-    out = TimeSeriesKey[]
+    out = ConcreteTimeSeriesKey[]
     for row in rows
         if !isnothing(time_series_type)
             _infrastore_type_matches(
@@ -2020,8 +2020,13 @@ function _infrastore_list_keys(
 end
 
 # A key for every time series in the store (all owners).
-_infrastore_all_metadata(store::Store) =
-    [_key_from_row(row) for row in InfraStore.list_keys(store.inner)]
+function _infrastore_all_metadata(store::Store)
+    out = ConcreteTimeSeriesKey[]
+    for row in InfraStore.list_keys(store.inner)
+        push!(out, _key_from_row(row))
+    end
+    return out
+end
 
 # Owner-level `list_metadata` entry point (mirrors the metadata-store signature).
 function infrastore_owner_list_keys(

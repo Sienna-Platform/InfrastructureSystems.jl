@@ -55,7 +55,10 @@ mutable struct TimeSeriesContext
     "Keys for the buffered additions, in stage order."
     keys::Vector{ConcreteTimeSeriesKey}
     "Forecast window parameters per `(resolution, interval)` group."
-    params_cache::Dict{Tuple{Dates.Period, Dates.Period}, Any}
+    params_cache::Dict{
+        Tuple{Dates.Period, Dates.Period},
+        Union{Nothing, ForecastParameters},
+    }
     "Whether a store transaction backs this context."
     transactional::Bool
     closed::Bool
@@ -87,7 +90,7 @@ function TimeSeriesContext(
         mgr,
         nothing,
         ConcreteTimeSeriesKey[],
-        Dict{Tuple{Dates.Period, Dates.Period}, Any}(),
+        Dict{Tuple{Dates.Period, Dates.Period}, Union{Nothing, ForecastParameters}}(),
         false,
         false,
         owner_validator,
