@@ -114,13 +114,29 @@ function get_time_series(
 )
     # The key is already fully resolved, so read key-addressed — no catalog
     # re-resolution by name.
-    return _get_time_series_by_key(
-        owner,
-        key;
-        start_time = start_time,
-        len = len,
-        count = count,
-    )
+    try
+        return _get_time_series_by_key(
+            owner,
+            key;
+            start_time = start_time,
+            len = len,
+            count = count,
+        )
+    catch e
+        # `catch`-block exception inspection: a stale key — the series was
+        # removed after the key was obtained — surfaces as the store's
+        # NotFoundError; keep the accessors' public ArgumentError contract.
+        if e isa InfraStore.NotFoundError
+            throw(
+                ArgumentError(
+                    "No time series matches the key $(summary(key)) with " *
+                    "name='$(get_name(key))' on $(summary(owner)); " *
+                    "it may have been removed.",
+                ),
+            )
+        end
+        rethrow()
+    end
 end
 
 _get_time_series_by_key(
@@ -342,17 +358,12 @@ function get_time_series_array(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series_array(
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        interval = get_interval(key),
-        start_time = start_time,
-        len = len,
-        features...,
-    )
+    # Read key-addressed (exact identity, no catalog re-resolution) and hand the
+    # instance to the instance-form accessor. Unpacking the key back into by-name
+    # kwargs would re-resolve it through subset feature matching, which is
+    # ambiguous when a sibling's feature set is a superset of the key's.
+    ts = get_time_series(owner, key; start_time = start_time, len = len, count = 1)
+    return get_time_series_array(owner, ts; start_time = start_time, len = len)
 end
 
 """
@@ -549,17 +560,10 @@ function get_time_series_timestamps(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series_timestamps(
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        interval = get_interval(key),
-        start_time = start_time,
-        len = len,
-        features...,
-    )
+    # See `get_time_series_array(owner, key)`: read key-addressed, then delegate
+    # to the instance form.
+    ts = get_time_series(owner, key; start_time = start_time, len = len, count = 1)
+    return get_time_series_timestamps(owner, ts; start_time = start_time, len = len)
 end
 
 """
@@ -759,17 +763,10 @@ function get_time_series_values(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series_values(
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        interval = get_interval(key),
-        start_time = start_time,
-        len = len,
-        features...,
-    )
+    # See `get_time_series_array(owner, key)`: read key-addressed, then delegate
+    # to the instance form.
+    ts = get_time_series(owner, key; start_time = start_time, len = len, count = 1)
+    return get_time_series_values(owner, ts; start_time = start_time, len = len)
 end
 
 """
@@ -884,7 +881,11 @@ function has_time_series(owner::TimeSeriesOwners; kwargs...)
     kw = Dict(kwargs)
     name = pop!(kw, :name, nothing)
     T = pop!(kw, :time_series_type, TimeSeriesData)
-    isnothing(name) && return infrastore_has_any(owner; time_series_type = T)
+    # With no name and no other filters, take the cheap any-series probe; any
+    # remaining kwargs (resolution/interval/features) must reach the store — the
+    # filtered probe accepts `name = nothing`.
+    isnothing(name) && isempty(kw) &&
+        return infrastore_has_any(owner; time_series_type = T)
     return infrastore_has_time_series(T, owner, name; kw...)
 end
 

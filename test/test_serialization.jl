@@ -245,8 +245,7 @@ end
     IS.add_supplemental_attribute!(sys, components[1], attr)
     expected_ids = Dict(IS.get_name(c) => IS.get_id(c) for c in components)
     attr_id = IS.get_id(attr)
-    next_component_id_before = sys.next_component_id
-    next_attribute_id_before = sys.next_supplemental_attribute_id
+    next_id_before = sys.next_id
 
     sys2, result = validate_serialization(sys)
     @test result
@@ -258,14 +257,14 @@ end
     attr2 = only(IS.get_supplemental_attributes(IS.GeographicInfo, sys2))
     @test IS.get_id(attr2) == attr_id
 
-    # Both next-id counters survive the round trip; newly added objects do not collide
-    # within their own stream.
-    @test sys2.next_component_id == next_component_id_before
-    @test sys2.next_supplemental_attribute_id == next_attribute_id_before
+    # The next-id counter survives the round trip, so newly added objects collide with
+    # neither the restored components nor the restored attributes.
+    @test sys2.next_id == next_id_before
     new_component = IS.TestComponent("new_component", 9)
     IS.add_component!(sys2, new_component)
-    @test IS.get_id(new_component) == next_component_id_before
+    @test IS.get_id(new_component) == next_id_before
     @test IS.get_id(new_component) ∉ values(expected_ids)
+    @test IS.get_id(new_component) != attr_id
 end
 
 @testset "Test version info" begin

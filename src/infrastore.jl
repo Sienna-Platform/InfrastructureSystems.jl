@@ -647,6 +647,59 @@ function infrastore_remove_row!(store::Store, row)
     return
 end
 
+"""
+Remove exactly the association that a fully-resolved `TimeSeriesKey` names.
+
+The key carries the complete stored identity — type, name, resolution, interval,
+and the *whole* feature set — so this routes to the store's exact-key removal
+(the core matches the features by set hash) instead of the subset feature filter
+that the by-name removals use. A sibling series whose feature set is a strict
+superset of the key's therefore survives, which the subset filter would have
+deleted along with the keyed series.
+"""
+function infrastore_remove_time_series!(
+    store::Store,
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey,
+)
+    owner_id, _, category = _infrastore_owner_args(owner)
+    name = get_name(key)
+    try
+        InfraStore.remove_time_series!(
+            _infrastore_type(get_time_series_type(key)),
+            store.inner,
+            owner_id,
+            category,
+            name;
+            resolution = get_resolution(key),
+            interval = get_interval(key),
+            features = get_features(key),
+        )
+    catch e
+        # `catch`-block exception inspection: the core reports both conditions
+        # through its own error types, which IS maps to the errors callers
+        # dispatch on. The DST-orphan guard can only fire for a SingleTimeSeries
+        # key; an InvalidParameterError for any other key type is something else
+        # and propagates as itself.
+        if e isa InfraStore.InvalidParameterError &&
+           get_time_series_type(key) <: SingleTimeSeries
+            throw(
+                ArgumentError(
+                    "Cannot remove SingleTimeSeries '$name' because it is attached to a " *
+                    "DeterministicSingleTimeSeries."),
+            )
+        elseif e isa InfraStore.NotFoundError
+            throw(
+                ArgumentError(
+                    "No time series matches the key $(summary(key)) with name='$name' " *
+                    "on $(summary(owner)); it may already have been removed."),
+            )
+        end
+        rethrow()
+    end
+    return
+end
+
 # The store handle / file path differ across a serialize→deserialize round-trip,
 # so compare structurally by counts. Element-level equality is covered by the
 # InfraStore integration tests.
@@ -1707,11 +1760,12 @@ _decode_element(element, encoding::RowEncoding) =
 
 """Route `has_time_series(owner, T, name; ...)` to the InfraStore store. Honors partial
 (subset) feature / resolution queries: matches if any stored series of type `T`
-contains at least the requested features."""
+contains at least the requested features. `name = nothing` probes across all
+names (the name-less kwargs form with resolution/interval/feature filters)."""
 function infrastore_has_time_series(
     ::Type{T},
     owner::TimeSeriesOwners,
-    name::AbstractString;
+    name::Union{Nothing, AbstractString};
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
@@ -1732,7 +1786,11 @@ function infrastore_has_time_series(
             time_series_type = t, name = name, resolution = resolution,
             interval = interval, features = feats)
     types = _infrastore_query_types(T)
-    isempty(types) && return probe(nothing)
+    if isempty(types)
+        # Empty means "every type" or "no type"; a no-type query (parameterized
+        # concrete) must answer false, not probe unfiltered.
+        return _infrastore_matches_any_stored_type(T) && probe(nothing)
+    end
     return any(probe, types)
 end
 
@@ -1779,6 +1837,14 @@ function _infrastore_query_types(::Type{T}) where {T <: TimeSeriesData}
     return _infrastore_collapse_family(types)
 end
 
+# Disambiguates the two meanings of `_infrastore_query_types`' empty tuple:
+# "matches every stored type" (true) vs "matches none" (false — a parameterized
+# concrete such as `SingleTimeSeries{Float64, 1}`, which no stored UnionAll
+# subtypes). The empty tuple only arises in those two cases, so testing a single
+# stored type settles which one this is.
+_infrastore_matches_any_stored_type(::Type{T}) where {T <: TimeSeriesData} =
+    _infrastore_type_matches(_INFRASTORE_TYPE_PAIRS[1][2], T)
+
 # The single InfraStore type to push into the core `list_keys` filter for a query
 # type — a stored type, where `InfraStore.Deterministic` covers a
 # `Deterministic`-family query because the core matches both storage forms under
@@ -1797,7 +1863,14 @@ function infrastore_has_any(owner; time_series_type::Union{Nothing, Type} = noth
     owner_id, _, category = _infrastore_owner_args(owner)
     types =
         time_series_type === nothing ? () : _infrastore_query_types(time_series_type)
-    isempty(types) && return InfraStore.has_for_owner(store.inner, owner_id, category)
+    if isempty(types)
+        # Empty means "every type" or "no type"; a no-type query (parameterized
+        # concrete) must answer false, not probe unfiltered.
+        time_series_type === nothing ||
+            _infrastore_matches_any_stored_type(time_series_type) ||
+            return false
+        return InfraStore.has_for_owner(store.inner, owner_id, category)
+    end
     return any(
         t ->
             InfraStore.has_for_owner(store.inner, owner_id, category; time_series_type = t),
@@ -1971,9 +2044,11 @@ function infrastore_get_time_series_key(
 end
 
 # Content hash (64-char lowercase hex, the documented public form of the
-# wrapper's 32-byte hash) of the array `key` resolves to under `owner`. Narrows
-# the catalog to the owner + the key's type/name in one query, then matches the
-# exact resolution + features in-memory.
+# wrapper's 32-byte hash) of the array `key` resolves to under `owner`. Pushes
+# the key's type/name/resolution/interval into one catalog query (a `nothing`
+# resolution or interval — a key type that has none — constrains nothing), so
+# the store applies its canonical comparisons; only the type residual and the
+# whole-feature-set match stay in-memory.
 function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
     mgr = get_time_series_manager(owner)
     isnothing(mgr) &&
@@ -1983,12 +2058,11 @@ function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSerie
     T = get_time_series_type(key)
     rows = InfraStore.list_array_groups(store.inner; owner_id = owner_id,
         owner_category = category,
-        time_series_type = _infrastore_pushable_type(T), name = get_name(key))
-    target_res = get_resolution(key)
+        time_series_type = _infrastore_pushable_type(T), name = get_name(key),
+        resolution = get_resolution(key), interval = get_interval(key))
     target_feats = get_features(key)
     for row in rows
         _infrastore_type_matches(_infrastore_is_type(row.time_series_type), T) || continue
-        row.resolution == target_res || continue
         row.features == target_feats || continue
         return bytes2hex(row.data_hash)
     end
@@ -2264,12 +2338,10 @@ function _infrastore_remove_by_filter!(
 )
     types = isnothing(time_series_type) ? () : _infrastore_query_types(time_series_type)
     if isempty(types)
-        # The empty tuple means the query matches every stored type — or none
-        # at all (e.g. a parameterized concrete such as
-        # `Deterministic{Float64, 2}`, which no stored UnionAll subtypes).
-        # Disambiguate with one membership test before removing unfiltered.
+        # Empty means "every type" or "no type"; a no-type query (parameterized
+        # concrete) must remove nothing, not remove unfiltered.
         if !isnothing(time_series_type) &&
-           !_infrastore_type_matches(_INFRASTORE_TYPE_PAIRS[1][2], time_series_type)
+           !_infrastore_matches_any_stored_type(time_series_type)
             return 0
         end
         return InfraStore.remove_by_filter!(

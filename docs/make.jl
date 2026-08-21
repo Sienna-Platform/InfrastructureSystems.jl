@@ -22,7 +22,6 @@ pages = OrderedDict(
             "dev_guide/components_and_container.md",
             "dev_guide/auto_generation.md",
             "dev_guide/time_series.md",
-            "dev_guide/associations_database.md",
             "dev_guide/recorder.md",
             "dev_guide/tests.md",
             "dev_guide/retest_migration.md",

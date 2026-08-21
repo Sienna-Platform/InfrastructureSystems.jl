@@ -253,6 +253,25 @@ end
     @test IS.get_time_series_timestamps(component, key_2h)[1] == initial_time
     @test TimeSeries.values(IS.get_time_series_array(component, key_2h))[1] == 1001.0
 
+    # The keyed content hash matches on the interval too, so each key resolves to
+    # its own array instead of whichever catalog row happens to come first.
+    hash_1h = IS.get_time_series_hash(component, key_1h)
+    hash_2h = IS.get_time_series_hash(component, key_2h)
+    @test hash_1h != hash_2h
+    id = IS.get_id(component)
+    @test IS.get_time_series_hashes(
+        (component,),
+        IS.Deterministic,
+        name;
+        interval = Dates.Hour(1),
+    )[id] == hash_1h
+    @test IS.get_time_series_hashes(
+        (component,),
+        IS.Deterministic,
+        name;
+        interval = Dates.Hour(2),
+    )[id] == hash_2h
+
     # A keyed copy transfers both series.
     component2 = IS.TestComponent("Component2", 6)
     IS.add_component!(sys, component2)
@@ -264,6 +283,118 @@ end
     remaining = IS.get_time_series_keys(component)
     @test length(remaining) == 1
     @test IS.get_interval(only(remaining)) == Dates.Hour(2)
+end
+
+@testset "Test key-addressed access with a superset-features sibling" begin
+    # Two series differing only in that one carries an extra feature are a legal
+    # pair: the store's association identity hashes the whole feature set. A key
+    # is a fully-resolved identity, so keyed paths must match the feature set
+    # exactly — the by-name subset matching would call the pair ambiguous on read
+    # and delete both on removal.
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+    name = "test"
+    mk(vals) = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = length(vals), step = resolution), vals),
+        name = name)
+
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    key_subset = IS.add_time_series!(sys, component, mk(collect(1.0:24.0)); scenario = "a")
+    key_superset = IS.add_time_series!(
+        sys,
+        component,
+        mk(collect(101.0:124.0));
+        scenario = "a",
+        model = "x",
+    )
+    @test IS.get_features(key_subset) == Dict("scenario" => "a")
+    @test IS.get_features(key_superset) == Dict("scenario" => "a", "model" => "x")
+
+    # Keyed reads resolve exactly instead of throwing an ambiguity error.
+    @test IS.get_time_series_values(component, key_subset)[1] == 1.0
+    @test IS.get_time_series_values(component, key_superset)[1] == 101.0
+    @test TimeSeries.values(IS.get_time_series_array(component, key_subset))[1] == 1.0
+    @test TimeSeries.values(IS.get_time_series_array(component, key_superset))[1] == 101.0
+    @test IS.get_time_series_timestamps(component, key_subset)[1] == initial_time
+    @test IS.get_time_series_timestamps(component, key_superset)[1] == initial_time
+    @test IS.get_time_series_values(component, key_subset; len = 2) == [1.0, 2.0]
+    @test IS.get_time_series_values(
+        component,
+        key_superset;
+        start_time = initial_time + resolution,
+        len = 2,
+    ) == [102.0, 103.0]
+
+    # A keyed removal removes exactly the keyed series.
+    IS.remove_time_series!(sys, component, key_subset)
+    remaining = IS.get_time_series_keys(component)
+    @test length(remaining) == 1
+    @test IS.get_features(only(remaining)) == Dict("scenario" => "a", "model" => "x")
+    @test IS.get_time_series_values(component, only(remaining))[1] == 101.0
+
+    # The removal is exact in the other direction too: removing the superset key
+    # leaves the subset series alone.
+    IS.add_time_series!(sys, component, mk(collect(1.0:24.0)); scenario = "a")
+    IS.remove_time_series!(sys, component, key_superset)
+    left = IS.get_time_series_keys(component)
+    @test length(left) == 1
+    @test IS.get_features(only(left)) == Dict("scenario" => "a")
+
+    # A key that names nothing stored is an error, not a silent no-op.
+    @test_throws ArgumentError IS.remove_time_series!(sys, component, key_superset)
+
+    # A stale key — its series was removed above — is the accessors' documented
+    # ArgumentError, not the store's raw NotFoundError.
+    @test_throws ArgumentError IS.get_time_series(component, key_superset)
+    @test_throws ArgumentError IS.get_time_series_values(component, key_superset)
+    @test_throws ArgumentError IS.get_time_series_array(component, key_superset)
+    @test_throws ArgumentError IS.get_time_series_timestamps(component, key_superset)
+end
+
+@testset "Test has_time_series type and filter narrowing" begin
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+    name = "test"
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    forecast = IS.Deterministic(;
+        data = Dict(initial_time => ones(24), initial_time + resolution => ones(24)),
+        name = name,
+        resolution = resolution,
+    )
+    IS.add_time_series!(sys, component, forecast)
+
+    # A parameterized concrete query type matches no stored type; it must not
+    # degrade to an unfiltered probe that answers true for the wrong type.
+    @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}, name) == false
+    @test IS.has_time_series(
+        component;
+        time_series_type = IS.SingleTimeSeries{Float64, 1},
+    ) ==
+          false
+    @test IS.has_time_series(component, IS.Deterministic, name)
+    @test IS.has_time_series(component; time_series_type = IS.Deterministic)
+
+    # The name-less kwargs form must apply resolution/interval/feature filters
+    # instead of silently dropping them.
+    sts = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = 24, step = resolution), collect(1.0:24.0)),
+        name = "static")
+    IS.add_time_series!(sys, component, sts; scenario = "a")
+    @test IS.has_time_series(component; resolution = resolution)
+    @test IS.has_time_series(component; resolution = Dates.Minute(5)) == false
+    @test IS.has_time_series(component; scenario = "a")
+    @test IS.has_time_series(component; scenario = "b") == false
+    @test IS.has_time_series(
+        component;
+        time_series_type = IS.SingleTimeSeries,
+        resolution = resolution,
+    )
 end
 
 @testset "Test add forecast with irregular resolution and interval" begin

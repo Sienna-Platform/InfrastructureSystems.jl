@@ -46,6 +46,12 @@ empty buffer and nothing to commit, and these accessors run in per-timestep loop
 const AUTO_FLUSH_THRESHOLD = 10_000
 const AUTO_FLUSH_BYTES = 256 * 1024 * 1024
 
+"""
+The API surface of a [`time_series_transaction`](@ref) block. Additions staged
+through it are buffered and written in bulk; when the block is transactional,
+everything it does commits or rolls back atomically with the block. Yielded by
+`time_series_transaction` — not constructed directly by users.
+"""
 mutable struct TimeSeriesContext
     # Typed on the abstract supertype: this file is included before the concrete
     # `TimeSeriesManager`, which needs `TimeSeriesContext` in its own signatures.
@@ -191,8 +197,18 @@ function discard!(context::TimeSeriesContext)
     try
         InfraStore.rollback_transaction!(context.mgr.data_store.inner)
     catch e
-        @error "Rolling back the time series transaction failed; the store may " *
-               "retain partial work from this block" exception = e
+        # `catch`-block exception inspection: InvalidParameterError is the
+        # store's "no transaction is open" — the store already ended it (e.g. a
+        # commit that became durable before `commit!` threw in later work), so
+        # there is no partial work to warn about, and erroring here would turn a
+        # correctly-propagated failure into a second, misleading one.
+        if e isa InfraStore.InvalidParameterError
+            @debug "No store transaction was open to roll back; it was already " *
+                   "ended by the store" exception = e
+        else
+            @error "Rolling back the time series transaction failed; the store may " *
+                   "retain partial work from this block" exception = e
+        end
     end
     return
 end
