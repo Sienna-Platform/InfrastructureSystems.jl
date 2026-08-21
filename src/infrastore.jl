@@ -910,7 +910,11 @@ function _infrastore_read_non_sequential(
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(key))
-    time_range = isnothing(start_time) ? nothing : (start_time, _FAR_FUTURE_DATETIME)
+    time_range = if isnothing(start_time)
+        nothing
+    else
+        (start_time, _FAR_FUTURE_DATETIME)
+    end
     nts = get_non_sequential(
         store, owner_id, category, get_name(key);
         features = feats, time_range = time_range,

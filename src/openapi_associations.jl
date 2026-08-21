@@ -5,8 +5,8 @@
 # `export_time_series_associations_openapi` / `export_supplemental_attribute_associations_openapi`
 # / `import_supplemental_attribute_associations_openapi!` /
 # `reconcile_time_series_associations_openapi!`). The store owns every column mapping and wire
-# spelling now (id/owner_id, `owner_category`, ISO durations, plain-scalar features,
-# `unit_system` labels, per-type timing columns, sort order); this file only bridges
+# spelling (id/owner_id, `owner_category`, ISO durations, plain-scalar features, `unit_system`
+# labels, per-type timing columns, sort order); this file only bridges
 # `SystemData`/`Store` to the store handle they already hold and parses the store's JSON into
 # the generated OpenAPI model types, the same way `PowerOpenAPIModels.document_from_json` does
 # (`OpenAPI.from_json` on the raw row dict; the oneOf wrapper picks its concrete member type
