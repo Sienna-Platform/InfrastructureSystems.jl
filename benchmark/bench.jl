@@ -76,7 +76,8 @@ end
 # Batched adds: stage on the transaction's AddBatch and commit once.
 function bulk_add!(f::Function, sys)
     IS.time_series_transaction(sys) do txn
-        f((c, ts; feat...) -> IS.add_time_series!(txn, c, ts; feat...))
+        f((c, ts; features = Dict{String, Any}()) ->
+            IS.add_time_series!(txn, c, ts; features = features))
     end
 end
 
@@ -507,7 +508,8 @@ function run_has_kind(n)
         nq,
         () -> bulk_add!(sys) do addfn
             for c in comps, (j, (name, scen)) in enumerate(names)
-                addfn(c, base[mod1(j, 2)]; scenario = scen, model_year = "2030")
+                addfn(c, base[mod1(j, 2)];
+                    features = Dict("scenario" => scen, "model_year" => "2030"))
             end
         end,
     )
@@ -522,7 +524,8 @@ function run_has_kind(n)
         () -> begin
             for c in comps, (name, scen) in names
                 hits[] += IS.has_time_series(c, IS.SingleTimeSeries, name;
-                    resolution = RES, scenario = scen, model_year = "2030")
+                    resolution = RES,
+                    features = Dict("scenario" => scen, "model_year" => "2030"))
             end
         end,
     )
@@ -537,7 +540,8 @@ function run_has_kind(n)
         () -> begin
             for c in comps, (name, _) in names
                 misses[] += IS.has_time_series(c, IS.SingleTimeSeries, name;
-                    resolution = RES, scenario = "s99", model_year = "2030")
+                    resolution = RES,
+                    features = Dict("scenario" => "s99", "model_year" => "2030"))
             end
         end,
     )
