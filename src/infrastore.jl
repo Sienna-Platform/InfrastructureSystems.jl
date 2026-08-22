@@ -716,10 +716,7 @@ function infrastore_add_time_series!(
         features...,
     )
     try
-        # `get_data_store` flushes any open transaction's staged adds first, so this add
-        # lands after them (and a duplicate of a staged series is caught here, not at
-        # the block's commit).
-        InfraStore.add_time_series_bulk!(get_data_store(mgr).inner, batch)
+        InfraStore.add_time_series_bulk!(mgr.data_store.inner, batch)
     catch e
         _infrastore_rethrow_duplicate(
             e,
@@ -832,7 +829,7 @@ function _infrastore_read_single(
     len::Union{Nothing, Int} = nothing,
 )
     mgr = get_time_series_manager(owner)
-    store = get_data_store(mgr)
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     name = get_name(key)
     initial_timestamp = get_initial_timestamp(key)
@@ -896,7 +893,7 @@ function _infrastore_read_non_sequential(
     len::Union{Nothing, Int} = nothing,
 )
     mgr = get_time_series_manager(owner)
-    store = get_data_store(mgr)
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     feats = get_features(key)
     time_range = if isnothing(start_time)
@@ -1268,7 +1265,7 @@ function _infrastore_get_forecast(
     features...,
 )
     mgr = get_time_series_manager(owner)
-    store = get_data_store(mgr)::Store
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     # Resolve the unique forecast of the requested type matching a possibly-partial
     # (subset) feature / resolution / interval query, then read it by its exact stored
@@ -1808,7 +1805,7 @@ function infrastore_has_time_series(
     features...,
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(owner)
-    store = get_data_store(mgr)::Store
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     feats = _infrastore_features(features)
     # Pure existence probe — a covering-index `SELECT 1 ... LIMIT 1` in the store; nothing
@@ -1903,7 +1900,7 @@ _infrastore_probe_types(probe, types::Tuple) = any(probe, types)
 # `Any` instead of `Bool` — real cost on the `has_time_series` hot path.
 function infrastore_has_any(owner; time_series_type = nothing)
     mgr = get_time_series_manager(owner)
-    store = get_data_store(mgr)::Store
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     probe =
         t -> InfraStore.has_for_owner(
@@ -2049,7 +2046,7 @@ function infrastore_owner_list_keys(
     features...,
 )
     mgr = get_time_series_manager(owner)
-    store = get_data_store(mgr)::Store
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     return _infrastore_list_keys(store, owner_id, category;
         time_series_type = time_series_type, name = name, resolution = resolution,
@@ -2091,7 +2088,7 @@ function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSerie
     mgr = get_time_series_manager(owner)
     isnothing(mgr) &&
         throw(InfraStore.NotFoundError("owner has no time series to hash"))
-    store = get_data_store(mgr)::Store
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     T = get_time_series_type(key)
     rows = InfraStore.list_array_groups(store.inner; owner_id = owner_id,
@@ -2127,7 +2124,7 @@ function infrastore_get_time_series_hashes(
     owner = first(owners)
     mgr = get_time_series_manager(owner)
     isnothing(mgr) && return hashes
-    store = get_data_store(mgr)::Store
+    store = mgr.data_store
     ids = Set{Int}(get_id(o) for o in owners)
     rows = InfraStore.list_array_groups(store.inner;
         owner_category = get_owner_category(owner),

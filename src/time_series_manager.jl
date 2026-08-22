@@ -9,14 +9,6 @@ directly.
 mutable struct TimeSeriesManager <: AbstractTimeSeriesManager
     data_store::Store
     read_only::Bool
-    """
-    The innermost open [`TimeSeriesContext`](@ref) (a `time_series_transaction` block),
-    or `nothing`. Its buffered additions are not in the store yet; `get_data_store`
-    flushes them before handing the store out, so a read, removal, or transform issued
-    inside the block sees everything the block has added so far. Typed loosely because
-    the context type is parameterized on the manager.
-    """
-    active_context::Any
 end
 
 function TimeSeriesManager(;
@@ -59,23 +51,13 @@ function TimeSeriesManager(;
                 catalog = :memory,
             )
     end
-    return TimeSeriesManager(data_store, read_only, nothing)
+    return TimeSeriesManager(data_store, read_only)
 end
 
 """
 The [`Store`](@ref) holding this manager's time series arrays and their catalog.
-
-Inside a [`time_series_transaction`](@ref) block this first writes the block's
-buffered additions to the store, so whatever is done with the returned store sees
-them. Outside a block it is a plain field access.
 """
-function get_data_store(mgr::TimeSeriesManager)
-    context = mgr.active_context
-    # A closed context is one being torn down (`discard!` rolling back); it has
-    # nothing buffered and must not be touched.
-    isnothing(context) || context.closed || flush!(context)
-    return mgr.data_store
-end
+get_data_store(mgr::TimeSeriesManager) = mgr.data_store
 
 # (owner_id::Int, owner_type::String, owner_category::InfraStore.OwnerCategory)
 # for the InfraStore binding. The owner is identified by its integer id.
@@ -114,6 +96,11 @@ Open a batch of time series work and run `func` on it, inside a store transactio
 Additions made through the yielded [`TimeSeriesContext`](@ref) are buffered and
 written as one bulk call, so the store pays one catalog transaction for the block
 instead of one per series. The block commits when `func` returns.
+
+Buffered additions are not visible to reads through the manager or system until
+the block commits. Call `flush!(txn)` first when a read inside the block must see
+additions staged through `txn`; doing so creates a batching boundary but keeps the
+writes inside the transaction.
 
 If `func` throws, the transaction is rolled back and the whole block is undone —
 buffered additions never reached the store, and everything that did, **including
@@ -155,11 +142,6 @@ function _time_series_transaction(
         auto_flush_bytes = auto_flush_bytes,
     )
     begin_transaction!(context)
-    # Register the block as the manager's innermost context so reads issued inside it
-    # flush its buffer first (see `get_data_store`). Blocks nest innermost-first, so
-    # the enclosing block's context is restored on exit, whichever way the block ends.
-    outer = mgr.active_context
-    mgr.active_context = context
     # `commit!` must stay inside the protected region: buffered additions are only
     # written (and validated by the store) at the final flush it performs, so a bad
     # add in a small block throws here rather than at `add_time_series!` time. If it
@@ -172,8 +154,6 @@ function _time_series_transaction(
     catch
         discard!(context)
         rethrow()
-    finally
-        mgr.active_context = outer
     end
     return result
 end

@@ -86,15 +86,20 @@ end
     @test_throws ArgumentError IS.get_time_series(IS.Forecast, component, "fx")
 end
 
-@testset "Test reads inside a transaction see staged additions" begin
+@testset "Test transaction reads require an explicit flush" begin
     sys, component = _sys_with_component()
     IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, _hourly_sts("v"))
+        @test IS.has_staged_data(txn)
+        @test !IS.has_time_series(component, IS.SingleTimeSeries, "v")
+        @test isempty(IS.get_time_series_keys(component))
+        IS.flush!(txn)
+        @test !IS.has_staged_data(txn)
         @test IS.has_time_series(component, IS.SingleTimeSeries, "v")
         @test length(IS.get_time_series_keys(component)) == 1
         @test IS.get_time_series_values(IS.SingleTimeSeries, component, "v") ==
               collect(1.0:24)
-        # Adds keep working after the implicit flush, and the block stays one transaction.
+        # Adds keep working after an explicit flush, and the block stays one transaction.
         IS.add_time_series!(txn, component, _hourly_sts("w"))
     end
     @test IS.has_time_series(component, IS.SingleTimeSeries, "w")
@@ -102,6 +107,7 @@ end
     # A removal inside the block of a series staged earlier in it removes it.
     IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, _hourly_sts("x"))
+        IS.flush!(txn)
         IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "x")
     end
     @test !IS.has_time_series(component, IS.SingleTimeSeries, "x")
@@ -109,6 +115,7 @@ end
     # A transform inside the block covers the staged series.
     IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, _hourly_sts("y"))
+        IS.flush!(txn)
         IS.transform_single_time_series!(
             sys,
             IS.DeterministicSingleTimeSeries,
@@ -121,11 +128,11 @@ end
     # Everything flushed inside a failing block still rolls back.
     @test_throws ErrorException IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, _hourly_sts("z"))
+        IS.flush!(txn)
         @test IS.has_time_series(component, IS.SingleTimeSeries, "z")
         error("boom")
     end
     @test !IS.has_time_series(component, IS.SingleTimeSeries, "z")
-    @test isnothing(sys.time_series_manager.active_context)
 end
 
 @testset "Test calendar-interval forecast windows" begin

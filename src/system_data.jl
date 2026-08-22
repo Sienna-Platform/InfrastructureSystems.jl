@@ -127,6 +127,11 @@ written as one bulk call. The block commits when `func` returns; if it throws,
 everything the block did is rolled back — **including removals**, which are
 recoverable only in here.
 
+Buffered additions are not visible to reads through the system until the block
+commits. Call `flush!(txn)` first when a read inside the block must see additions
+staged through `txn`; doing so creates a batching boundary but keeps the writes
+inside the transaction.
+
 Blocks nest innermost-first.
 
 A batch that grows past `auto_flush_threshold` staged additions or
