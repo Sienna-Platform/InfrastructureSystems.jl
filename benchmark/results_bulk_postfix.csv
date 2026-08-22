@@ -1,7 +1,0 @@
-scenario,op,n,total_s,us_per_op
-nonshared,bulk_add,100000,1.755,17.55
-nonshared,get_full,100000,9.473,94.73
-nonshared,get_sliced,100000,8.839,88.39
-shared,bulk_add,100000,0.816,8.16
-shared,get_full,100000,9.356,93.56
-shared,get_sliced,100000,8.782,87.82

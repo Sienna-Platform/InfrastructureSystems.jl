@@ -1,8 +1,0 @@
-branch,scenario,op,n,total_s,us_per_op,bytes
-is4,nonshared,add,100000,417.288,4172.88,1208343456
-is4,nonshared,get_full,100000,931.783,9317.83,902000624
-is4,nonshared,get_sliced,100000,916.427,9164.27,890799808
-is4,shared,add,100000,1.592,15.92,1023145200
-is4,shared,get_full,100000,869.546,8695.46,902000336
-is4,shared,get_sliced,100000,914.059,9140.59,890800096
-DONE is4
