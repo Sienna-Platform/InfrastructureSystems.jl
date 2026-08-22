@@ -172,7 +172,8 @@ using .RelativeUnits:
     SU,
     NU,
     display_units_arg,
-    unitful_variant
+    unitful_variant,
+    display_string
 # Names not exported from the submodule are pulled in explicitly so the
 # `IS._strip_units(...)` / `IS.convert_cost_coefficient(...)` call sites work.
 using .RelativeUnits: _strip_units, convert_cost_coefficient
