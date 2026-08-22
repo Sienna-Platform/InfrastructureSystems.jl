@@ -178,7 +178,7 @@ function add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     _throw_if_read_only(mgr)
     return infrastore_add_time_series!(mgr, owner, time_series; features = features)
@@ -192,7 +192,7 @@ function add_time_series!(
     context::TimeSeriesContext,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     _throw_if_closed(context)
     context.owner_validator(owner)
@@ -207,7 +207,7 @@ function add_time_series!(
     context::TimeSeriesContext,
     components,
     time_series::TimeSeriesData;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     # Component information is not embedded into the key, so every component
     # produces the same one.
@@ -230,7 +230,7 @@ function _stage_on_context!(
     context::TimeSeriesContext,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     key, nbytes = _infrastore_stage!(
         _batch!(context),
@@ -285,7 +285,7 @@ get_time_series_key(
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 ) = infrastore_get_time_series_key(
     component,
     time_series_type,
@@ -302,7 +302,7 @@ list_time_series_keys(
     name::Union{String, Nothing} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 ) = infrastore_owner_list_keys(
     component;
     time_series_type = time_series_type,
@@ -322,7 +322,7 @@ function remove_time_series!(
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     _throw_if_read_only(mgr)
     store = get_data_store(mgr)

@@ -459,7 +459,7 @@ end
 
 """
     serialize_single!(batch, owner_id, owner_type, owner_category, name, sts;
-                      features=Dict(), units=get_units(sts),
+                      features=Dict{String, Any}(), units=get_units(sts),
                       quantity_kind=get_quantity_kind(sts), unit_system=get_unit_system(sts))
 
 Stage a `SingleTimeSeries` (data + metadata) onto a `InfraStore.AddBatch` for a
@@ -475,7 +475,7 @@ function serialize_single!(
     owner_category::InfraStore.OwnerCategory,
     name::AbstractString,
     sts::SingleTimeSeries;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
     units::Union{Nothing, AbstractString} = get_units(sts),
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(sts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(sts),
@@ -499,7 +499,7 @@ end
 
 """
     serialize_non_sequential!(batch, owner_id, owner_type, owner_category, name, nts;
-                              features=Dict(), units=get_units(nts),
+                              features=Dict{String, Any}(), units=get_units(nts),
                               quantity_kind=get_quantity_kind(nts),
                               unit_system=get_unit_system(nts))
 
@@ -517,7 +517,7 @@ function serialize_non_sequential!(
     owner_category::InfraStore.OwnerCategory,
     name::AbstractString,
     nts::NonSequentialTimeSeries;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
     units::Union{Nothing, AbstractString} = get_units(nts),
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(nts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(nts),
@@ -538,7 +538,7 @@ function serialize_non_sequential!(
 end
 
 """
-    get_non_sequential(store, owner_id, owner_category, name; features=Dict(), time_range=nothing) -> NonSequentialTimeSeries
+    get_non_sequential(store, owner_id, owner_category, name; features=Dict{String, Any}(), time_range=nothing) -> NonSequentialTimeSeries
 
 Reconstruct a `NonSequentialTimeSeries` (timestamps + decoded array) from the InfraStore
 store. A non-sequential series is addressed by name + features (it has no resolution).
@@ -551,7 +551,7 @@ function get_non_sequential(
     owner_id::Integer,
     owner_category::InfraStore.OwnerCategory,
     name::AbstractString;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
     time_range::Union{Nothing, Tuple{Dates.DateTime, Dates.DateTime}} = nothing,
 )
     nts = InfraStore.get_time_series(InfraStore.NonSequentialTimeSeries, store.inner,
@@ -704,7 +704,7 @@ function infrastore_add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     batch = InfraStore.AddBatch()
     key, _ = _infrastore_stage!(
@@ -771,7 +771,7 @@ infrastore_get_time_series(
     count::Union{Nothing, Int} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 ) where {T <: Forecast} = _infrastore_get_forecast(owner, name;
     time_series_type = T,
     start_time = start_time, len = len, count = count, resolution = resolution,
@@ -790,7 +790,7 @@ function infrastore_get_time_series(
     count::Union{Nothing, Int} = nothing,  # not applicable to a static series; ignored
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,  # rejected when provided
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     _check_interval_supported(SingleTimeSeries, interval)
     # Resolve the unique series matching a possibly-partial (subset) feature /
@@ -875,7 +875,7 @@ function infrastore_get_time_series(
     count::Union{Nothing, Int} = nothing,  # not applicable to a static series; ignored
     resolution::Union{Nothing, Dates.Period} = nothing,  # not applicable; ignored
     interval::Union{Nothing, Dates.Period} = nothing,  # rejected when provided
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     _check_interval_supported(NonSequentialTimeSeries, interval)
     # Resolve the unique series matching a possibly-partial (subset) feature query,
@@ -976,7 +976,7 @@ function _infrastore_stage!(
     params_cache::AbstractDict,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     throw_if_does_not_support_time_series(owner)
     check_time_series_data(time_series)
@@ -996,7 +996,7 @@ function _infrastore_stage_data!(
     ::AbstractDict,
     owner::TimeSeriesOwners,
     time_series::SingleTimeSeries;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(time_series)
@@ -1020,7 +1020,7 @@ function _infrastore_stage_data!(
     ::AbstractDict,
     owner::TimeSeriesOwners,
     time_series::NonSequentialTimeSeries;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(time_series)
@@ -1071,7 +1071,7 @@ function _infrastore_stage_forecast!(
     params_cache::AbstractDict,
     owner::TimeSeriesOwners,
     ts::Forecast;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     _infrastore_check_staged_forecast!(params_cache, mgr, ts)
     owner_id, owner_type, category = _infrastore_owner_args(owner)
@@ -1103,7 +1103,7 @@ function _infrastore_stage_data!(
     params_cache::AbstractDict,
     owner::TimeSeriesOwners,
     ts::Probabilistic;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
@@ -1123,7 +1123,7 @@ function _infrastore_stage_data!(
     params_cache::AbstractDict,
     owner::TimeSeriesOwners,
     ts::Deterministic;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
@@ -1147,7 +1147,7 @@ function _infrastore_stage_data!(
     params_cache::AbstractDict,
     owner::TimeSeriesOwners,
     ts::Scenarios;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
@@ -1167,7 +1167,7 @@ _infrastore_stage_data!(
     ::AbstractDict,
     ::TimeSeriesOwners,
     ts::TimeSeriesData;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 ) = error(
     "InfraStore backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
     "Deterministic, Probabilistic, and Scenarios (got $(typeof(ts))). A " *
@@ -1267,7 +1267,7 @@ function _infrastore_get_forecast(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     key::Union{Nothing, ForecastKey} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     mgr = get_time_series_manager(owner)
     store = mgr.data_store
@@ -1557,7 +1557,7 @@ function infrastore_build_forecast_reader(
     ::Type{T};
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 ) where {T <: Forecast}
     inner = InfraStore.build_forecast_reader(store.inner, _tss_forecast_type(T);
         resolution = resolution, name = name, features = features)
@@ -1685,7 +1685,7 @@ function infrastore_build_static_time_series_reader(
     id_to_owner;
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     inner = InfraStore.build_static_reader(store.inner;
         resolution = resolution, name = name, features = features)
@@ -1807,7 +1807,7 @@ function infrastore_has_time_series(
     name::Union{Nothing, AbstractString};
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 ) where {T <: TimeSeriesData}
     _check_interval_supported(T, interval)
     mgr = get_time_series_manager(owner)
@@ -2019,7 +2019,7 @@ function _infrastore_list_keys(
     name = nothing,
     resolution = nothing,
     interval = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     type_filter = _infrastore_pushable_type(time_series_type)
     feats = Dict{String, Any}(string(k) => v for (k, v) in features)
@@ -2049,7 +2049,7 @@ function infrastore_owner_list_keys(
     name = nothing,
     resolution = nothing,
     interval = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     !isnothing(time_series_type) &&
         _check_interval_supported(time_series_type, interval)
@@ -2068,7 +2068,7 @@ function infrastore_get_time_series_key(
     name::AbstractString;
     resolution = nothing,
     interval = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 ) where {T <: TimeSeriesData}
     items = infrastore_owner_list_keys(owner; time_series_type = T, name = name,
         resolution = resolution, interval = interval, features = features)
@@ -2125,7 +2125,7 @@ function infrastore_get_time_series_hashes(
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 ) where {T <: TimeSeriesData}
     _check_interval_supported(T, interval)
     hashes = Dict{Int, String}()
@@ -2396,7 +2396,7 @@ function _infrastore_remove_by_filter!(
     name::Union{Nothing, String} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     !isnothing(time_series_type) &&
         _check_interval_supported(time_series_type, interval)

@@ -210,7 +210,7 @@ This is not commonly done in Sienna yet, but a goal is to improve our use of
         name::AbstractString;
         start_time::Union{Nothing, Dates.DateTime} = nothing,
         len::Union{Nothing, Int} = nothing,
-        features::Dict = Dict(),
+        features::Dict = Dict{String, Any}(),
     ) where {T <: TimeSeriesData}),
     [`get_time_series_array` from a `StaticTimeSeriesCache`](@ref get_time_series_array(
         owner::TimeSeriesOwners,

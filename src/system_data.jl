@@ -173,7 +173,7 @@ function add_time_series!(
     data::SystemData,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     _validate(data, owner)
     return add_time_series!(data.time_series_manager, owner, time_series; features = features)
@@ -197,7 +197,7 @@ function add_time_series!(
     data::SystemData,
     components,
     time_series::TimeSeriesData;
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     # A block opened for just this call, so the components land as one batch,
     # atomically. The transaction's dispatch stores the array once and validates
@@ -217,7 +217,7 @@ function remove_time_series!(
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 ) where {T <: TimeSeriesData}
     return remove_time_series!(
         data.time_series_manager,
@@ -1280,7 +1280,7 @@ function build_forecast_reader(
     ::Type{T};
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 ) where {T <: Forecast}
     store = get_data_store(data)
     id_to_owner = _make_id_to_owner(data)
@@ -1311,7 +1311,7 @@ function build_static_time_series_reader(
     data::SystemData;
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
-    features::Dict = Dict(),
+    features::Dict = Dict{String, Any}(),
 )
     store = get_data_store(data)
     id_to_owner = _make_id_to_owner(data)
