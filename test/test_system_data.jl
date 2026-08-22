@@ -43,7 +43,7 @@ end
     IS.remove_component!(data, collect(components)[1])
     components = IS.get_components(IS.TestComponent, data)
     @test length(components) == 0
-    @test isempty(data.component_uuids)
+    @test isempty(data.component_ids)
 
     IS.add_component!(data, component)
     components =
@@ -132,19 +132,30 @@ end
     component1 = IS.TestComponent("a", 5)
     component2 = IS.TestComponent("a", 5)
     @test IS.compare_values(component1, component2)
-    @test(
-        @test_logs(
-            (:error, r"not match"),
-            match_mode = :any,
-            !IS.compare_values(component1, component2; compare_uuids = true)
+
+    # Two unattached components both carry `UNASSIGNED_ID` and so compare equal; use
+    # throwaway components with explicit ids to exercise both arms, leaving
+    # component1/component2 unassigned for the `add_component!` calls below.
+    let a = IS.TestComponent("a", 5), b = IS.TestComponent("a", 5)
+        IS.set_id!(IS.get_internal(a), 1)
+        IS.set_id!(IS.get_internal(b), 2)
+        @test(
+            @test_logs(
+                (:error, r"not match"),
+                match_mode = :any,
+                !IS.compare_values(a, b; compare_ids = true)
+            )
         )
-    )
+        IS.set_id!(IS.get_internal(b), 1)
+        @test IS.compare_values(a, b; compare_ids = true)
+    end
+
     component2.name = "b"
     @test(
         @test_logs(
             (:error, r"not match"),
             match_mode = :any,
-            !IS.compare_values(component1, component2; compare_uuids = false)
+            !IS.compare_values(component1, component2; compare_ids = false)
         )
     )
 
@@ -221,10 +232,10 @@ end
     @test IS.get_compression_settings(IS.SystemData()) == none
     @test IS.get_compression_settings(IS.SystemData(; time_series_in_memory = true)) ==
           none
+    # The InfraStore backend honors the requested compression policy (DEFLATE).
     settings =
         IS.CompressionSettings(; enabled = true, type = IS.CompressionTypes.DEFLATE)
-    @test IS.get_compression_settings(IS.SystemData(; compression = settings)) ==
-          settings
+    @test IS.get_compression_settings(IS.SystemData(; compression = settings)) == settings
 end
 
 @testset "Test single time series consistency" begin
@@ -313,7 +324,7 @@ end
     IS.check_components(data, IS.TestComponent)
     component = IS.get_component(IS.TestComponent, data, "component_3")
     IS.check_component(data, component)
-    @test component === IS.get_component(data, IS.get_uuid(component))
+    @test component === IS.get_component(data, IS.get_id(component))
 end
 
 @testset "Test component and time series counts" begin
@@ -387,7 +398,7 @@ end
 
     attributes = IS.get_supplemental_attributes(IS.GeographicInfo, data)
     @test length(attributes) == 4
-    @test IS.get_uuid(attribute_removed) ∉ IS.get_uuid.(attributes)
+    @test IS.get_id(attribute_removed) ∉ IS.get_id.(attributes)
 
     IS.remove_supplemental_attributes!(data, IS.GeographicInfo)
     attributes = IS.get_supplemental_attributes(IS.GeographicInfo, data)
@@ -530,17 +541,17 @@ end
         ),
     ) == 1
 
-    uuid1 = IS.get_uuid(attr1)
-    uuid2 = IS.get_uuid(attr2)
-    uuid3 = IS.get_uuid(geo_supplemental_attribute)
-    @test IS.get_supplemental_attribute(data, uuid1) ===
-          IS.get_supplemental_attribute(component1, uuid1)
-    @test IS.get_supplemental_attribute(data, uuid2) ===
-          IS.get_supplemental_attribute(component2, uuid2)
-    @test IS.get_supplemental_attribute(data, uuid3) ===
-          IS.get_supplemental_attribute(component1, uuid3)
-    @test IS.get_supplemental_attribute(data, uuid3) ===
-          IS.get_supplemental_attribute(component2, uuid3)
+    id1 = IS.get_id(attr1)
+    id2 = IS.get_id(attr2)
+    id3 = IS.get_id(geo_supplemental_attribute)
+    @test IS.get_supplemental_attribute(data, id1) ===
+          IS.get_supplemental_attribute(component1, id1)
+    @test IS.get_supplemental_attribute(data, id2) ===
+          IS.get_supplemental_attribute(component2, id2)
+    @test IS.get_supplemental_attribute(data, id3) ===
+          IS.get_supplemental_attribute(component1, id3)
+    @test IS.get_supplemental_attribute(data, id3) ===
+          IS.get_supplemental_attribute(component2, id3)
 end
 
 @testset "Test retrieval of components with a supplemental attribute" begin
@@ -559,41 +570,94 @@ end
     @test components[2] === component2
 end
 
-@testset "Test assign_new_uuid" begin
+@testset "Test assign_new_id" begin
     data = IS.SystemData()
 
     name = "component1"
     component = IS.TestComponent(name, 5)
     IS.add_component!(data, component)
-    uuid1 = IS.get_uuid(component)
-    IS.assign_new_uuid!(data, component)
-    uuid2 = IS.get_uuid(component)
-    @test uuid1 != uuid2
+    id1 = IS.get_id(component)
+    subsystem_name = "subsystem1"
+    IS.add_subsystem!(data, subsystem_name)
+    IS.add_component_to_subsystem!(data, subsystem_name, component)
+    IS.assign_new_id!(data, component)
+    id2 = IS.get_id(component)
+    @test id1 != id2
+    @test IS.get_component(data, id2) === component
+    @test_throws ArgumentError IS.get_component(data, id1)
     @test IS.get_component(IS.TestComponent, data, name).name == name
+    # The subsystem membership set must track the new ID after reassignment.
+    @test IS.has_component(data, subsystem_name, component)
+    @test collect(IS.get_subsystem_components(data, subsystem_name)) == [component]
+    @test id2 in IS.get_component_ids(data, subsystem_name)
+    @test !(id1 in IS.get_component_ids(data, subsystem_name))
 end
 
-@testset "Test assign_new_uuid! keeps uuid index consistent" begin
+@testset "Test unified component/supplemental-attribute id stream" begin
     data = IS.SystemData()
-    component = IS.TestComponent("comp_uuid_idx", 5)
-    IS.add_component!(data, component)
-    old_uuid = IS.get_uuid(component)
-    IS.assign_new_uuid!(data, component)
-    new_uuid = IS.get_uuid(component)
-    @test new_uuid != old_uuid
-    @test IS.get_component(data, new_uuid) === component
-    @test_throws ArgumentError IS.get_component(data, old_uuid)
-end
+    component1 = IS.TestComponent("component1", 5)
+    component2 = IS.TestComponent("component2", 6)
+    # Unattached components have no id.
+    @test IS.get_id(component1) == IS.UNASSIGNED_ID
+    IS.add_component!(data, component1)
+    IS.add_component!(data, component2)
+    @test IS.get_id(component1) == 1
+    @test IS.get_id(component2) == 2
 
-@testset "Test assign_new_uuid_internal! errors on attached component" begin
-    data = IS.SystemData()
-    component = IS.TestComponent("comp_guard", 5)
-    IS.add_component!(data, component)
-    @test_throws ErrorException IS.assign_new_uuid_internal!(component)
+    # Components and supplemental attributes draw from the same stream, so attributes
+    # continue where the components left off instead of restarting at 1.
+    attr1 = IS.GeographicInfo()
+    attr2 = IS.TestSupplemental(; value = 1.0)
+    IS.add_supplemental_attribute!(data, component1, attr1)
+    IS.add_supplemental_attribute!(data, component1, attr2)
+    @test IS.get_id(attr1) == 3
+    @test IS.get_id(attr2) == 4
+
+    # The next component added continues the same stream.
+    component3 = IS.TestComponent("component3", 7)
+    IS.add_component!(data, component3)
+    @test IS.get_id(component3) == 5
+
+    # Ids are unique across BOTH kinds together, not merely within each: a component and a
+    # supplemental attribute in the same SystemData can never share an id.
+    component_ids = Set(IS.get_id.(IS.get_components(IS.TestComponent, data)))
+    attribute_ids = Set(
+        vcat(
+            IS.get_id.(IS.get_supplemental_attributes(IS.GeographicInfo, data)),
+            IS.get_id.(IS.get_supplemental_attributes(IS.TestSupplemental, data)),
+        ),
+    )
+    @test length(component_ids) + length(attribute_ids) ==
+          length(union(component_ids, attribute_ids))
+    @test isempty(intersect(component_ids, attribute_ids))
+
+    # `assign_id!` for a component keeps a pre-set id (e.g. one an importer set explicitly
+    # from a document before attaching) and bumps the shared counter past it.
+    component4 = IS.TestComponent("component4", 8)
+    IS.set_id!(component4, 100)
+    IS.add_component!(data, component4)
+    @test IS.get_id(component4) == 100
+    @test data.next_id == 101
+
+    # `assign_id!` for a supplemental attribute is symmetric: same keep-if-set,
+    # bump-past-it behavior.
+    attr3 = IS.TestSupplemental(; value = 2.0)
+    IS.set_id!(attr3, 200)
+    IS.add_supplemental_attribute!(data, component1, attr3)
+    @test IS.get_id(attr3) == 200
+    @test data.next_id == 201
+
+    # The next freshly assigned id, of either kind, continues from the bumped counter.
+    component5 = IS.TestComponent("component5", 9)
+    IS.add_component!(data, component5)
+    @test IS.get_id(component5) == 201
 end
 
 @testset "Test bulk add of time series" begin
     for in_memory in (false, true)
         sys = IS.SystemData(; time_series_in_memory = in_memory)
+        # The InfraStore backend honors `time_series_in_memory`: in-memory keeps the
+        # store handle off-disk, otherwise it writes a `.h5` (+ `.sqlite`) pair.
         @test IS.stores_time_series_in_memory(sys) == in_memory
         initial_time = Dates.DateTime("2020-09-01")
         resolution = Dates.Hour(1)
@@ -603,33 +667,31 @@ end
         ts_name = "test"
         component_names = String[]
 
-        IS.open_time_series_store!(sys, "r+") do
+        IS.time_series_transaction(sys) do txn
             for (i, ta) in enumerate(arrays)
                 name = "component_$(i)"
                 component = IS.TestComponent(name, 3)
                 IS.add_component!(sys, component)
                 push!(component_names, name)
                 ts = IS.SingleTimeSeries(; data = ta, name = ts_name)
-                IS.add_time_series!(sys, component, ts)
+                IS.add_time_series!(txn, component, ts)
             end
         end
 
-        IS.open_time_series_store!(sys, "r") do
-            for (i, expected_array) in enumerate(arrays)
-                name = component_names[i]
-                component = IS.get_component(IS.TestComponent, sys, name)
-                @test !isnothing(component)
-                ts = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
-                @test ts.data == expected_array
-            end
+        for (i, expected_array) in enumerate(arrays)
+            name = component_names[i]
+            component = IS.get_component(IS.TestComponent, sys, name)
+            @test !isnothing(component)
+            ts = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
+            @test IS.get_data(ts) == expected_array
         end
     end
 end
 
-@testset "Test bulk add of time series via function with args and kwargs" begin
-    function add_time_series(sys_data, component, ta; ts_name)
+@testset "Test bulk add of time series via a helper function" begin
+    function add_time_series(txn, component, ta; ts_name)
         ts = IS.SingleTimeSeries(; data = ta, name = ts_name)
-        IS.add_time_series!(sys_data, component, ts)
+        IS.add_time_series!(txn, component, ts)
     end
 
     for in_memory in (false, true)
@@ -643,18 +705,12 @@ end
         name = "component"
         component = IS.TestComponent(name, 3)
         IS.add_component!(sys, component)
-        IS.open_time_series_store!(
-            add_time_series,
-            sys,
-            "r+",
-            sys,
-            component,
-            ta;
-            ts_name = ts_name,
-        )
+        IS.time_series_transaction(sys) do txn
+            add_time_series(txn, component, ta; ts_name = ts_name)
+        end
 
         ts = IS.get_time_series(IS.SingleTimeSeries, component, ts_name)
-        @test ts.data == ta
+        @test IS.get_data(ts) == ta
     end
 end
 
@@ -712,7 +768,7 @@ end
         sys2 = deepcopy(sys)
         component2 = IS.get_component(IS.TestComponent, sys2, name)
         ts2 = IS.get_time_series(IS.SingleTimeSeries, component2, ts_name)
-        @test ts2.data == array
+        @test IS.get_data(ts2) == array
     end
 end
 

@@ -58,6 +58,14 @@ InputOutputCurve{T}(
 ) where {(T <: Union{QuadraticFunctionData, LinearFunctionData, PiecewiseLinearData})} =
     InputOutputCurve{T}(function_data, nothing)
 
+# An `InputOutputCurve` is a thin wrapper whose `function_data` directly represents the
+# input-output function, so it converts to that `FunctionData` when assigned to a
+# `FunctionData` field. Narrow on purpose: a blanket `::Type{<:FunctionData}` method would
+# break `convert`'s contract by returning a value of the wrong requested type.
+Base.convert(::Type{FunctionData}, curve::InputOutputCurve) = get_function_data(curve)
+Base.convert(::Type{T}, curve::InputOutputCurve{T}) where {T <: FunctionData} =
+    get_function_data(curve)
+
 """
 Evaluate the `InputOutputCurve` at a given input value `x`.
 """

@@ -190,6 +190,161 @@ Do not add other exports.
 - **Missing validation descriptor → validation silently passes** (`validation.jl:~74`) — a named silent-failure pattern; new validation code must error loudly instead.
 - Containers expose `.data` and ~29 cross-file bare accesses exist — prefer accessor functions; do not add new direct reaches.
 
+## Time Series Type Hierarchy
+
+The whole hierarchy is parameterized on the value element type `T`, so callers dispatch on
+the payload instead of querying it:
+
+```
+TimeSeriesData{T}
+├─ StaticTimeSeries{T} ⊃ SingleTimeSeries{T, N}, NonSequentialTimeSeries{T, N}
+└─ Forecast{T} ⊃ Probabilistic{T, N}, Scenarios{T, N},
+   └─ AbstractDeterministic{T} ⊃ Deterministic{T, N}, DeterministicSingleTimeSeries{T, N}
+```
+
+`DeterministicSingleTimeSeries` is a **fieldless query marker** (as of IS4): the DST is
+derived in-store by `transform_single_time_series!`, reads materialize a `Deterministic`,
+and no instance is ever constructed. The type exists only for query/removal filters,
+`TimeSeriesKey.time_series_type`, and the transform API — do not reintroduce data-bearing
+fields or an instance `add_time_series!` path.
+
+### transform_single_time_series! validation lives in Rust
+
+**All** of the transform's eligibility validation is in the InfraStore core — horizon fit
+and divisibility, interval divisibility and length, per-resolution grid uniformity, and
+conflicts with forecasts already stored. IS used to re-run every one of these in Julia
+over a listing of all 100k `SingleTimeSeries`; the store answers them from its distinct
+static grids (`GROUP BY resolution`), so the cost is O(distinct resolutions), not
+O(series). `_check_transform_single_time_series` and
+`_check_single_time_series_transformed_parameters` are **deleted** — do not reintroduce a
+Julia-side pre-check.
+
+IS calls through `infrastore_transform_single_time_series!` (`src/infrastore.jl`), which
+maps the core's `InvalidParameterError`/`IntegrityError` to `ConflictingInputsError` —
+the type callers dispatch on. The returned `TransformOutcome` carries `sources` (0 ⇒ the
+"nothing to transform" warning) and `interval_normalized` (⇒ the "only one forecast
+window" warning); IS re-emits both warnings from it rather than deriving them.
+
+Three rules turned out **not** to be storage invariants — the core has passing tests
+asserting the opposite — so they are opt-in via `TransformPolicy`, which IS sets and
+Python/CLI leave at `Default`:
+
+| flag | why it is a client rule |
+|---|---|
+| `normalize_single_window` | the interval is part of the association identity; IS looks single-window views up by zero, other clients by the horizon |
+| `require_uniform_forecast_grid` | the store is happy to hold forecasts on several grids; one-system-one-grid is an IS rule |
+| `dry_run` | validate and report without writing — how `check_transform_single_time_series` answers without a trial-and-rollback |
+
+The **irregular-period guard stays in Julia** (`transform_single_time_series!`,
+`system_data.jl`): the core supports monthly transforms and has a test for it, so IS's ban
+is an IS arithmetic limitation, not a store invariant. It is O(1) and costs nothing.
+
+Now unused inside IS but deliberately kept (downstream may reach them):
+`infrastore_list_keys_with_owner` and the 5-arg `get_forecast_window_count`.
+
+`T` is the value element type (`Float64` or a domain type such as `LinearFunctionData`);
+`N` is the array rank — per-window for forecasts, per-series for static — and is
+deliberately NOT lifted to the abstract parents, since its meaning varies by subtype.
+
+Every concrete type carries a `units::Union{Nothing, String}` field — a **user-declared**
+label (`"MW"`), read with `get_units`, defaulting to `nothing`. It is distinct from
+`element_type` (package-derived; a user never sets it) and from features (identity):
+
+- set at construction, **immutable** — do not add a setter;
+- **never** filterable: not on `TimeSeriesKey`, not a `get_time_series*` argument. Two
+  series differing only in their label are a duplicate, and `units` is in the store's
+  `RESERVED_FEATURE_NAMES` so it cannot be smuggled in as a feature;
+- carried over by every data-sharing constructor (`X(src, name)`, subset forms) and by a
+  derived `DeterministicSingleTimeSeries`;
+- IS neither interprets nor validates it — no units vocabulary in IS. `nothing` is left
+  alone; "unknown" vs "dimensionless" is the caller's convention.
+
+Not to be confused with the `RelativeUnits` system markers (`SU`/`DU`/`NU`) — a per-unit
+normalization base, not a physical dimension. Note the accessor-side `units::AbstractUnitSystem`
+kwarg documented under "Time series accessors" is **not present on this branch**
+(`default_units` in `src/units.jl` has no callers here); when that line merges, the two
+`units` spellings will collide by name and the accessor kwarg should be renamed, not this
+field. The store column already existed, so no `DATA_FORMAT_VERSION` bump.
+
+The same move was made in the Rust core: `units`, `ext`, and `element_type` are now fields
+on the five `TimeSeriesData` variants and are **gone from `AddRequest`** — one shape across
+IS.jl / InfraStore.jl / infrastore. Set them with the `with_units` / `with_ext` /
+`with_element_type` builders on the series (or `set_descriptors` on the enum); the write
+path reads them off the data, and `materialize_time_series` fills them back in from the
+catalog row on every read. `Store::add_time_series` and `BulkAdd::add` lost their trailing
+`units` parameter accordingly.
+
+Bulk and per-key reads agree: `Store::bulk_read` populates the three from the catalog row
+it already loads, the bulk-result FFI getters return them (`out_ext` / `out_element_type` /
+`out_units`, all nullable), and `InfraStore.jl`'s `_bulk_*` decoders put them on the
+reconstructed struct. The long-standing `ext`-drops-on-bulk-read gap is closed as part of
+this; there is a parity test in InfraStore.jl's suite — don't reintroduce a read path that
+skips them.
+
+**infrasys (Python) is deliberately not done**: its `units` column already holds a
+serialized `QuantityMetadata` blob derived from `pint.Quantity`; see
+`infrasys/UNITS_FIELD_NOTE.md`.
+
+`Base.eltype(::TimeSeriesData{T}) = T` is the only accessor.
+Prefer a signature constraint over a runtime check:
+
+```julia
+f(ts::TimeSeriesData{<:PiecewiseStepData}) = ...            # good — dispatch
+f(ts::TimeSeriesData) = throw(TypeError(...eltype(ts)))     # explicit mismatch method
+```
+
+Because the abstract types are `UnionAll`s, plain `::TimeSeriesData` annotations,
+`Type{<:TimeSeriesData}` and `where {T <: TimeSeriesData}` bounds all still work
+unchanged. What does NOT work is subtyping without a parameter — `struct Foo <:
+TimeSeriesData end` must become `<: TimeSeriesData{Float64}`.
+
+## Time series batching and transactions
+
+One primitive: `time_series_transaction(data) do txn ... end`. The yielded
+`TimeSeriesContext` is the block's API surface: call `add_time_series!(txn, owner, ts)` on it
+and the adds are buffered and written as one bulk call — that batching is what buys
+block-sized array writes and feature-set dedup, which a transaction does not provide. The
+block is also an InfraStore transaction: if it throws, everything it did is rolled back,
+**including removals**, which are irreversible outside one (the store frees an array once
+its last reference goes; inside a transaction that free is deferred to the commit).
+
+`add_time_series!` on the `SystemData` or manager means "no batch": the operation goes
+straight to the store, which is atomic on its own. There is no `context` kwarg — the batch
+is selected by dispatch on the first argument. A transaction opened on a `SystemData`
+carries its owner validation (`owner_validator`); one opened on a bare manager does not.
+Read paths take no context and allocate nothing — a `TimeSeriesContext` owns an FFI
+`AddBatch` handle, so constructing one per read would be a real cost in per-timestep loops.
+The batch itself is created lazily on the first stage.
+
+Constraints: blocks nest innermost-first (SQLite savepoints are a stack), and an open block
+holds the store's write lock so gather data *before* opening one.
+
+The batch auto-flushes at `AUTO_FLUSH_THRESHOLD` (10,000) staged additions or
+`AUTO_FLUSH_BYTES` (256 MiB) of staged array data, whichever first, so arbitrarily large
+blocks hold bounded memory. The count keeps HDF5 chunks near the store's 1 MiB cap (chunk
+width = batch width); the byte limit is the real memory bound for long arrays. Auto-flushed
+work still rolls back with the block.
+
+Removed in IS4 — do not reintroduce: `begin_time_series_update` (snapshot-diff rollback),
+`open_time_series_store!` and its `mode` argument (named an HDF5 handle that no longer
+exists; the arg was never read — renamed to `time_series_transaction`),
+`bulk_add_time_series!` and `TimeSeriesAssociation` (a six-line loop over the context), and
+`ADD_TIME_SERIES_BATCH_SIZE` (silently ignored).
+
+## Core Abstractions
+
+- `InfrastructureSystemsComponent`
+- `InfrastructureSystemsType`
+- `InfrastructureSystemsContainer`
+- `SystemData`
+- `TimeSeriesData{T}` (see Time Series Type Hierarchy)
+- `ValueCurve` (static and `TimeSeries*` curves)
+- `ProductionVariableCostCurve` (`CostCurve{T,U}`, `FuelCurve{T,U}`)
+- `FunctionData` (`StaticFunctionData`, `TimeSeriesFunctionData`)
+- `RelativeUnits.AbstractUnitSystem` (`DU`, `SU`, `NU` singletons)
+- `ComponentSelector`
+- `Outputs`
+
 ## Testing
 
 - **Location:** `test/`
@@ -200,7 +355,8 @@ Do not add other exports.
 - **Single testset** (regex on testset names):
   `julia --project=test -e 'include("test/InfrastructureSystemsTests.jl"); run_tests("<name>")'`
 - If the package registry is unreachable (HTTP 403), prefix commands with `JULIA_PKG_SERVER=`.
-- Full-suite baseline (2026-07-05): 8,635 passing.
+- Full-suite baseline (2026-07-29): 8,771 passing, 1 broken.
+- Requires `INFRASTORE_LIB` pointing at `libinfrastore_ffi` (see the InfraStore repo).
 
 ## AI Agent Guidance
 

@@ -26,8 +26,6 @@ aware of how much data is stored.
 
 Specify `start_time` and `len` if you only need a subset of data.
 
-Does not apply a scaling factor multiplier.
-
 # Arguments
 
   - `::Type{T}`: Concrete subtype of `TimeSeriesData` to return
@@ -68,20 +66,11 @@ function get_time_series(
     features...,
 ) where {T <: TimeSeriesData}
     TimerOutputs.@timeit_debug SYSTEM_TIMERS "get_time_series" begin
-        ts_metadata =
-            get_time_series_metadata(
-                T,
-                owner,
-                name;
-                resolution = resolution,
-                interval = interval,
-                features...,
-            )
-        start_time = _check_start_time(start_time, ts_metadata)
-        rows = _get_rows(start_time, len, ts_metadata)
-        columns = _get_columns(start_time, count, ts_metadata)
-        storage = get_time_series_storage(owner)
-        return deserialize_time_series(T, storage, ts_metadata, rows, columns)
+        return infrastore_get_time_series(
+            T, owner, name;
+            start_time = start_time, len = len, count = count,
+            resolution = resolution, interval = interval, features...,
+        )
     end
 end
 
@@ -91,8 +80,6 @@ Return the exact stored data in a time series, using a time series key.
 This will load all forecast windows into memory by default. Be aware of how much data is stored.
 
 Specify start_time and len if you only need a subset of data.
-
-Does not apply a scaling factor multiplier.
 
 # Arguments
 
@@ -125,18 +112,65 @@ function get_time_series(
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series(
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        start_time = start_time,
-        len = len,
-        count = count,
-        features...,
-    )
+    # The key is already fully resolved, so read key-addressed — no catalog
+    # re-resolution by name.
+    try
+        return _get_time_series_by_key(
+            owner,
+            key;
+            start_time = start_time,
+            len = len,
+            count = count,
+        )
+    catch e
+        # `catch`-block exception inspection: a stale key — the series was
+        # removed after the key was obtained — surfaces as the store's
+        # NotFoundError; keep the accessors' public ArgumentError contract.
+        if e isa InfraStore.NotFoundError
+            throw(
+                ArgumentError(
+                    "No time series matches the key $(summary(key)) with " *
+                    "name='$(get_name(key))' on $(summary(owner)); " *
+                    "it may have been removed.",
+                ),
+            )
+        end
+        rethrow()
+    end
 end
+
+_get_time_series_by_key(
+    owner::TimeSeriesOwners,
+    key::ForecastKey;
+    start_time,
+    len,
+    count,
+) = _infrastore_get_forecast(
+    owner,
+    get_name(key);
+    key = key,
+    start_time = start_time,
+    len = len,
+    count = count,
+)
+
+# `count` does not apply to a static series; it is accepted for interface
+# uniformity and ignored.
+_get_time_series_by_key(
+    owner::TimeSeriesOwners,
+    key::NonSequentialTimeSeriesKey;
+    start_time,
+    len,
+    count,
+) = _infrastore_read_non_sequential(owner, key; start_time = start_time, len = len)
+
+_get_time_series_by_key(
+    owner::TimeSeriesOwners,
+    key::StaticTimeSeriesKey;
+    start_time,
+    len,
+    count,
+) = _infrastore_read_single(owner, key; start_time = start_time, len = len)
 
 """
 Returns an iterator of TimeSeriesData instances attached to the component or attribute.
@@ -173,50 +207,24 @@ function get_time_series_multiple(
     mgr = get_time_series_manager(owner)
     # This is true when the component or attribute is not part of a system.
     isnothing(mgr) && return ()
-    storage = get_time_series_storage(owner)
-
-    Channel() do channel
-        for metadata in list_metadata(
-            mgr,
-            owner;
-            time_series_type = type,
-            name = name,
-            resolution = resolution,
-            interval = interval,
-        )
-            ts = deserialize_time_series(
-                isnothing(type) ? time_series_metadata_to_data(metadata) : type,
-                storage,
-                metadata,
-                UnitRange(1, length(metadata)),
-                UnitRange(1, get_count(metadata)),
-            )
-            if !isnothing(filter_func) && !filter_func(ts)
-                continue
-            end
-            put!(channel, ts)
-        end
-    end
-end
-
-function get_time_series_uuid(
-    ::Type{T},
-    component::InfrastructureSystemsComponent,
-    name::AbstractString;
-    resolution::Union{Nothing, Dates.Period} = nothing,
-    interval::Union{Nothing, Dates.Period} = nothing,
-) where {T <: TimeSeriesData}
-    metadata = get_time_series_metadata(
-        T,
-        component,
-        name;
+    return infrastore_get_time_series_multiple(
+        owner,
+        filter_func;
+        type = type,
+        name = name,
         resolution = resolution,
         interval = interval,
     )
-    return get_time_series_uuid(metadata)
 end
 
-function get_time_series_metadata(
+"""
+Return the [`TimeSeriesKey`](@ref) identifying the single time series of type `T`
+attached to `owner` under `name` (and the given resolution/interval/features).
+
+Pairs with [`get_time_series_keys`](@ref) (enumeration) and
+[`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref) (retrieval).
+"""
+function get_time_series_key(
     ::Type{T},
     owner::TimeSeriesOwners,
     name::AbstractString;
@@ -225,7 +233,7 @@ function get_time_series_metadata(
     features...,
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(owner)
-    return get_metadata(
+    return get_time_series_key(
         mgr,
         owner,
         T,
@@ -238,9 +246,6 @@ end
 
 """
 Return a `TimeSeries.TimeArray` from storage for the given time series parameters.
-
-If the time series data are scaling factors, the returned data will be scaled by the scaling
-factor multiplier by default.
 
 This will load all forecast windows into memory by default. Be
 aware of how much data is stored.
@@ -260,11 +265,6 @@ Specify `start_time` and `len` if you only need a subset of data.
     `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
-    result of calling the stored `scaling_factor_multiplier` function on the `owner`
-  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
-    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
-    multipliers receive `SU`). IS performs no conversion itself.
   - `features...`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
 
@@ -274,7 +274,6 @@ See also: [`get_time_series_values`](@ref get_time_series_values(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 features...,) where {T <: TimeSeriesData}),
 [`get_time_series_timestamps`](@ref get_time_series_timestamps(
     ::Type{T},
@@ -289,14 +288,12 @@ features...,) where {T <: TimeSeriesData}),
     time_series::StaticTimeSeries;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 )),
 [`get_time_series_array` from a `ForecastCache`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
     forecast::Forecast;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len = nothing,
-    ignore_scaling_factors = false,
 ))
 """
 function get_time_series_array(
@@ -307,8 +304,6 @@ function get_time_series_array(
     interval::Union{Nothing, Dates.Period} = nothing,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
-    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
     features...,
 ) where {T <: TimeSeriesData}
     ts = get_time_series(
@@ -331,16 +326,11 @@ function get_time_series_array(
         ts;
         start_time = start_time,
         len = len,
-        ignore_scaling_factors = ignore_scaling_factors,
-        units = units,
     )
 end
 
 """
 Return a `TimeSeries.TimeArray` from storage, using a time series key.
-
-If the time series data are scaling factors, the returned data will be scaled by the scaling
-factor multiplier by default.
 
 # Arguments
   - `owner::TimeSeriesOwners`: Component or attribute containing the time series
@@ -350,11 +340,6 @@ factor multiplier by default.
     then `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
-    result of calling the stored `scaling_factor_multiplier` function on the `owner`
-  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
-    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
-    multipliers receive `SU`). IS performs no conversion itself.
 
 See also: [`get_time_series_array` by name](@ref get_time_series_array(
     ::Type{T},
@@ -362,7 +347,6 @@ See also: [`get_time_series_array` by name](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
     features...,
 ) where {T <: TimeSeriesData}),
 [`get_time_series_values`](@ref),
@@ -373,29 +357,28 @@ function get_time_series_array(
     key::TimeSeriesKey;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
-    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series_array(
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        start_time = start_time,
-        len = len,
-        ignore_scaling_factors = ignore_scaling_factors,
-        units = units,
-        features...,
-    )
+    ts = _read_for_key(owner, key; start_time = start_time, len = len)
+    return get_time_series_array(owner, ts; start_time = start_time, len = len)
+end
+
+# Read key-addressed (exact identity, no catalog re-resolution) so the by-key accessors can
+# hand the instance to their instance-form counterpart. Unpacking the key back into by-name
+# kwargs would re-resolve it through subset feature matching, which is ambiguous when a
+# sibling's feature set is a superset of the key's. `count = 1` because a key names one
+# series, and for a forecast the accessors want the single window at `start_time`.
+function _read_for_key(
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey;
+    start_time::Union{Nothing, Dates.DateTime} = nothing,
+    len::Union{Nothing, Int} = nothing,
+)
+    return get_time_series(owner, key; start_time = start_time, len = len, count = 1)
 end
 
 """
 Return a `TimeSeries.TimeArray` for one forecast window from a cached [`Forecast`](@ref)
 instance
-
-If the time series data are scaling factors, the returned data will be scaled by the scaling
-factor multiplier by default.
 
 # Arguments
   - `owner::TimeSeriesOwners`: Component or attribute containing the time series
@@ -404,18 +387,12 @@ factor multiplier by default.
     the forecast windows
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
-    result of calling the stored `scaling_factor_multiplier` function on the `owner`
-  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
-    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
-    multipliers receive `SU`). IS performs no conversion itself.
 
 See also [`get_time_series_values`](@ref get_time_series_values(
     owner::TimeSeriesOwners,
     forecast::Forecast;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 )), [`get_time_series_timestamps`](@ref get_time_series_timestamps(
     owner::TimeSeriesOwners,
     forecast::Forecast;
@@ -428,7 +405,6 @@ See also [`get_time_series_values`](@ref get_time_series_values(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
     features...,
 ) where {T <: TimeSeriesData}),
 [`get_time_series_array` from a `StaticTimeSeriesCache`](@ref get_time_series_array(
@@ -436,7 +412,6 @@ See also [`get_time_series_values`](@ref get_time_series_values(
     time_series::StaticTimeSeries;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 ))
 """
 function get_time_series_array(
@@ -444,25 +419,17 @@ function get_time_series_array(
     forecast::Forecast;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len = nothing,
-    ignore_scaling_factors = false,
-    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
-    initial_time = isnothing(start_time) ? get_initial_timestamp(forecast) : start_time
-    return _make_time_array(
-        owner,
-        forecast,
-        initial_time,
-        len,
-        ignore_scaling_factors,
-        units,
-    )
+    initial_time = if isnothing(start_time)
+        get_initial_timestamp(forecast)
+    else
+        start_time
+    end
+    return make_time_array(forecast, initial_time; len = len)
 end
 
 """
 Return a `TimeSeries.TimeArray` from a cached `StaticTimeSeries` instance.
-
-If the time series data are scaling factors, the returned data will be scaled by the scaling
-factor multiplier by default.
 
 # Arguments
   - `owner::TimeSeriesOwners`: Component or attribute containing the time series
@@ -471,13 +438,8 @@ factor multiplier by default.
     If nothing, use the `initial_timestamp` of the time series.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number
     of timestamps). If nothing, use the entire length
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
-    result of calling the stored `scaling_factor_multiplier` function on the `owner`
-  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
-    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
-    multipliers receive `SU`). IS performs no conversion itself.
 
-See also: [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing, ignore_scaling_factors = false)),
+See also: [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing)),
 [`get_time_series_timestamps`](@ref get_time_series_timestamps(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing,)),
 [`StaticTimeSeriesCache`](@ref),
 [`get_time_series_array` by name from storage](@ref get_time_series_array(
@@ -486,7 +448,6 @@ See also: [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeri
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
     features...,
 ) where {T <: TimeSeriesData}),
 [`get_time_series_array` from a `ForecastCache`](@ref get_time_series_array(
@@ -494,7 +455,6 @@ See also: [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeri
     forecast::Forecast;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len = nothing,
-    ignore_scaling_factors = false,
 ))
 """
 function get_time_series_array(
@@ -502,8 +462,6 @@ function get_time_series_array(
     time_series::StaticTimeSeries;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
-    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
     if start_time === nothing
         start_time = get_initial_timestamp(time_series)
@@ -513,14 +471,7 @@ function get_time_series_array(
         len = length(time_series)
     end
 
-    return _make_time_array(
-        owner,
-        time_series,
-        start_time,
-        len,
-        ignore_scaling_factors,
-        units,
-    )
+    return make_time_array(time_series, start_time; len = len)
 end
 
 """
@@ -548,7 +499,6 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
     features...,
 ) where {T <: TimeSeriesData}),
 [`get_time_series_values`](@ref get_time_series_values(
@@ -557,7 +507,6 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 features...,) where {T <: TimeSeriesData}),
 [`get_time_series_timestamps` from a `StaticTimeSeriesCache`](@ref get_time_series_timestamps(
     owner::TimeSeriesOwners,
@@ -625,16 +574,8 @@ function get_time_series_timestamps(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series_timestamps(
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        start_time = start_time,
-        len = len,
-        features...,
-    )
+    ts = _read_for_key(owner, key; start_time = start_time, len = len)
+    return get_time_series_timestamps(owner, ts; start_time = start_time, len = len)
 end
 
 """
@@ -653,13 +594,11 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     forecast::Forecast,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len = nothing,
-    ignore_scaling_factors = false,
 )), [`get_time_series_values`](@ref get_time_series_values(
     owner::TimeSeriesOwners,
     forecast::Forecast;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 )), [`ForecastCache`](@ref),
 [`get_time_series_timestamps` by name from storage](@ref get_time_series_timestamps(
     ::Type{T},
@@ -703,8 +642,7 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     time_series::StaticTimeSeries;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
-)), [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing, ignore_scaling_factors = false)),
+)), [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing)),
 [`StaticTimeSeriesCache`](@ref),
 [`get_time_series_timestamps` by name from storage](@ref get_time_series_timestamps(
     ::Type{T},
@@ -751,11 +689,6 @@ that accepts a cached `TimeSeriesData` instance.
     `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
-    result of calling the stored `scaling_factor_multiplier` function on the `owner`
-  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
-    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
-    multipliers receive `SU`). IS performs no conversion itself.
   - `features...`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
 
@@ -765,7 +698,6 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
     features...,
 ) where {T <: TimeSeriesData}),
 [`get_time_series_timestamps`](@ref get_time_series_timestamps(
@@ -782,14 +714,12 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     time_series::StaticTimeSeries;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 )),
 [`get_time_series_values` from a `ForecastCache`](@ref get_time_series_values(
     owner::TimeSeriesOwners,
     forecast::Forecast,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 ))
 """
 function get_time_series_values(
@@ -800,8 +730,6 @@ function get_time_series_values(
     interval::Union{Nothing, Dates.Period} = nothing,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
-    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
     features...,
 ) where {T <: TimeSeriesData}
     return TimeSeries.values(
@@ -813,8 +741,6 @@ function get_time_series_values(
             interval = interval,
             start_time = start_time,
             len = len,
-            ignore_scaling_factors = ignore_scaling_factors,
-            units = units,
             features...,
         ),
     )
@@ -831,11 +757,6 @@ Return a vector of time series data without timestamps from storage, using a tim
     then `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
-    result of calling the stored `scaling_factor_multiplier` function on the `owner`
-  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
-    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
-    multipliers receive `SU`). IS performs no conversion itself.
 
 See also: [`get_time_series_values` by name](@ref get_time_series_values(
     ::Type{T},
@@ -843,7 +764,6 @@ See also: [`get_time_series_values` by name](@ref get_time_series_values(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
     features...,
 ) where {T <: TimeSeriesData}),
 [`get_time_series_array`](@ref),
@@ -854,21 +774,9 @@ function get_time_series_values(
     key::TimeSeriesKey;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
-    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
-    features = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in key.features)
-    return get_time_series_values(
-        get_time_series_type(key),
-        owner,
-        get_name(key);
-        resolution = get_resolution(key),
-        start_time = start_time,
-        len = len,
-        ignore_scaling_factors = ignore_scaling_factors,
-        units = units,
-        features...,
-    )
+    ts = _read_for_key(owner, key; start_time = start_time, len = len)
+    return get_time_series_values(owner, ts; start_time = start_time, len = len)
 end
 
 """
@@ -882,18 +790,12 @@ cached `Forecast` instance.
     the forecast windows
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
-    result of calling the stored `scaling_factor_multiplier` function on the `owner`
-  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
-    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
-    multipliers receive `SU`). IS performs no conversion itself.
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
     forecast::Forecast;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len = nothing,
-    ignore_scaling_factors = false,
 )), [`get_time_series_timestamps`](@ref get_time_series_timestamps(
     owner::TimeSeriesOwners,
     forecast::Forecast;
@@ -906,7 +808,6 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
     features...,
 ) where {T <: TimeSeriesData}),
 [`get_time_series_values` from a `StaticTimeSeriesCache`](@ref get_time_series_values(
@@ -914,7 +815,6 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     time_series::StaticTimeSeries;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 ))
 """
 function get_time_series_values(
@@ -922,8 +822,6 @@ function get_time_series_values(
     forecast::Forecast;
     start_time::Union{Dates.DateTime, Nothing} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
-    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
     return TimeSeries.values(
         get_time_series_array(
@@ -931,8 +829,6 @@ function get_time_series_values(
             forecast;
             start_time = start_time,
             len = len,
-            ignore_scaling_factors = ignore_scaling_factors,
-            units = units,
         ),
     )
 end
@@ -947,18 +843,12 @@ Return an vector of timeseries data without timestamps from a cached `StaticTime
     If nothing, use the `initial_timestamp` of the time series.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number
     of timestamps). If nothing, use the entire length
-  - `ignore_scaling_factors = false`: If `true`, the time-series data will not be multiplied by the
-    result of calling the stored `scaling_factor_multiplier` function on the `owner`
-  - `units::Union{Nothing, AbstractUnitSystem} = default_units(owner)`: unit-system marker forwarded to the scaling-factor
-    multiplier; defaults to `default_units(owner)` (`nothing` in IS, so unit-aware
-    multipliers receive `SU`). IS performs no conversion itself.
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
     time_series::StaticTimeSeries,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 )), [`get_time_series_timestamps`](@ref get_time_series_timestamps(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing,)),
 [`StaticTimeSeriesCache`](@ref),
 [`get_time_series_values` by name from storage](@ref get_time_series_values(
@@ -967,7 +857,6 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
     features...,
 ) where {T <: TimeSeriesData}),
 [`get_time_series_values` from a `ForecastCache`](@ref get_time_series_values(
@@ -975,7 +864,6 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     forecast::Forecast;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
 ))
 """
 function get_time_series_values(
@@ -983,8 +871,6 @@ function get_time_series_values(
     time_series::StaticTimeSeries;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
-    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
 )
     return TimeSeries.values(
         get_time_series_array(
@@ -992,74 +878,15 @@ function get_time_series_values(
             time_series;
             start_time = start_time,
             len = len,
-            ignore_scaling_factors = ignore_scaling_factors,
-            units = units,
         ),
     )
 end
 
 """
-    default_units(owner)
-
-The units argument forwarded to scaling-factor multipliers when the caller does
-not pass one. Domain packages override this per owner type (e.g. PowerSystems
-returns `SU` for `Component`s). The IS fallback returns `nothing`, in which case
-a unit-aware (2-arg) multiplier receives `SU` and a unit-agnostic (1-arg)
-multiplier is called without units.
+$(TYPEDSIGNATURES)
+Return true if the component or supplemental attribute has any time series data.
 """
-default_units(::Any) = nothing
-
-# Scaling-factor multipliers come in two arities: unit-aware accessors from
-# downstream packages define `(owner, ::AbstractUnitSystem)`, while user-supplied
-# closures and pre-IS4 multipliers define only `(owner)`. Prefer the 2-arg form
-# whenever the multiplier is unit-aware, and fall back to the 1-arg form only when
-# no 2-arg method exists. A unit-aware multiplier that lacks a method for the
-# requested units is an error — the units must not be silently dropped. The 2-arg
-# convention is `(owner, ::AbstractUnitSystem)`, so `SU` probes unit-awareness.
-function _apply_multiplier(multiplier, owner, units)
-    requested = units === nothing ? SU : units
-    if applicable(multiplier, owner, requested)
-        return multiplier(owner, requested)
-    elseif applicable(multiplier, owner, SU)
-        throw(
-            ArgumentError(
-                "scaling_factor_multiplier `$(nameof(multiplier))` is unit-aware but " *
-                "defines no method for units `$(requested)`; pass a supported unit system",
-            ),
-        )
-    end
-    return multiplier(owner)
-end
-
-function _make_time_array(
-    owner,
-    time_series,
-    start_time,
-    len,
-    ignore_scaling_factors,
-    units::Union{Nothing, AbstractUnitSystem} = default_units(owner),
-)
-    ta = make_time_array(time_series, start_time; len = len)
-    if ignore_scaling_factors
-        return ta
-    end
-
-    multiplier = get_scaling_factor_multiplier(time_series)
-    if multiplier === nothing
-        return ta
-    end
-
-    return ta .* _apply_multiplier(multiplier, owner, units)
-end
-
-"""
-Return true if the component or supplemental attribute has time series data.
-"""
-function has_time_series(owner::TimeSeriesOwners; kwargs...)
-    mgr = get_time_series_manager(owner)
-    isnothing(mgr) && return false
-    return has_metadata(mgr.metadata_store, owner; kwargs...)
-end
+has_time_series(owner::TimeSeriesOwners) = has_time_series(owner, TimeSeriesData)
 
 """
 Return true if the component or supplemental attribute has time series data of type T.
@@ -1070,7 +897,7 @@ function has_time_series(
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(val)
     isnothing(mgr) && return false
-    return has_metadata(mgr.metadata_store, val; time_series_type = T)
+    return infrastore_has_any(val; time_series_type = T)
 end
 
 function has_time_series(
@@ -1083,11 +910,28 @@ function has_time_series(
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(val)
     isnothing(mgr) && return false
-    return has_metadata(
-        mgr.metadata_store,
-        val;
-        time_series_type = T,
-        name = name,
+    return infrastore_has_time_series(
+        T, val, name;
+        resolution = resolution, interval = interval, features...,
+    )
+end
+
+"""
+$(TYPEDSIGNATURES)
+Return true if the component or supplemental attribute has time series data named
+`name`, optionally narrowed by `resolution`, `interval`, or `features`.
+"""
+function has_time_series(
+    owner::TimeSeriesOwners,
+    name::AbstractString;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features...,
+)
+    return has_time_series(
+        owner,
+        TimeSeriesData,
+        name;
         resolution = resolution,
         interval = interval,
         features...,
@@ -1127,24 +971,17 @@ references.
     provided and src has a `time_series` with a name not present in `name_mapping`, that
     `time_series` will not copied. If `name_mapping` is nothing then all `time_series` will
     be copied with src's names.
-  - `scaling_factor_multiplier_mapping::Dict = nothing`: Optionally map src multipliers to
-    different dst multipliers.  If provided and src has a `time_series` with a multiplier
-    not present in `scaling_factor_multiplier_mapping`, that `time_series` will not copied.
-    If `scaling_factor_multiplier_mapping` is nothing then all `time_series` will be copied
-    with src's multipliers.
 """
 function copy_time_series!(
     dst::TimeSeriesOwners,
     src::TimeSeriesOwners;
     name_mapping::Union{Nothing, Dict{Tuple{String, String}, String}} = nothing,
-    scaling_factor_multiplier_mapping::Union{Nothing, Dict{String, String}} = nothing,
 )
     TimerOutputs.@timeit_debug SYSTEM_TIMERS "copy_time_series" begin
         _copy_time_series!(
             dst,
             src;
             name_mapping = name_mapping,
-            scaling_factor_multiplier_mapping = scaling_factor_multiplier_mapping,
         )
     end
 end
@@ -1153,10 +990,9 @@ function _copy_time_series!(
     dst::TimeSeriesOwners,
     src::TimeSeriesOwners;
     name_mapping::Union{Nothing, Dict{Tuple{String, String}, String}} = nothing,
-    scaling_factor_multiplier_mapping::Union{Nothing, Dict{String, String}} = nothing,
 )
-    storage = get_time_series_storage(dst)
-    if isnothing(storage)
+    mgr = get_time_series_manager(dst)
+    if isnothing(mgr)
         throw(
             ArgumentError(
                 "$(summary(dst)) does not have time series storage. " *
@@ -1165,50 +1001,55 @@ function _copy_time_series!(
         )
     end
 
-    mgr = get_time_series_manager(dst)
-    @assert !isnothing(mgr)
+    store = get_data_store(mgr)
+    dst_id, dst_type, _ = _infrastore_owner_args(dst)
+    src_id, category = _infrastore_owner_id_category(src)
 
-    for ts_metadata in get_time_series_metadata(src)
-        name = get_name(ts_metadata)
-        new_name = name
-        if !isnothing(name_mapping)
-            new_name = get(name_mapping, (get_name(src), name), nothing)
-            if isnothing(new_name)
-                @debug "Skip copying ts_metadata" _group = LOG_GROUP_TIME_SERIES name
-                continue
+    # The copy happens entirely inside the store: it clones the association row
+    # against the same content-addressed array. Nothing is read into Julia, so no
+    # array is duplicated and the stored type survives verbatim — a
+    # DeterministicSingleTimeSeries stays one instead of being materialized into a
+    # dense Deterministic, which is what a get/add round-trip through the Julia
+    # types would produce.
+    #
+    # One transaction for the whole set, so a failure part-way through does not leave
+    # `dst` holding a subset of `src`'s series.
+    time_series_transaction(mgr) do _
+        for ts_key in get_time_series_keys(src)
+            name = get_name(ts_key)
+            new_name = name
+            if !isnothing(name_mapping)
+                new_name = get(name_mapping, (get_name(src), name), nothing)
+                if isnothing(new_name)
+                    @debug "Skip copying ts_key" _group = LOG_GROUP_TIME_SERIES name
+                    continue
+                end
+                @debug "Copy ts_key with" _group = LOG_GROUP_TIME_SERIES new_name
             end
-            @debug "Copy ts_metadata with" _group = LOG_GROUP_TIME_SERIES new_name
+            InfraStore.copy_time_series!(
+                _infrastore_type(get_time_series_type(ts_key)),
+                store.inner,
+                src_id,
+                category,
+                name,
+                dst_id,
+                dst_type;
+                new_name = new_name,
+                resolution = get_resolution(ts_key),
+                interval = get_interval(ts_key),
+                features = Dict{String, Any}(get_features(ts_key)),
+            )
         end
-        multiplier = get_scaling_factor_multiplier(ts_metadata)
-        new_multiplier = multiplier
-        if !isnothing(scaling_factor_multiplier_mapping)
-            new_multiplier = get(scaling_factor_multiplier_mapping, multiplier, nothing)
-            if isnothing(new_multiplier)
-                @debug "Skip copying ts_metadata" _group = LOG_GROUP_TIME_SERIES multiplier
-                continue
-            end
-            @debug "Copy ts_metadata with" _group = LOG_GROUP_TIME_SERIES new_multiplier
-        end
-        new_time_series = deepcopy(ts_metadata)
-        assign_new_uuid_internal!(new_time_series)
-        set_name!(new_time_series, new_name)
-        set_scaling_factor_multiplier!(new_time_series, new_multiplier)
-        add_metadata!(mgr.metadata_store, dst, new_time_series)
     end
+    return
 end
 
 """
-Return information about each time series array attached to the owner.
-This information can be used to call
-[`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
+Return the [`TimeSeriesKey`](@ref) for each time series attached to `owner`,
+optionally filtered by type/name/resolution/interval/features. Each key can be
+passed to [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
 """
-function get_time_series_keys(owner::TimeSeriesOwners)
-    mgr = get_time_series_manager(owner)
-    isnothing(mgr) && return []
-    return get_time_series_keys(mgr.metadata_store, owner)
-end
-
-function get_time_series_metadata(
+function get_time_series_keys(
     owner::TimeSeriesOwners;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
     name::Union{String, Nothing} = nothing,
@@ -1217,8 +1058,8 @@ function get_time_series_metadata(
     features...,
 )
     mgr = get_time_series_manager(owner)
-    isnothing(mgr) && return []
-    return list_metadata(
+    isnothing(mgr) && return TimeSeriesKey[]
+    return list_time_series_keys(
         mgr,
         owner;
         time_series_type = time_series_type,
@@ -1228,6 +1069,54 @@ function get_time_series_metadata(
         features...,
     )
 end
+
+"""
+$(TYPEDSIGNATURES)
+Return the content hash (64-character lowercase hex string) of the array that
+`key` resolves to under `owner`.
+
+The hash identifies the underlying *stored array*, not the logical time series:
+two `(owner, key)` pairs return the same hash exactly when they share the same
+stored array. That happens both when identical data is deduplicated and when a
+`SingleTimeSeries` and a `DeterministicSingleTimeSeries` derived from it share
+their array. Throws if no stored time series matches `key`.
+
+To enumerate every group of time series that share data across a whole system,
+use [`get_time_series_array_groups`](@ref).
+"""
+get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey) =
+    infrastore_get_time_series_hash(owner, key)
+
+"""
+$(TYPEDSIGNATURES)
+Return the content hash (64-character lowercase hex string) of the array behind
+the time series of type `T` named `name` for each owner in `owners`, as a `Dict`
+keyed by the owner's integer id ([`get_id`](@ref)). Owners with no matching time
+series are absent from the result. Resolved by a single catalog query for the
+whole collection, so prefer this over per-owner [`get_time_series_hash`](@ref)
+when processing many owners (e.g. batching model parameters by shared array).
+
+All owners must be of one category (all components or all supplemental
+attributes). `resolution`, `interval`, and `features` narrow the match the same
+way they do in [`get_time_series_keys`](@ref); if the filters leave more than
+one matching series with distinct arrays for an owner, an error is thrown.
+"""
+get_time_series_hashes(
+    owners,
+    ::Type{T},
+    name::AbstractString;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features...,
+) where {T <: TimeSeriesData} =
+    infrastore_get_time_series_hashes(
+        owners,
+        T,
+        name;
+        resolution = resolution,
+        interval = interval,
+        features...,
+    )
 
 function clear_time_series!(owner::TimeSeriesOwners)
     mgr = get_time_series_manager(owner)
@@ -1259,135 +1148,6 @@ function throw_if_does_not_support_time_series(owner::TimeSeriesOwners)
     if !supports_time_series(owner)
         throw(ArgumentError("$(summary(owner)) does not support time series"))
     end
-end
-
-"""
-Return a time series from TimeSeriesFileMetadata.
-
-# Arguments
-
-  - `cache::TimeSeriesParsingCache`: cached data
-  - `ts_file_metadata::TimeSeriesFileMetadata`: metadata
-  - `resolution::{Nothing, Dates.Period}`: skip any time_series that don't match this resolution
-"""
-function make_time_series!(
-    cache::TimeSeriesParsingCache,
-    ts_file_metadata::TimeSeriesFileMetadata,
-)
-    info = add_time_series_info!(cache, ts_file_metadata)
-    return ts_file_metadata.time_series_type(info)
-end
-
-function add_time_series_info!(
-    cache::TimeSeriesParsingCache,
-    metadata::TimeSeriesFileMetadata,
-)
-    time_series = _add_time_series_info!(cache, metadata)
-    info = TimeSeriesParsedInfo(metadata, time_series)
-    @debug "Added TimeSeriesParsedInfo" _group = LOG_GROUP_TIME_SERIES metadata
-    return info
-end
-
-function _get_columns(start_time, count, ts_metadata::ForecastMetadata)
-    offset = start_time - get_initial_timestamp(ts_metadata)
-    interval = time_period_conversion(get_interval(ts_metadata))
-    window_count = get_count(ts_metadata)
-    if window_count > 1
-        index = Int(offset / interval) + 1
-    else
-        index = 1
-    end
-    if count === nothing
-        count = window_count - index + 1
-    end
-
-    if index + count - 1 > get_count(ts_metadata)
-        throw(
-            ArgumentError(
-                "The requested start_time $start_time and count $count are invalid",
-            ),
-        )
-    end
-    return UnitRange(index, index + count - 1)
-end
-
-_get_columns(start_time, count, ts_metadata::StaticTimeSeriesMetadata) = UnitRange(1, 1)
-
-function _get_rows(start_time, len, ts_metadata::StaticTimeSeriesMetadata)
-    index = compute_time_array_index(
-        get_initial_timestamp(ts_metadata),
-        start_time,
-        get_resolution(ts_metadata),
-    )
-    if len === nothing
-        len = length(ts_metadata) - index + 1
-    end
-    if index + len - 1 > length(ts_metadata)
-        throw(
-            ArgumentError(
-                "The requested index=$index len=$len exceeds the range $(length(ts_metadata))",
-            ),
-        )
-    end
-
-    return UnitRange(index, index + len - 1)
-end
-
-function _get_rows(start_time, len, ts_metadata::ForecastMetadata)
-    if len === nothing
-        len = get_horizon_count(ts_metadata)
-    end
-
-    return UnitRange(1, len)
-end
-
-function _check_start_time(start_time, metadata::StaticTimeSeriesMetadata)
-    return _check_start_time_common(start_time, metadata)
-end
-
-function _check_start_time(start_time, metadata::ForecastMetadata)
-    initial_time = get_initial_timestamp(metadata)
-    actual_start_time = _check_start_time_common(start_time, metadata)
-    if actual_start_time != initial_time
-        # This will throw ArgumentError if start_time is not on a multiple of interval.
-        compute_periods_between(initial_time, actual_start_time, get_interval(metadata))
-    end
-    return actual_start_time
-end
-
-function _check_start_time_common(start_time, metadata::TimeSeriesMetadata)
-    if start_time === nothing
-        return get_initial_timestamp(metadata)
-    end
-
-    if start_time < get_initial_timestamp(metadata)
-        throw(
-            ArgumentError(
-                "start_time = $start_time is earlier than $(get_initial_timestamp(metadata))",
-            ),
-        )
-    end
-
-    last_time = _get_last_user_start_timestamp(metadata)
-    if start_time > last_time
-        throw(
-            ArgumentError(
-                "start_time = $start_time is greater than the last timestamp $last_time",
-            ),
-        )
-    end
-
-    return start_time
-end
-
-function _get_last_user_start_timestamp(metadata::StaticTimeSeriesMetadata)
-    return get_initial_timestamp(metadata) +
-           (get_length(metadata) - 1) * get_resolution(metadata)
-end
-
-function _get_last_user_start_timestamp(forecast::ForecastMetadata)
-    return get_initial_timestamp(forecast) +
-           (get_count(forecast) - 1) * get_interval(forecast)
 end
 
 function get_forecast_window_count(

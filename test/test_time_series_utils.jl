@@ -79,7 +79,11 @@ end
 end
 
 @testset "Test is_irregular_period" begin
-    all_periods = Set(IS.get_all_concrete_subtypes(Period))
+    # Restrict to the periods defined by Dates. Other packages loaded in this environment
+    # (such as TimeZones) can define their own Period subtypes.
+    all_periods = Set(
+        x for x in IS.get_all_concrete_subtypes(Period) if parentmodule(x) === Dates
+    )
     regular_periods = (
         Day,
         Week,

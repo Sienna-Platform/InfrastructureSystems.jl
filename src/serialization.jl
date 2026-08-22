@@ -91,6 +91,15 @@ function serialize(vals::Vector{T}) where {T <: InfrastructureSystemsType}
     return serialize_struct.(vals)
 end
 
+# A time series *type* (not an instance) serializes to bare metadata, so a
+# `TimeSeriesKey`'s `time_series_type` field round-trips.
+function serialize(::Type{T}) where {T <: TimeSeriesData}
+    @debug "serialize" _group = LOG_GROUP_SERIALIZATION T
+    data = Dict{String, Any}()
+    add_serialization_metadata!(data, T)
+    return data
+end
+
 function serialize(func::Function)
     return Dict{String, Any}(
         METADATA_KEY => Dict{String, Any}(
@@ -117,7 +126,9 @@ function add_serialization_metadata!(data::Dict, ::Type{T}) where {T}
         TYPE_KEY => string(nameof(T)),
         MODULE_KEY => string(parentmodule(T)),
     )
-    if !isempty(T.parameters)
+    # A `UnionAll` (e.g. the parametric `SingleTimeSeries`) has no concrete
+    # parameters; name + module are enough to reconstruct it.
+    if !(T isa UnionAll) && !isempty(T.parameters)
         data[METADATA_KEY][PARAMETERS_KEY] = [string(nameof(x)) for x in T.parameters]
     end
 
@@ -168,16 +179,6 @@ end
 _resolve_serialized_type_parameter(_module::Module, x::AbstractString) =
     getproperty(_module, Symbol(x))
 
-# A structured entry encodes a parameter that is not a named type; currently a
-# `NamedTuple{names, NTuple{N, Float64}}` shape (used by `TupleTimeSeries`).
-function _resolve_serialized_type_parameter(::Module, x::AbstractDict)
-    haskey(x, "namedtuple_names") || throw(
-        ArgumentError("unrecognized serialized type parameter encoding: $x"),
-    )
-    names = Tuple(Symbol.(x["namedtuple_names"]))
-    return NamedTuple{names, NTuple{length(names), Float64}}
-end
-
 serialize(val::Base.RefValue{T}) where {T} = serialize(val[])
 
 # The default implementation allows any scalar type (or collection of scalar types) to
@@ -195,7 +196,6 @@ function deserialize(::Type{T}, data::Dict) where {T <: InfrastructureSystemsTyp
 end
 
 function deserialize_to_dict(::Type{T}, data::Dict) where {T}
-    # Note: mostly duplicated in src/deterministic_metadata.jl
     vals = Dict{Symbol, Any}()
     for (field_name, field_type) in zip(fieldnames(T), fieldtypes(T))
         name_str = string(field_name)

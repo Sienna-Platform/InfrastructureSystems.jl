@@ -1,19 +1,38 @@
 const SupplementalAttributesByType =
-    Dict{DataType, Dict{Base.UUID, <:SupplementalAttribute}}
+    Dict{DataType, Dict{Int, SupplementalAttribute}}
 
+"""
+Owns supplemental attributes and their associations to components in a [`SystemData`](@ref).
+
+Attributes are stored by type and integer id. Component links are tracked in
+[`SupplementalAttributeAssociations`](@ref). User code typically calls
+[`add_supplemental_attribute!`](@ref) on [`SystemData`](@ref) rather than on the manager
+directly.
+
+See also: [`SupplementalAttribute`](@ref), [`iterate_supplemental_attributes`](@ref)
+"""
 mutable struct SupplementalAttributeManager <: AbstractSupplementalAttributeManager
     data::SupplementalAttributesByType
     associations::SupplementalAttributeAssociations
 end
 
-function SupplementalAttributeManager()
+"""
+Construct an empty manager whose associations live in `store`.
+
+The store is shared with the [`TimeSeriesManager`](@ref) of the same system: association
+rows and the time series catalog are two tables in one artifact, so both managers must
+hold the same handle for a system to serialize and deep-copy correctly.
+"""
+function SupplementalAttributeManager(store::Store)
     return SupplementalAttributeManager(
         SupplementalAttributesByType(),
-        SupplementalAttributeAssociations(),
+        SupplementalAttributeAssociations(store),
     )
 end
 
 get_member_string(::SupplementalAttributeManager) = "supplemental attributes"
+
+get_data_store(mgr::SupplementalAttributeManager) = get_data_store(mgr.associations)
 
 """
 Begin an update of supplemental attributes. Use this function when adding
@@ -25,34 +44,51 @@ function begin_supplemental_attributes_update(
     func::Function,
     mgr::SupplementalAttributeManager,
 )
+    # Invariant: the rollback must also undo in-place mutations of attribute data (e.g. a
+    # `geo_json` Dict), which a shallow copy would let alias through.
     orig_data = _snapshot_attribute_data(mgr)
+    # Invariant: the rollback must also undo REMOVALS, which a diff of newly added rows
+    # cannot, and which `InfraStore.transaction` covers only for writes made through it.
+    orig_associations = _association_rows(mgr.associations)
 
     try
-        SQLite.transaction(mgr.associations.db) do
-            func()
-        end
-        optimize_database!(mgr.associations)
+        func()
     catch
         mgr.data = orig_data
+        restore_associations!(mgr.associations, orig_associations)
         rethrow()
     end
 end
 
+# One deep copy of the whole container, with the live managers pinned in the `IdDict` so
+# each attribute's `shared_system_references` back-reference is shared rather than dragging
+# the system (store handle included) into the snapshot.
 function _snapshot_attribute_data(mgr::SupplementalAttributeManager)
-    stackdict = IdDict{Any, Any}()
-    for attr_dict in values(mgr.data), attr in values(attr_dict)
-        refs = get_shared_system_references(attr)
-        if !isnothing(refs)
-            # SharedSystemReferences is immutable, so deepcopy ignores an entry for
-            # it and recurses into its fields; pin the mutable managers it points
-            # back to instead so deepcopy stops at the reference-graph boundary
-            # rather than cloning the whole system.
-            stackdict[refs.supplemental_attribute_manager] =
-                refs.supplemental_attribute_manager
-            stackdict[refs.time_series_manager] = refs.time_series_manager
+    pinned = IdDict()
+    for inner in values(mgr.data)
+        for attr in values(inner)
+            _pin_shared_references!(pinned, get_shared_system_references(attr))
         end
     end
-    return Base.deepcopy_internal(mgr.data, stackdict)::SupplementalAttributesByType
+    return Base.deepcopy_internal(mgr.data, pinned)::SupplementalAttributesByType
+end
+
+_pin_shared_references!(::IdDict, ::Nothing) = nothing
+
+function _pin_shared_references!(pinned::IdDict, refs::SharedSystemReferences)
+    _pin!(pinned, refs.supplemental_attribute_manager)
+    _pin!(pinned, refs.time_series_manager)
+    return nothing
+end
+
+# `deepcopy_internal` consults the `IdDict` only for mutable objects, so pinning the
+# managers (mutable) is what stops the walk; the immutable `SharedSystemReferences` box is
+# rebuilt from those identical fields and so stays `===` to the original.
+_pin!(::IdDict, ::Nothing) = nothing
+
+function _pin!(pinned::IdDict, mgr)
+    pinned[mgr] = mgr
+    return nothing
 end
 
 function add_supplemental_attribute!(
@@ -93,21 +129,33 @@ function _attach_attribute!(
         )
     end
 
+    id = get_id(attribute)
+    if id == UNASSIGNED_ID
+        throw(
+            ArgumentError(
+                "$(summary(attribute)) has an unassigned ID; call `add_supplemental_attribute!` " *
+                "on `SystemData` to have one assigned automatically, or, when adopting an " *
+                "attribute whose id is already fixed by a document, call `set_id!` first and " *
+                "attach it with `attach_supplemental_attribute!`.",
+            ),
+        )
+    end
+
     T = typeof(attribute)
     if !haskey(mgr.data, T)
-        mgr.data[T] = Dict{Base.UUID, T}()
+        mgr.data[T] = Dict{Int, SupplementalAttribute}()
     end
-    mgr.data[T][get_uuid(attribute)] = attribute
+    mgr.data[T][id] = attribute
 end
 
 function is_attached(attribute::SupplementalAttribute, mgr::SupplementalAttributeManager)
     T = typeof(attribute)
     !haskey(mgr.data, T) && return false
-    _attribute = get(mgr.data[T], get_uuid(attribute), nothing)
+    _attribute = get(mgr.data[T], get_id(attribute), nothing)
     isnothing(_attribute) && return false
 
     if attribute !== _attribute
-        @warn "An attribute with the same UUUID as $(summary(attribute)) is stored in " *
+        @warn "An attribute with the same id as $(summary(attribute)) is stored in " *
               "the system but is not the same instance."
         return false
     end
@@ -137,14 +185,6 @@ end
 """
 function iterate_supplemental_attributes(mgr::SupplementalAttributeManager)
     return iterate_container(mgr)
-end
-
-"""
-Iterate the per-type attribute dicts stored in the manager.
-Each element is a `Dict{UUID, <:SupplementalAttribute}` for one concrete type.
-"""
-function iterate_supplemental_attribute_dicts(mgr::SupplementalAttributeManager)
-    return values(mgr.data)
 end
 
 """
@@ -192,7 +232,7 @@ function remove_supplemental_attribute!(
     end
 
     T = typeof(supplemental_attribute)
-    pop!(mgr.data[T], get_uuid(supplemental_attribute))
+    pop!(mgr.data[T], get_id(supplemental_attribute))
     prepare_for_removal!(supplemental_attribute)
     if isempty(mgr.data[T])
         pop!(mgr.data, T)
@@ -252,40 +292,39 @@ function get_supplemental_attributes(
     return iterate_instances(T, mgr.data, nothing)
 end
 
-function get_supplemental_attribute(mgr::SupplementalAttributeManager, uuid::Base.UUID)
+function get_supplemental_attribute(mgr::SupplementalAttributeManager, id::Int)
     for attr_dict in values(mgr.data)
-        attribute = get(attr_dict, uuid, nothing)
-        if !isnothing(attribute)
-            return attribute
-        end
+        attr = get(attr_dict, id, nothing)
+        isnothing(attr) || return attr
     end
 
-    throw(ArgumentError("No attribute with UUID = $uuid is stored"))
+    throw(ArgumentError("No attribute with id = $id is stored"))
 end
 
-function list_associated_component_uuids(
+function list_associated_component_ids(
     mgr::SupplementalAttributeManager,
     attribute_type::Type{<:SupplementalAttribute},
     component_type::Union{Nothing, Type{<:InfrastructureSystemsComponent}},
 )
-    return list_associated_component_uuids(mgr.associations, attribute_type, component_type)
+    return list_associated_component_ids(mgr.associations, attribute_type, component_type)
 end
 
-function list_associated_supplemental_attribute_uuids(
+function list_associated_supplemental_attribute_ids(
     mgr::SupplementalAttributeManager,
     component_type::Type{<:InfrastructureSystemsComponent},
     attribute_type::Union{Nothing, Type{<:SupplementalAttribute}},
 )
-    return list_associated_supplemental_attribute_uuids(
+    return list_associated_supplemental_attribute_ids(
         mgr.associations,
         component_type,
         attribute_type,
     )
 end
 
+# Associations are persisted by the store, in its `.sqlite` sidecar, so they are
+# deliberately absent from this dict.
 function serialize(mgr::SupplementalAttributeManager)
     return Dict(
-        "associations" => to_records(mgr.associations),
         "attributes" => [serialize(y) for x in values(mgr.data) for y in values(x)],
     )
 end
@@ -295,10 +334,9 @@ function deserialize(
     data::Dict,
     time_series_manager::TimeSeriesManager,
 )
-    mgr = SupplementalAttributeManager(
-        SupplementalAttributesByType(SupplementalAttributesByType()),
-        from_records(SupplementalAttributeAssociations, data["associations"]),
-    )
+    # Associations come from the store the system was opened from, not from `data`: an
+    # "associations" key in older system JSON is ignored, not imported.
+    mgr = SupplementalAttributeManager(time_series_manager.data_store)
     refs = SharedSystemReferences(;
         supplemental_attribute_manager = mgr,
         time_series_manager = time_series_manager,
@@ -306,14 +344,14 @@ function deserialize(
     for attr_dict in data["attributes"]
         type = get_type_from_serialization_metadata(get_serialization_metadata(attr_dict))
         if !haskey(mgr.data, type)
-            mgr.data[type] = Dict{Base.UUID, SupplementalAttribute}()
+            mgr.data[type] = Dict{Int, SupplementalAttribute}()
         end
         attr = deserialize(type, attr_dict)
-        uuid = get_uuid(attr)
-        if haskey(mgr.data[type], uuid)
-            error("Bug: duplicate UUID in attributes container: type=$type uuid=$uuid")
+        id = get_id(attr)
+        if haskey(mgr.data[type], id)
+            error("Bug: duplicate id in attributes container: type=$type id=$id")
         end
-        mgr.data[type][uuid] = attr
+        mgr.data[type][id] = attr
         set_shared_system_references!(attr, refs)
         @debug "Deserialized $(summary(attr))" _group = LOG_GROUP_SERIALIZATION
     end

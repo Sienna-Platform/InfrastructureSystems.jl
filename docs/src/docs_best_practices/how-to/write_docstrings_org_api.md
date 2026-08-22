@@ -210,7 +210,6 @@ This is not commonly done in Sienna yet, but a goal is to improve our use of
         name::AbstractString;
         start_time::Union{Nothing, Dates.DateTime} = nothing,
         len::Union{Nothing, Int} = nothing,
-        ignore_scaling_factors = false,
         features...,
     ) where {T <: TimeSeriesData}),
     [`get_time_series_array` from a `StaticTimeSeriesCache`](@ref get_time_series_array(
@@ -218,7 +217,6 @@ This is not commonly done in Sienna yet, but a goal is to improve our use of
         time_series::StaticTimeSeries,
         start_time::Union{Nothing, Dates.DateTime} = nothing;
         len::Union{Nothing, Int} = nothing,
-        ignore_scaling_factors = false,
     ))
     ```
 

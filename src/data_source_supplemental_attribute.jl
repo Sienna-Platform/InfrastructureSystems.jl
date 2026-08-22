@@ -253,4 +253,4 @@ function set_recorded_by!(ds::DataSource, val::String)
 end
 
 get_internal(ds::DataSource) = ds.internal
-get_uuid(ds::DataSource) = get_uuid(get_internal(ds))
+get_id(ds::DataSource) = get_id(get_internal(ds))

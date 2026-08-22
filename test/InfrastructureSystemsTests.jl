@@ -6,24 +6,31 @@ using Dates
 import TerminalLoggers: TerminalLogger
 import TimeSeries
 import UUIDs
-import JSON
-import HDF5
 using DataStructures: SortedDict
 using DataFrames
 using Random
 using ProgressLogging
 import SQLite
+import JSON
 
 import InfrastructureSystems
 import InfrastructureSystems as IS
+import OpenAPI
+import PowerCoreOpenAPIModels
+import PowerTimeSeriesOpenAPIModels
 
 import Aqua
-Aqua.test_all(InfrastructureSystems)
+# `piracies` crashes on Julia 1.12+ (`Core.TypeName.mt` was removed), unfixed in Aqua 0.8.11.
+# `persistent_tasks` cannot resolve the unregistered PowerOpenAPIModels deps in the throwaway
+# project it builds, since `[sources]` applies only to the top-level project.
+Aqua.test_all(
+    InfrastructureSystems;
+    piracies = VERSION < v"1.12",
+    persistent_tasks = false,
+)
 
 const BASE_DIR =
     abspath(joinpath(dirname(Base.find_package("InfrastructureSystems")), ".."))
-const DATA_DIR = joinpath(BASE_DIR, "test", "data")
-const FORECASTS_DIR = joinpath(DATA_DIR, "time_series")
 
 const LOG_FILE = "infrastructure-systems.log"
 

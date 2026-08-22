@@ -1,28 +1,33 @@
 """
-Assign a new UUID to a detached component.
-
-Do not call this directly on a component attached to a `SystemData` — the UUID index and
-the time-series / supplemental-attribute mappings would become stale. Use
-`assign_new_uuid!(data, component)` instead, which keeps all three in sync.
+Assign a new integer ID to the component, drawn from the system counter, and update any
+references to its old ID in the time series store, supplemental attribute associations, and
+subsystem membership sets.
 """
-function assign_new_uuid_internal!(component::InfrastructureSystemsComponent)
-    if !isnothing(get_shared_system_references(component))
-        error(
-            "Cannot call assign_new_uuid_internal! on $(summary(component)) while it is " *
-            "attached to a system. Use assign_new_uuid!(data, component) instead.",
-        )
-    end
-    old_uuid = get_uuid(component)
-    new_uuid = make_uuid()
+# `data` is a `SystemData`, but this file is included before it is defined, so the
+# annotation names the widest available supertype.
+function assign_new_id_internal!(
+    data::ComponentContainer,
+    component::InfrastructureSystemsComponent,
+)
+    old_id = get_id(component)
+    new_id = get_next_id!(data)
     mgr = get_time_series_manager(component)
     if !isnothing(mgr)
-        replace_component_uuid!(mgr.metadata_store, old_uuid, new_uuid)
+        InfraStore.replace_owner!(
+            get_data_store(mgr).inner,
+            old_id,
+            new_id,
+            InfraStore.Component,
+        )
     end
+
     associations = _get_supplemental_attribute_associations(component)
     if !isnothing(associations)
-        replace_component_uuid!(associations, old_uuid, new_uuid)
+        replace_component_id!(associations, old_id, new_id)
     end
-    set_uuid!(get_internal(component), new_uuid)
+
+    replace_component_id_in_subsystems!(data, old_id, new_id)
+    set_id!(get_internal(component), new_id)
     return
 end
 
@@ -55,8 +60,8 @@ end
 function clear_supplemental_attributes!(component::InfrastructureSystemsComponent)
     mgr = _get_supplemental_attributes_manager(component)
     isnothing(mgr) && return
-    for uuid in list_associated_supplemental_attribute_uuids(mgr.associations, component)
-        attribute = get_supplemental_attribute(mgr, uuid)
+    for id in list_associated_supplemental_attribute_ids(mgr.associations, component)
+        attribute = get_supplemental_attribute(mgr, id)
         remove_supplemental_attribute!(mgr, component, attribute)
     end
     @debug "Cleared attributes in $(summary(component))."
@@ -93,7 +98,7 @@ function _get_supplemental_attributes(
     isnothing(mgr) && return supplemental_attribute_type[]
     return supplemental_attribute_type[
         get_supplemental_attribute(mgr, x) for
-        x in list_associated_supplemental_attribute_uuids(
+        x in list_associated_supplemental_attribute_ids(
             mgr.associations,
             component,
             supplemental_attribute_type,
@@ -122,14 +127,14 @@ function _get_supplemental_attributes(
     component::InfrastructureSystemsComponent,
 )
     mgr = _get_supplemental_attributes_manager(component)
-    isnothing(mgr) && return [supplemental_attribute_type]
+    isnothing(mgr) && return supplemental_attribute_type[]
     attrs = Vector{supplemental_attribute_type}()
-    for uuid in list_associated_supplemental_attribute_uuids(
+    for id in list_associated_supplemental_attribute_ids(
         mgr.associations,
         component,
         supplemental_attribute_type,
     )
-        attribute = get_supplemental_attribute(mgr, uuid)
+        attribute = get_supplemental_attribute(mgr, id)
         if filter_func(attribute)
             push!(attrs, attribute)
         end
@@ -140,12 +145,12 @@ end
 
 function get_supplemental_attribute(
     component::InfrastructureSystemsComponent,
-    uuid::Base.UUID,
+    id::Int,
 )
     mgr = _get_supplemental_attributes_manager(component)
     isnothing(mgr) &&
         error("$(summary(component)) does not have supplemental attributes")
-    return get_supplemental_attribute(mgr, uuid)
+    return get_supplemental_attribute(mgr, id)
 end
 
 function _get_supplemental_attributes_manager(component::InfrastructureSystemsComponent)

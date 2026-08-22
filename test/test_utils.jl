@@ -65,7 +65,7 @@ end
           "InfrastructureSystems.InfrastructureSystemsComponent[#undef, #undef, #undef]"
 end
 
-struct FakeTimeSeries <: InfrastructureSystems.TimeSeriesData end
+struct FakeTimeSeries <: InfrastructureSystems.TimeSeriesData{Float64} end
 Base.length(::FakeTimeSeries) = 42
 IS.get_name(::FakeTimeSeries) = "fake"
 

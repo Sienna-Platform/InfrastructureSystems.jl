@@ -1,21 +1,18 @@
-# This is used to add time series associations efficiently in SQLite.
-# This strikes a balance in SQLite efficiency vs loading many time arrays into memory.
-const ADD_TIME_SERIES_BATCH_SIZE = 100
+"""
+Manages a system's time series data.
 
-mutable struct BulkUpdateTSCache
-    forecast_params::Dict{Tuple{Dates.Period, Dates.Period}, ForecastParameters}
-end
-
+Wraps the [`Store`](@ref) holding both the arrays and their catalog (owner
+associations and metadata) and enforces read-only mode. Owned by a `SystemData`;
+user code reaches it through the system-level time series API rather than
+directly.
+"""
 mutable struct TimeSeriesManager <: AbstractTimeSeriesManager
-    data_store::TimeSeriesStorage
-    metadata_store::TimeSeriesMetadataStore
+    data_store::Store
     read_only::Bool
-    bulk_update_cache::Union{Nothing, BulkUpdateTSCache}
 end
 
 function TimeSeriesManager(;
     data_store = nothing,
-    metadata_store = nothing,
     in_memory = false,
     read_only = false,
     directory = nothing,
@@ -25,122 +22,142 @@ function TimeSeriesManager(;
         directory = ENV[TIME_SERIES_DIRECTORY_ENV_VAR]
     end
 
-    if isnothing(metadata_store)
-        metadata_store = TimeSeriesMetadataStore()
-    end
-
     if isnothing(data_store)
-        data_store = make_time_series_storage(;
-            in_memory = in_memory,
-            directory = directory,
-            compression = compression,
-        )
+        # The InfraStore store unifies data + metadata. On-disk artifacts live at
+        # `<dir>/<uuid>_time_series.h5` (+ sidecar `.sqlite`).
+        path = if in_memory
+            nothing
+        else
+            # `directory` may be an explicit kwarg, the SIENNA_TIME_SERIES_DIRECTORY
+            # env var, or `tempdir()`. Create it if missing (e.g. an HPC per-job
+            # scratch path that doesn't exist yet).
+            dir = if isnothing(directory)
+                tempdir()
+            else
+                directory
+            end
+            mkpath(dir)
+            joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
+        end
+        data_store =
+            Store(;
+                in_memory = in_memory,
+                path = path,
+                compression = compression,
+                # A system's working store is scratch: the artifacts sit in a temp
+                # directory and the system they back lives in memory, so a crash loses
+                # both. Journaling the catalog on every commit would buy durability
+                # nobody can consume; it is written out when the system is serialized.
+                catalog = :memory,
+            )
     end
-    return TimeSeriesManager(data_store, metadata_store, read_only, nothing)
+    return TimeSeriesManager(data_store, read_only)
 end
 
-get_metadata_store(mgr::TimeSeriesManager) = mgr.metadata_store
+"""
+The [`Store`](@ref) holding this manager's time series arrays and their catalog.
+"""
 get_data_store(mgr::TimeSeriesManager) = mgr.data_store
 
-_get_forecast_params(ts::Forecast) = make_time_series_parameters(ts)
-_get_forecast_params(::StaticTimeSeries) = nothing
-_get_forecast_params!(::TimeSeriesManager, ::StaticTimeSeries) = nothing
-
-function _get_forecast_params!(mgr::TimeSeriesManager, forecast::Forecast)
-    resolution = get_resolution(forecast)
-    interval = get_interval(forecast)
-    if isnothing(mgr.bulk_update_cache)
-        return get_forecast_parameters(
-            mgr.metadata_store;
-            resolution = resolution,
-            interval = interval,
-        )
-    end
-
-    key = (resolution, interval)
-    cached = get(mgr.bulk_update_cache.forecast_params, key, nothing)
-    if !isnothing(cached)
-        return cached
-    end
-
-    params = get_forecast_parameters(
-        mgr.metadata_store;
-        resolution = resolution,
-        interval = interval,
+# (owner_id::Int, owner_type::String, owner_category::InfraStore.OwnerCategory)
+# for the InfraStore binding. The owner is identified by its integer id.
+function _infrastore_owner_args(owner::TimeSeriesOwners)
+    return (
+        get_id(owner),
+        string(nameof(typeof(owner))),
+        get_owner_category(owner),
     )
-    if isnothing(params)
-        params = _get_forecast_params(forecast)
+end
+
+# The same identity without the type-name string, for the calls that never send it.
+function _infrastore_owner_id_category(owner::TimeSeriesOwners)
+    return (get_id(owner), get_owner_category(owner))
+end
+
+_feature_value(_, v::Union{Bool, Real, AbstractString}) = v
+
+_feature_value(k, v) = throw(
+    ArgumentError(
+        "time series feature `$k` must be a Bool, Real, or String, got $(typeof(v))",
+    ),
+)
+
+function _infrastore_features(features)
+    out = Dict{String, Any}()
+    for (k, v) in features
+        out[string(k)] = _feature_value(k, v)
     end
-    mgr.bulk_update_cache.forecast_params[key] = params
-    return params
+    return out
 end
 
 """
-Begin an update of time series. Use this function when adding many time series arrays
-in order to improve performance.
+Open a batch of time series work and run `func` on it, inside a store transaction.
 
-If an error occurs during the update, changes will be reverted.
+Additions made through the yielded [`TimeSeriesContext`](@ref) are buffered and
+written as one bulk call, so the store pays one catalog transaction for the block
+instead of one per series. The block commits when `func` returns.
 
-Using this function to remove time series is currently not supported.
+If `func` throws, the transaction is rolled back and the whole block is undone —
+buffered additions never reached the store, and everything that did, **including
+removals**, is reversed. A removal is recoverable only in here; outside a block the
+store frees the array as soon as its last reference goes.
+
+Blocks nest innermost-first: an inner block must finish before the one enclosing
+it.
+
+A batch that grows past `auto_flush_threshold` staged additions or
+`auto_flush_bytes` of staged array data — whichever comes first — is written out
+mid-block, so an arbitrarily large block holds a bounded amount of data in memory.
+Flushed work stays inside the transaction and rolls back with it.
+
+```julia
+time_series_transaction(mgr) do txn
+    for (component, profile) in profiles
+        add_time_series!(txn, component, profile)
+    end
+end
+```
 """
-function begin_time_series_update(
+function time_series_transaction(func::Function, mgr::TimeSeriesManager; kwargs...)
+    return _time_series_transaction(func, mgr, no_owner_validation; kwargs...)
+end
+
+function _time_series_transaction(
     func::Function,
     mgr::TimeSeriesManager,
+    owner_validator::Function;
+    auto_flush_threshold::Int = AUTO_FLUSH_THRESHOLD,
+    auto_flush_bytes::Int = AUTO_FLUSH_BYTES,
 )
-    if !isnothing(mgr.bulk_update_cache)
-        error(
-            "A bulk time series update is already in progress; " *
-            "nested or concurrent begin_time_series_update calls are not supported.",
-        )
+    _throw_if_read_only(mgr)
+    context = TimeSeriesContext(
+        mgr,
+        owner_validator;
+        auto_flush_threshold = auto_flush_threshold,
+        auto_flush_bytes = auto_flush_bytes,
+    )
+    begin_transaction!(context)
+    # `commit!` must stay inside the protected region: buffered additions are only
+    # written (and validated by the store) at the final flush it performs, so a bad
+    # add in a small block throws here rather than at `add_time_series!` time. If it
+    # escaped the try, `discard!` would never run and the store transaction would be
+    # left open holding the write lock.
+    result = try
+        r = func(context)
+        commit!(context)
+        r
+    catch
+        discard!(context)
+        rethrow()
     end
-    open_store!(mgr.data_store, "r+") do
-        original_ts_uuids = Set(list_existing_time_series_uuids(mgr.metadata_store))
-        mgr.bulk_update_cache =
-            BulkUpdateTSCache(Dict{Tuple{Dates.Period, Dates.Period}, ForecastParameters}())
-        try
-            SQLite.transaction(mgr.metadata_store.db) do
-                func()
-            end
-            optimize_database!(mgr.metadata_store)
-        catch
-            # If an error occurs, we can easily remove new time series data to ensure
-            # that the metadata database is consistent with the data.
-            # We currently can't restore time series data that was deleted.
-            new_ts_uuids = setdiff(
-                Set(list_existing_time_series_uuids(mgr.metadata_store)),
-                original_ts_uuids,
-            )
-            for uuid in new_ts_uuids
-                remove_time_series!(mgr.data_store, uuid)
-            end
-            rethrow()
-        finally
-            mgr.bulk_update_cache = nothing
-        end
-    end
+    return result
 end
 
-function bulk_add_time_series!(
-    mgr::TimeSeriesManager,
-    associations;
-    kwargs...,
-)
-    # TODO: deprecate this function if team agrees
-    ts_keys = TimeSeriesKey[]
-    begin_time_series_update(mgr) do
-        for association in associations
-            key = add_time_series!(
-                mgr,
-                association.owner,
-                association.time_series; association.features...,
-            )
-            push!(ts_keys, key)
-        end
-    end
-
-    return ts_keys
-end
-
+"""
+Add a time series directly to the store, outside any batch. A single add is atomic
+on its own; to batch many adds, open [`time_series_transaction`](@ref) and call
+`add_time_series!` on the yielded transaction instead.
+"""
 function add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
@@ -148,57 +165,104 @@ function add_time_series!(
     features...,
 )
     _throw_if_read_only(mgr)
-    forecast_params = _get_forecast_params!(mgr, time_series)
-    sts_params = StaticTimeSeriesParameters()
-    throw_if_does_not_support_time_series(owner)
-    check_time_series_data(time_series)
-    metadata_type = time_series_data_to_metadata(typeof(time_series))
-    metadata = metadata_type(time_series; features...)
-    ts_key = make_time_series_key(metadata)
-    check_params_compatibility(sts_params, forecast_params, time_series)
+    return infrastore_add_time_series!(mgr, owner, time_series; features...)
+end
 
-    if has_metadata(
-        mgr.metadata_store,
-        owner;
-        time_series_type = typeof(time_series),
-        name = get_name(metadata),
-        resolution = get_resolution(metadata),
-        interval = get_interval(metadata),
+"""
+Add a time series through an open transaction, buffering it into the block's one
+bulk write. If the block throws, the addition is rolled back with the rest of it.
+"""
+function add_time_series!(
+    context::TimeSeriesContext,
+    owner::TimeSeriesOwners,
+    time_series::TimeSeriesData;
+    features...,
+)
+    _throw_if_closed(context)
+    context.owner_validator(owner)
+    return _stage_on_context!(context, owner, time_series; features...)
+end
+
+"""
+Add the same time series to multiple components through an open transaction. Only
+one copy of the array is stored.
+"""
+function add_time_series!(
+    context::TimeSeriesContext,
+    components,
+    time_series::TimeSeriesData;
+    features...,
+)
+    # Component information is not embedded into the key, so every component
+    # produces the same one.
+    peeled = Iterators.peel(components)
+    isnothing(peeled) && throw(
+        ArgumentError(
+            "`components` is empty; there is nothing to associate " *
+            "$(summary(time_series)) with",
+        ),
+    )
+    first_component, rest = peeled
+    key = add_time_series!(context, first_component, time_series; features...)
+    for component in rest
+        add_time_series!(context, component, time_series; features...)
+    end
+    return key
+end
+
+function _stage_on_context!(
+    context::TimeSeriesContext,
+    owner::TimeSeriesOwners,
+    time_series::TimeSeriesData;
+    features...,
+)
+    key, nbytes = _infrastore_stage!(
+        _batch!(context),
+        context.mgr,
+        context.params_cache,
+        owner,
+        time_series;
         features...,
     )
-        throw(
-            ArgumentError(
-                "Time series data with duplicate attributes are already stored: " *
-                "$(metadata)",
-            ),
-        )
+    push!(context.keys, key)
+    # `nbytes` is the exact size of the encoded array the batch copied at stage
+    # time (computed where the array is materialized — never derived by walking
+    # the source objects, which costs more than the rest of the stage combined).
+    context.staged_bytes += nbytes
+    if length(context.keys) >= context.auto_flush_threshold ||
+       context.staged_bytes >= context.auto_flush_bytes
+        flush!(context)
     end
-
-    if !has_metadata(mgr.metadata_store, get_uuid(time_series))
-        serialize_time_series!(mgr.data_store, time_series)
-    end
-
-    add_metadata!(mgr.metadata_store, owner, metadata)
-    return ts_key
+    return key
 end
 
 function clear_time_series!(mgr::TimeSeriesManager)
     _throw_if_read_only(mgr)
-    clear_metadata!(mgr.metadata_store)
-    clear_time_series!(mgr.data_store)
+    clear_time_series!(get_data_store(mgr))
+    return
+end
+
+function compact_time_series!(mgr::TimeSeriesManager)
+    _throw_if_read_only(mgr)
+    return compact_time_series!(get_data_store(mgr))
 end
 
 function clear_time_series!(mgr::TimeSeriesManager, component::TimeSeriesOwners)
     _throw_if_read_only(mgr)
-    for metadata in list_metadata(mgr.metadata_store, component)
-        remove_time_series!(mgr, component, metadata)
-    end
+    owner_id, category = _infrastore_owner_id_category(component)
+    # One owner-scoped clear (order-independent, so it is not blocked by the
+    # core's SingleTimeSeries/DST removal guard).
+    InfraStore.clear!(
+        get_data_store(mgr).inner;
+        owner_id = owner_id,
+        owner_category = category,
+    )
     @debug "Cleared time_series in $(summary(component))." _group =
         LOG_GROUP_TIME_SERIES
     return
 end
 
-get_metadata(
+get_time_series_key(
     mgr::TimeSeriesManager,
     component::TimeSeriesOwners,
     time_series_type::Type{<:TimeSeriesData},
@@ -206,8 +270,7 @@ get_metadata(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = get_metadata(
-    mgr.metadata_store,
+) = infrastore_get_time_series_key(
     component,
     time_series_type,
     name;
@@ -216,7 +279,7 @@ get_metadata(
     features...,
 )
 
-list_metadata(
+list_time_series_keys(
     mgr::TimeSeriesManager,
     component::TimeSeriesOwners;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
@@ -224,8 +287,7 @@ list_metadata(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = list_metadata(
-    mgr.metadata_store,
+) = infrastore_owner_list_keys(
     component;
     time_series_type = time_series_type,
     name = name,
@@ -247,53 +309,58 @@ function remove_time_series!(
     features...,
 )
     _throw_if_read_only(mgr)
-    uuids = list_matching_time_series_uuids(
-        mgr.metadata_store;
-        time_series_type = time_series_type,
-        name = name,
-        resolution = resolution,
-        interval = interval,
-        features...,
-    )
-    remove_metadata!(
-        mgr.metadata_store,
-        owner;
-        time_series_type = time_series_type,
-        name = name,
-        resolution = resolution,
-        interval = interval,
-        features...,
-    )
-
-    @debug "Removed time_series metadata in $(summary(component))." _group =
-        LOG_GROUP_TIME_SERIES component time_series_type name features
-
-    for uuid in uuids
-        _remove_data_if_no_more_references(mgr, uuid)
+    store = get_data_store(mgr)
+    owner_id, category = _infrastore_owner_id_category(owner)
+    feats = Dict{String, Any}(string(k) => v for (k, v) in features)
+    # Subset (partial) feature/resolution matching: each bulk catalog call
+    # removes every stored series of the query type that contains at least the
+    # requested features, in one store transaction — no per-key listing or
+    # per-key transactions. The core refuses to remove a SingleTimeSeries whose
+    # array still backs a DeterministicSingleTimeSeries; surface that as the
+    # IS-level error.
+    try
+        _infrastore_remove_by_filter!(
+            store,
+            time_series_type;
+            owner_id = owner_id,
+            owner_category = category,
+            name = name,
+            resolution = resolution,
+            interval = interval,
+            features = feats,
+        )
+    catch e
+        # `catch`-block exception inspection: the DST-orphan guard can only fire for a
+        # SingleTimeSeries removal. An InvalidParameterError raised for any other query
+        # type — or for any other reason — must surface the store's own message.
+        if e isa InfraStore.InvalidParameterError &&
+           time_series_type <: SingleTimeSeries
+            throw(
+                ArgumentError(
+                    "Cannot remove SingleTimeSeries '$name' because it is attached to a " *
+                    "DeterministicSingleTimeSeries. Store reported: $(e.msg)"),
+            )
+        end
+        rethrow()
     end
-
     return
 end
 
+"""
+Remove exactly the time series that `key` identifies, and nothing else.
+
+A key is a fully-resolved identity, so this takes the store's exact-key removal
+path (whole-feature-set match) rather than the by-name subset filter: a sibling
+series of the same type/name/resolution/interval whose features are a strict
+superset of the key's is left in place.
+"""
 function remove_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
-    metadata::TimeSeriesMetadata,
+    key::TimeSeriesKey,
 )
     _throw_if_read_only(mgr)
-    remove_metadata!(mgr.metadata_store, owner, metadata)
-    @debug "Removed time_series metadata in $(summary(owner)) $(summary(metadata))." _group =
-        LOG_GROUP_TIME_SERIES
-    _remove_data_if_no_more_references(mgr, get_time_series_uuid(metadata))
-    return
-end
-
-function _remove_data_if_no_more_references(mgr::TimeSeriesManager, uuid::Base.UUID)
-    if !has_metadata(mgr.metadata_store, uuid)
-        remove_time_series!(mgr.data_store, uuid)
-        @debug "Removed time_series data $uuid." _group = LOG_GROUP_TIME_SERIES
-    end
-
+    infrastore_remove_time_series!(get_data_store(mgr), owner, key)
     return
 end
 
@@ -307,38 +374,16 @@ function compare_values(
     match_fn::Union{Function, Nothing},
     x::TimeSeriesManager,
     y::TimeSeriesManager;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
-    match = true
-    for name in fieldnames(TimeSeriesManager)
-        val_x = getproperty(x, name)
-        val_y = getproperty(y, name)
-        if name == :data_store && typeof(val_x) != typeof(val_y)
-            @warn "Cannot compare $(typeof(val_x)) and $(typeof(val_y))"
-            # TODO 1.0: workaround for not being able to convert Hdf5TimeSeriesStorage to
-            # InMemoryTimeSeriesStorage
-            continue
-        elseif name == :read_only
-            # Skip this because users can change it during deserialization and we test it
-            # separately.
-            continue
-        end
-
-        if !compare_values(
-            match_fn,
-            val_x,
-            val_y;
-            compare_uuids = compare_uuids,
-            exclude = exclude,
-        )
-            @error "TimeSeriesManager field = $name does not match" getproperty(x, name) getproperty(
-                y,
-                name,
-            )
-            match = false
-        end
-    end
-
-    return match
+    # `read_only` can be changed during deserialization and is tested separately;
+    # structural equality is the data store's count comparison.
+    return compare_values(
+        match_fn,
+        get_data_store(x),
+        get_data_store(y);
+        compare_ids = compare_ids,
+        exclude = exclude,
+    )
 end

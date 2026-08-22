@@ -12,6 +12,12 @@
 # downstream call sites (`IS.SU`, `IS._strip_units`, …) keep working.
 ###############################
 
+"""
+Relative (per-unit) markers and the [`RelativeQuantity`](@ref) wrapper. Domain-agnostic:
+expresses "device base" / "system base" / "natural unit" without assuming any particular
+physical domain. Downstream packages (e.g. PowerSystems) attach domain-specific meaning
+via categories and conversions.
+"""
 module RelativeUnits
 
 export AbstractUnitSystem, AbstractRelativeUnit

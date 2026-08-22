@@ -48,7 +48,6 @@ function get_time_series_array!(cache::TimeSeriesCache, timestamp::Dates.DateTim
         _get_time_series(cache);
         start_time = timestamp,
         len = len,
-        ignore_scaling_factors = _get_ignore_scaling_factors(cache),
     )
     if !isnothing(next_time) && timestamp == next_time
         _increment_next_time!(cache, len)
@@ -135,7 +134,6 @@ _get_start_time(c::TimeSeriesCache) = c.common.start_time
 _decrement_length_remaining!(c::TimeSeriesCache, num) = c.common.length_remaining[] -= num
 _get_name(c::TimeSeriesCache) = c.common.name
 _get_num_iterations(c::TimeSeriesCache) = c.common.num_iterations
-_get_ignore_scaling_factors(c::TimeSeriesCache) = c.common.ignore_scaling_factors
 _get_type(c::TimeSeriesCache) = typeof(c.common.ts[])
 _get_time_series(c::TimeSeriesCache) = c.common.ts[]
 _set_time_series!(c::TimeSeriesCache, ts) = c.common.ts[] = ts
@@ -144,7 +142,7 @@ _decrement_iterations_remaining!(c::TimeSeriesCache) = c.common.iterations_remai
 _get_resolution(cache::TimeSeriesCache) = get_resolution(_get_time_series(cache))
 
 struct TimeSeriesCacheKey
-    component_uuid::Base.UUID
+    component_id::Int
     time_series_type::Type{<:TimeSeriesData}
     name::String
     resolution::Dates.Period
@@ -168,7 +166,6 @@ struct TimeSeriesCacheCommon{T <: TimeSeriesData, U <: InfrastructureSystemsComp
     "Total iterations to traverse all data"
     num_iterations::Int
     iterations_remaining::Base.RefValue{Int}
-    ignore_scaling_factors::Bool
 
     function TimeSeriesCacheCommon(;
         ts,
@@ -177,7 +174,6 @@ struct TimeSeriesCacheCommon{T <: TimeSeriesData, U <: InfrastructureSystemsComp
         next_time,
         len,
         num_iterations,
-        ignore_scaling_factors,
     )
         return new{typeof(ts), typeof(component)}(
             Ref(ts),
@@ -192,7 +188,6 @@ struct TimeSeriesCacheCommon{T <: TimeSeriesData, U <: InfrastructureSystemsComp
             Ref(len),
             num_iterations,
             Ref(num_iterations),
-            ignore_scaling_factors,
         )
     end
 end
@@ -231,8 +226,6 @@ will return a TimeSeries.TimeArray covering one forecast window of length `horiz
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: forecast start time
   - `horizon_count::Union{Nothing, Int} = nothing`: forecast horizon count
   - `cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES`: maximum size of data to keep in memory
-  - `ignore_scaling_factors = false`: controls whether to ignore `scaling_factor_multiplier`
-    in the time series instance
   - `interval::Union{Nothing, Dates.Period} = nothing`: select among multiple forecasts
     that share `(type, name)` but differ in interval.
   - `resolution::Union{Nothing, Dates.Period} = nothing`: select among multiple forecasts
@@ -245,11 +238,10 @@ function ForecastCache(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     horizon_count::Union{Nothing, Int} = nothing,
     cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES,
-    ignore_scaling_factors = false,
     interval::Union{Nothing, Dates.Period} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: Forecast}
-    ts_metadata = get_time_series_metadata(
+    ts_metadata = get_time_series_key(
         T,
         component,
         name;
@@ -301,7 +293,6 @@ function ForecastCache(
             next_time = start_time,
             len = count,
             num_iterations = count,
-            ignore_scaling_factors = ignore_scaling_factors,
         ),
         in_memory_count,
         horizon_count,
@@ -370,8 +361,6 @@ return a TimeSeries.TimeArray of size 1.
   - `component::InfrastructureSystemsComponent`: component
   - `name::AbstractString`: time series name
   - `cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES`: maximum size of data to keep in memory
-  - `ignore_scaling_factors = false`: controls whether to ignore `scaling_factor_multiplier`
-    in the time series instance
   - `resolution::Union{Nothing, Dates.Period} = nothing`: select among multiple
     SingleTimeSeries that share `(type, name)` but differ in resolution.
 """
@@ -381,10 +370,9 @@ function StaticTimeSeriesCache(
     name::AbstractString;
     cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
-    ignore_scaling_factors = false,
     resolution::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: StaticTimeSeries}
-    ts_metadata = get_time_series_metadata(T, component, name; resolution = resolution)
+    ts_metadata = get_time_series_key(T, component, name; resolution = resolution)
     initial_timestamp = get_initial_timestamp(ts_metadata)
     if start_time === nothing
         start_time = initial_timestamp
@@ -422,7 +410,6 @@ function StaticTimeSeriesCache(
             next_time = start_time,
             len = total_length,
             num_iterations = total_length,
-            ignore_scaling_factors = ignore_scaling_factors,
         ),
         in_memory_rows,
     )
@@ -484,7 +471,6 @@ function make_time_series_cache(
     name,
     initial_time,
     len::Int;
-    ignore_scaling_factors = true,
     resolution::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: StaticTimeSeries}
     return StaticTimeSeriesCache(
@@ -492,7 +478,6 @@ function make_time_series_cache(
         component,
         name;
         start_time = initial_time,
-        ignore_scaling_factors = ignore_scaling_factors,
         resolution = resolution,
     )
 end
@@ -503,7 +488,6 @@ function make_time_series_cache(
     name,
     initial_time,
     horizon_count::Int;
-    ignore_scaling_factors = true,
     interval::Union{Nothing, Dates.Period} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 ) where {T <: AbstractDeterministic}
@@ -513,7 +497,6 @@ function make_time_series_cache(
         name;
         start_time = initial_time,
         horizon_count = horizon_count,
-        ignore_scaling_factors = ignore_scaling_factors,
         interval = interval,
         resolution = resolution,
     )
@@ -525,7 +508,6 @@ function make_time_series_cache(
     name,
     initial_time,
     horizon_count::Int;
-    ignore_scaling_factors = true,
     interval::Union{Nothing, Dates.Period} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
@@ -535,7 +517,6 @@ function make_time_series_cache(
         name;
         start_time = initial_time,
         horizon_count = horizon_count,
-        ignore_scaling_factors = ignore_scaling_factors,
         interval = interval,
         resolution = resolution,
     )

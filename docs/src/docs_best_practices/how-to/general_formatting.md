@@ -46,7 +46,6 @@ signature with types into the hyperlink reference.
     forecast::Forecast,
     start_time::Dates.DateTime;
     len::Union{Nothing, Int} = nothing,
-    ignore_scaling_factors = false,
     ))
     ```
 

@@ -17,15 +17,31 @@ function get_value end
 function set_value end
 export get_value, set_value
 
+# Time-series accessor exports. These getters/setters are defined on the time
+# series data types and on the `TimeSeriesKey` hierarchy.
+export get_count
+export get_features
+export get_horizon
+export get_initial_timestamp
+export get_interval
+export get_length
+export get_name
+export get_percentiles
+export get_resolution
+export get_scenario_count
+export get_time_series_type
+export set_name!
+
 import Base: @kwdef
-import CSV
 import DataFrames
 import DataFrames: DataFrame
 import Dates
 import JSON
 import TimeZones
 import GeoJSON
+import OpenAPI
 import PowerCoreOpenAPIModels
+import PowerTimeSeriesOpenAPIModels
 import Logging
 import Random
 import Pkg
@@ -35,11 +51,10 @@ import SHA
 import StringTemplates
 import TerminalLoggers: TerminalLogger, ProgressLevel
 import TimeSeries
+import InfraStore
 import TimerOutputs
 import TOML
 using DataStructures: OrderedDict, SortedDict
-import SQLite
-import Tables
 using LinearAlgebra: norm, dot
 
 using DocStringExtensions
@@ -108,13 +123,10 @@ Required interface functions for subtypes:
 
 Optional interface functions:
 
-  - get_uuid()
+  - [`get_id`](@ref)
+  - [`supports_time_series`](@ref)
 
-Subtypes may contain time series. Which requires
-
-  - `supports_time_series(::SupplementalAttribute)`
-
-All subtypes must include an instance of ComponentUUIDs in order to track
+All subtypes must include an instance of [`ComponentIDs`](@ref) in order to track
 components attached to each attribute.
 """
 abstract type SupplementalAttribute <: InfrastructureSystemsType end
@@ -174,39 +186,34 @@ include("utils/generate_structs.jl")
 include("utils/lazy_dict_from_iterator.jl")
 include("utils/logging.jl")
 include("utils/stdout_redirector.jl")
-include("utils/sqlite.jl")
 include("function_data/function_data.jl")
 include("utils/utils.jl")
 include("definitions.jl")
 include("internal.jl")
-include("time_series_storage.jl")
+include("store.jl")
 include("abstract_time_series.jl")
 include("forecasts.jl")
 include("static_time_series.jl")
 include("time_series_parameters.jl")
 include("containers.jl")
 include("component_container.jl")
-include("component_uuids.jl")
+include("component_ids.jl")
 include("geographic_supplemental_attribute.jl")
 include("data_source_supplemental_attribute.jl")
 include("openapi_converters.jl")
-include("generated/includes.jl")
-include("time_series_parser.jl")
+include("time_series_normalization.jl")
 include("single_time_series.jl")
+include("non_sequential_time_series.jl")
 include("deterministic_single_time_series.jl")
 include("deterministic.jl")
 include("probabilistic.jl")
 include("scenarios.jl")
-include("deterministic_metadata.jl")
-include("hdf5_time_series_storage.jl")
-include("in_memory_time_series_storage.jl")
 include("time_series_structs.jl")
 include("function_data/time_series_function_data.jl")
-include("tuple_time_series.jl")
-include("time_series_formats.jl")
-include("time_series_metadata_store.jl")
+include("time_series_context.jl")
 include("time_series_manager.jl")
 include("time_series_interface.jl")
+include("infrastore.jl")
 include("time_series_cache.jl")
 include("time_series_utils.jl")
 include("supplemental_attribute_associations.jl")
@@ -216,6 +223,8 @@ include("iterators.jl")
 include("component.jl")
 include("serialization.jl")
 include("system_data.jl")
+# After system_data.jl: the bulk catalog reads take a `SystemData`.
+include("openapi_associations.jl")
 include("subsystems.jl")
 include("validation.jl")
 include("component_selector.jl")

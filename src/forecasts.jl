@@ -2,30 +2,30 @@
 Supertype for forecast time series
 Current concrete subtypes are:
 - [`Deterministic`](@ref)
-- [`DeterministicSingleTimeSeries`](@ref)
 - [`Scenarios`](@ref)
 - [`Probabilistic`](@ref)
+- [`DeterministicSingleTimeSeries`](@ref) — a query-only marker; reads materialize a
+  [`Deterministic`](@ref)
 
-Subtypes of Forecast must implement:
+Instantiable subtypes of Forecast must implement:
 - `get_horizon_count`
 - `get_initial_times`
 - `get_initial_timestamp`
 - `get_name`
-- `get_scaling_factor_multiplier`
 - `get_window`
 - `iterate_windows`
 """
-abstract type Forecast <: TimeSeriesData end
+abstract type Forecast{T} <: TimeSeriesData{T} end
 
 Base.length(ts::Forecast) = get_count(ts)
 
 """
 Supertype for all deterministic forecast time series.
 
-Concrete subtypes include [`Deterministic`](@ref) and
+Concrete subtypes are [`Deterministic`](@ref) and the query-only marker
 [`DeterministicSingleTimeSeries`](@ref).
 """
-abstract type AbstractDeterministic <: Forecast end
+abstract type AbstractDeterministic{T} <: Forecast{T} end
 
 function check_time_series_data(forecast::Forecast)
     _check_forecast_data(forecast)
@@ -65,11 +65,14 @@ function _check_forecast_interval(forecast::Forecast)
     end
 end
 
-# This method requires that the forecast type implement a `get_data` method like
-# Deterministic.
-function eltype_data_common(forecast::Forecast)
-    return eltype(first(values(get_data(forecast))))
-end
+# Element type and per-window array rank of a forecast's window dict, used to infer
+# the `{T, N}` parameters of the concrete forecast structs.
+_window_eltype(data::AbstractDict) = eltype(valtype(data))
+_window_ndims(data::AbstractDict) = ndims(valtype(data))
+
+# Normalize a window dict to a `SortedDict`; copy-free when it already is one.
+_ensure_sorted_dict(data::SortedDict) = data
+_ensure_sorted_dict(data::AbstractDict) = SortedDict(data)
 
 # This method requires that the forecast type implement a `get_data` method like
 # Deterministic.

@@ -1,838 +1,386 @@
-const SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME = "supplemental_attributes"
-
-# Design note:
-# Supplemental attributes and time series are stored in independent SQLite databases.
-# Ideally, they would be different tables in the same database. This is not practical
-# because of requirements set by the team for serialization output files.
-#
-# Background:
-#   - Time series metadata is always persisted as a SQLite file during serialization.
-#   - That SQLite file is written as an HDF5 dataset in the time series data file.
-#   - The result of serialization is system.json, system_metadata.json, and
-#     system_time_series.h5.
-#   - If there is no time series in the system, then there is no extra file: only
-#     system.json and system_metadata.json.
-#
-# If we persist supplemental attribute associations to a SQLite file and there is no time
-# series, serialization would produce an extra file. The team was strongly opposed to this
-# and set a requirement that those associations must be written to the system JSON file.
-#
-# Rather than try to manage the complexities of temporarily sharing a database across
-# serialization and deepcopy operations, this design keeps them separate in order to
-# simplifiy the code. The supplemental attribute database is always ephemeral.
-
-mutable struct SupplementalAttributeAssociations
-    db::SQLite.DB
-    # If we don't cache SQL statements, there is a cost of 3-4 us on every query.
-    cached_statements::Dict{String, SQLite.Stmt}
-    # If you add any fields, ensure they are managed in deepcopy_internal below.
-end
+# Associations live in the store's `supplemental_attribute_associations` table, not in the
+# system JSON, so a system with attributes but no time series still produces a storage
+# artifact; the store enforces uniqueness on `(component_id, attribute_id)`.
 
 """
-Construct a new SupplementalAttributeAssociations with an in-memory database.
+Tracks which supplemental attributes are attached to which components.
+
+This is the adapter over the InfraStore store: it keeps InfrastructureSystems' dispatch-based
+API — the `Type`-taking overloads, and the expansion of an abstract type into the
+concrete subtype names the store filters on — and forwards everything else.
+
+Abstract-type expansion deliberately stays on this side. The store filters on lists of
+concrete type-name strings and knows nothing about the Julia type hierarchy, so
+`get_all_subtype_names` is applied here before any query is issued.
 """
-function SupplementalAttributeAssociations(; create_indexes = true)
-    associations =
-        SupplementalAttributeAssociations(SQLite.DB(), Dict{String, SQLite.Stmt}())
-    _create_attribute_associations_table!(associations)
-    if create_indexes
-        _create_indexes!(associations)
-    end
-    @debug "Initialized new supplemental attributes association table" _group =
-        LOG_GROUP_SUPPLEMENTAL_ATTRIBUTES
-    return associations
+struct SupplementalAttributeAssociations
+    store::Store
+    # Deferred-insert buffer for `begin_association_batch`. Empty and inactive otherwise;
+    # `pending_pairs` mirrors `pending` so the duplicate probe stays O(1) without re-scanning.
+    pending::Vector{InfraStore.SupplementalAttributeAssociation}
+    pending_pairs::Set{Tuple{Int, Int}}
+    deferring::Base.RefValue{Bool}
 end
 
-function _create_attribute_associations_table!(
-    associations::SupplementalAttributeAssociations,
+SupplementalAttributeAssociations(store::Store) = SupplementalAttributeAssociations(
+    store,
+    InfraStore.SupplementalAttributeAssociation[],
+    Set{Tuple{Int, Int}}(),
+    Ref(false),
 )
-    schema = [
-        "attribute_uuid TEXT NOT NULL",
-        "attribute_type TEXT NOT NULL",
-        "component_uuid TEXT NOT NULL",
-        "component_type TEXT NOT NULL",
-    ]
-    schema_text = join(schema, ",")
-    _execute(
-        associations,
-        "CREATE TABLE $(SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME)($(schema_text))",
-    )
-    @debug "Created supplemental attribute association table" schema _group =
-        LOG_GROUP_SUPPLEMENTAL_ATTRIBUTES
-    return
-end
-
-function _create_indexes!(associations::SupplementalAttributeAssociations)
-    SQLite.createindex!(
-        associations.db,
-        SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-        "by_attribute",
-        [
-            "attribute_uuid",
-            "component_uuid",
-            "component_type",
-        ];
-        unique = false,
-    )
-    SQLite.createindex!(
-        associations.db,
-        SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-        "by_component",
-        [
-            "component_uuid",
-            "attribute_uuid",
-            "attribute_type",
-        ];
-        unique = false,
-    )
-
-    optimize_database!(associations)
-    return
-end
-
-function Base.deepcopy_internal(val::SupplementalAttributeAssociations, dict::IdDict)
-    if haskey(dict, val)
-        return dict[val]
-    end
-    new_db = SQLite.DB()
-    backup(new_db, val.db)
-    new_associations =
-        SupplementalAttributeAssociations(new_db, Dict{String, SQLite.Stmt}())
-    dict[val] = new_associations
-    return new_associations
-end
-
-const _QUERY_INSERT_C_ATTR_ASSOCIATION = StringTemplates.@template """
-    INSERT INTO $table_name
-    VALUES($placeholder)
-"""
 
 """
-Add a supplemental attribute association to the associations. The caller must check for
-duplicates.
+The [`Store`](@ref) holding these association rows. Shared with the system's
+[`TimeSeriesManager`](@ref).
+"""
+get_data_store(associations::SupplementalAttributeAssociations) = associations.store
+
+# The store handle the queries below run against.
+_assoc_store(associations::SupplementalAttributeAssociations) = associations.store.inner
+
+# Render a type filter the way the store wants it: a vector of concrete type names, or
+# `nothing` for "no filter". An abstract type with no concrete subtypes yields an empty
+# vector, which the store treats as "match nothing" — the same answer the old
+# `IN ()`-avoiding special case produced.
+#
+# The two ROOT abstract types are answered with "no filter" rather than by expansion. Every
+# stored row matches them by definition, so the filter would be a no-op — but building it
+# means an `InteractiveUtils.subtypes` walk of the whole hierarchy plus a fresh
+# `Vector{String}` on EVERY call, and these are exactly the shapes the per-component
+# accessors use (`get_supplemental_attributes(component)` passes `SupplementalAttribute`).
+# Callers that need every row at once should use `list_supplemental_attribute_association_rows`
+# instead of one query per component.
+_type_names(::Nothing) = nothing
+_type_names(::Type{SupplementalAttribute}) = nothing
+_type_names(::Type{InfrastructureSystemsComponent}) = nothing
+function _type_names(type::Type{<:InfrastructureSystemsType})
+    isabstracttype(type) && return get_all_subtype_names(type)
+    return [string(nameof(type))]
+end
+
+"""
+Add an association between a component and a supplemental attribute.
+
+Throws `ArgumentError` if either object has an unassigned ID. The store rejects a repeat
+of the same `(component_id, attribute_id)` pair; callers wanting a domain-specific
+message check [`has_association`](@ref) first.
 """
 function add_association!(
     associations::SupplementalAttributeAssociations,
     component::InfrastructureSystemsComponent,
     attribute::SupplementalAttribute,
 )
-    TimerOutputs.@timeit_debug SYSTEM_TIMERS "add supplemental attribute association" begin
-        row = (
-            string(get_uuid(attribute)),
-            string(nameof(typeof(attribute))),
-            string(get_uuid(component)),
-            string(nameof(typeof(component))),
+    component_id = get_id(component)
+    attribute_id = get_id(attribute)
+    if component_id == UNASSIGNED_ID
+        throw(ArgumentError("$(summary(component)) does not have an ID assigned"))
+    end
+    if attribute_id == UNASSIGNED_ID
+        throw(ArgumentError("$(summary(attribute)) does not have an ID assigned"))
+    end
+
+    row = InfraStore.SupplementalAttributeAssociation(
+        component_id,
+        string(nameof(typeof(component))),
+        attribute_id,
+        string(nameof(typeof(attribute))),
+    )
+    if associations.deferring[]
+        push!(associations.pending, row)
+        push!(associations.pending_pairs, (component_id, attribute_id))
+        return
+    end
+    InfraStore.add_supplemental_attribute_association!(_assoc_store(associations), row)
+    return
+end
+
+"""
+Defer association inserts until `func` returns, then write them all in one store call.
+
+WRITE-ONLY while open: every read except the exact `(component, attribute)`
+[`has_association`](@ref) probe sees the store alone, not the buffered rows; and a throw
+drops the buffer without rolling back the attributes already attached to `mgr.data`, so use
+the `SystemData`-level [`begin_association_batch`](@ref) when the manager must roll back too.
+
+Not reentrant: a nested call errors rather than silently flattening two scopes into one.
+"""
+function begin_association_batch(
+    func::Function,
+    associations::SupplementalAttributeAssociations,
+)
+    associations.deferring[] && error(
+        "begin_association_batch: already inside a batch; nesting is not supported",
+    )
+    associations.deferring[] = true
+    try
+        func()
+        isempty(associations.pending) && return
+        InfraStore.add_supplemental_attribute_associations!(
+            _assoc_store(associations), associations.pending,
         )
-        placeholder = chop(repeat("?,", length(row)))
-        _execute_cached(
-            associations,
-            StringTemplates.render(
-                _QUERY_INSERT_C_ATTR_ASSOCIATION;
-                table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-                placeholder = placeholder,
-            ),
-            row,
-        )
-        @debug "Added association bewteen $(summary(attribute)) and $(summary(component))"
-        LOG_GROUP_SUPPLEMENTAL_ATTRIBUTES
+    finally
+        associations.deferring[] = false
+        empty!(associations.pending)
+        empty!(associations.pending_pairs)
     end
     return
 end
 
-const _QUERY_DROP_ATTR_TABLE = "DROP TABLE IF EXISTS $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME"
-
-const _QUERY_GET_ATTRIBUTE_COUNTS_BY_TYPE = """
-    SELECT
-        attribute_type
-        ,count(*) AS count
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    GROUP BY
-        attribute_type
-    ORDER BY
-        attribute_type
 """
-
-"""
-Return a Vector of OrderedDict of stored time series counts by type.
+Return a `Vector{OrderedDict}` of attribute counts by type, with keys `"type"` and
+`"count"`.
 """
 function get_attribute_counts_by_type(associations::SupplementalAttributeAssociations)
-    table = Tables.rowtable(_execute(associations, _QUERY_GET_ATTRIBUTE_COUNTS_BY_TYPE))
     return [
-        OrderedDict("type" => x.attribute_type, "count" => x.count) for x in table
+        OrderedDict{String, Any}("type" => row.attribute_type, "count" => row.count)
+        for
+        row in InfraStore.supplemental_attribute_counts_by_type(_assoc_store(associations))
     ]
 end
 
-const _QUERY_GET_ATTRIBUTE_SUMMARY_TABLE = """
-    SELECT
-        attribute_type
-        ,component_type
-        ,count(*) AS count
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    GROUP BY
-        attribute_type
-        ,component_type
-    ORDER BY
-        attribute_type
-        ,component_type
 """
-
-"""
-Return a DataFrame with the number of supplemental attributes by type for components.
+Return a `DataFrame` of association counts by attribute type and component type.
 """
 function get_attribute_summary_table(associations::SupplementalAttributeAssociations)
-    return DataFrame(_execute(associations, _QUERY_GET_ATTRIBUTE_SUMMARY_TABLE))
-end
-
-const _QUERY_GET_NUM_ATTRIBUTES = """
-    SELECT COUNT(DISTINCT attribute_uuid) AS count
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-"""
-
-"""
-Return the number of supplemental attributes.
-"""
-function get_num_attributes(associations::SupplementalAttributeAssociations)
-    return _execute_count(associations, _QUERY_GET_NUM_ATTRIBUTES)
-end
-
-const _QUERY_GET_NUM_COMPONENTS_WITH_ATTRIBUTES = """
-    SELECT COUNT(DISTINCT component_uuid) AS count
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-"""
-
-"""
-Return the number of components with supplemental attributes.
-"""
-function get_num_components_with_attributes(associations::SupplementalAttributeAssociations)
-    return _execute_count(associations, _QUERY_GET_NUM_COMPONENTS_WITH_ATTRIBUTES)
-end
-
-"""
-Update database statistics for optimal query planning.
-Call this after bulk operations or significant data changes.
-"""
-function optimize_database!(associations::SupplementalAttributeAssociations)
-    # Run ANALYZE to update query planner statistics
-    SQLite.DBInterface.execute(associations.db, "ANALYZE")
-    @debug "Optimized database statistics" _group = LOG_GROUP_SUPPLEMENTAL_ATTRIBUTES
-    return
-end
-
-const _QUERY_HAS_ASSOCIATION_BY_ATTRIBUTE = """
-    SELECT attribute_uuid
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    WHERE attribute_uuid = ?
-    LIMIT 1
-"""
-
-"""
-Return true if there is at least one association matching the inputs.
-"""
-function has_association(
-    associations::SupplementalAttributeAssociations,
-    attribute::SupplementalAttribute,
-)
-    # Note: Unlike the other has_association methods, this is not covered by an index.
-    params = (string(get_uuid(attribute)),)
-    return !isempty(
-        Tables.rowtable(
-            _execute_cached(associations, _QUERY_HAS_ASSOCIATION_BY_ATTRIBUTE, params),
-        ),
+    rows = InfraStore.supplemental_attribute_summary(_assoc_store(associations))
+    return DataFrame(;
+        attribute_type = [r.attribute_type for r in rows],
+        component_type = [r.component_type for r in rows],
+        count = [r.count for r in rows],
     )
 end
 
-const _QUERY_HAS_ASSOCIATION_BY_COMPONENT_ATTRIBUTE = """
-    SELECT attribute_uuid
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    WHERE attribute_uuid = ? AND component_uuid = ?
-    LIMIT 1
+"""
+Return the number of distinct supplemental attributes with associations.
+"""
+get_num_attributes(associations::SupplementalAttributeAssociations) =
+    InfraStore.count_supplemental_attributes(_assoc_store(associations))
+
+"""
+Return the number of distinct components with supplemental attributes.
+"""
+get_num_components_with_attributes(associations::SupplementalAttributeAssociations) =
+    InfraStore.count_components_with_attributes(_assoc_store(associations))
+
+# Each query below selects rows by some mix of a component, an attribute, and
+# their types; every such argument maps to exactly one store filter keyword, so
+# the queries just splat whatever they were given. `nothing` contributes no
+# filter, which is how the optional type arguments stay optional.
+_assoc_filters(::Nothing) = ()
+_assoc_filters(component::InfrastructureSystemsComponent) =
+    (:component_id => get_id(component),)
+_assoc_filters(attribute::SupplementalAttribute) = (:attribute_id => get_id(attribute),)
+_assoc_filters(component_type::Type{<:InfrastructureSystemsComponent}) =
+    (:component_types => _type_names(component_type),)
+_assoc_filters(attribute_type::Type{<:SupplementalAttribute}) =
+    (:attribute_types => _type_names(attribute_type),)
+
+# The store filter keywords implied by a query's positional arguments.
+_assoc_query(args...) = (p for arg in args for p in _assoc_filters(arg))
+
+"""
+Return true if there is at least one association matching the arguments: a component,
+an attribute, both, or a component together with an attribute type (which may be
+abstract).
+
+Reads the store alone. Inside an open [`begin_association_batch`](@ref) this does NOT see
+rows buffered but not yet flushed — only the exact `(component, attribute)` pair overload,
+below, checks the pending buffer too.
+"""
+has_association(associations::SupplementalAttributeAssociations, args...) =
+    InfraStore.has_supplemental_attribute_association(
+        _assoc_store(associations); _assoc_query(args...)...)
+
+"""
+The exact `(component, attribute)` probe, which also sees rows buffered by
+[`begin_association_batch`](@ref).
+
+This is the shape `add_supplemental_attribute!` calls before every attach, and the only one
+a batch has to answer correctly: without it a document naming the same pair twice would be
+buffered twice and only rejected at flush, by the store, without naming the objects.
 """
 function has_association(
     associations::SupplementalAttributeAssociations,
     component::InfrastructureSystemsComponent,
     attribute::SupplementalAttribute,
 )
-    a_uuid = get_uuid(attribute)
-    c_uuid = get_uuid(component)
-    params = (string(a_uuid), string(c_uuid))
-    return !isempty(
-        _execute_cached(
-            associations,
-            _QUERY_HAS_ASSOCIATION_BY_COMPONENT_ATTRIBUTE,
-            params,
-        ),
+    pair = (get_id(component), get_id(attribute))
+    associations.deferring[] && pair in associations.pending_pairs && return true
+    return InfraStore.has_supplemental_attribute_association(
+        _assoc_store(associations);
+        component_id = pair[1],
+        attribute_id = pair[2],
     )
 end
 
-const _QUERY_HAS_ASSOCIATION_BY_COMPONENT = """
-    SELECT attribute_uuid
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    WHERE component_uuid = ?
-    LIMIT 1
 """
-function has_association(
+Return the IDs of components associated with the given attribute or attribute type,
+optionally restricted to a component type. Both types may be abstract.
+"""
+list_associated_component_ids(
     associations::SupplementalAttributeAssociations,
-    component::InfrastructureSystemsComponent,
-)
-    params = (string(get_uuid(component)),)
-    return !isempty(
-        Tables.rowtable(
-            _execute_cached(associations, _QUERY_HAS_ASSOCIATION_BY_COMPONENT, params),
-        ),
-    )
-end
+    attribute::Union{SupplementalAttribute, Type{<:SupplementalAttribute}},
+    component_type::Union{Nothing, Type{<:InfrastructureSystemsComponent}},
+) = InfraStore.list_components_with_attributes(
+    _assoc_store(associations); _assoc_query(attribute, component_type)...)
 
-const _QUERY_HAS_ASSOCIATION_BY_COMP_ATTR_TYPE = """
-    SELECT attribute_uuid
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    WHERE component_uuid = ? AND attribute_type = ?
-    LIMIT 1
 """
-function has_association(
+Return the IDs of supplemental attributes associated with the given component or
+component type, optionally restricted to an attribute type. Both types may be abstract.
+"""
+list_associated_supplemental_attribute_ids(
     associations::SupplementalAttributeAssociations,
-    component::InfrastructureSystemsComponent,
-    attribute_type::Type{<:SupplementalAttribute},
-)
-    params = (string(get_uuid(component)), string(nameof(attribute_type)))
-    return !isempty(
-        Tables.rowtable(
-            _execute_cached(associations, _QUERY_HAS_ASSOCIATION_BY_COMP_ATTR_TYPE, params),
-        ),
-    )
-end
-
-# component UUIDS from attribute
-const _QUERY_LIST_ASSOCIATED_COMP_UUIDS = """
-    SELECT DISTINCT component_uuid
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    WHERE attribute_uuid = ?
-"""
+    component::Union{
+        InfrastructureSystemsComponent, Type{<:InfrastructureSystemsComponent},
+    },
+    attribute_type::Union{Nothing, Type{<:SupplementalAttribute}} = nothing,
+) = InfraStore.list_supplemental_attribute_ids(
+    _assoc_store(associations); _assoc_query(component, attribute_type)...)
 
 """
-Return the distinct component UUIDs associated with the attribute.
+Return the `(component_id, attribute_id)` pairs for the given attribute and component
+types. Both types may be abstract.
 """
-function list_associated_component_uuids(
-    associations::SupplementalAttributeAssociations,
-    attribute::SupplementalAttribute,
-    ::Nothing,
-)
-    params = (string(get_uuid(attribute)),)
-    table = Tables.columntable(
-        _execute_cached(associations, _QUERY_LIST_ASSOCIATED_COMP_UUIDS, params),
-    )
-    return Base.UUID.(table.component_uuid)
-end
-
-# attribute UUIDS from component
-const _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_UUIDS = """
-    SELECT DISTINCT attribute_uuid
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    WHERE component_uuid = ?
-"""
-
-"""
-Return the distinct attribute UUIDs associated with the component.
-"""
-function list_associated_supplemental_attribute_uuids(
-    associations::SupplementalAttributeAssociations,
-    component::InfrastructureSystemsComponent,
-    ::Nothing,
-)
-    params = (string(get_uuid(component)),)
-    table = Tables.columntable(
-        _execute_cached(
-            associations,
-            _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_UUIDS,
-            params,
-        ),
-    )
-    return Base.UUID.(table.attribute_uuid)
-end
-
-list_associated_supplemental_attribute_uuids(
-    associations::SupplementalAttributeAssociations,
-    component::InfrastructureSystemsComponent,
-) = list_associated_supplemental_attribute_uuids(associations, component, nothing)
-
-# component UUIDS from attribute plus component type
-const _QUERY_LIST_ASSOCIATED_COMP_UUIDS_BY_C_TYPE = StringTemplates.@template """
-    SELECT DISTINCT component_uuid
-    FROM $table_name
-    WHERE attribute_uuid = ? AND $component_type_clause
-"""
-
-"""
-Return the distinct component UUIDs associated with the attribute, filter by component type.
-"""
-function list_associated_component_uuids(
-    associations::SupplementalAttributeAssociations,
-    attribute::SupplementalAttribute,
-    component_type::Type{<:InfrastructureSystemsComponent},
-)
-    params = [string(get_uuid(attribute))]
-    component_type_clause = _get_type_clause!(params, component_type, "component_type")
-    query = StringTemplates.render(
-        _QUERY_LIST_ASSOCIATED_COMP_UUIDS_BY_C_TYPE;
-        table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-        component_type_clause = component_type_clause,
-    )
-    table = Tables.columntable(
-        _execute_cached(associations, query, params),
-    )
-    return Base.UUID.(table.component_uuid)
-end
-
-# attribute UUIDS from component plus attribute type
-const _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_UUIDS_BY_A_TYPE =
-    StringTemplates.@template """
-    SELECT DISTINCT attribute_uuid
-    FROM $table_name
-    WHERE component_uuid = ? AND $attribute_type_clause
-"""
-
-"""
-Return the distinct attribute UUIDs associated with the component, filter by attribute type.
-"""
-function list_associated_supplemental_attribute_uuids(
-    associations::SupplementalAttributeAssociations,
-    component::InfrastructureSystemsComponent,
-    attribute_type::Type{<:SupplementalAttribute},
-)
-    params = [string(get_uuid(component))]
-    attribute_type_clause = _get_type_clause!(params, attribute_type, "attribute_type")
-    query = StringTemplates.render(
-        _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_UUIDS_BY_A_TYPE;
-        table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-        attribute_type_clause = attribute_type_clause,
-    )
-    table = Tables.columntable(
-        _execute_cached(associations, query, params),
-    )
-    return Base.UUID.(table.attribute_uuid)
-end
-
-# component UUIDS from attribute type driver function
-"""
-Return the distinct component UUIDs associated with the attribute type.
-"""
-function list_associated_component_uuids(
-    associations::SupplementalAttributeAssociations,
-    attribute_type::Type{<:SupplementalAttribute},
-    ::Nothing,
-)
-    if isconcretetype(attribute_type)
-        return _list_associated_component_uuids(associations, (attribute_type,))
-    end
-
-    subtypes = get_all_concrete_subtypes(attribute_type)
-    return _list_associated_component_uuids(associations, subtypes)
-end
-
-# attribute UUIDS from component type driver function
-"""
-Return the distinct attribute UUIDs associated with the component type.
-"""
-function list_associated_supplemental_attribute_uuids(
-    associations::SupplementalAttributeAssociations,
-    component_type::Type{<:InfrastructureSystemsComponent},
-    ::Nothing,
-)
-    if isconcretetype(component_type)
-        return _list_associated_supplemental_attribute_uuids(
-            associations,
-            (component_type,),
-        )
-    end
-
-    subtypes = get_all_concrete_subtypes(component_type)
-    return _list_associated_supplemental_attribute_uuids(associations, subtypes)
-end
-
-# component UUIDS from attribute type plus component type
-const _QUERY_LIST_ASSOCIATED_COMP_UUIDS_BY_TYPES = StringTemplates.@template """
-    SELECT DISTINCT component_uuid
-    FROM $table_name
-    WHERE $attribute_type_clause AND $component_type_clause
-"""
-
-"""
-Return the distinct component UUIDs associated with the attribute type, filter by
-component_type.
-"""
-function list_associated_component_uuids(
+function list_associated_pair_ids(
     associations::SupplementalAttributeAssociations,
     attribute_type::Type{<:SupplementalAttribute},
     component_type::Type{<:InfrastructureSystemsComponent},
 )
-    params = String[]
-    attribute_type_clause = _get_type_clause!(params, attribute_type, "attribute_type")
-    component_type_clause = _get_type_clause!(params, component_type, "component_type")
-    query = StringTemplates.render(
-        _QUERY_LIST_ASSOCIATED_COMP_UUIDS_BY_TYPES;
-        table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-        attribute_type_clause = attribute_type_clause,
-        component_type_clause = component_type_clause,
+    rows = InfraStore.list_supplemental_attribute_associations(
+        _assoc_store(associations);
+        _assoc_query(attribute_type, component_type)...,
     )
-    table = Tables.columntable(_execute_cached(associations, query, params))
-    return Base.UUID.(table.component_uuid)
-end
-
-# attribute UUIDS from attribute type plus component type
-const _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_UUIDS_BY_TYPES =
-    StringTemplates.@template """
-    SELECT DISTINCT attribute_uuid
-    FROM $table_name
-    WHERE $attribute_type_clause AND $component_type_clause
-"""
-
-"""
-Return the distinct attribute UUIDs associated with the component type, filter by
-attribute_type.
-"""
-function list_associated_supplemental_attribute_uuids(
-    associations::SupplementalAttributeAssociations,
-    component_type::Type{<:InfrastructureSystemsComponent},
-    attribute_type::Type{<:SupplementalAttribute},
-)
-    params = String[]
-    attribute_type_clause = _get_type_clause!(params, attribute_type, "attribute_type")
-    component_type_clause = _get_type_clause!(params, component_type, "component_type")
-    query = StringTemplates.render(
-        _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_UUIDS_BY_TYPES;
-        table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-        attribute_type_clause = attribute_type_clause,
-        component_type_clause = component_type_clause,
-    )
-    table = Tables.columntable(_execute_cached(associations, query, params))
-    return Base.UUID.(table.attribute_uuid)
-end
-
-const _QUERY_LIST_ASSOCIATED_PAIR_UUIDS = StringTemplates.@template """
-    SELECT DISTINCT component_uuid, attribute_uuid
-    FROM $table_name
-    WHERE $component_type_clause AND $attribute_type_clause
-"""
-
-"""
-Return the component and attribute UUIDs that are associated with the given types.
-"""
-function list_associated_pair_uuids(
-    associations::SupplementalAttributeAssociations,
-    attribute_type::Type{<:SupplementalAttribute},
-    component_type::Type{<:InfrastructureSystemsComponent},
-)
-    params = String[]
-    component_type_clause = _get_type_clause!(params, component_type, "component_type")
-    attribute_type_clause = _get_type_clause!(params, attribute_type, "attribute_type")
-    query = StringTemplates.render(
-        _QUERY_LIST_ASSOCIATED_PAIR_UUIDS;
-        table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-        component_type_clause = component_type_clause,
-        attribute_type_clause = attribute_type_clause,
-    )
-    table = Tables.rowtable(_execute_cached(associations, query, params))
-    return [(Base.UUID(row.component_uuid), Base.UUID(row.attribute_uuid)) for row in table]
-end
-
-function _get_type_clause!(
-    params::Vector{String},
-    type::Type{<:InfrastructureSystemsType},
-    column::String,
-)
-    if isabstracttype(type)
-        subtypes = [string(nameof(x)) for x in get_all_concrete_subtypes(type)]
-        type_clause = if length(subtypes) == 1
-            "$column = ?"
-        else
-            placeholder = chop(repeat("?,", length(subtypes)))
-            "$column IN ($placeholder)"
-        end
-        for subtype in subtypes
-            push!(params, subtype)
-        end
-    else
-        type_clause = "$column = ?"
-        push!(params, string(nameof(type)))
-    end
-
-    return type_clause
-end
-
-# component UUIDs from attribute type implementation
-const _QUERY_LIST_ASSOCIATED_COMP_UUIDS_BY_ONE_TYPE = """
-    SELECT DISTINCT component_uuid
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    WHERE attribute_type = ?
-"""
-
-const _QUERY_LIST_ASSOCIATED_COMP_UUIDS_BY_MULTIPLE_TYPES = StringTemplates.@template """
-    SELECT DISTINCT component_uuid
-    FROM $table_name
-    WHERE attribute_type IN ($placeholder)
-"""
-
-function _list_associated_component_uuids(
-    associations::SupplementalAttributeAssociations,
-    attribute_types,
-)
-    len = length(attribute_types)
-    if len == 0
-        # This would require an abstract type with no subtypes. Just here for completeness.
-        return Base.UUID[]
-    elseif len == 1
-        query = _QUERY_LIST_ASSOCIATED_COMP_UUIDS_BY_ONE_TYPE
-        params = (string(nameof(first(attribute_types))),)
-    else
-        placeholder = chop(repeat("?,", length(attribute_types)))
-        params = Tuple(string(nameof(type)) for type in attribute_types)
-        query = StringTemplates.render(
-            _QUERY_LIST_ASSOCIATED_COMP_UUIDS_BY_MULTIPLE_TYPES;
-            table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-            placeholder = placeholder,
-        )
-    end
-
-    table = Tables.columntable(_execute_cached(associations, query, params))
-    return Base.UUID.(table.component_uuid)
-end
-
-# attribute UUIDs from component type implementation
-const _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_UUIDS_BY_ONE_TYPE = """
-    SELECT DISTINCT attribute_uuid
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    WHERE component_type = ?
-"""
-
-const _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_UUIDS_BY_MULTIPLE_TYPES =
-    StringTemplates.@template """
-    SELECT DISTINCT attribute_uuid
-    FROM $table_name
-    WHERE component_type IN ($placeholder)
-"""
-
-function _list_associated_supplemental_attribute_uuids(
-    associations::SupplementalAttributeAssociations,
-    component_types,
-)
-    len = length(component_types)
-    if len == 0
-        # This would require an abstract type with no subtypes. Just here for completeness.
-        return Base.UUID[]
-    elseif len == 1
-        query = _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_UUIDS_BY_ONE_TYPE
-        params = (string(nameof(first(component_types))),)
-    else
-        placeholder = chop(repeat("?,", length(component_types)))
-        params = Tuple(string(nameof(type)) for type in component_types)
-        query = StringTemplates.render(
-            _QUERY_LIST_ASSOCIATED_SUPPLEMENTAL_ATTRIBUTE_UUIDS_BY_MULTIPLE_TYPES;
-            table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-            placeholder = placeholder,
-        )
-    end
-
-    table = Tables.columntable(_execute_cached(associations, query, params))
-    return Base.UUID.(table.attribute_uuid)
+    return [(row.component_id, row.attribute_id) for row in rows]
 end
 
 """
-Remove the association between the attribute and component.
+Remove the association between one component and one supplemental attribute.
 """
 function remove_association!(
     associations::SupplementalAttributeAssociations,
     component::InfrastructureSystemsComponent,
     attribute::SupplementalAttribute,
 )
-    where_clause = "WHERE attribute_uuid = ? AND component_uuid = ?"
-    params = (string(get_uuid(attribute)), string(get_uuid(component)))
-    num_deleted = _remove_associations!(associations, where_clause, params)
+    num_deleted = InfraStore.remove_supplemental_attribute_associations!(
+        _assoc_store(associations);
+        component_id = get_id(component),
+        attribute_id = get_id(attribute),
+    )
     if num_deleted != 1
-        error("Bug: unexpected number of deletions: $num_deleted. Should have been 1.")
+        error("Bug: unexpected number of deletions: $num_deleted")
     end
+    return
 end
 
 """
-Remove all associations of the given type.
+Remove all associations of the given supplemental attribute type. The type may be
+abstract.
 """
 function remove_associations!(
     associations::SupplementalAttributeAssociations,
     type::Type{<:SupplementalAttribute},
 )
-    where_clause = "WHERE attribute_type = ?"
-    params = (string(nameof(type)),)
-    num_deleted = _remove_associations!(associations, where_clause, params)
+    num_deleted = InfraStore.remove_supplemental_attribute_associations!(
+        _assoc_store(associations);
+        attribute_types = _type_names(type),
+    )
     @debug "Deleted $num_deleted supplemental attribute associations" _group =
         LOG_GROUP_SUPPLEMENTAL_ATTRIBUTES
     return
 end
 
-const _QUERY_REPLACE_COMP_UUID_SA = """
-    UPDATE $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-    SET component_uuid = ?
-    WHERE component_uuid = ?
 """
-
+Replace all occurrences of `old_id` in the component column with `new_id`.
 """
-Replace the component UUID in the table.
-"""
-function replace_component_uuid!(
+function replace_component_id!(
     associations::SupplementalAttributeAssociations,
-    old_uuid::Base.UUID,
-    new_uuid::Base.UUID,
+    old_id::Int,
+    new_id::Int,
 )
-    params = (string(new_uuid), string(old_uuid))
-    _execute_cached(associations, _QUERY_REPLACE_COMP_UUID_SA, params)
+    InfraStore.replace_supplemental_attribute_component_id!(
+        _assoc_store(associations),
+        old_id,
+        new_id,
+    )
     return
 end
 
 """
-Run a query and return the results in a DataFrame.
+The raw store rows. Used for the rollback snapshot and for comparison; callers that
+just want a count should use [`get_num_associations`](@ref).
 """
-function sql(
+_association_rows(associations::SupplementalAttributeAssociations) =
+    InfraStore.list_supplemental_attribute_associations(_assoc_store(associations))
+
+"""
+Return the total number of association rows.
+
+Distinct from [`get_num_attributes`](@ref), which counts distinct attributes: one
+attribute attached to three components is one attribute but three rows.
+"""
+get_num_associations(associations::SupplementalAttributeAssociations) =
+    InfraStore.count_supplemental_attribute_associations(_assoc_store(associations))
+
+"""
+Replace every association row with `rows`.
+
+This is the rollback primitive for [`begin_supplemental_attributes_update`](@ref): a failed
+update restores the rows captured on entry. Unlike undoing only the newly added rows, this
+also puts back rows the update removed.
+
+The clear and the re-add run inside one `InfraStore.transaction`, so a failure partway
+through — the re-add throwing, say — cannot leave the store cleared with nothing put back.
+`InfraStore.transaction` nests (only the outermost commit/rollback is real), so this is safe
+even called from inside another open transaction, and it preserves the error that caused the
+rollback rather than replacing it with one about the rollback itself.
+"""
+function restore_associations!(
     associations::SupplementalAttributeAssociations,
-    query::String,
-    params = nothing,
+    rows::AbstractVector,
 )
-    return DataFrames.DataFrame(_execute(associations, query, params))
-end
-
-const _QUERY_TO_RECORDS = """
-    SELECT *
-    FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-"""
-"""
-Return all rows in the table as dictionaries.
-"""
-function to_records(associations::SupplementalAttributeAssociations)
-    return Tables.rowtable(_execute(associations, _QUERY_TO_RECORDS))
-end
-
-const _QUERY_INSERT_ROWS_INTO_C_ATTR_TABLE = StringTemplates.@template """
-    INSERT INTO $table_name
-    VALUES($placeholder)
-"""
-
-"""
-Add records to the database. Expects output from [`to_records`](@ref).
-"""
-function from_records(::Type{SupplementalAttributeAssociations}, records)
-    associations = SupplementalAttributeAssociations(; create_indexes = false)
-    isempty(records) && return associations
-
-    columns = ("attribute_uuid", "attribute_type", "component_uuid", "component_type")
-    num_rows = length(records)
-    num_columns = length(columns)
-    data = OrderedDict(x => Vector{String}(undef, num_rows) for x in columns)
-    for (i, record) in enumerate(records)
-        for column in columns
-            data[column][i] = record[column]
-        end
+    InfraStore.transaction(_assoc_store(associations)) do
+        clear_associations!(associations)
+        isempty(rows) && return
+        InfraStore.add_supplemental_attribute_associations!(
+            _assoc_store(associations),
+            rows,
+        )
     end
-    placeholder = chop(repeat("?,", num_columns))
-
-    # Note: executemany automatically wraps operations in a transaction for performance
-    # No need for explicit BEGIN/COMMIT as SQLite.jl handles this internally
-    SQLite.DBInterface.executemany(
-        associations.db,
-        StringTemplates.render(
-            _QUERY_INSERT_ROWS_INTO_C_ATTR_TABLE;
-            table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-            placeholder = placeholder,
-        ),
-        NamedTuple(Symbol(k) => v for (k, v) in data),
-    )
-    _create_indexes!(associations)
-    return associations
+    return
 end
 
-const _QUERY_REMOVE_ASSOCIATIONS = StringTemplates.@template """
-    DELETE FROM $table_name
-    $where_clause
 """
-
-const _QUERY_SELECT_CHANGES = "SELECT CHANGES() AS changes"
-
-function _remove_associations!(
-    associations::SupplementalAttributeAssociations,
-    where_clause::AbstractString,
-    params,
+Copy every association row from `src` into `dst`.
+"""
+function copy_associations!(
+    dst::SupplementalAttributeAssociations,
+    src::SupplementalAttributeAssociations,
 )
-    _execute_cached(
-        associations,
-        StringTemplates.render(
-            _QUERY_REMOVE_ASSOCIATIONS;
-            table_name = SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME,
-            where_clause = where_clause,
-        ),
-        params,
-    )
-    table = Tables.rowtable(_execute(associations, _QUERY_SELECT_CHANGES))
-    @assert_op length(table) == 1
-    @debug "Deleted $(table[1].changes) rows from the time series metadata table" _group =
-        LOG_GROUP_SUPPLEMENTAL_ATTRIBUTES
-    return table[1].changes
+    rows = InfraStore.list_supplemental_attribute_associations(_assoc_store(src))
+    isempty(rows) && return
+    InfraStore.add_supplemental_attribute_associations!(_assoc_store(dst), rows)
+    return
+end
+
+"""
+Remove every association row.
+"""
+function clear_associations!(associations::SupplementalAttributeAssociations)
+    InfraStore.remove_supplemental_attribute_associations!(_assoc_store(associations))
+    return
 end
 
 function compare_values(
     match_fn::Union{Function, Nothing},
     x::SupplementalAttributeAssociations,
     y::SupplementalAttributeAssociations;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
-    !compare_uuids && return true
-    query = """
-        SELECT *
-        FROM $SUPPLEMENTAL_ATTRIBUTE_TABLE_NAME
-        ORDER BY attribute_uuid, component_uuid
-    """
-    table_x = Tables.rowtable(_execute(x, query))
-    table_y = Tables.rowtable(_execute(y, query))
+    !compare_ids && return true
+    sort_key = row -> (row.attribute_id, row.component_id)
+    table_x = sort(_association_rows(x); by = sort_key)
+    table_y = sort(_association_rows(y); by = sort_key)
     match_fn = _fetch_match_fn(match_fn)
     return match_fn(table_x, table_y)
-end
-
-function _make_stmt(associations::SupplementalAttributeAssociations, query::String)
-    return get!(
-        () -> SQLite.Stmt(associations.db, query),
-        associations.cached_statements,
-        query,
-    )
-end
-
-_execute_cached(s::SupplementalAttributeAssociations, q, p = nothing) =
-    execute(_make_stmt(s, q), p, LOG_GROUP_TIME_SERIES)
-_execute(s::SupplementalAttributeAssociations, q, p = nothing) =
-    execute(s.db, q, p, LOG_GROUP_SUPPLEMENTAL_ATTRIBUTES)
-function _execute_count(
-    associations::SupplementalAttributeAssociations,
-    query::String,
-    params = nothing,
-)
-    rows = Tables.rowtable(_execute(associations, query, params))
-    if isempty(rows)
-        error("$query did not return any rows.")
-    end
-    return rows[1].count
-end
-
-function _get_attribute_type_string!(
-    params, attribute_type::Union{Nothing, Type{<:SupplementalAttribute}},
-)
-    val = if isnothing(attribute_type)
-        ""
-    elseif isabstracttype(attribute_type)
-        count = 0
-        for type in get_all_concrete_subtypes(attribute_type)
-            push!(params, string(nameof(type)))
-            count += 1
-        end
-        placeholder = chop(repeat("?,", count))
-        "attribute_type in ($placeholder)"
-    else
-        push!(params, string(nameof(attribute_type)))
-        "attribute_type = ?"
-    end
-
-    return val
 end

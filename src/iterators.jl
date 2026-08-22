@@ -4,19 +4,19 @@ function iterate_instances(
     filter_func::Function,
     ::Type{T},
     data::_ContainerTypes,
-    uuids::Set{Base.UUID},
+    ids::Set{Int},
 ) where {T <: InfrastructureSystemsType}
-    func_uuids = x -> get_uuid(x) in uuids
-    _filter_func = x -> filter_func(x) && func_uuids(x)
+    func_ids = x -> get_id(x) in ids
+    _filter_func = x -> filter_func(x) && func_ids(x)
     return iterate_instances(_filter_func, T, data, nothing)
 end
 
 function iterate_instances(
     ::Type{T},
     data::_ContainerTypes,
-    uuids::Set{Base.UUID},
+    ids::Set{Int},
 ) where {T <: InfrastructureSystemsType}
-    filter_func = x -> get_uuid(x) in uuids
+    filter_func = x -> get_id(x) in ids
     return iterate_instances(filter_func, T, data, nothing)
 end
 
