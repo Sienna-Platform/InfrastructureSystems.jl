@@ -789,9 +789,10 @@ function infrastore_get_time_series(
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,  # not applicable to a static series; ignored
     resolution::Union{Nothing, Dates.Period} = nothing,
-    interval::Union{Nothing, Dates.Period} = nothing,  # not applicable; ignored
+    interval::Union{Nothing, Dates.Period} = nothing,  # rejected when provided
     features::Dict = Dict(),
 )
+    _check_interval_supported(SingleTimeSeries, interval)
     # Resolve the unique series matching a possibly-partial (subset) feature /
     # resolution query, then read it by its exact stored attributes.
     key = infrastore_get_time_series_key(
@@ -873,9 +874,10 @@ function infrastore_get_time_series(
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,  # not applicable to a static series; ignored
     resolution::Union{Nothing, Dates.Period} = nothing,  # not applicable; ignored
-    interval::Union{Nothing, Dates.Period} = nothing,  # not applicable; ignored
+    interval::Union{Nothing, Dates.Period} = nothing,  # rejected when provided
     features::Dict = Dict(),
 )
+    _check_interval_supported(NonSequentialTimeSeries, interval)
     # Resolve the unique series matching a possibly-partial (subset) feature query,
     # then read it by its exact stored attributes.
     key = infrastore_get_time_series_key(
@@ -1807,6 +1809,7 @@ function infrastore_has_time_series(
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Dict = Dict(),
 ) where {T <: TimeSeriesData}
+    _check_interval_supported(T, interval)
     mgr = get_time_series_manager(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
@@ -2048,6 +2051,8 @@ function infrastore_owner_list_keys(
     interval = nothing,
     features::Dict = Dict(),
 )
+    !isnothing(time_series_type) &&
+        _check_interval_supported(time_series_type, interval)
     mgr = get_time_series_manager(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
@@ -2122,6 +2127,7 @@ function infrastore_get_time_series_hashes(
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Dict = Dict(),
 ) where {T <: TimeSeriesData}
+    _check_interval_supported(T, interval)
     hashes = Dict{Int, String}()
     isempty(owners) && return hashes
     owner = first(owners)
@@ -2392,6 +2398,8 @@ function _infrastore_remove_by_filter!(
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Dict = Dict(),
 )
+    !isnothing(time_series_type) &&
+        _check_interval_supported(time_series_type, interval)
     remove =
         t -> InfraStore.remove_by_filter!(
             store.inner;

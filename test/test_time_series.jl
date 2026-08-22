@@ -395,6 +395,23 @@ end
         "static";
         resolution = resolution,
     )
+    for operation in (
+        () -> IS.get_time_series(
+            IS.SingleTimeSeries, component, "static"; interval = resolution),
+        () -> IS.get_time_series_key(
+            IS.SingleTimeSeries, component, "static"; interval = resolution),
+        () -> IS.get_time_series_keys(
+            component; time_series_type = IS.SingleTimeSeries, interval = resolution),
+        () -> IS.has_time_series(
+            component, IS.SingleTimeSeries, "static"; interval = resolution),
+        () -> IS.get_time_series_hashes(
+            (component,), IS.SingleTimeSeries, "static"; interval = resolution),
+        () -> IS.remove_time_series!(
+            sys, IS.SingleTimeSeries, component, "static"; interval = resolution),
+        () -> IS.remove_time_series!(sys, IS.SingleTimeSeries; interval = resolution),
+    )
+        @test_throws ArgumentError operation()
+    end
 
     # The redesign's whole point is static `Bool` inference; the deleted
     # kwargs catch-all boxed its type filter as `Any` and broke this.
@@ -3170,6 +3187,28 @@ const IRREGULAR_TIMESTAMPS = [
     @test IS.get_resolution(key) === nothing
     @test IS.get_name(key) == name
     @test IS.length(key) == 4
+    interval = Dates.Hour(1)
+    for operation in (
+        () -> IS.get_time_series(
+            IS.NonSequentialTimeSeries, component, name; interval = interval),
+        () -> IS.get_time_series_key(
+            IS.NonSequentialTimeSeries, component, name; interval = interval),
+        () -> IS.get_time_series_keys(
+            component;
+            time_series_type = IS.NonSequentialTimeSeries,
+            interval = interval,
+        ),
+        () -> IS.has_time_series(
+            component, IS.NonSequentialTimeSeries, name; interval = interval),
+        () -> IS.get_time_series_hashes(
+            (component,), IS.NonSequentialTimeSeries, name; interval = interval),
+        () -> IS.remove_time_series!(
+            sys, IS.NonSequentialTimeSeries, component, name; interval = interval),
+        () -> IS.remove_time_series!(
+            sys, IS.NonSequentialTimeSeries; interval = interval),
+    )
+        @test_throws ArgumentError operation()
+    end
     # Retrieval through the key round-trips.
     got_by_key = IS.get_time_series(component, key)
     @test IS.get_timestamps(got_by_key) == timestamps

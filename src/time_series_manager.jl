@@ -90,6 +90,17 @@ function _infrastore_features(features)
     return out
 end
 
+function _check_interval_supported(::Type{T}, interval) where {T <: TimeSeriesData}
+    if T <: StaticTimeSeries && !isnothing(interval)
+        throw(
+            ArgumentError(
+                "`interval` is not supported for $(nameof(T)); it is only valid for forecasts.",
+            ),
+        )
+    end
+    return
+end
+
 """
 Open a batch of time series work and run `func` on it, inside a store transaction.
 
