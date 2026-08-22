@@ -437,7 +437,8 @@ Return a `TimeSeries.TimeArray` from a cached `StaticTimeSeries` instance.
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: the first timestamp to retrieve.
     If nothing, use the `initial_timestamp` of the time series.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number
-    of timestamps). If nothing, use the entire length
+    of timestamps). If nothing, return all timestamps from `start_time` through the end
+    of the time series.
 
 See also: [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing)),
 [`get_time_series_timestamps`](@ref get_time_series_timestamps(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing,)),
@@ -633,7 +634,8 @@ Return a vector of timestamps from a cached StaticTimeSeries instance.
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: the first timestamp to retrieve.
     If nothing, use the `initial_timestamp` of the time series.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number
-    of timestamps). If nothing, use the entire length
+    of timestamps). If nothing, return all timestamps from `start_time` through the end
+    of the time series.
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
@@ -840,7 +842,8 @@ Return an vector of timeseries data without timestamps from a cached `StaticTime
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: the first timestamp to retrieve.
     If nothing, use the `initial_timestamp` of the time series.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number
-    of timestamps). If nothing, use the entire length
+    of timestamps). If nothing, return all timestamps from `start_time` through the end
+    of the time series.
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
