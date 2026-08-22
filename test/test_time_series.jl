@@ -4884,8 +4884,98 @@ end
 end
 
 @testset "Test DeterministicSingleTimeSeries with multiple intervals" begin
-    # KNOWN PARITY GAP: see setup_for_multi_interval_tests.
-    @test_skip "multiple-interval DSTs need interval in the InfraStore store key"
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 1)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Minute(5)
+    sts_length = 288  # 24 hours at 5-min resolution
+    sts_data = TimeSeries.TimeArray(
+        range(initial_time; length = sts_length, step = resolution),
+        rand(sts_length),
+    )
+    sts_name = "test_sts"
+    sts = IS.SingleTimeSeries(; data = sts_data, name = sts_name)
+    IS.add_time_series!(sys, component, sts)
+
+    horizon = Dates.Hour(1)
+    interval1 = Dates.Minute(30)
+    interval2 = Dates.Hour(1)
+    horizon_count = div(Dates.Millisecond(horizon), Dates.Millisecond(resolution))
+
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        horizon,
+        interval1;
+        delete_existing = false,
+    )
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        horizon,
+        interval2;
+        delete_existing = false,
+    )
+
+    # Both transforms exist
+    @test IS.has_time_series(
+        component,
+        IS.DeterministicSingleTimeSeries,
+        sts_name;
+        interval = interval1,
+    )
+    @test IS.has_time_series(
+        component,
+        IS.DeterministicSingleTimeSeries,
+        sts_name;
+        interval = interval2,
+    )
+
+    # Retrieve by interval: the read materializes a Deterministic (DST is a
+    # fieldless query marker), so check identity via get_interval, not isa.
+    ts1 = IS.get_time_series(
+        IS.DeterministicSingleTimeSeries,
+        component,
+        sts_name;
+        interval = interval1,
+    )
+    @test _is_deterministic(ts1)
+    @test IS.get_interval(ts1) == interval1
+
+    ts2 = IS.get_time_series(
+        IS.DeterministicSingleTimeSeries,
+        component,
+        sts_name;
+        interval = interval2,
+    )
+    @test _is_deterministic(ts2)
+    @test IS.get_interval(ts2) == interval2
+
+    # Without interval, ambiguous query throws
+    @test_throws ArgumentError IS.get_time_series(
+        IS.DeterministicSingleTimeSeries,
+        component,
+        sts_name,
+    )
+
+    # First window of both views matches the STS's first horizon of values
+    sts_values = TimeSeries.values(sts_data)
+    windows1 = IS.get_data(ts1)
+    windows2 = IS.get_data(ts2)
+    @test windows1[initial_time] == sts_values[1:horizon_count]
+    @test windows2[initial_time] == sts_values[1:horizon_count]
+
+    # Second window starts one interval in, per view
+    @test collect(keys(windows1))[2] == initial_time + interval1
+    @test collect(keys(windows2))[2] == initial_time + interval2
+
+    # Original SingleTimeSeries still accessible
+    @test IS.has_time_series(component, IS.SingleTimeSeries, sts_name)
+    @test IS.get_data(
+        IS.get_time_series(IS.SingleTimeSeries, component, sts_name),
+    ) == IS.get_data(sts)
 end
 
 @testset "Test ForecastCache with multiple intervals" begin
