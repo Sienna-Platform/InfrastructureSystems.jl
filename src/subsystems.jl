@@ -103,6 +103,19 @@ function remove_component_from_subsystem!(
     return
 end
 
+"""
+Rewrite every subsystem membership set that holds `old_id` to hold `new_id` instead.
+"""
+function replace_component_id_in_subsystems!(data::SystemData, old_id::Int, new_id::Int)
+    for ids in values(data.subsystems)
+        if old_id in ids
+            pop!(ids, old_id)
+            push!(ids, new_id)
+        end
+    end
+    return
+end
+
 function remove_component_from_subsystems!(
     data::SystemData,
     component::InfrastructureSystemsComponent,

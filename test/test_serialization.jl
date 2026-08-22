@@ -43,7 +43,7 @@ function validate_serialization(sys::IS.SystemData; time_series_read_only = fals
             comp = IS.deserialize(type, component)
             IS.add_component!(sys2, comp; allow_existing_time_series = true)
         end
-        return sys2, IS.compare_values(sys, sys2; compare_uuids = true)
+        return sys2, IS.compare_values(sys, sys2; compare_ids = true)
     finally
         cd(orig)
     end
@@ -100,50 +100,41 @@ end
 end
 
 @testset "Test JSON serialization of system data" begin
-    # On-disk time series serialization now uses the InfraStore backend (HDF5 removed).
-    if infrastore_ts_available()
-        sys = create_system_data_shared_time_series()
-        _, result = validate_serialization(sys)
-        @test result
-    else
-        @test_skip false
-    end
+    sys = create_system_data_shared_time_series()
+    _, result = validate_serialization(sys)
+    @test result
 end
 
 @testset "Test JSON serialization of NonSequentialTimeSeries" begin
-    if infrastore_ts_available()
-        sys = IS.SystemData()
-        component = IS.TestComponent("Component1", 5)
-        IS.add_component!(sys, component)
-        timestamps = [
-            Dates.DateTime("2020-01-01T00:00:00"),
-            Dates.DateTime("2020-01-01T04:00:00"),
-            Dates.DateTime("2020-01-03T00:00:00"),
-        ]
-        IS.add_time_series!(
-            sys,
-            component,
-            IS.NonSequentialTimeSeries("events", timestamps, [10.0, 20.0, 30.0]),
-        )
-        # A FunctionData series exercises the logical-type tag through the round-trip.
-        IS.add_time_series!(
-            sys,
-            component,
-            IS.NonSequentialTimeSeries(
-                "curves",
-                timestamps,
-                [IS.LinearFunctionData(Float64(i), Float64(2i)) for i in 1:3],
-            ),
-        )
-        sys2, result = validate_serialization(sys)
-        @test result
-        component2 = first(IS.get_components(IS.TestComponent, sys2))
-        got = IS.get_time_series(IS.NonSequentialTimeSeries, component2, "events")
-        @test IS.get_timestamps(got) == timestamps
-        @test IS.get_array(got) == [10.0, 20.0, 30.0]
-    else
-        @test_skip false
-    end
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+        Dates.DateTime("2020-01-03T00:00:00"),
+    ]
+    IS.add_time_series!(
+        sys,
+        component,
+        IS.NonSequentialTimeSeries("events", timestamps, [10.0, 20.0, 30.0]),
+    )
+    # A FunctionData series exercises the logical-type tag through the round-trip.
+    IS.add_time_series!(
+        sys,
+        component,
+        IS.NonSequentialTimeSeries(
+            "curves",
+            timestamps,
+            [IS.LinearFunctionData(Float64(i), Float64(2i)) for i in 1:3],
+        ),
+    )
+    sys2, result = validate_serialization(sys)
+    @test result
+    component2 = first(IS.get_components(IS.TestComponent, sys2))
+    got = IS.get_time_series(IS.NonSequentialTimeSeries, component2, "events")
+    @test IS.get_timestamps(got) == timestamps
+    @test IS.get_array(got) == [10.0, 20.0, 30.0]
 end
 
 @testset "Test prepare_for_serialization_to_file" begin
@@ -165,28 +156,20 @@ function _make_time_series()
 end
 
 @testset "Test JSON serialization of with read-only time series" begin
-    if infrastore_ts_available()
-        sys = create_system_data_shared_time_series()
-        sys2, result = validate_serialization(sys; time_series_read_only = true)
-        @test result
+    sys = create_system_data_shared_time_series()
+    sys2, result = validate_serialization(sys; time_series_read_only = true)
+    @test result
 
-        component = first(IS.get_components(IS.TestComponent, sys2))
-        @test_throws ArgumentError IS.add_time_series!(sys, component, _make_time_series())
-    else
-        @test_skip false
-    end
+    component = first(IS.get_components(IS.TestComponent, sys2))
+    @test_throws ArgumentError IS.add_time_series!(sys, component, _make_time_series())
 end
 
 @testset "Test JSON serialization of with mutable time series" begin
-    if infrastore_ts_available()
-        sys = create_system_data_shared_time_series()
-        sys2, result = validate_serialization(sys; time_series_read_only = false)
-        @test result
-        component = first(IS.get_components(IS.TestComponent, sys2))
-        IS.add_time_series!(sys2, component, _make_time_series())
-    else
-        @test_skip false
-    end
+    sys = create_system_data_shared_time_series()
+    sys2, result = validate_serialization(sys; time_series_read_only = false)
+    @test result
+    component = first(IS.get_components(IS.TestComponent, sys2))
+    IS.add_time_series!(sys2, component, _make_time_series())
 end
 
 @testset "Test JSON serialization with no time series" begin
@@ -196,40 +179,36 @@ end
 end
 
 @testset "Test JSON serialization with supplemental attributes" begin
-    if !infrastore_ts_available()
-        @test_skip false  # on-disk serialization needs the InfraStore backend
-    else
-        sys = IS.SystemData()
-        initial_time = Dates.DateTime("2020-09-01")
-        resolution = Dates.Hour(1)
-        ta = TimeSeries.TimeArray(
-            range(initial_time; length = 24, step = resolution),
-            rand(24),
-        )
-        ts = IS.SingleTimeSeries(; data = ta, name = "test")
-        geo = IS.GeographicInfo(;
-            geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
-        )
+    sys = IS.SystemData()
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    ta = TimeSeries.TimeArray(
+        range(initial_time; length = 24, step = resolution),
+        rand(24),
+    )
+    ts = IS.SingleTimeSeries(; data = ta, name = "test")
+    geo = IS.GeographicInfo(;
+        geo_json = Dict("type" => "Point", "coordinates" => [1.0, 2.0]),
+    )
 
-        for i in 1:2
-            name = "component_$(i)"
-            component = IS.TestComponent(name, 5)
-            IS.add_component!(sys, component)
-            attr = IS.TestSupplemental(; value = Float64(i))
-            IS.add_supplemental_attribute!(sys, component, attr)
-            IS.add_time_series!(sys, attr, ts)
-            IS.add_supplemental_attribute!(sys, component, geo)
-        end
+    for i in 1:2
+        name = "component_$(i)"
+        component = IS.TestComponent(name, 5)
+        IS.add_component!(sys, component)
+        attr = IS.TestSupplemental(; value = Float64(i))
+        IS.add_supplemental_attribute!(sys, component, attr)
+        IS.add_time_series!(sys, attr, ts)
+        IS.add_supplemental_attribute!(sys, component, geo)
+    end
 
-        sys2, result = validate_serialization(sys)
-        @test result
-        attrs = collect(IS.get_supplemental_attributes(IS.TestSupplemental, sys2))
-        @test length(attrs) == 2
-        for attr in attrs
-            @test IS.has_time_series(IS.SingleTimeSeries, attr)
-            ts2 = IS.get_time_series(IS.SingleTimeSeries, attr, "test")
-            @test IS.get_data(ts2) == ta
-        end
+    sys2, result = validate_serialization(sys)
+    @test result
+    attrs = collect(IS.get_supplemental_attributes(IS.TestSupplemental, sys2))
+    @test length(attrs) == 2
+    for attr in attrs
+        @test IS.has_time_series(IS.SingleTimeSeries, attr)
+        ts2 = IS.get_time_series(IS.SingleTimeSeries, attr, "test")
+        @test IS.get_data(ts2) == ta
     end
 end
 
@@ -373,17 +352,11 @@ end
 end
 
 @testset "Test serialization of deserialized system" begin
-    if infrastore_ts_available()
-        # create_system_data adds a Deterministic on the InfraStore path; verify a
-        # deserialized system re-serializes.
-        sys = create_system_data(; with_time_series = true)
-        sys2, result = validate_serialization(sys)
-        @test result
-        _, result2 = validate_serialization(sys2)
-        @test result2
-    else
-        @test_skip false
-    end
+    sys = create_system_data(; with_time_series = true)
+    sys2, result = validate_serialization(sys)
+    @test result
+    _, result2 = validate_serialization(sys2)
+    @test result2
 end
 
 @testset "Deserialize optional DateTime field" begin

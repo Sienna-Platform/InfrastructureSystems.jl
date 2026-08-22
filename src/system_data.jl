@@ -22,9 +22,8 @@ mutable struct SystemData <: ComponentContainer
     components::Components
     masked_components::Components
     "Maps the integer id of every attached component, regular and masked, to the component."
-    component_ids::Dict{Int, <:InfrastructureSystemsComponent}
-    "Next integer id to assign. Components and supplemental attributes draw from this one
-    stream, so an id identifies exactly one object of either kind. Starts at 1."
+    component_ids::Dict{Int, InfrastructureSystemsComponent}
+    "Components and supplemental attributes share one id stream; starts at 1."
     next_id::Int
     "User-defined subsystems. Components can be regular or masked."
     subsystems::Dict{String, Set{Int}}
@@ -66,7 +65,8 @@ function SystemData(;
         compression = compression,
     )
     components = Components(time_series_mgr, validation_descriptors)
-    supplemental_attribute_mgr = SupplementalAttributeManager(time_series_mgr.data_store)
+    supplemental_attribute_mgr =
+        SupplementalAttributeManager(get_data_store(time_series_mgr))
     masked_components = Components(time_series_mgr, validation_descriptors)
     return SystemData(
         components,
@@ -103,6 +103,11 @@ function SystemData(
         internal,
     )
 end
+
+"""
+The [`Store`](@ref) backing this system's time series and association rows.
+"""
+get_data_store(data::SystemData) = get_data_store(data.time_series_manager)
 
 """
 Return the next integer id and advance the counter. Components and supplemental attributes
@@ -255,7 +260,7 @@ function remove_time_series!(
     # IS-level error.
     try
         _infrastore_remove_by_filter!(
-            data.time_series_manager.data_store,
+            get_data_store(data),
             T;
             owner_category = InfraStore.Component,
             resolution = resolution,
@@ -316,7 +321,7 @@ function compare_values(
     match_fn::Union{Function, Nothing},
     x::SystemData,
     y::SystemData;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
     match = true
@@ -327,11 +332,11 @@ function compare_values(
             # the components.
             continue
         end
-        if !compare_uuids && name == :next_id
+        if !compare_ids && name == :next_id
             # This counter is derived from the identities it hands out, so it only means
             # anything when the identities themselves are being compared. Reassigning ids
             # (`assign_new_ids`) advances it past the originals while leaving the data
-            # identical — the same reason `id` itself is skipped unless `compare_uuids`.
+            # identical — the same reason `id` itself is skipped unless `compare_ids`.
             continue
         end
         val_x = getproperty(x, name)
@@ -340,7 +345,7 @@ function compare_values(
             match_fn,
             val_x,
             val_y;
-            compare_uuids = compare_uuids,
+            compare_ids = compare_ids,
             exclude = exclude,
         )
             @error "SystemData field = $name does not match" getproperty(x, name) getproperty(
@@ -439,7 +444,7 @@ function iterate_components_with_time_series(
     return (
         get_component(data, x) for
         x in infrastore_list_owner_ids(
-            data.time_series_manager.data_store,
+            get_data_store(data),
             InfrastructureSystemsComponent;
             time_series_type = time_series_type,
             resolution = resolution,
@@ -454,7 +459,7 @@ function iterate_supplemental_attributes_with_time_series(
     return (
         get_supplemental_attribute(data, x) for
         x in infrastore_list_owner_ids(
-            data.time_series_manager.data_store,
+            get_data_store(data),
             SupplementalAttribute;
             time_series_type = time_series_type,
         )
@@ -510,7 +515,7 @@ check_time_series_consistency(
     ts_type;
     resolution::Union{Nothing, Dates.Period} = nothing,
 ) = infrastore_check_consistency(
-    data.time_series_manager.data_store,
+    get_data_store(data),
     ts_type;
     resolution = resolution,
 )
@@ -574,7 +579,7 @@ function check_transform_single_time_series(
         # A dry run in the store: every check the real transform would run,
         # nothing written.
         infrastore_transform_single_time_series!(
-            data.time_series_manager.data_store,
+            get_data_store(data),
             horizon,
             interval;
             resolution = resolution,
@@ -604,23 +609,17 @@ function _transform_single_time_series!(
     # window parameters are recorded in the metadata. Supplemental-attribute
     # series are left untouched, matching the metadata-store behavior.
     #
-    # Every eligibility check runs in the store: horizon fit and divisibility,
-    # interval divisibility and length, per-resolution grid uniformity, and
-    # conflicts with forecasts already stored. IS used to re-run all of it here
-    # over a listing of every SingleTimeSeries, which cost one JSON-marshaled
-    # catalog listing plus a per-series loop; the store answers the same
-    # questions from its distinct static grids, so the cost no longer scales
-    # with the number of series. The two policy flags are IS's contract: the
-    # single-window interval is stored as zero (what IS looks views up by), and
-    # one system holds one forecast grid.
+    # The two policy flags are IS's contract, not store invariants: the single-window
+    # interval is stored as zero (what IS looks views up by), and one system holds one
+    # forecast grid.
     outcome = infrastore_transform_single_time_series!(
-        data.time_series_manager.data_store,
+        get_data_store(data),
         horizon,
         interval;
         resolution = resolution,
     )
 
-    if outcome.sources == 0
+    if iszero(outcome.sources)
         @warn "There are no SingleTimeSeries arrays to transform"
         return
     end
@@ -715,7 +714,7 @@ function serialize(data::SystemData)
             directory = metadata["serialization_directory"]
             base = metadata["basename"]
 
-            store = data.time_series_manager.data_store
+            store = get_data_store(data)
             if isempty(store)
                 json_data["time_series_compression_enabled"] =
                     get_compression_settings(store).enabled
@@ -748,11 +747,8 @@ function deserialize(
 )
     @debug "deserialize" raw _group = LOG_GROUP_SERIALIZATION
 
-    # "CastoreStore" and "RustTimeSeriesStore" are earlier names for the same InfraStore
-    # backend; accept them so systems serialized before either rename still load.
     if haskey(raw, "time_series_storage_file") &&
-       strip_module_name(get(raw, "time_series_storage_type", "")) in
-       ("InfraStore", "RustTimeSeriesStore")
+       strip_module_name(get(raw, "time_series_storage_type", "")) == "InfraStore"
         if !isfile(raw["time_series_storage_file"])
             error("time series file $(raw["time_series_storage_file"]) does not exist")
         end
@@ -851,12 +847,25 @@ end
 # Redirect functions to Components
 
 """
+Advance `data`'s shared id counter past `id` if `id` has not already been passed. Called
+whenever an entity (component or supplemental attribute) enters `data` carrying a pre-set id,
+so a later fresh mint from [`get_next_id!`](@ref) can never collide with it.
+"""
+function _advance_next_id_past!(data::SystemData, id::Int)
+    if id >= data.next_id
+        data.next_id = id + 1
+    end
+    return
+end
+
+"""
 Assign an integer id to a component or supplemental attribute being attached to `data`.
 
 A freshly constructed object has [`UNASSIGNED_ID`](@ref) and receives the next id. An object
-that already carries an id (for example, one restored during deserialization) keeps it; the
-counter is advanced past it so future ids do not collide. Components and supplemental
-attributes draw from the same stream, so an id is unique across both kinds.
+that already carries an id (for example, one restored during deserialization, or one an
+importer set explicitly with [`set_id!`](@ref) from a document) keeps it; the counter is
+advanced past it so future ids do not collide. Components and supplemental attributes draw
+from the same stream, so an id is unique across both kinds.
 """
 function assign_id!(
     data::SystemData,
@@ -866,8 +875,8 @@ function assign_id!(
     if id == UNASSIGNED_ID
         id = get_next_id!(data)
         set_id!(obj, id)
-    elseif id >= data.next_id
-        data.next_id = id + 1
+    else
+        _advance_next_id_past!(data, id)
     end
     return id
 end
@@ -974,7 +983,11 @@ function get_components(
     data::SystemData;
     subsystem_name::Union{Nothing, AbstractString} = nothing,
 ) where {T}
-    ids = isnothing(subsystem_name) ? nothing : get_component_ids(data, subsystem_name)
+    ids = if isnothing(subsystem_name)
+        nothing
+    else
+        get_component_ids(data, subsystem_name)
+    end
     return get_components(filter_func, T, data.components; component_ids = ids)
 end
 
@@ -983,7 +996,11 @@ function get_components(
     data::SystemData;
     subsystem_name::Union{Nothing, AbstractString} = nothing,
 ) where {T}
-    ids = isnothing(subsystem_name) ? nothing : get_component_ids(data, subsystem_name)
+    ids = if isnothing(subsystem_name)
+        nothing
+    else
+        get_component_ids(data, subsystem_name)
+    end
     return get_components(T, data.components; component_ids = ids)
 end
 
@@ -1069,8 +1086,16 @@ function get_component_supplemental_attribute_pairs(
     attributes = nothing,
 ) where {T <: InfrastructureSystemsComponent, U <: SupplementalAttribute}
     ca_pairs = NamedTuple{(:component, :supplemental_attribute), Tuple{T, U}}[]
-    c_ids = isnothing(components) ? Set{Int}() : Set(get_id.(components))
-    a_ids = isnothing(attributes) ? Set{Int}() : Set(get_id.(attributes))
+    c_ids = if isnothing(components)
+        Set{Int}()
+    else
+        Set(get_id.(components))
+    end
+    a_ids = if isnothing(attributes)
+        Set{Int}()
+    else
+        Set(get_id.(attributes))
+    end
     for (component_id, attribute_id) in
         list_associated_pair_ids(
         data.supplemental_attribute_manager.associations,
@@ -1114,14 +1139,15 @@ get_masked_component(::Type{T}, data::SystemData, name) where {T} =
     get_component(T, data.masked_components, name)
 
 function get_masked_component(data::SystemData, id::Int)
-    for component in get_masked_components(InfrastructureSystemsComponent, data)
-        if get_id(component) == id
-            return component
-        end
+    # `component_ids` indexes masked components too, so this is the same O(1) lookup as
+    # `get_component`, narrowed to the masked container.
+    component = get(data.component_ids, id, nothing)
+    if isnothing(component) || !is_attached(component, data.masked_components)
+        @error "no masked component with id $id is stored"
+        return nothing
     end
 
-    @error "no component with id $id is stored"
-    return nothing
+    return component
 end
 
 get_forecast_parameters(
@@ -1129,7 +1155,7 @@ get_forecast_parameters(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
 ) = infrastore_forecast_parameters(
-    data.time_series_manager.data_store;
+    get_data_store(data);
     resolution = resolution,
     interval = interval,
 )
@@ -1140,33 +1166,45 @@ function get_forecast_initial_times(data::SystemData; kwargs...)
     return get_initial_times(params.initial_timestamp, params.count, params.interval)
 end
 
-function get_forecast_window_count(data::SystemData; kwargs...)
+# One body for the four single-field forecast accessors. Each returns `nothing` when the
+# system holds no forecasts, which is their long-standing contract.
+function _forecast_parameter(data::SystemData, field::Symbol; kwargs...)
     params = get_forecast_parameters(data; kwargs...)
-    return isnothing(params) ? nothing : params.count
+    if isnothing(params)
+        return nothing
+    end
+    return getproperty(params, field)
 end
 
-function get_forecast_horizon(data::SystemData; kwargs...)
-    params = get_forecast_parameters(data; kwargs...)
-    return isnothing(params) ? nothing : params.horizon
-end
+get_forecast_window_count(data::SystemData; kwargs...) =
+    _forecast_parameter(data, :count; kwargs...)
 
-function get_forecast_initial_timestamp(data::SystemData; kwargs...)
-    params = get_forecast_parameters(data; kwargs...)
-    return isnothing(params) ? nothing : params.initial_timestamp
-end
+get_forecast_horizon(data::SystemData; kwargs...) =
+    _forecast_parameter(data, :horizon; kwargs...)
 
-function get_forecast_interval(data::SystemData; kwargs...)
-    params = get_forecast_parameters(data; kwargs...)
-    return isnothing(params) ? nothing : params.interval
-end
+get_forecast_initial_timestamp(data::SystemData; kwargs...) =
+    _forecast_parameter(data, :initial_timestamp; kwargs...)
+
+get_forecast_interval(data::SystemData; kwargs...) =
+    _forecast_parameter(data, :interval; kwargs...)
 
 get_time_series_resolutions(
     data::SystemData;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
 ) = infrastore_get_time_series_resolutions(
-    data.time_series_manager.data_store;
+    get_data_store(data);
     time_series_type = time_series_type,
 )
+
+# The store reports an owner as `(id, category)`; resolve that back to the Julia object.
+# Passed as a closure to the store-side readers and hash grouping.
+function _make_id_to_owner(data::SystemData)
+    return (id, category) -> if category == InfraStore.Component
+        get_component(data, id)
+    else
+        get_supplemental_attribute(data, id)
+    end
+end
 
 """
 $(TYPEDSIGNATURES)
@@ -1188,13 +1226,8 @@ Resolved by a single catalog query (no per-series reads).
 See also [`get_time_series_hash`](@ref) for the hash of one `(owner, key)`.
 """
 function get_time_series_array_groups(data::SystemData; only_shared = true)
-    store = data.time_series_manager.data_store::Store
-    id_to_owner =
-        (id, category) -> if category == InfraStore.Component
-            get_component(data, id)
-        else
-            get_supplemental_attribute(data, id)
-        end
+    store = get_data_store(data)
+    id_to_owner = _make_id_to_owner(data)
     return infrastore_group_by_hash(store, id_to_owner; only_shared = only_shared)
 end
 
@@ -1221,13 +1254,8 @@ function build_forecast_reader(
     name::Union{Nothing, AbstractString} = nothing,
     features...,
 ) where {T <: Forecast}
-    store = data.time_series_manager.data_store::Store
-    id_to_owner =
-        (id, category) -> if category == InfraStore.Component
-            get_component(data, id)
-        else
-            get_supplemental_attribute(data, id)
-        end
+    store = get_data_store(data)
+    id_to_owner = _make_id_to_owner(data)
     return infrastore_build_forecast_reader(
         store,
         id_to_owner,
@@ -1257,13 +1285,8 @@ function build_static_time_series_reader(
     name::Union{Nothing, AbstractString} = nothing,
     features...,
 )
-    store = data.time_series_manager.data_store::Store
-    id_to_owner =
-        (id, category) -> if category == InfraStore.Component
-            get_component(data, id)
-        else
-            get_supplemental_attribute(data, id)
-        end
+    store = get_data_store(data)
+    id_to_owner = _make_id_to_owner(data)
     return infrastore_build_static_time_series_reader(
         store,
         id_to_owner;
@@ -1300,13 +1323,13 @@ end
 check_component(data::SystemData, component) = check_component(data.components, component)
 
 get_compression_settings(data::SystemData) =
-    get_compression_settings(data.time_series_manager.data_store)
+    get_compression_settings(get_data_store(data))
 
 set_name!(data::SystemData, component, name) = set_name!(data.components, component, name)
 
 function get_component_counts_by_type(data::SystemData)
     counts = Dict{String, Int}()
-    for (component_type, components) in data.components.data
+    for (component_type, components) in iterate_components_by_type(data.components)
         counts[strip_module_name(component_type)] = length(components)
     end
 
@@ -1325,9 +1348,9 @@ get_num_components_with_supplemental_attributes(data::SystemData) =
     get_num_components_with_attributes(data.supplemental_attribute_manager.associations)
 
 get_num_time_series(data::SystemData) =
-    InfraStore.num_distinct_arrays(data.time_series_manager.data_store.inner)
+    InfraStore.num_distinct_arrays(get_data_store(data).inner)
 function get_time_series_counts(data::SystemData)
-    c = InfraStore.time_series_counts(data.time_series_manager.data_store.inner)
+    c = InfraStore.time_series_counts(get_data_store(data).inner)
     return TimeSeriesCounts(;
         components_with_time_series = c.components_with_time_series,
         supplemental_attributes_with_time_series = c.supplemental_attributes_with_time_series,
@@ -1336,11 +1359,11 @@ function get_time_series_counts(data::SystemData)
     )
 end
 get_time_series_counts_by_type(data::SystemData) =
-    infrastore_get_time_series_counts_by_type(data.time_series_manager.data_store)
+    infrastore_get_time_series_counts_by_type(get_data_store(data))
 get_static_time_series_summary_table(data::SystemData) =
-    infrastore_static_summary_table(data.time_series_manager.data_store)
+    infrastore_static_summary_table(get_data_store(data))
 get_forecast_summary_table(data::SystemData) =
-    infrastore_forecast_summary_table(data.time_series_manager.data_store)
+    infrastore_forecast_summary_table(get_data_store(data))
 
 _get_system_basename(system_file) = splitext(basename(system_file))[1]
 _get_secondary_basename(system_basename, name) = system_basename * "_" * name
@@ -1348,9 +1371,10 @@ _get_secondary_basename(system_basename, name) = system_basename * "_" * name
 """
 $(TYPEDSIGNATURES)
 
-Attach `attribute` to `component`. An attribute is created once and may be
-attached to many components; the association is stored rather than a copy.
-The component must already be attached to `data`.
+Create a brand-new association between `component` and `attribute`, minting a fresh id
+for `attribute` and writing a new association row. Use [`attach_supplemental_attribute!`](@ref)
+instead when `attribute` already carries an id and the association row already exists,
+e.g. when adopting a document on import.
 """
 function add_supplemental_attribute!(data::SystemData, component, attribute; kwargs...)
     # Note that we do not support adding attributes to masked components
@@ -1372,6 +1396,76 @@ function add_supplemental_attribute!(data::SystemData, component, attribute; kwa
     )
     return
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Attach `attribute` to `component` when the store's `supplemental_attribute_associations`
+table ALREADY holds this exact pairing — the shape an importer adopting a sidecar store
+needs, as opposed to [`add_supplemental_attribute!`](@ref), which mints a fresh id for
+`attribute` and writes a new association row.
+
+Does everything [`add_supplemental_attribute!`](@ref) does EXCEPT `assign_id!` and any
+association-table write or probe: `attribute` must already carry an id (call [`set_id!`](@ref)
+on it from the document before attaching, mirroring how components are adopted on import) —
+an `UNASSIGNED_ID` is always a caller bug here and throws `ArgumentError`. Because no
+association row is written, `attribute` ends up attached to `data` without a matching
+`(component, attribute)` row unless the caller already put one in the store; this function
+does not check that either.
+
+Use [`add_supplemental_attribute!`](@ref) instead when creating a brand-new attribute and its
+association for the first time.
+"""
+function attach_supplemental_attribute!(
+    data::SystemData,
+    component::InfrastructureSystemsComponent,
+    attribute::SupplementalAttribute;
+    allow_existing_time_series::Bool = false,
+)
+    throw_if_not_attached(data.components, component)
+    _attach_attribute!(
+        data.supplemental_attribute_manager,
+        attribute;
+        allow_existing_time_series = allow_existing_time_series,
+    )
+    # `attribute` already carries its id (checked by `_attach_attribute!`); advance the
+    # shared counter past it exactly like `assign_id!` does for the minted-fresh path.
+    _advance_next_id_past!(data, get_id(attribute))
+    set_shared_system_references!(
+        attribute,
+        SharedSystemReferences(;
+            supplemental_attribute_manager = data.supplemental_attribute_manager,
+            time_series_manager = data.time_series_manager,
+        ),
+    )
+    return
+end
+
+"""
+Defer supplemental-attribute association inserts until `func` returns, then write them in
+one store call. See [`begin_association_batch`](@ref) for the write-buffering mechanics and
+its read-side limits.
+
+Unlike the associations-level form, this SystemData form is fully transactional over BOTH the
+attribute manager and the store: it runs inside
+[`begin_supplemental_attributes_update`](@ref), which snapshots `mgr.data` (deep-copying each
+attribute already stored) before `func` runs and restores it, together with the association
+rows, if `func` throws. That closes a gap the associations-level form leaves open on its own —
+`add_supplemental_attribute!` attaches the attribute to `mgr.data` *before* buffering its
+association row, so a throw partway through a batch (a duplicate pair, say) would otherwise
+leave an attribute attached in `mgr.data` with no association row for it, and no way to reach
+it back out. The snapshot costs O(attributes already stored) — zero on the common import path,
+where the manager starts empty.
+
+Use this around a bulk attach — replaying a document's association table, say — where the
+per-attach probe-then-insert pair would otherwise cost two store round trips per row.
+"""
+begin_association_batch(func::Function, data::SystemData) =
+    begin_supplemental_attributes_update(data.supplemental_attribute_manager) do
+        begin_association_batch(
+            func, data.supplemental_attribute_manager.associations,
+        )
+    end
 
 function get_supplemental_attributes(
     filter_func::Function,
@@ -1418,7 +1512,7 @@ clear_supplemental_attributes!(data::SystemData) =
     clear_supplemental_attributes!(data.supplemental_attribute_manager)
 
 stores_time_series_in_memory(data::SystemData) =
-    isnothing(_store_path(data.time_series_manager.data_store))
+    isnothing(_store_path(get_data_store(data)))
 
 """
 Make a `deepcopy` of a [`SystemData`](@ref) more quickly by skipping the copying of time
@@ -1439,22 +1533,10 @@ function fast_deepcopy_system(
     skip_time_series::Bool = true,
     skip_supplemental_attributes::Bool = true,
 )
-    # The approach taken here is to swap out the data we don't want to copy with blank data,
-    # then do a deepcopy, then swap it back. We can't just construct a new instance with
-    # different fields because we also need to change references within components.
-    #
-    # Both managers share one store, so "skip one, keep the other" cannot be expressed by
-    # swapping in a blank manager alone — the store carries time series AND association
-    # rows. Each combination therefore decides which store the copy should see:
-    #
-    #   * keep both   -> the real store, deep-copied once and shared (no shortcut).
-    #   * skip both   -> a fresh empty store; nothing is copied.
-    #   * skip series -> a fresh store seeded with just the association rows. Copying
-    #                    those is cheap; copying the time series artifacts is what the
-    #                    caller asked to avoid.
-    #   * skip attrs  -> the real store must be copied for its time series, so the
-    #                    association rows ride along and are cleared from the COPY
-    #                    afterwards (clearing the original would corrupt it).
+    # Swap the data we don't want copied for blank data, deepcopy, then swap back: a fresh
+    # instance with different fields would not fix up the references held by components.
+    # Both managers share one store, which carries time series AND association rows, so each
+    # flag combination has to decide which store the copy sees.
     old_time_series_manager = data.time_series_manager
     old_supplemental_attribute_manager = data.supplemental_attribute_manager
 
@@ -1463,7 +1545,7 @@ function fast_deepcopy_system(
     else
         old_time_series_manager
     end
-    new_store = new_time_series_manager.data_store
+    new_store = get_data_store(new_time_series_manager)
     new_supplemental_attribute_manager = if skip_supplemental_attributes
         SupplementalAttributeManager(new_store)
     elseif skip_time_series

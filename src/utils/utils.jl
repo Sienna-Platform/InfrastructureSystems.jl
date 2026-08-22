@@ -20,10 +20,7 @@ Check if the element type T can be encoded by the time series store for
 Deterministic forecast windows. Returns true if supported, false otherwise.
 """
 is_array_type_supported(::Type{T}) where {T <: Real} = true
-is_array_type_supported(::Type{T}) where {T <: LinearFunctionData} = true
-is_array_type_supported(::Type{T}) where {T <: QuadraticFunctionData} = true
-is_array_type_supported(::Type{T}) where {T <: PiecewiseLinearData} = true
-is_array_type_supported(::Type{T}) where {T <: PiecewiseStepData} = true
+is_array_type_supported(::Type{<:StaticFunctionData}) = true
 # Fixed-arity Float64 tuples — the same tuple form the static storage encoding
 # supports (`_storage_array` in infrastore.jl).
 is_array_type_supported(::Type{NTuple{N, Float64}}) where {N} = true
@@ -110,18 +107,26 @@ function _get_all_concrete_subtypes(::Type{T}, sub_types::Vector{DataType}) wher
     return nothing
 end
 
+const g_cached_subtype_names = Dict{DataType, Vector{String}}()
+
 """
-Returns the names of all leaf subtypes of T, as Strings.
+Returns the names of all leaf subtypes of T, as Strings. Caches the values for faster
+lookup on repeated calls.
 
 Unlike [`get_all_concrete_subtypes`](@ref), this includes *parametric* leaf types
-(e.g. `SingleTimeSeries`, `ConstantReserveGroup`), which have no concrete `DataType` of
-their own but are persisted under their base name. Use this when building type-name
-clauses for SQL queries; use `get_all_concrete_subtypes` when the types will be
-instantiated, since a parametric type has no instantiable concrete form.
+(e.g. `SingleTimeSeries`), which have no concrete `DataType` of their own but are
+persisted under their base name. Use this when building type-name filters for the store;
+use `get_all_concrete_subtypes` when the types will be instantiated, since a parametric
+type has no instantiable concrete form.
 """
 function get_all_subtype_names(::Type{T}) where {T}
+    if haskey(g_cached_subtype_names, T)
+        return g_cached_subtype_names[T]
+    end
+
     names = Vector{String}()
     _get_all_subtype_names(T, names)
+    g_cached_subtype_names[T] = names
     return names
 end
 
@@ -269,12 +274,13 @@ Recursively compares struct values. Prints all mismatched values to stdout.
     `IS.isequivalent`.
   - `x::T`: First value
   - `y::U`: Second value
-  - `compare_uuids::Bool = false`: Compare any UUID in the object or composed objects.
+  - `compare_ids::Bool = false`: Compare the integer `id` of the object and of any composed
+    objects.
   - `exclude::Set{Symbol} = Set{Symbol}(): Fields to exclude from comparison. Passed on
      recursively and so applied per type.
 """
 function compare_values(match_fn::Union{Function, Nothing}, x::T, y::U;
-    compare_uuids = false, exclude = Set{Symbol}()) where {T, U}
+    compare_ids = false, exclude = Set{Symbol}()) where {T, U}
     _is_compare_directly(x, y) && (return _fetch_match_fn(match_fn)(x, y))
 
     match = true
@@ -285,7 +291,7 @@ function compare_values(match_fn::Union{Function, Nothing}, x::T, y::U;
         val1 = getproperty(x, field_name)
         val2 = getproperty(y, field_name)
         sub_result = compare_values(match_fn, val1, val2;
-            compare_uuids = compare_uuids, exclude = exclude)
+            compare_ids = compare_ids, exclude = exclude)
         if !sub_result
             @error "values do not match" T field_name val1 val2
             match = false
@@ -300,7 +306,7 @@ function compare_values(
     match_fn::Union{Function, Nothing},
     x::AbstractArray,
     y::AbstractArray;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
     if size(x) != size(y)
@@ -314,7 +320,7 @@ function compare_values(
             match_fn,
             x[i],
             y[i];
-            compare_uuids = compare_uuids,
+            compare_ids = compare_ids,
             exclude = exclude,
         )
             @error "values do not match" typeof(x[i]) i x[i] y[i]
@@ -329,7 +335,7 @@ function compare_values(
     match_fn::Union{Function, Nothing},
     x::AbstractDict,
     y::AbstractDict;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
     keys_x = Set(keys(x))
@@ -345,7 +351,7 @@ function compare_values(
             match_fn,
             x[key],
             y[key];
-            compare_uuids = compare_uuids,
+            compare_ids = compare_ids,
             exclude = exclude,
         )
             @error "values do not match" typeof(x[key]) key x[key] y[key]

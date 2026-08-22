@@ -32,8 +32,7 @@ function open_infrastore_store(
     return Store(inner)
 end
 
-# The store's backing path (nothing for an in-memory store). InfraStore owns this state
-# now; IS no longer duplicates it.
+# The store's backing path (nothing for an in-memory store).
 _store_path(store::Store) = InfraStore.get_path(store.inner)
 
 # Translate the `InfraStore.get_compression` NamedTuple back into a
@@ -68,7 +67,11 @@ function open_deserialized_infrastore_store(
     read_only::Bool,
 )
     read_only && return open_infrastore_store(source; read_only = true)
-    dir = isnothing(directory) ? tempdir() : String(directory)
+    dir = if isnothing(directory)
+        tempdir()
+    else
+        String(directory)
+    end
     mkpath(dir)
     dst = joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
     # The `.sqlite` is copied so the open below has a catalog to read into memory; it
@@ -92,11 +95,13 @@ function Base.deepcopy_internal(store::Store, dict::IdDict)
     # An in-memory store has no path, so its copy lands in `tempdir()` and is therefore
     # disk-backed: the backend gives us no way to clone in-memory state in place.
     path = _store_path(store)
-    directory = isnothing(path) ? tempdir() : dirname(path)
+    directory = if isnothing(path)
+        tempdir()
+    else
+        dirname(path)
+    end
     dst = joinpath(directory, string(UUIDs.uuid4()) * "_time_series.h5")
     InfraStore.persist!(store.inner, dst)
-    # The copy inherits the original's catalog placement, so a deepcopy does not quietly
-    # change when the copy's changes become durable.
     new_store =
         open_infrastore_store(dst; read_only = false, catalog = catalog_mode(store))
     dict[store] = new_store
@@ -105,16 +110,7 @@ end
 
 # ---- Conversions -----------------------------------------------------------
 
-# Unit system, between IS's `RelativeUnits` markers and the store's two-valued
-# enum.
-#
-# IS names three bases; the store represents only the component's own base and
-# natural units. `SystemBaseUnit` therefore has no storage spelling, and it is
-# rejected here rather than written as `ComponentBase` or dropped to
-# "unspecified": both would misreport the basis of every value in the series to
-# the next reader, and a per-unit series read against the wrong base is wrong by
-# a factor nobody can recover after the fact. The error names the two bases that
-# do round-trip so the caller can normalize before adding.
+# Unit system, between IS's `RelativeUnits` markers and the store's two-valued enum.
 _to_store_unit_system(::Nothing) = nothing
 _to_store_unit_system(::NaturalUnit) = InfraStore.NaturalUnits
 _to_store_unit_system(::DeviceBaseUnit) = InfraStore.ComponentBase
@@ -145,16 +141,9 @@ get_owner_category(
 ) = InfraStore.SupplementalAttribute
 
 # ---- Element encoding ------------------------------------------------------
-# Scalars store as a 1-D array. Fixed-size FunctionData tuples store as a
-# `(length, k)` Float64 array. Every encoder returns the store's canonical
-# `element_type` string alongside the array; that string is a first-class column
-# in the catalog, so reconstruction on read keys on it rather than on anything
-# IS wrote into the opaque `ext` payload.
-#
-# The names are the store's own vocabulary, deliberately language-neutral:
-# `piecewise_linear`, not `PiecewiseLinearData`. See the encoding table in
-# infrastore's `types/element_type.rs` — a TypeScript or Python consumer decodes
-# the same bytes from the same tag.
+# Scalars store as a 1-D array; structured elements as a `(length, k)` Float64 array.
+# Every encoder returns the store's canonical `element_type` tag, a first-class catalog
+# column, so reads reconstruct from it rather than from the opaque `ext` payload.
 
 # Julia scalar element type -> canonical dtype spelling. Only the widths the
 # store supports; anything else is an unsupported element type, not a silent
@@ -183,8 +172,29 @@ end
 _storage_array(v::AbstractVector{<:Real}) =
     (collect(v), _element_type_name(eltype(v)))
 
+# Encoded width `k` of a vector of structured elements, without encoding it. The forecast
+# encoder needs the widest window's `k` before it allocates, so this is the single source
+# of truth every `_storage_array` below allocates from.
+_storage_width(::AbstractVector{LinearFunctionData}) = 2
+
+_storage_width(::AbstractVector{QuadraticFunctionData}) = 3
+
+_storage_width(v::AbstractVector{PiecewiseLinearData}) =
+    1 + 2 * maximum(length(get_points(fd)) for fd in v; init = 0)
+
+function _storage_width(v::AbstractVector{PiecewiseStepData})
+    max_n = maximum(length(get_x_coords(fd)) for fd in v; init = 0)
+    iszero(max_n) && return 1
+    return 2 * max_n
+end
+
+_storage_width(::AbstractVector{NTuple{N, Float64}}) where {N} = N
+
+_storage_width(v::AbstractVector) =
+    error("InfraStore backend does not support time series element type $(eltype(v)) yet")
+
 function _storage_array(v::AbstractVector{LinearFunctionData})
-    mat = Matrix{Float64}(undef, length(v), 2)
+    mat = Matrix{Float64}(undef, length(v), _storage_width(v))
     for (i, fd) in enumerate(v)
         mat[i, 1] = get_proportional_term(fd)
         mat[i, 2] = get_constant_term(fd)
@@ -193,7 +203,7 @@ function _storage_array(v::AbstractVector{LinearFunctionData})
 end
 
 function _storage_array(v::AbstractVector{QuadraticFunctionData})
-    mat = Matrix{Float64}(undef, length(v), 3)
+    mat = Matrix{Float64}(undef, length(v), _storage_width(v))
     for (i, fd) in enumerate(v)
         mat[i, 1] = get_quadratic_term(fd)
         mat[i, 2] = get_proportional_term(fd)
@@ -206,9 +216,7 @@ end
 # `(len, 1 + 2*max_points)` matrix padded with zeros; column 1 of each row is the
 # point count, so `shape[0]` stays the timestep count.
 function _storage_array(v::AbstractVector{PiecewiseLinearData})
-    len = length(v)
-    max_n = maximum(length(get_points(fd)) for fd in v; init = 0)
-    mat = zeros(Float64, len, 1 + 2 * max_n)
+    mat = zeros(Float64, length(v), _storage_width(v))
     for (i, fd) in enumerate(v)
         pts = get_points(fd)
         mat[i, 1] = length(pts)
@@ -226,9 +234,7 @@ end
 # then the `n - 1` y-coords. Each row is self-describing, so decode needs no
 # global width.
 function _storage_array(v::AbstractVector{PiecewiseStepData})
-    len = length(v)
-    max_n = maximum(length(get_x_coords(fd)) for fd in v; init = 0)
-    mat = zeros(Float64, len, max_n == 0 ? 1 : 2 * max_n)
+    mat = zeros(Float64, length(v), _storage_width(v))
     for (i, fd) in enumerate(v)
         xs = get_x_coords(fd)
         ys = get_y_coords(fd)
@@ -244,10 +250,9 @@ function _storage_array(v::AbstractVector{PiecewiseStepData})
     return (mat, "piecewise_step")
 end
 
-# Fixed-arity `NTuple{N, Float64}` values — the storage form for tuple-shaped
-# quantities (e.g. the hot/warm/cold start-up stages of a market bid). Dense, so unlike
-# the ragged piecewise encodings every row is full width; the arity travels in the
-# element type so decode rebuilds the tuple without inferring it from the array shape.
+# Fixed-arity `NTuple{N, Float64}` values. Dense, so unlike the ragged piecewise
+# encodings every row is full width; the arity travels in the element type so decode
+# rebuilds the tuple without inferring it from the array shape.
 function _storage_array(v::AbstractVector{NTuple{N, Float64}}) where {N}
     mat = Matrix{Float64}(undef, length(v), N)
     for (i, tup) in enumerate(v)
@@ -262,18 +267,10 @@ _storage_array(v::AbstractVector) =
     error("InfraStore backend does not support time series element type $(eltype(v)) yet")
 
 # ---- Element encodings ------------------------------------------------------
-#
-# The store tags each association with an `element_type` string — the tag
-# `_storage_array` above returned when the values were written. Decoding is
-# selected by dispatch on a singleton per tag, not by comparing the string at
-# every decode: `_element_encoding` is the one place the tag is interpreted, and
-# it is called once per read (or once per reader build) rather than once per
-# value.
-#
-# `ScalarEncoding` covers every tag whose values need no reconstruction — the
-# scalar dtypes (`f64`, `i32`, …), and any tag this binding does not map.
-# `RowEncoding` marks the encodings stored one element per matrix row, which is
-# the distinction the forecast and reader paths branch on.
+# One singleton per stored `element_type` tag, so decoding dispatches instead of
+# comparing the tag string per value. `ScalarEncoding` is also the fallback for any tag
+# this binding does not map; `RowEncoding` marks one-element-per-matrix-row layouts,
+# which is the distinction the forecast and reader paths branch on.
 abstract type ElementEncoding end
 abstract type RowEncoding <: ElementEncoding end
 
@@ -283,10 +280,9 @@ struct QuadraticFunctionEncoding <: RowEncoding end
 struct PiecewiseLinearEncoding <: RowEncoding end
 struct PiecewiseStepEncoding <: RowEncoding end
 
-# Fixed-arity f64 tuples: the arity is part of the encoding, so `_decode_ntuples`
-# gets it as a type parameter instead of re-parsing the tag. Only f64 tuples are
-# representable as `NTuple{N, Float64}`; the store's grammar allows other dtypes,
-# which this binding does not map (they fall through to `ScalarEncoding`).
+# Fixed-arity f64 tuples: the arity is part of the encoding, so `_decode_ntuples` gets it
+# as a type parameter instead of re-parsing the tag. The store's grammar allows other
+# dtypes, which this binding does not map (they fall through to `ScalarEncoding`).
 struct TupleEncoding{N} <: RowEncoding end
 
 const _ELEMENT_ENCODINGS = Dict{String, ElementEncoding}(
@@ -305,7 +301,8 @@ _element_encoding(::Nothing) = ScalarEncoding()
 function _element_encoding(element_type::AbstractString)
     haskey(_ELEMENT_ENCODINGS, element_type) && return _ELEMENT_ENCODINGS[element_type]
     m = match(_TUPLE_ELEMENT_TYPE, element_type)
-    return isnothing(m) ? ScalarEncoding() : TupleEncoding{parse(Int, m.captures[1])}()
+    isnothing(m) && return ScalarEncoding()
+    return TupleEncoding{parse(Int, m.captures[1])}()
 end
 
 # Rebuild the `NTuple{N, Float64}` vector from rows of a stored/materialized `(len, N)`
@@ -370,8 +367,15 @@ _decode_stored_values(data::AbstractArray, encoding::ElementEncoding) =
 # type; each window column is encoded with the same scheme as a SingleTimeSeries
 # via `_storage_array`.
 
-_storage_forecast_array(windows::Vector{<:AbstractVector{<:Real}}) =
-    (Float64.(reduce(hcat, windows)), "f64")
+function _storage_forecast_array(windows::Vector{<:AbstractVector{<:Real}})
+    count = length(windows)
+    horizon = length(first(windows))
+    arr = Matrix{Float64}(undef, horizon, count)
+    for (c, w) in enumerate(windows)
+        copyto!(view(arr, :, c), w)
+    end
+    return (arr, "f64")
+end
 
 # FunctionData windows encode row-wise like a SingleTimeSeries (ragged PWL is
 # padded to the widest row); NTuple windows are the same dense per-row layout at
@@ -380,15 +384,15 @@ function _storage_forecast_array(
     windows::Vector{<:AbstractVector{<:Union{FunctionData, NTuple}}},
 )
     count = length(windows)
-    # each: ((horizon, k) matrix, element_type)
-    encoded = [_storage_array(w) for w in windows]
-    element_type = encoded[1][2]
-    horizon = size(encoded[1][1], 1)
-    k = maximum(size(e[1], 2) for e in encoded)      # pad ragged PWL to the widest
+    horizon = length(first(windows))
+    k = maximum(_storage_width, windows)
     arr = zeros(Float64, horizon, count, k)
+    element_type = ""
     for c in 1:count
-        m = encoded[c][1]
-        @views arr[:, c, 1:size(m, 2)] .= m
+        # Encoded one window at a time: holding all `count` matrices before the copy
+        # would double the forecast's peak footprint.
+        mat, element_type = _storage_array(windows[c])
+        @views arr[:, c, 1:size(mat, 2)] .= mat
     end
     return (arr, element_type)
 end
@@ -406,23 +410,19 @@ function _dense_forecast_array(forecast::Forecast, dim1::Integer)
     return arr
 end
 
-# Decode window `c` (1-based) of a `(horizon, count, k)` forecast array of the
-# given element type into a Vector of the corresponding FunctionData or NTuple.
-# The per-window `(horizon, k)` slice decodes with the same row-wise scheme as a
-# static array.
+# Decode window `c` (1-based) of a `(horizon, count, k)` forecast array into a Vector of
+# the corresponding FunctionData or NTuple; the per-window `(horizon, k)` slice decodes
+# with the same row-wise scheme as a static array.
 #
-# Only a `RowEncoding` has a `k` axis, so a scalar tag on a 3-D array is a
-# storage inconsistency, not a pass-through: `_forecast_window` routes 2-D
-# (scalar) arrays elsewhere, and a scalar-tagged window would decode wrong.
-# The tag string travels alongside the encoding purely to name it in that error.
-_decode_forecast_window(arr::AbstractArray{<:Real, 3}, element_type, c::Integer) =
-    _decode_forecast_slice(arr, _element_encoding(element_type), element_type, c)
-
-_decode_forecast_slice(
+# Only a `RowEncoding` has a `k` axis, so a scalar tag on a 3-D array is a storage
+# inconsistency, not a pass-through: `_forecast_window` routes 2-D (scalar) arrays
+# elsewhere, and a scalar-tagged window would decode wrong. The tag string travels
+# alongside the encoding purely to name it in that error.
+_decode_forecast_window(
     ::AbstractArray{<:Real, 3}, ::ScalarEncoding, element_type, ::Integer,
 ) = error("InfraStore backend cannot decode forecast element_type $element_type")
 
-_decode_forecast_slice(
+_decode_forecast_window(
     arr::AbstractArray{<:Real, 3}, encoding::RowEncoding, _element_type, c::Integer,
 ) = _decode_static_values(@view(arr[:, c, :]), encoding, size(arr, 1))
 
@@ -474,12 +474,8 @@ function serialize_single!(
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(sts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(sts),
 )
-    # Encode the values: scalars stay 1-D; FunctionData becomes a (length, k)
-    # Float64 matrix. The element type drives reconstruction on read.
     # `get_array` returns the raw `Array{T, N}` (no TimeArray allocation).
     arr, element_type = _storage_array(get_array(sts))
-    # `name` is carried on the binding struct (matching the
-    # InfrastructureSystems.jl object shape), not on add_time_series!.
     tss_ts = InfraStore.SingleTimeSeries(
         get_initial_timestamp(sts),
         get_resolution(sts),
@@ -491,8 +487,7 @@ function serialize_single!(
         owner_category, tss_ts; features = features, units = units,
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system))
-    # The encoded array is what the batch keeps buffered; its exact byte size
-    # drives the auto-flush accounting.
+    # The encoded array is what the batch buffers; its byte size drives auto-flush.
     return sizeof(arr)
 end
 
@@ -521,9 +516,6 @@ function serialize_non_sequential!(
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(nts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(nts),
 )
-    # Same element encoding as SingleTimeSeries: scalars stay 1-D; FunctionData
-    # becomes a (length, k) Float64 matrix, with the element type driving the
-    # reconstruction on read.
     arr, element_type = _storage_array(get_array(nts))
     tss_ts = InfraStore.NonSequentialTimeSeries(
         get_timestamps(nts),
@@ -535,16 +527,18 @@ function serialize_non_sequential!(
         owner_category, tss_ts; features = features, units = units,
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system))
-    # As in `serialize_single!`: the staged bytes are the encoded array plus the
-    # explicit timestamps the association carries.
+    # The staged bytes are the encoded array plus the timestamps the association carries.
     return sizeof(arr) + sizeof(get_timestamps(nts))
 end
 
 """
-    get_non_sequential(store, owner_id, owner_category, name; features=Dict()) -> NonSequentialTimeSeries
+    get_non_sequential(store, owner_id, owner_category, name; features=Dict(), time_range=nothing) -> NonSequentialTimeSeries
 
 Reconstruct a `NonSequentialTimeSeries` (timestamps + decoded array) from the InfraStore
 store. A non-sequential series is addressed by name + features (it has no resolution).
+`time_range`, if given, is a half-open `[start, stop)` window on the (irregular) timestamp
+axis, sliced server-side — the same pushdown `_infrastore_read_single` uses for a
+`SingleTimeSeries` grid window.
 """
 function get_non_sequential(
     store::Store,
@@ -552,10 +546,11 @@ function get_non_sequential(
     owner_category::InfraStore.OwnerCategory,
     name::AbstractString;
     features = Dict{String, Any}(),
+    time_range::Union{Nothing, Tuple{Dates.DateTime, Dates.DateTime}} = nothing,
 )
     nts = InfraStore.get_time_series(InfraStore.NonSequentialTimeSeries, store.inner,
         owner_id,
-        owner_category, name; features = features)
+        owner_category, name; features = features, time_range = time_range)
     values = _decode_stored_values(nts.data, _element_encoding(nts.element_type))
     return NonSequentialTimeSeries(
         String(name), nts.timestamps, values; units = nts.units,
@@ -624,28 +619,6 @@ store stays usable across the swap, and the report's `bytes_reclaimed` says how
 much smaller the file got. An in-memory store has no file to rewrite.
 """
 compact_time_series!(store::Store) = InfraStore.compact!(store.inner)
-
-# A hashable identity for one stored association (a `InfraStore.list_keys` row),
-# used to diff the store before/after a batch update for rollback.
-infrastore_row_identity(row) = (
-    row.owner_id,
-    row.owner_category,
-    nameof(row.time_series_type),
-    row.name,
-    row.resolution === nothing ? nothing : Dates.Millisecond(row.resolution).value,
-    Tuple(sort!([string(k) => v for (k, v) in row.features])),
-)
-
-# Remove the single association described by a `InfraStore.list_keys` row.
-function infrastore_remove_row!(store::Store, row)
-    feats = Dict{String, Any}(row.features)
-    # Pin the row's own interval: one name can carry several forecasts differing
-    # only by interval, and the removal must hit exactly the row described.
-    InfraStore.remove_time_series!(row.time_series_type, store.inner, row.owner_id,
-        row.owner_category, row.name;
-        resolution = row.resolution, interval = row.interval, features = feats)
-    return
-end
 
 """
 Remove exactly the association that a fully-resolved `TimeSeriesKey` names.
@@ -823,6 +796,20 @@ function infrastore_get_time_series(
     return _infrastore_read_single(owner, key; start_time = start_time, len = len)
 end
 
+_window_length(::Nothing, index::Integer, total::Integer) = total - index + 1
+_window_length(len::Integer, ::Integer, ::Integer) = len
+
+# Step count of the requested `[index, index + n)` window on a series of `total` steps.
+# Errors rather than clamping: the store clamps an out-of-grid range silently, so the
+# window is validated here against the key before the sliced read is issued.
+function _validate_window(index::Integer, len, total::Integer)
+    n = _window_length(len, index, total)
+    if index < 1 || n < 1 || index + n - 1 > total
+        throw(ArgumentError("requested index=$index len=$n exceeds range $total"))
+    end
+    return n
+end
+
 # Key-addressed SingleTimeSeries read: the key carries the exact stored attributes
 # plus the `(initial_timestamp, resolution, length)` needed to validate the
 # requested window, so no catalog query is issued. The store slices the half-open
@@ -841,16 +828,15 @@ function _infrastore_read_single(
     initial_timestamp = get_initial_timestamp(key)
     resolution = get_resolution(key)
     total = get_length(key)
-    feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(key))
+    feats = get_features(key)
 
-    start = isnothing(start_time) ? initial_timestamp : start_time
-    index = compute_time_array_index(initial_timestamp, start, resolution)
-    n = isnothing(len) ? (total - index + 1) : len
-    if index < 1 || n < 1 || index + n - 1 > total
-        throw(ArgumentError("requested index=$index len=$n exceeds range $total"))
+    start = if isnothing(start_time)
+        initial_timestamp
+    else
+        start_time
     end
-    # The store clamps an out-of-grid range rather than erroring, so the window is
-    # validated above against the key before the sliced read.
+    index = compute_time_array_index(initial_timestamp, start, resolution)
+    n = _validate_window(index, len, total)
     time_range = if (isnothing(start_time) && isnothing(len))
         nothing
     else
@@ -887,9 +873,12 @@ function infrastore_get_time_series(
     return _infrastore_read_non_sequential(owner, key; start_time = start_time, len = len)
 end
 
-# Key-addressed NonSequentialTimeSeries read (no catalog re-resolution). The
-# timestamps are irregular, so `start_time`/`len` slice on the materialized
-# series in Julia; the read itself is one store call.
+# Key-addressed NonSequentialTimeSeries read (no catalog re-resolution). Only `start_time`
+# pushes down: `len` is a POINT COUNT, and turning it into an end timestamp needs to know
+# which irregular timestamps exist — which is what the read is for. The store has no
+# sentinel for "no upper bound" (`typemax(DateTime)` overflows the FFI's millisecond range
+# check), so the suffix read stands one in and `len` slices the result client-side.
+const _FAR_FUTURE_DATETIME = Dates.DateTime(9999, 12, 31, 23, 59, 59)
 function _infrastore_read_non_sequential(
     owner::TimeSeriesOwners,
     key::NonSequentialTimeSeriesKey;
@@ -899,23 +888,34 @@ function _infrastore_read_non_sequential(
     mgr = get_time_series_manager(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
-    feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(key))
-    nts = get_non_sequential(store, owner_id, category, get_name(key); features = feats)
+    feats = get_features(key)
+    time_range = if isnothing(start_time)
+        nothing
+    else
+        (start_time, _FAR_FUTURE_DATETIME)
+    end
+    nts = get_non_sequential(
+        store, owner_id, category, get_name(key);
+        features = feats, time_range = time_range,
+    )
     (isnothing(start_time) && isnothing(len)) && return nts
 
-    # Slice on the explicit, strictly-increasing timestamps. The values are sliced
-    # directly (not via a TimeArray) so FunctionData / N-D series slice too.
+    # Slice the values directly (not via a TimeArray) so FunctionData / N-D series slice
+    # too. With `start_time` given, `nts` is already the store-side suffix, so this narrows
+    # what the store returned; the exact-match check below still rejects a `start_time`
+    # that is not one of the series' timestamps.
     timestamps = get_timestamps(nts)
     full = get_array(nts)
     total = size(full, 1)
-    start = isnothing(start_time) ? timestamps[1] : start_time
+    start = if isnothing(start_time)
+        timestamps[1]
+    else
+        start_time
+    end
     index = searchsortedfirst(timestamps, start)
     (index <= total && timestamps[index] == start) ||
         throw(ArgumentError("start_time=$start is not a timestamp in the series"))
-    n = isnothing(len) ? (total - index + 1) : len
-    if n < 1 || index + n - 1 > total
-        throw(ArgumentError("requested index=$index len=$n exceeds range $total"))
-    end
+    n = _validate_window(index, len, total)
     colons = ntuple(_ -> Colon(), ndims(full) - 1)
     vals = full[index:(index + n - 1), colons...]
     # A slice is the same values over a shorter window, so it keeps the label.
@@ -1077,8 +1077,8 @@ function _infrastore_stage_forecast!(
         initial_timestamp = initial, resolution = resolution,
         horizon = horizon, interval = interval, count = count,
         features = Dict{String, Any}(feats))
-    # `obj.data` is the encoded dense array the batch buffers — its exact byte
-    # size drives the auto-flush accounting.
+    # `obj.data` is the encoded dense array the batch buffers; its byte size drives
+    # auto-flush.
     return key, sizeof(obj.data)
 end
 
@@ -1177,19 +1177,23 @@ function _forecast_time_range(initial_timestamp, interval, total_count, start_ti
         offset = start_time - initial_timestamp  # Millisecond
         interval_ms = Dates.Millisecond(interval).value
         if start_time < initial_timestamp ||
-           (interval_ms != 0 && rem(offset.value, interval_ms) != 0)
+           (!iszero(interval_ms) && !iszero(rem(offset.value, interval_ms)))
             throw(
                 ArgumentError(
                     "start_time=$start_time is not a forecast window timestamp"),
             )
         end
-        start_idx = interval_ms == 0 ? 1 : div(offset.value, interval_ms) + 1
+        start_idx = if iszero(interval_ms)
+            1
+        else
+            div(offset.value, interval_ms) + 1
+        end
     end
     if start_idx < 1 || start_idx > total_count
         throw(ArgumentError(
             "start_time=$start_time is out of range (count=$total_count)"))
     end
-    n = isnothing(count) ? total_count - start_idx + 1 : count
+    n = _window_length(count, start_idx, total_count)
     if n < 1 || start_idx + n - 1 > total_count
         throw(
             ArgumentError(
@@ -1198,25 +1202,27 @@ function _forecast_time_range(initial_timestamp, interval, total_count, start_ti
         )
     end
 
-    # A single-window forecast (count == 1) carries a zero interval: window
-    # arithmetic below collapses to a zero-width `[initial, initial)` range that
-    # selects nothing. The request has already been validated against
-    # `total_count`, so read the whole (single-window) series instead of slicing.
-    Dates.value(interval) == 0 && return nothing
+    # A single-window forecast carries a zero interval, so the arithmetic below would
+    # collapse to a zero-width `[initial, initial)` range that selects nothing. The
+    # request is already validated, so read the whole (single-window) series.
+    iszero(Dates.value(interval)) && return nothing
 
     start_ts = initial_timestamp + interval * (start_idx - 1)
     end_ts = initial_timestamp + interval * (start_idx - 1 + n)  # exclusive
     return (start_ts, end_ts)
 end
 
-# Assemble forecast windows into a `SortedDict` with a concrete value type.
-# Building it from a generator yields `SortedDict{Any, Any}`, which
-# `Deterministic`'s `convert_data` then coerces to `Vector{Float64}` — corrupting
-# FunctionData windows. Materializing first pins the value type to the actual
-# window vector type (`Vector{Float64}` or `Vector{<:FunctionData}`).
+# Assemble forecast windows into a `SortedDict` with a concrete value type. Building it
+# from a generator yields `SortedDict{Any, Any}`, which `Deterministic`'s `convert_data`
+# then coerces to `Vector{Float64}` — corrupting FunctionData windows. Materializing
+# first pins the value type to the window type `window(i)` actually returns.
 function _assemble_forecast_windows(initial_timestamp, interval, count, window)
     windows = [window(i) for i in 1:count]
-    V = isempty(windows) ? Vector{Float64} : typeof(windows[1])
+    V = if isempty(windows)
+        Vector{Float64}
+    else
+        typeof(first(windows))
+    end
     data = SortedDict{Dates.DateTime, V}()
     for i in 1:count
         data[initial_timestamp + interval * (i - 1)] = windows[i]
@@ -1253,7 +1259,7 @@ function _infrastore_get_forecast(
     else
         key
     end
-    feats = Dict{String, Any}(string(k) => v for (k, v) in get_features(matched))
+    feats = get_features(matched)
     resolution = get_resolution(matched)
     # Pin every store lookup below to the resolved forecast's exact interval.
     # One name can carry several forecasts differing only by interval, and the
@@ -1289,9 +1295,15 @@ _truncate_window(w::AbstractMatrix, len::Int) = w[1:len, :]
 # windows carry trailing coefficient dims (3D). The stored `element_type` names
 # a scalar dtype in the 2-D case (and a DST inherits the metadata of the
 # SingleTimeSeries it shares), so key the decode on the array rank instead.
-_forecast_window(data::AbstractMatrix, element_type, i) = data[:, i]
-_forecast_window(data::AbstractArray{<:Any, 3}, element_type, i) =
-    _decode_forecast_window(data, element_type, i)
+_forecast_window(data::AbstractMatrix, ::ElementEncoding, _element_type, i) = data[:, i]
+
+_forecast_window(
+    data::AbstractArray{<:Any, 3}, encoding::ElementEncoding, element_type, i,
+) = _decode_forecast_window(data, encoding, element_type, i)
+
+# A Probabilistic/Scenarios window is stored `(member, horizon)` and transposed to the
+# `(horizon, member)` matrix IS hands users.
+_member_window(data::AbstractArray{<:Any, 3}, i) = permutedims(@view data[:, :, i])
 
 # Reconstruct a forecast read from the store as its user-facing type. Every
 # InfraStore read below is already sliced to the requested window range.
@@ -1312,11 +1324,8 @@ function _reconstruct_forecast(
         category, name;
         resolution = resolution, interval = interval, features = feats,
         time_range = time_range)
-    data = SortedDict{Dates.DateTime, Matrix{Float64}}()
-    for i in 1:(p.count)
-        data[p.initial_timestamp + p.interval * (i - 1)] =
-            _truncate_window(permutedims(p.data[:, :, i]), len)
-    end
+    window(i) = _truncate_window(_member_window(p.data, i), len)
+    data = _assemble_forecast_windows(p.initial_timestamp, p.interval, p.count, window)
     return Probabilistic(; name = name, data = data,
         percentiles = p.percentiles, resolution = p.resolution,
         interval = p.interval, units = p.units, quantity_kind = p.quantity_kind,
@@ -1357,8 +1366,10 @@ function _reconstruct_deterministic(
     d = InfraStore.get_time_series(store_type, store.inner, owner_id, category, name;
         resolution = resolution, interval = interval, features = feats,
         time_range = time_range)
-    # A scalar dtype spelling ("f64", ...) for scalar windows.
-    window(i) = _truncate_window(_forecast_window(d.data, d.element_type, i), len)
+    # Resolved once per read: the tag is the same for every window.
+    encoding = _element_encoding(d.element_type)
+    window(i) =
+        _truncate_window(_forecast_window(d.data, encoding, d.element_type, i), len)
     data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
     return Deterministic(; name = name, data = data,
         resolution = d.resolution, interval = d.interval, units = d.units,
@@ -1383,11 +1394,10 @@ function _reconstruct_forecast(
         category, name;
         resolution = resolution, interval = interval, features = feats,
         time_range = time_range)
-    data = SortedDict{Dates.DateTime, Matrix{Float64}}()
-    for i in 1:(s_ts.count)
-        data[s_ts.initial_timestamp + s_ts.interval * (i - 1)] =
-            _truncate_window(permutedims(s_ts.data[:, :, i]), len)
-    end
+    window(i) = _truncate_window(_member_window(s_ts.data, i), len)
+    data = _assemble_forecast_windows(
+        s_ts.initial_timestamp, s_ts.interval, s_ts.count, window,
+    )
     return Scenarios(; name = name, data = data,
         scenario_count = s_ts.scenario_count, resolution = s_ts.resolution,
         interval = s_ts.interval, units = s_ts.units,
@@ -1396,13 +1406,9 @@ function _reconstruct_forecast(
 end
 
 # ---- ForecastReader --------------------------------------------------------
-# A timestamp-oriented reader over the forecasts matching a filter, for the
-# simulation pattern "at each window timestamp, get every component's forecast".
-# It wraps the InfraStore `ForecastReader`, which deduplicates the physical `.h5` read:
-# components that share a forecast array (and read plan) collapse to one window
-# slot, so the data is read once per timestamp no matter how many components
-# reference it. This wrapper carries that dedup up to Julia — each unique slot's
-# window is materialized (and FunctionData-decoded) at most once per read.
+# A timestamp-oriented reader over the forecasts matching a filter. It carries the
+# InfraStore reader's `.h5` dedup up to Julia: forecasts sharing an array collapse to one
+# slot, materialized (and decoded) at most once per read.
 
 # Map an IS forecast type to the `InfraStore` reader type. An
 # `InfraStore.Deterministic` reader spans both deterministic storage forms, so
@@ -1414,12 +1420,9 @@ _tss_forecast_type(::Type{<:AbstractDeterministic}) = InfraStore.Deterministic
 _tss_forecast_type(::Type{<:Probabilistic}) = InfraStore.Probabilistic
 _tss_forecast_type(::Type{<:Scenarios}) = InfraStore.Scenarios
 
-# Orient + decode one raw window into IS's canonical per-window value (matching a
-# single `get_time_series(...).data[timestamp]`): Probabilistic/Scenarios windows
-# are stored `(count_member, horizon)` and transposed to `(horizon, member)`;
-# Deterministic/DST windows are a horizon vector, or a FunctionData
-# `(horizon, k)` matrix decoded row-wise via the encoding. Split by dispatch on
-# the forecast type, mirroring `_tss_forecast_type` above.
+# Orient + decode one raw window into IS's canonical per-window value, matching a single
+# `get_time_series(...).data[timestamp]`. Dispatched on the forecast type, mirroring
+# `_tss_forecast_type` above.
 _decode_forecast_reader_window(::Type{<:Probabilistic}, raw, ::ElementEncoding) =
     permutedims(raw)
 
@@ -1440,7 +1443,7 @@ forecast array (and read plan) report the same `slot`.
 """
 struct ForecastReaderEntry
     owner::TimeSeriesOwners
-    key::TimeSeriesKey
+    key::ForecastKey
     slot::Int
 end
 
@@ -1585,7 +1588,7 @@ function get_forecast_window(reader::ForecastReader{T}, entry_index::Integer) wh
         ArgumentError("call read_forecast_window! before reading window values"))
     entry = reader.entries[entry_index]
     cached = reader.windows[entry.slot]
-    cached === nothing || return cached
+    isnothing(cached) || return cached
     raw = InfraStore.forecast_values(reader.inner, entry_index)
     window =
         _decode_forecast_reader_window(T, raw, reader.element_encodings[entry_index])
@@ -1594,12 +1597,9 @@ function get_forecast_window(reader::ForecastReader{T}, entry_index::Integer) wh
 end
 
 # ---- StaticTimeSeriesReader ------------------------------------------------
-# The static counterpart of the ForecastReader, for the simulation pattern
-# "at each timestamp, get every component's value". It wraps the InfraStore
-# `StaticReader`, which packs the matching series into columnar
-# `(dtype, element_shape)` groups so a whole group is served by one physical
-# `.h5` read per timestamp. This wrapper carries that grouping up to Julia —
-# each group's values are materialized at most once per read.
+# The static counterpart of the ForecastReader. The InfraStore reader packs matching
+# series into columnar `(dtype, element_shape)` groups, one `.h5` read per group per
+# timestamp; this wrapper materializes each group's values at most once per read.
 
 """
 One series in a [`StaticTimeSeriesReader`], bound to its owner. `group` and
@@ -1730,7 +1730,7 @@ function get_static_time_series_value(
             "call read_static_time_series_values! before reading values"))
     entry = reader.entries[entry_index]
     vals = reader.values[entry.group]
-    if vals === nothing
+    if isnothing(vals)
         vals = InfraStore.static_values(reader.inner, entry.group)
         reader.values[entry.group] = vals
     end
@@ -1774,24 +1774,15 @@ function infrastore_has_time_series(
     store = mgr.data_store::Store
     owner_id, _, category = _infrastore_owner_args(owner)
     feats = _infrastore_features(features)
-    # Pure existence probe — a covering-index `SELECT 1 ... LIMIT 1` in the
-    # store; nothing is listed, hydrated, or marshaled, so this is safe in hot
-    # per-component loops. A broad abstract query type expands to one probe per
-    # candidate (the deterministic pair collapses to a single probe, since
-    # `InfraStore.Deterministic` matches both storage forms); the empty tuple
-    # means every type matches, i.e. one unfiltered probe.
+    # Pure existence probe — a covering-index `SELECT 1 ... LIMIT 1` in the store; nothing
+    # is listed, hydrated, or marshaled, so this is safe in hot per-component loops. A
+    # broad abstract query type expands to one probe per candidate stored type.
     probe =
         t -> InfraStore.has_any_time_series(store.inner;
             owner_id = owner_id, owner_category = category,
             time_series_type = t, name = name, resolution = resolution,
             interval = interval, features = feats)
-    types = _infrastore_query_types(T)
-    if isempty(types)
-        # Empty means "every type" or "no type"; a no-type query (parameterized
-        # concrete) must answer false, not probe unfiltered.
-        return _infrastore_matches_any_stored_type(T) && probe(nothing)
-    end
-    return any(probe, types)
+    return _infrastore_probe_types(probe, _infrastore_query_types(T))
 end
 
 # ---- Type translation ------------------------------------------------------
@@ -1811,14 +1802,19 @@ for (store_type, is_type) in _INFRASTORE_TYPE_PAIRS
     @eval _infrastore_type(::Type{<:$is_type}) = $store_type
 end
 
-# The deterministic pair collapses to `InfraStore.Deterministic`, which the core
-# already expands to both storage forms — one query/probe instead of two.
-_infrastore_collapse_family(types::Tuple) =
-    if types == (InfraStore.Deterministic, InfraStore.DeterministicSingleTimeSeries)
-        (InfraStore.Deterministic,)
-    else
-        types
-    end
+# `InfraStore.Deterministic` already expands to both deterministic storage forms in the
+# core, so a DST alongside it is a redundant query/probe.
+function _infrastore_collapse_family(types::Tuple)
+    (InfraStore.Deterministic in types) || return types
+    return Tuple(t for t in types if t !== InfraStore.DeterministicSingleTimeSeries)
+end
+
+# The three answers `_infrastore_query_types` can give. `AllStoredTypes` means one
+# unfiltered query serves the request; `NoStoredTypes` means no stored type can match (a
+# parameterized concrete such as `SingleTimeSeries{Float64, 1}`, which no stored UnionAll
+# subtypes) and the caller must answer empty WITHOUT querying.
+struct AllStoredTypes end
+struct NoStoredTypes end
 
 # All InfraStore types whose IS type is a subtype of `T` (strict `<:` semantics —
 # distinct from `_infrastore_type_matches`, which treats a `Deterministic` query
@@ -1827,23 +1823,17 @@ _infrastore_collapse_family(types::Tuple) =
 _infrastore_subtype_types(::Type{T}) where {T <: TimeSeriesData} =
     _infrastore_collapse_family(Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if k <: T))
 
-# Name-less existence queries: the stored InfraStore types a query for `T` should
-# match, under the same `Deterministic`-matches-DST semantics as
-# `_infrastore_type_matches`. A match on every type is returned as the empty
-# tuple, the caller's signal to issue one unfiltered query instead of six.
+# The stored InfraStore types a query for `T` should match, under the same
+# `Deterministic`-matches-DST semantics as `_infrastore_type_matches`. `AllStoredTypes()`
+# / `NoStoredTypes()` for the two degenerate answers; otherwise a non-empty tuple.
+_infrastore_query_types(::Nothing) = AllStoredTypes()
+
 function _infrastore_query_types(::Type{T}) where {T <: TimeSeriesData}
     types = Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if _infrastore_type_matches(k, T))
-    length(types) == length(_INFRASTORE_TYPE_PAIRS) && return ()
+    length(types) == length(_INFRASTORE_TYPE_PAIRS) && return AllStoredTypes()
+    isempty(types) && return NoStoredTypes()
     return _infrastore_collapse_family(types)
 end
-
-# Disambiguates the two meanings of `_infrastore_query_types`' empty tuple:
-# "matches every stored type" (true) vs "matches none" (false — a parameterized
-# concrete such as `SingleTimeSeries{Float64, 1}`, which no stored UnionAll
-# subtypes). The empty tuple only arises in those two cases, so testing a single
-# stored type settles which one this is.
-_infrastore_matches_any_stored_type(::Type{T}) where {T <: TimeSeriesData} =
-    _infrastore_type_matches(_INFRASTORE_TYPE_PAIRS[1][2], T)
 
 # The single InfraStore type to push into the core `list_keys` filter for a query
 # type — a stored type, where `InfraStore.Deterministic` covers a
@@ -1851,34 +1841,41 @@ _infrastore_matches_any_stored_type(::Type{T}) where {T <: TimeSeriesData} =
 # it. `nothing` when the type spans more than that (a broader abstract family
 # like `Forecast`); the caller then applies the residual
 # `_infrastore_type_matches` filter on the (already narrowed) rows.
-function _infrastore_pushable_type(::Type{T}) where {T <: TimeSeriesData}
-    types = _infrastore_query_types(T)
-    return length(types) == 1 ? only(types) : nothing
+_infrastore_pushable_type(::Type{T}) where {T <: TimeSeriesData} =
+    _infrastore_pushable_type(_infrastore_query_types(T))
+
+_infrastore_pushable_type(::Nothing) = nothing
+_infrastore_pushable_type(::AllStoredTypes) = nothing
+_infrastore_pushable_type(::NoStoredTypes) = nothing
+
+function _infrastore_pushable_type(types::Tuple)
+    length(types) == 1 && return only(types)
+    return nothing
 end
 
+# `probe(time_series_type)` over the stored types a query matches: one unfiltered probe
+# for `AllStoredTypes`, no probe at all when nothing can match.
+_infrastore_probe_types(probe, ::AllStoredTypes) = probe(nothing)
+_infrastore_probe_types(_probe, ::NoStoredTypes) = false
+_infrastore_probe_types(probe, types::Tuple) = any(probe, types)
+
 # True iff `owner` has any time series, optionally restricted to type `T`.
-function infrastore_has_any(owner; time_series_type::Union{Nothing, Type} = nothing)
+# `time_series_type` is deliberately untyped: annotating it `Union{Nothing, Type}`
+# widens the passed `Type{T}` constant to abstract `Type`, which defeats constant
+# propagation through `_infrastore_query_types` and boxes this function's return as
+# `Any` instead of `Bool` — real cost on the `has_time_series` hot path.
+function infrastore_has_any(owner; time_series_type = nothing)
     mgr = get_time_series_manager(owner)
     store = mgr.data_store::Store
     owner_id, _, category = _infrastore_owner_args(owner)
-    types =
-        time_series_type === nothing ? () : _infrastore_query_types(time_series_type)
-    if isempty(types)
-        # Empty means "every type" or "no type"; a no-type query (parameterized
-        # concrete) must answer false, not probe unfiltered.
-        time_series_type === nothing ||
-            _infrastore_matches_any_stored_type(time_series_type) ||
-            return false
-        return InfraStore.has_for_owner(store.inner, owner_id, category)
-    end
-    return any(
-        t ->
-            InfraStore.has_for_owner(store.inner, owner_id, category; time_series_type = t),
-        types,
-    )
+    probe =
+        t -> InfraStore.has_for_owner(
+            store.inner, owner_id, category; time_series_type = t,
+        )
+    return _infrastore_probe_types(probe, _infrastore_query_types(time_series_type))
 end
 
-# ---- Metadata reconstruction (parity with the SQLite metadata store) --------
+# ---- Metadata reconstruction -----------------------------------------------
 # IS time series type for a `InfraStore` metadata-row type (matched by name) —
 # the inverse of `_infrastore_type`, over the same table.
 const _INFRASTORE_IS_TYPES =
@@ -1889,19 +1886,19 @@ _infrastore_is_type(s::Symbol) =
         error("InfraStore backend does not support time series type $s")
     end
 
-# Whether a stored row of concrete type `row_type` satisfies a query for type `T`.
-# Mirrors both the metadata-store semantics and InfraStore's: a `Deterministic`
-# (or `AbstractDeterministic`) query also matches a `DeterministicSingleTimeSeries`
-# (which reads as a `Deterministic`), while a `DeterministicSingleTimeSeries`
-# query matches DST only.
+# Whether a stored row of concrete type `row_type` satisfies a query for the query type.
+# Mirrors InfraStore's semantics: a `Deterministic` (or `AbstractDeterministic`) query
+# also matches a `DeterministicSingleTimeSeries` (which reads as a `Deterministic`),
+# while a `DeterministicSingleTimeSeries` query matches DST only.
+_infrastore_type_matches(
+    row_type::Type, ::Type{<:DeterministicSingleTimeSeries},
+) = row_type <: DeterministicSingleTimeSeries
+
+_infrastore_type_matches(row_type::Type, ::Type{<:AbstractDeterministic}) =
+    row_type <: AbstractDeterministic
+
 _infrastore_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
-    if T <: DeterministicSingleTimeSeries
-        row_type <: DeterministicSingleTimeSeries
-    elseif T <: AbstractDeterministic
-        row_type <: AbstractDeterministic
-    else
-        row_type <: T
-    end
+    row_type <: T
 
 # `_infrastore_query_types`' answer is static per query type, and its generic
 # method's runtime match loop costs ~2 µs — real money on the
@@ -1925,39 +1922,39 @@ end
 # metadata row (they share the key-describing fields). The key is the single
 # descriptor for a stored association; forecast-only fields (percentiles,
 # scenario_count) are not carried — they come from the data on read.
-function _key_from_row(row)
-    feats = Dict{String, Any}(string(k) => v for (k, v) in row.features)
-    is_type = _infrastore_is_type(row.time_series_type)
-    if is_type <: NonSequentialTimeSeries
-        return NonSequentialTimeSeriesKey(;
-            time_series_type = is_type,
-            name = row.name,
-            length = row.length,
-            features = feats,
-        )
-    elseif is_type <: StaticTimeSeries
-        return StaticTimeSeriesKey(;
-            time_series_type = is_type,
-            name = row.name,
-            initial_timestamp = row.initial_timestamp,
-            resolution = row.resolution,
-            length = row.length,
-            features = feats,
-        )
-    elseif is_type <: Forecast
-        return ForecastKey(;
-            time_series_type = is_type,
-            name = row.name,
-            initial_timestamp = row.initial_timestamp,
-            resolution = row.resolution,
-            horizon = row.horizon,
-            interval = row.interval,
-            count = row.count,
-            features = feats,
-        )
-    end
-    error("InfraStore backend cannot build a key for $(row.time_series_type)")
-end
+_key_from_row(row) = _key_from_row(_infrastore_is_type(row.time_series_type), row)
+
+_row_features(row) = Dict{String, Any}(string(k) => v for (k, v) in row.features)
+
+_key_from_row(::Type{T}, row) where {T <: NonSequentialTimeSeries} =
+    NonSequentialTimeSeriesKey(;
+        time_series_type = T,
+        name = row.name,
+        length = row.length,
+        features = _row_features(row),
+    )
+
+_key_from_row(::Type{T}, row) where {T <: StaticTimeSeries} =
+    StaticTimeSeriesKey(;
+        time_series_type = T,
+        name = row.name,
+        initial_timestamp = row.initial_timestamp,
+        resolution = row.resolution,
+        length = row.length,
+        features = _row_features(row),
+    )
+
+_key_from_row(::Type{T}, row) where {T <: Forecast} =
+    ForecastKey(;
+        time_series_type = T,
+        name = row.name,
+        initial_timestamp = row.initial_timestamp,
+        resolution = row.resolution,
+        horizon = row.horizon,
+        interval = row.interval,
+        count = row.count,
+        features = _row_features(row),
+    )
 
 # All matching associations for one owner, as `TimeSeriesKey` objects. The core
 # `list_keys` query filters owner / name / resolution / interval / features
@@ -1975,15 +1972,14 @@ function _infrastore_list_keys(
     interval = nothing,
     features = (),
 )
-    type_filter =
-        isnothing(time_series_type) ? nothing : _infrastore_pushable_type(time_series_type)
+    type_filter = _infrastore_pushable_type(time_series_type)
     feats = Dict{String, Any}(string(k) => v for (k, v) in features)
     rows =
         InfraStore.list_keys(store.inner; owner_id = owner_id,
             owner_category = owner_category, time_series_type = type_filter,
             name = name, resolution = resolution, interval = interval,
             features = feats)
-    out = TimeSeriesKey[]
+    out = ConcreteTimeSeriesKey[]
     for row in rows
         if !isnothing(time_series_type)
             _infrastore_type_matches(
@@ -1997,11 +1993,7 @@ function _infrastore_list_keys(
     return out
 end
 
-# A key for every time series in the store (all owners).
-_infrastore_all_metadata(store::Store) =
-    [_key_from_row(row) for row in InfraStore.list_keys(store.inner)]
-
-# Owner-level `list_metadata` entry point (mirrors the metadata-store signature).
+# Owner-level `list_metadata` entry point.
 function infrastore_owner_list_keys(
     owner::TimeSeriesOwners;
     time_series_type = nothing,
@@ -2159,21 +2151,23 @@ function infrastore_get_time_series_multiple(
         resolution = resolution, interval = interval)
     Channel() do channel
         for m in metas
-            # Each key is already fully resolved, so read key-addressed — no
-            # catalog re-resolution per series.
-            ts = if m isa ForecastKey
-                _infrastore_get_forecast(owner, get_name(m); key = m)
-            elseif m isa NonSequentialTimeSeriesKey
-                _infrastore_read_non_sequential(owner, m)
-            else
-                _infrastore_read_single(owner, m)
-            end
+            ts = _infrastore_read_key(owner, m)
             (isnothing(filter_func) || filter_func(ts)) && put!(channel, ts)
         end
     end
 end
 
-# ---- Store-wide aggregates (parity with the SQLite metadata store) ----------
+# Read one series by its already-resolved key — no catalog re-resolution.
+_infrastore_read_key(owner::TimeSeriesOwners, key::ForecastKey) =
+    _infrastore_get_forecast(owner, get_name(key); key = key)
+
+_infrastore_read_key(owner::TimeSeriesOwners, key::NonSequentialTimeSeriesKey) =
+    _infrastore_read_non_sequential(owner, key)
+
+_infrastore_read_key(owner::TimeSeriesOwners, key::StaticTimeSeriesKey) =
+    _infrastore_read_single(owner, key)
+
+# ---- Store-wide aggregates -------------------------------------------------
 
 # Distinct, sorted resolutions across the store, optionally restricted to a type
 # (strict subtype). One DISTINCT query per concrete subtype code, in the core.
@@ -2189,7 +2183,7 @@ function infrastore_get_time_series_resolutions(
     return sort!(collect(res))
 end
 
-# Counts of time series grouped by type name (parity with counts_by_type).
+# Counts of time series grouped by type name.
 function infrastore_get_time_series_counts_by_type(store::Store)
     counts = OrderedDict{String, Int}()
     for r in InfraStore.counts_by_type(store.inner)
@@ -2198,8 +2192,7 @@ function infrastore_get_time_series_counts_by_type(store::Store)
     return [OrderedDict("type" => k, "count" => v) for (k, v) in sort!(OrderedDict(counts))]
 end
 
-# Static-time-series summary DataFrame (parity with the metadata-store version).
-# The core groups the rows; we shape them into the DataFrame.
+# Static-time-series summary DataFrame. The core groups the rows; we shape them here.
 function infrastore_static_summary_table(store::Store)
     rows = InfraStore.static_summary(store.inner)
     return DataFrames.DataFrame(;
@@ -2214,7 +2207,7 @@ function infrastore_static_summary_table(store::Store)
     )
 end
 
-# Forecast summary DataFrame (parity with the metadata-store version).
+# Forecast summary DataFrame.
 function infrastore_forecast_summary_table(store::Store)
     rows = InfraStore.forecast_summary(store.inner)
     return DataFrames.DataFrame(;
@@ -2304,10 +2297,9 @@ function infrastore_list_keys_with_owner(
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
     category = get_owner_category(owner_type)
-    type_filter =
-        isnothing(time_series_type) ? nothing : _infrastore_pushable_type(time_series_type)
     rows = InfraStore.list_keys(store.inner; owner_category = category,
-        time_series_type = type_filter, resolution = resolution)
+        time_series_type = _infrastore_pushable_type(time_series_type),
+        resolution = resolution)
     out = NamedTuple[]
     for row in rows
         if !isnothing(time_series_type)
@@ -2336,27 +2328,8 @@ function _infrastore_remove_by_filter!(
     interval::Union{Nothing, Dates.Period} = nothing,
     features::AbstractDict = Dict{String, Any}(),
 )
-    types = isnothing(time_series_type) ? () : _infrastore_query_types(time_series_type)
-    if isempty(types)
-        # Empty means "every type" or "no type"; a no-type query (parameterized
-        # concrete) must remove nothing, not remove unfiltered.
-        if !isnothing(time_series_type) &&
-           !_infrastore_matches_any_stored_type(time_series_type)
-            return 0
-        end
-        return InfraStore.remove_by_filter!(
-            store.inner;
-            owner_id = owner_id,
-            owner_category = owner_category,
-            name = name,
-            resolution = resolution,
-            interval = interval,
-            features = features,
-        )
-    end
-    count = 0
-    for t in types
-        count += InfraStore.remove_by_filter!(
+    remove =
+        t -> InfraStore.remove_by_filter!(
             store.inner;
             owner_id = owner_id,
             owner_category = owner_category,
@@ -2366,6 +2339,18 @@ function _infrastore_remove_by_filter!(
             interval = interval,
             features = features,
         )
+    return _infrastore_remove_types!(remove, _infrastore_query_types(time_series_type))
+end
+
+_infrastore_remove_types!(remove, ::AllStoredTypes) = remove(nothing)
+
+# A query no stored type can match must remove nothing, not remove unfiltered.
+_infrastore_remove_types!(_remove, ::NoStoredTypes) = 0
+
+function _infrastore_remove_types!(remove, types::Tuple)
+    count = 0
+    for t in types
+        count += remove(t)
     end
     return count
 end
@@ -2380,10 +2365,8 @@ end
 # contract on top of that: a single-window interval is stored as zero (the form
 # IS looks views up by), and one system holds one forecast grid.
 #
-# The store's parameter and integrity failures are IS's ConflictingInputsError:
-# callers (`check_transform_single_time_series`, PowerSimulations) dispatch on
-# that type, and every one of these conditions was raised as a
-# ConflictingInputsError before the checks moved into the store.
+# The store's parameter and integrity failures become IS's ConflictingInputsError,
+# which is the type callers dispatch on.
 function infrastore_transform_single_time_series!(
     store::Store,
     horizon::Dates.Period,
@@ -2409,12 +2392,10 @@ function infrastore_transform_single_time_series!(
     end
 end
 
-# Verify that, per resolution, all SingleTimeSeries share an initial timestamp
-# and length; return `(initial_timestamp, length)` (parity with the
-# metadata-store check). SingleTimeSeries at different resolutions have
-# legitimately different grids, so with more than one resolution present the
-# caller must pass `resolution` to name the grid it wants. Resolved by a single
-# DISTINCT query in the core.
+# Verify that, per resolution, all SingleTimeSeries share an initial timestamp and
+# length; return `(initial_timestamp, length)`. Series at different resolutions have
+# legitimately different grids, so with more than one resolution present the caller must
+# pass `resolution` to name the grid it wants. One DISTINCT query in the core.
 function infrastore_check_consistency(
     store::Store,
     ::Type{<:SingleTimeSeries};

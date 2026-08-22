@@ -419,7 +419,7 @@ function compare_values(
     match_fn::Union{Function, Nothing},
     x::Components,
     y::Components;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
     match = true
@@ -433,7 +433,7 @@ function compare_values(
             match_fn,
             val_x,
             val_y;
-            compare_uuids = compare_uuids,
+            compare_ids = compare_ids,
             exclude = exclude,
         )
             val_x = getproperty(x, name)

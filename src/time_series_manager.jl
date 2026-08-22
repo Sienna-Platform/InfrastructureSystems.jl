@@ -31,7 +31,11 @@ function TimeSeriesManager(;
             # `directory` may be an explicit kwarg, the SIENNA_TIME_SERIES_DIRECTORY
             # env var, or `tempdir()`. Create it if missing (e.g. an HPC per-job
             # scratch path that doesn't exist yet).
-            dir = isnothing(directory) ? tempdir() : directory
+            dir = if isnothing(directory)
+                tempdir()
+            else
+                directory
+            end
             mkpath(dir)
             joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
         end
@@ -50,6 +54,11 @@ function TimeSeriesManager(;
     return TimeSeriesManager(data_store, read_only)
 end
 
+"""
+The [`Store`](@ref) holding this manager's time series arrays and their catalog.
+"""
+get_data_store(mgr::TimeSeriesManager) = mgr.data_store
+
 # (owner_id::Int, owner_type::String, owner_category::InfraStore.OwnerCategory)
 # for the InfraStore binding. The owner is identified by its integer id.
 function _infrastore_owner_args(owner::TimeSeriesOwners)
@@ -60,15 +69,23 @@ function _infrastore_owner_args(owner::TimeSeriesOwners)
     )
 end
 
+# The same identity without the type-name string, for the calls that never send it.
+function _infrastore_owner_id_category(owner::TimeSeriesOwners)
+    return (get_id(owner), get_owner_category(owner))
+end
+
+_feature_value(_, v::Union{Bool, Real, AbstractString}) = v
+
+_feature_value(k, v) = throw(
+    ArgumentError(
+        "time series feature `$k` must be a Bool, Real, or String, got $(typeof(v))",
+    ),
+)
+
 function _infrastore_features(features)
     out = Dict{String, Any}()
     for (k, v) in features
-        v isa Union{Bool, Real, AbstractString} || throw(
-            ArgumentError(
-                "time series feature `$k` must be a Bool, Real, or String, got $(typeof(v))",
-            ),
-        )
-        out[string(k)] = v
+        out[string(k)] = _feature_value(k, v)
     end
     return out
 end
@@ -102,13 +119,13 @@ end
 ```
 """
 function time_series_transaction(func::Function, mgr::TimeSeriesManager; kwargs...)
-    return _time_series_transaction(func, mgr, nothing; kwargs...)
+    return _time_series_transaction(func, mgr, no_owner_validation; kwargs...)
 end
 
 function _time_series_transaction(
     func::Function,
     mgr::TimeSeriesManager,
-    owner_validator::Union{Nothing, Function};
+    owner_validator::Function;
     auto_flush_threshold::Int = AUTO_FLUSH_THRESHOLD,
     auto_flush_bytes::Int = AUTO_FLUSH_BYTES,
 )
@@ -162,7 +179,7 @@ function add_time_series!(
     features...,
 )
     _throw_if_closed(context)
-    isnothing(context.owner_validator) || context.owner_validator(owner)
+    context.owner_validator(owner)
     return _stage_on_context!(context, owner, time_series; features...)
 end
 
@@ -178,9 +195,17 @@ function add_time_series!(
 )
     # Component information is not embedded into the key, so every component
     # produces the same one.
-    key = nothing
-    for component in components
-        key = add_time_series!(context, component, time_series; features...)
+    peeled = Iterators.peel(components)
+    isnothing(peeled) && throw(
+        ArgumentError(
+            "`components` is empty; there is nothing to associate " *
+            "$(summary(time_series)) with",
+        ),
+    )
+    first_component, rest = peeled
+    key = add_time_series!(context, first_component, time_series; features...)
+    for component in rest
+        add_time_series!(context, component, time_series; features...)
     end
     return key
 end
@@ -204,9 +229,6 @@ function _stage_on_context!(
     # time (computed where the array is materialized — never derived by walking
     # the source objects, which costs more than the rest of the stage combined).
     context.staged_bytes += nbytes
-    # A batch that grows past either limit is written out so an arbitrarily large
-    # block holds a bounded amount of data in memory. The write lands inside the
-    # open transaction, so it rolls back with the block.
     if length(context.keys) >= context.auto_flush_threshold ||
        context.staged_bytes >= context.auto_flush_bytes
         flush!(context)
@@ -216,21 +238,25 @@ end
 
 function clear_time_series!(mgr::TimeSeriesManager)
     _throw_if_read_only(mgr)
-    clear_time_series!(mgr.data_store)
+    clear_time_series!(get_data_store(mgr))
     return
 end
 
 function compact_time_series!(mgr::TimeSeriesManager)
     _throw_if_read_only(mgr)
-    return compact_time_series!(mgr.data_store)
+    return compact_time_series!(get_data_store(mgr))
 end
 
 function clear_time_series!(mgr::TimeSeriesManager, component::TimeSeriesOwners)
     _throw_if_read_only(mgr)
-    owner_id, _, category = _infrastore_owner_args(component)
+    owner_id, category = _infrastore_owner_id_category(component)
     # One owner-scoped clear (order-independent, so it is not blocked by the
     # core's SingleTimeSeries/DST removal guard).
-    InfraStore.clear!(mgr.data_store.inner; owner_id = owner_id, owner_category = category)
+    InfraStore.clear!(
+        get_data_store(mgr).inner;
+        owner_id = owner_id,
+        owner_category = category,
+    )
     @debug "Cleared time_series in $(summary(component))." _group =
         LOG_GROUP_TIME_SERIES
     return
@@ -283,8 +309,8 @@ function remove_time_series!(
     features...,
 )
     _throw_if_read_only(mgr)
-    store = mgr.data_store
-    owner_id, _, category = _infrastore_owner_args(owner)
+    store = get_data_store(mgr)
+    owner_id, category = _infrastore_owner_id_category(owner)
     feats = Dict{String, Any}(string(k) => v for (k, v) in features)
     # Subset (partial) feature/resolution matching: each bulk catalog call
     # removes every stored series of the query type that contains at least the
@@ -304,11 +330,15 @@ function remove_time_series!(
             features = feats,
         )
     catch e
-        if e isa InfraStore.InvalidParameterError
+        # `catch`-block exception inspection: the DST-orphan guard can only fire for a
+        # SingleTimeSeries removal. An InvalidParameterError raised for any other query
+        # type — or for any other reason — must surface the store's own message.
+        if e isa InfraStore.InvalidParameterError &&
+           time_series_type <: SingleTimeSeries
             throw(
                 ArgumentError(
                     "Cannot remove SingleTimeSeries '$name' because it is attached to a " *
-                    "DeterministicSingleTimeSeries."),
+                    "DeterministicSingleTimeSeries. Store reported: $(e.msg)"),
             )
         end
         rethrow()
@@ -330,7 +360,7 @@ function remove_time_series!(
     key::TimeSeriesKey,
 )
     _throw_if_read_only(mgr)
-    infrastore_remove_time_series!(mgr.data_store::Store, owner, key)
+    infrastore_remove_time_series!(get_data_store(mgr), owner, key)
     return
 end
 
@@ -344,16 +374,16 @@ function compare_values(
     match_fn::Union{Function, Nothing},
     x::TimeSeriesManager,
     y::TimeSeriesManager;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
     # `read_only` can be changed during deserialization and is tested separately;
     # structural equality is the data store's count comparison.
     return compare_values(
         match_fn,
-        x.data_store,
-        y.data_store;
-        compare_uuids = compare_uuids,
+        get_data_store(x),
+        get_data_store(y);
+        compare_ids = compare_ids,
         exclude = exclude,
     )
 end

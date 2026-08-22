@@ -47,18 +47,6 @@ function create_system_data(;
     return data
 end
 
-# True if the InfraStore native library is available, so on-disk serialization
-# tests can run. Set INFRASTORE_LIB for a development build of the library.
-function infrastore_ts_available()
-    try
-        store = IS.Store(; in_memory = true)
-        IS.close!(store)
-        return true
-    catch
-        return false
-    end
-end
-
 function create_system_data_shared_time_series(;
     time_series_in_memory = false,
 )

@@ -15,7 +15,7 @@ struct ComponentIDs <: InfrastructureSystemsType
     end
 end
 
-Base.copy(x::ComponentIDs) = copy(x.ids)
+Base.copy(x::ComponentIDs) = ComponentIDs(copy(x.ids))
 Base.delete!(x::ComponentIDs, id) = delete!(x.ids, id)
 Base.empty!(x::ComponentIDs) = empty!(x.ids)
 Base.filter!(f, x::ComponentIDs) = filter!(f, x.ids)
@@ -31,9 +31,5 @@ Base.setdiff!(x::ComponentIDs, y::ComponentIDs) = setdiff!(x.ids, y.ids)
 Base.sizehint!(x::ComponentIDs, newsz) = sizehint!(x.ids, newsz)
 
 function deserialize(::Type{ComponentIDs}, data::Dict)
-    ids = Set{Int}()
-    for id in data["ids"]
-        push!(ids, Int(id))
-    end
-    return ComponentIDs(ids)
+    return ComponentIDs(Set{Int}(Int(id) for id in data["ids"]))
 end

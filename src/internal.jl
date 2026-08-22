@@ -13,10 +13,8 @@ Unit system for component data values.
 """ UnitSystem
 
 """
-System-level manager references handed to a component or supplemental attribute
-when it is attached to a [`SystemData`](@ref), letting the owner reach its
-system's time series and supplemental attributes without a back-pointer to the
-whole system.
+Back-references from a component or supplemental attribute to the managers of the
+[`SystemData`](@ref) it is attached to. `nothing` in both fields until attachment.
 """
 @kwdef struct SharedSystemReferences <: InfrastructureSystemsType
     supplemental_attribute_manager::Union{Nothing, AbstractSupplementalAttributeManager} =
@@ -147,12 +145,12 @@ function compare_values(
     match_fn::Union{Function, Nothing},
     x::InfrastructureSystemsInternal,
     y::InfrastructureSystemsInternal;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
     match = true
     for name in fieldnames(InfrastructureSystemsInternal)
-        if name in exclude || (name == :id && !compare_uuids) ||
+        if name in exclude || (name == :id && !compare_ids) ||
            name == :shared_system_references
             continue
         end
@@ -173,7 +171,7 @@ function compare_values(
                 match_fn,
                 val1,
                 val2;
-                compare_uuids = compare_uuids,
+                compare_ids = compare_ids,
                 exclude = exclude,
             )
                 @error "ext does not match" val1 val2
@@ -183,7 +181,7 @@ function compare_values(
             match_fn,
             getproperty(x, name),
             getproperty(y, name);
-            compare_uuids = compare_uuids,
+            compare_ids = compare_ids,
             exclude = exclude,
         )
             @error "InfrastructureSystemsInternal field=$name does not match"

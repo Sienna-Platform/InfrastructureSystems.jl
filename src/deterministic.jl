@@ -19,16 +19,14 @@ A deterministic forecast for a particular data field in a Component.
   - `resolution::Dates.Period`: forecast resolution
   - `interval::Dates.Period`: forecast interval
   - `units::Union{Nothing, String}`: optional user-declared units label for the values
-    (e.g. `"MW"`). Set at construction and returned on read; IS neither interprets nor
-    validates it, and it is never part of the time series' identity.
+    (e.g. `"MW"`)
   - `quantity_kind::Union{Nothing, String}`: optional label for the kind of physical
-    quantity the values measure (e.g. `"ActivePower"`). Sits above `units`: it separates
-    active from reactive power, which dimensional analysis cannot, and it is the only
-    record of what per-unit values measure.
+    quantity the values measure (e.g. `"ActivePower"`)
   - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
-    the values are already expressed in (`NU`, `DU`, or `SU`). A declaration, not a
-    conversion; `nothing` means unspecified, which is not the same as `NU`.
+    the values are already expressed in (`NU`, `DU`, or `SU`)
   - `internal::InfrastructureSystemsInternal`
+
+See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref).
 """
 struct Deterministic{T, N} <: AbstractDeterministic{T}
     "user-defined name"
@@ -64,9 +62,9 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
             data,
             resolution,
             interval,
-            _maybe_units(units),
-            _maybe_quantity_kind(quantity_kind),
-            _maybe_unit_system(unit_system),
+            _maybe_string(units),
+            _maybe_string(quantity_kind),
+            unit_system,
         )
     end
 end
@@ -82,7 +80,7 @@ function Deterministic(
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
-    sorted = data isa SortedDict ? data : SortedDict(data...)
+    sorted = _ensure_sorted_dict(data)
     return Deterministic{_window_eltype(sorted), _window_ndims(sorted)}(
         String(name),
         sorted,
@@ -194,7 +192,6 @@ end
 Construct a new Deterministic from an existing instance and a subset of data.
 """
 function Deterministic(forecast::Deterministic, data)
-    # A subset of the same values keeps the same units label.
     return Deterministic(
         get_name(forecast),
         data,
@@ -238,7 +235,6 @@ function Deterministic(
     src::Deterministic,
     name::AbstractString,
 )
-    # `units` is carried over: it describes the values, and the values are shared.
     return Deterministic(
         name,
         src.data,
@@ -259,11 +255,11 @@ end
 
 # If values are no more specific than Any, assume CONSTANT
 convert_data(data::AbstractDict{<:Any, Any}) =
-    SortedDict{Dates.DateTime, Vector{CONSTANT}}(data...)
+    SortedDict{Dates.DateTime, Vector{CONSTANT}}(data)
 
 # If values are more specific, don't assume CONSTANT but do upgrade some types
 convert_data(data::AbstractDict{<:Any, Vector{T}}) where {T} =
-    SortedDict{Dates.DateTime, Vector{T}}(data...)
+    SortedDict{Dates.DateTime, Vector{T}}(data)
 
 # If everything is fully specified, pass through
 convert_data(data::SortedDict{Dates.DateTime, Vector}) = data

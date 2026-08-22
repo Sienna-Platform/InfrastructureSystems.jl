@@ -1,5 +1,5 @@
 const SupplementalAttributesByType =
-    Dict{DataType, Dict{Int, <:SupplementalAttribute}}
+    Dict{DataType, Dict{Int, SupplementalAttribute}}
 
 """
 Owns supplemental attributes and their associations to components in a [`SystemData`](@ref).
@@ -32,6 +32,8 @@ end
 
 get_member_string(::SupplementalAttributeManager) = "supplemental attributes"
 
+get_data_store(mgr::SupplementalAttributeManager) = get_data_store(mgr.associations)
+
 """
 Begin an update of supplemental attributes. Use this function when adding
 or removing many supplemental attributes in order to improve performance.
@@ -42,24 +44,11 @@ function begin_supplemental_attributes_update(
     func::Function,
     mgr::SupplementalAttributeManager,
 )
-    # Snapshot the attributes so a failed update reverts to the pre-update state,
-    # INCLUDING in-place mutations of attribute data (e.g. a `geo_json` Dict). A
-    # shallow `copy` of the inner dicts aliases the attribute objects, so such
-    # mutations would leak through the rollback. Deep-copy each attribute instead.
-    orig_data = SupplementalAttributesByType()
-    for (key, inner) in mgr.data
-        snapshot = empty(inner)
-        for (id, attr) in inner
-            snapshot[id] = _snapshot_supplemental_attribute(attr)
-        end
-        orig_data[key] = snapshot
-    end
-
-    # The store exposes no transaction primitive, so snapshot the association rows and
-    # restore them wholesale on failure. Rows are small metadata and a system holds far
-    # fewer of them than time series, so a full clear-and-reload is cheap — and unlike a
-    # diff of newly added rows it also undoes REMOVALS, which is what the SQLite
-    # transaction this replaced did.
+    # Invariant: the rollback must also undo in-place mutations of attribute data (e.g. a
+    # `geo_json` Dict), which a shallow copy would let alias through.
+    orig_data = _snapshot_attribute_data(mgr)
+    # Invariant: the rollback must also undo REMOVALS, which a diff of newly added rows
+    # cannot, and which `InfraStore.transaction` covers only for writes made through it.
     orig_associations = _association_rows(mgr.associations)
 
     try
@@ -71,22 +60,35 @@ function begin_supplemental_attributes_update(
     end
 end
 
-# Deep-copy an attribute for the rollback snapshot WITHOUT following its
-# `shared_system_references` back-reference: that field links the attribute to the
-# live managers, so `deepcopy` would otherwise drag the whole system (SQLite handle
-# included) into the copy. The snapshot shares the original references object, so a
-# rollback leaves those references identical — matching how `serialize` and
-# `compare_values` treat this field.
-function _snapshot_supplemental_attribute(attr::SupplementalAttribute)
-    refs = get_shared_system_references(attr)
-    set_shared_system_references!(attr, nothing)
-    try
-        snapshot = deepcopy(attr)
-        set_shared_system_references!(snapshot, refs)
-        return snapshot
-    finally
-        set_shared_system_references!(attr, refs)
+# One deep copy of the whole container, with the live managers pinned in the `IdDict` so
+# each attribute's `shared_system_references` back-reference is shared rather than dragging
+# the system (store handle included) into the snapshot.
+function _snapshot_attribute_data(mgr::SupplementalAttributeManager)
+    pinned = IdDict()
+    for inner in values(mgr.data)
+        for attr in values(inner)
+            _pin_shared_references!(pinned, get_shared_system_references(attr))
+        end
     end
+    return Base.deepcopy_internal(mgr.data, pinned)::SupplementalAttributesByType
+end
+
+_pin_shared_references!(::IdDict, ::Nothing) = nothing
+
+function _pin_shared_references!(pinned::IdDict, refs::SharedSystemReferences)
+    _pin!(pinned, refs.supplemental_attribute_manager)
+    _pin!(pinned, refs.time_series_manager)
+    return nothing
+end
+
+# `deepcopy_internal` consults the `IdDict` only for mutable objects, so pinning the
+# managers (mutable) is what stops the walk; the immutable `SharedSystemReferences` box is
+# rebuilt from those identical fields and so stays `===` to the original.
+_pin!(::IdDict, ::Nothing) = nothing
+
+function _pin!(pinned::IdDict, mgr)
+    pinned[mgr] = mgr
+    return nothing
 end
 
 function add_supplemental_attribute!(
@@ -131,15 +133,17 @@ function _attach_attribute!(
     if id == UNASSIGNED_ID
         throw(
             ArgumentError(
-                "$(summary(attribute)) has an unassigned ID; attach it through " *
-                "`add_supplemental_attribute!` on `SystemData` so an ID is assigned first.",
+                "$(summary(attribute)) has an unassigned ID; call `add_supplemental_attribute!` " *
+                "on `SystemData` to have one assigned automatically, or, when adopting an " *
+                "attribute whose id is already fixed by a document, call `set_id!` first and " *
+                "attach it with `attach_supplemental_attribute!`.",
             ),
         )
     end
 
     T = typeof(attribute)
     if !haskey(mgr.data, T)
-        mgr.data[T] = Dict{Int, T}()
+        mgr.data[T] = Dict{Int, SupplementalAttribute}()
     end
     mgr.data[T][id] = attribute
 end
@@ -290,10 +294,8 @@ end
 
 function get_supplemental_attribute(mgr::SupplementalAttributeManager, id::Int)
     for attr_dict in values(mgr.data)
-        attribute = get(attr_dict, id, nothing)
-        if !isnothing(attribute)
-            return attribute
-        end
+        attr = get(attr_dict, id, nothing)
+        isnothing(attr) || return attr
     end
 
     throw(ArgumentError("No attribute with id = $id is stored"))

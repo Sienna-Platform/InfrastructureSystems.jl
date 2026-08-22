@@ -1,13 +1,12 @@
 
 const DEFAULT_COMPRESSION = false
 
-@scoped_enum(CompressionTypes, BLOSC = 0, DEFLATE = 1,)
+@scoped_enum(CompressionTypes, DEFLATE = 1,)
 
 @doc """
 HDF5 compression algorithm types for time series storage.
 
 # Values
-- `BLOSC`: Blosc compression (fast, general-purpose)
 - `DEFLATE`: Deflate/zlib compression
 """ CompressionTypes
 
@@ -18,15 +17,11 @@ Provides customization of HDF5 compression settings.
 
 $(TYPEDFIELDS)
 
-Refer to the [HDF5.jl](https://juliaio.github.io/HDF5.jl/stable/) and
-[HDF5](https://portal.hdfgroup.org/) documentation for more details on the
-options.
-
 # Example
 ```julia
 settings = CompressionSettings(
     enabled = true,
-    type = CompressionTypes.DEFLATE,  # BLOSC is also supported
+    type = CompressionTypes.DEFLATE,
     level = 3,
     shuffle = true,
 )
@@ -69,8 +64,7 @@ associations). When `in_memory=false`, `path` is the base path for the on-disk a
 (`<path>.h5` and `<path>.sqlite`).
 
 `compression` is a [`CompressionSettings`](@ref). The InfraStore backend supports
-`DEFLATE` (with `level` 0-9 and `shuffle`) or no compression (`enabled=false`);
-`BLOSC` is not available and raises an error.
+`DEFLATE` (with `level` 0-9 and `shuffle`) or no compression (`enabled=false`).
 
 `catalog` places the SQLite catalog: `:attached` makes it the `.sqlite` file, where every
 commit is durable, while `:memory` holds it in RAM so it reaches disk only through
@@ -85,26 +79,25 @@ function Store(;
     catalog = nothing,
 )
     kwargs = _infrastore_compression_kwargs(compression)
-    catalog_kwargs = isnothing(catalog) ? (;) : (; catalog = catalog)
+    # `catalog = nothing` is InfraStore's own default, so it needs no special case.
     inner = if in_memory
-        InfraStore.Store(; in_memory = true, kwargs..., catalog_kwargs...)
+        InfraStore.Store(; in_memory = true, catalog = catalog, kwargs...)
     else
-        InfraStore.Store(; in_memory = false, path = path, kwargs..., catalog_kwargs...)
+        InfraStore.Store(;
+            in_memory = false,
+            path = path,
+            catalog = catalog,
+            kwargs...,
+        )
     end
     return Store(inner)
 end
 
 # Translate a `CompressionSettings` into the keyword arguments accepted by
-# `InfraStore.Store`. BLOSC is not supported by the InfraStore backend.
+# `InfraStore.Store`.
 function _infrastore_compression_kwargs(c::CompressionSettings)
     if !c.enabled
         return (; compression = :none)
     end
-    if c.type == CompressionTypes.DEFLATE
-        return (; compression = :deflate, compression_level = c.level, shuffle = c.shuffle)
-    end
-    error(
-        "InfraStore does not support $(c.type) compression; " *
-        "use CompressionTypes.DEFLATE or disable compression (enabled=false).",
-    )
+    return (; compression = :deflate, compression_level = c.level, shuffle = c.shuffle)
 end

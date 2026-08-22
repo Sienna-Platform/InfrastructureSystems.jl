@@ -30,15 +30,13 @@ scalar-per-step case, `N >= 2` is multidimensional per-step values).
   - `timestamps::Vector{Dates.DateTime}`: strictly-increasing timestamps, one per value
   - `data::Array{T, N}`: value array (dimension 1 is time)
   - `units::Union{Nothing, String}`: optional user-declared units label for the values
-    (e.g. `"MW"`). Set at construction and returned on read; IS neither interprets nor
-    validates it, and it is never part of the time series' identity.
+    (e.g. `"MW"`)
   - `quantity_kind::Union{Nothing, String}`: optional label for the kind of physical
-    quantity the values measure (e.g. `"ActivePower"`). Sits above `units`: it separates
-    active from reactive power, which dimensional analysis cannot, and it is the only
-    record of what per-unit values measure.
+    quantity the values measure (e.g. `"ActivePower"`)
   - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
-    the values are already expressed in (`NU`, `DU`, or `SU`). A declaration, not a
-    conversion; `nothing` means unspecified, which is not the same as `NU`.
+    the values are already expressed in (`NU`, `DU`, or `SU`)
+
+See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref).
 """
 struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
     "user-defined name"
@@ -74,16 +72,15 @@ struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
             String(name),
             timestamps,
             data,
-            _maybe_units(units),
-            _maybe_quantity_kind(quantity_kind),
-            _maybe_unit_system(unit_system),
+            _maybe_string(units),
+            _maybe_string(quantity_kind),
+            unit_system,
         )
     end
 end
 
 # The element/rank parameters `{T, N}` are inferred from the value array so callers
-# never have to spell them out. Views/ranges are normalized to a concrete `Array`
-# (copy-free when already one).
+# never have to spell them out.
 function NonSequentialTimeSeries(
     name,
     timestamps::AbstractVector,
@@ -92,14 +89,30 @@ function NonSequentialTimeSeries(
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
-    arr = data isa Array ? data : Array(data)
-    stamps = if timestamps isa Vector{Dates.DateTime}
-        timestamps
-    else
-        collect(Dates.DateTime, timestamps)
-    end
+    arr = _ensure_array(data)
     return NonSequentialTimeSeries{eltype(arr), ndims(arr)}(
-        String(name), stamps, arr, units, quantity_kind, unit_system,
+        String(name),
+        _ensure_datetime_vector(timestamps),
+        arr,
+        units,
+        quantity_kind,
+        unit_system,
+    )
+end
+
+# Normalize the `data` keyword to `(timestamps, values)`. Only a `TimeArray` carries
+# its own timestamps; raw arrays must go through the positional constructor.
+function _non_sequential_args(data::TimeSeries.TimeArray, normalization_factor)
+    normalized = handle_normalization_factor(data, normalization_factor)
+    return collect(TimeSeries.timestamp(normalized)), TimeSeries.values(normalized)
+end
+
+function _non_sequential_args(data, normalization_factor)
+    throw(
+        ArgumentError(
+            "NonSequentialTimeSeries(; name, data) requires data to be a TimeArray; " *
+            "pass NonSequentialTimeSeries(name, timestamps, data) for raw arrays",
+        ),
     )
 end
 
@@ -111,24 +124,11 @@ function NonSequentialTimeSeries(;
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
-    if data isa TimeSeries.TimeArray
-        norm = handle_normalization_factor(data, normalization_factor)
-        return NonSequentialTimeSeries(
-            name,
-            collect(TimeSeries.timestamp(norm)),
-            TimeSeries.values(norm);
-            units = units,
-            quantity_kind = quantity_kind,
-            unit_system = unit_system,
-        )
-    else
-        throw(
-            ArgumentError(
-                "NonSequentialTimeSeries(; name, data) requires data to be a TimeArray; " *
-                "pass NonSequentialTimeSeries(name, timestamps, data) for raw arrays",
-            ),
-        )
-    end
+    timestamps, vals = _non_sequential_args(data, normalization_factor)
+    return NonSequentialTimeSeries(
+        name, timestamps, vals;
+        units = units, quantity_kind = quantity_kind, unit_system = unit_system,
+    )
 end
 
 """
@@ -146,7 +146,6 @@ function NonSequentialTimeSeries(
     src::NonSequentialTimeSeries,
     name::AbstractString,
 )
-    # `units` is carried over: it describes the values, and the values are shared.
     return NonSequentialTimeSeries(
         name, src.timestamps, src.data;
         units = src.units, quantity_kind = src.quantity_kind, unit_system = src.unit_system,
@@ -154,13 +153,13 @@ function NonSequentialTimeSeries(
 end
 
 """
-Construct a `NonSequentialTimeSeries` from a TimeArray or DataFrame. The
-timestamps are taken as-is (no regularity is assumed).
+Construct a `NonSequentialTimeSeries` from a TimeArray. The timestamps are taken
+as-is (no regularity is assumed).
 
 # Arguments
 
   - `name::AbstractString`: user-defined name
-  - `data::Union{TimeSeries.TimeArray, DataFrames.DataFrame}`: time series data
+  - `data::TimeSeries.TimeArray`: time series data
   - `normalization_factor::NormalizationFactor = 1.0`: optional normalization factor to apply
     to each data entry
   - `timestamp::Symbol = :timestamp`: If a DataFrame is passed then this must be the column name
@@ -168,31 +167,46 @@ timestamps are taken as-is (no regularity is assumed).
 """
 function NonSequentialTimeSeries(
     name::AbstractString,
-    data::Union{TimeSeries.TimeArray, DataFrames.DataFrame};
+    data::TimeSeries.TimeArray;
     normalization_factor::NormalizationFactor = 1.0,
     timestamp::Symbol = :timestamp,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
-    if data isa DataFrames.DataFrame
-        ta = TimeSeries.TimeArray(data; timestamp = timestamp)
-    elseif data isa TimeSeries.TimeArray
-        ta = data
-    else
-        error("fatal: $(typeof(data))")
-    end
     # TimeArray's table integration returns a Matrix even for a single column; slice
     # to the lone column to obtain the appropriate Vector value (mirrors SingleTimeSeries).
-    length(TimeSeries.colnames(ta)) == 1 || throw(
+    length(TimeSeries.colnames(data)) == 1 || throw(
         ArgumentError("The input data should have a single column other than $(timestamp)"),
     )
-    ta = ta[first(TimeSeries.colnames(ta))]
-
     return NonSequentialTimeSeries(;
         name = name,
-        data = ta,
+        data = data[first(TimeSeries.colnames(data))],
         normalization_factor = normalization_factor,
+        units = units,
+        quantity_kind = quantity_kind,
+        unit_system = unit_system,
+    )
+end
+
+"""
+Construct a `NonSequentialTimeSeries` from a DataFrame whose `timestamp` column holds
+the timestamps.
+"""
+function NonSequentialTimeSeries(
+    name::AbstractString,
+    data::DataFrames.DataFrame;
+    normalization_factor::NormalizationFactor = 1.0,
+    timestamp::Symbol = :timestamp,
+    units::Union{Nothing, AbstractString} = nothing,
+    quantity_kind::Union{Nothing, AbstractString} = nothing,
+    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+)
+    return NonSequentialTimeSeries(
+        name,
+        TimeSeries.TimeArray(data; timestamp = timestamp);
+        normalization_factor = normalization_factor,
+        timestamp = timestamp,
         units = units,
         quantity_kind = quantity_kind,
         unit_system = unit_system,
@@ -206,7 +220,6 @@ function NonSequentialTimeSeries(
     time_series::NonSequentialTimeSeries,
     data::TimeSeries.TimeArray,
 )
-    # A subset of the same values keeps the same units label.
     return NonSequentialTimeSeries(
         get_name(time_series),
         collect(TimeSeries.timestamp(data)),
@@ -216,6 +229,10 @@ function NonSequentialTimeSeries(
         unit_system = get_unit_system(time_series),
     )
 end
+
+# Hook for the shared `StaticTimeSeries` slicing methods.
+_from_time_array(ts::NonSequentialTimeSeries, data::TimeSeries.TimeArray) =
+    NonSequentialTimeSeries(ts, data)
 
 function check_time_series_data(ts::NonSequentialTimeSeries)
     len = size(ts.data, 1)
@@ -268,10 +285,8 @@ end
 """
 Get [`NonSequentialTimeSeries`](@ref) `data` as a `TimeArray`.
 
-!!! warning "Deprecated"
-    `get_data` is a temporary back-compatibility alias of [`get_time_array`](@ref).
-    Prefer [`get_array`](@ref) (raw `Array`) or [`get_time_array`](@ref) (built
-    `TimeArray`) in new code.
+An alias of [`get_time_array`](@ref). Prefer [`get_array`](@ref) (raw `Array`) when a
+`TimeArray` is not needed.
 """
 get_data(value::NonSequentialTimeSeries) = get_time_array(value)
 
@@ -282,98 +297,6 @@ irregular, so this is always `nothing`.
 get_resolution(::NonSequentialTimeSeries) = nothing
 
 get_initial_timestamp(time_series::NonSequentialTimeSeries) = time_series.timestamps[1]
-
-Base.length(time_series::NonSequentialTimeSeries) = size(time_series.data, 1)
-
-function Base.getindex(time_series::NonSequentialTimeSeries, args...)
-    return NonSequentialTimeSeries(
-        time_series,
-        getindex(get_time_array(time_series), args...),
-    )
-end
-
-Base.first(time_series::NonSequentialTimeSeries) = head(time_series, 1)
-
-Base.last(time_series::NonSequentialTimeSeries) = tail(time_series, 1)
-
-Base.firstindex(time_series::NonSequentialTimeSeries) =
-    firstindex(get_time_array(time_series))
-
-Base.lastindex(time_series::NonSequentialTimeSeries) =
-    lastindex(get_time_array(time_series))
-
-Base.lastindex(time_series::NonSequentialTimeSeries, d) =
-    lastindex(get_time_array(time_series), d)
-
-Base.eachindex(time_series::NonSequentialTimeSeries) =
-    eachindex(get_time_array(time_series))
-
-Base.iterate(time_series::NonSequentialTimeSeries, n = 1) =
-    iterate(get_time_array(time_series), n)
-
-"""
-Refer to TimeSeries.when(). Underlying data is copied.
-"""
-function when(time_series::NonSequentialTimeSeries, period::Function, t::Integer)
-    return NonSequentialTimeSeries(
-        time_series,
-        TimeSeries.when(get_time_array(time_series), period, t),
-    )
-end
-
-"""
-Return a time_series truncated starting with timestamp.
-"""
-function from(time_series::NonSequentialTimeSeries, timestamp)
-    return NonSequentialTimeSeries(
-        time_series,
-        TimeSeries.from(get_time_array(time_series), timestamp),
-    )
-end
-
-"""
-Return a time_series truncated after timestamp.
-"""
-function to(time_series::NonSequentialTimeSeries, timestamp)
-    return NonSequentialTimeSeries(
-        time_series,
-        TimeSeries.to(get_time_array(time_series), timestamp),
-    )
-end
-
-"""
-Return a time_series with only the first num values.
-"""
-function head(time_series::NonSequentialTimeSeries)
-    return NonSequentialTimeSeries(
-        time_series,
-        TimeSeries.head(get_time_array(time_series)),
-    )
-end
-
-function head(time_series::NonSequentialTimeSeries, num)
-    return NonSequentialTimeSeries(
-        time_series,
-        TimeSeries.head(get_time_array(time_series), num),
-    )
-end
-
-"""
-Return a time_series with only the ending num values.
-"""
-function tail(time_series::NonSequentialTimeSeries)
-    return NonSequentialTimeSeries(
-        time_series,
-        TimeSeries.tail(get_time_array(time_series)),
-    )
-end
-
-function tail(time_series::NonSequentialTimeSeries, num)
-    return NonSequentialTimeSeries(
-        time_series,
-        TimeSeries.tail(get_time_array(time_series), num),
-    )
-end
 
 function make_time_array(
     time_series::NonSequentialTimeSeries,

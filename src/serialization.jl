@@ -34,7 +34,7 @@ function to_json(obj::T; pretty = false, indent = 2) where {T <: InfrastructureS
         if pretty
             io = IOBuffer()
             JSON.json(io, serialize(obj); pretty = indent)
-            return take!(io)
+            return String(take!(io))
         else
             return JSON.json(serialize(obj))
         end
@@ -89,6 +89,15 @@ end
 function serialize(vals::Vector{T}) where {T <: InfrastructureSystemsType}
     @debug "serialize Vector{InfrastructureSystemsType}" _group = LOG_GROUP_SERIALIZATION vals T
     return serialize_struct.(vals)
+end
+
+# A time series *type* (not an instance) serializes to bare metadata, so a
+# `TimeSeriesKey`'s `time_series_type` field round-trips.
+function serialize(::Type{T}) where {T <: TimeSeriesData}
+    @debug "serialize" _group = LOG_GROUP_SERIALIZATION T
+    data = Dict{String, Any}()
+    add_serialization_metadata!(data, T)
+    return data
 end
 
 function serialize(func::Function)
@@ -187,7 +196,6 @@ function deserialize(::Type{T}, data::Dict) where {T <: InfrastructureSystemsTyp
 end
 
 function deserialize_to_dict(::Type{T}, data::Dict) where {T}
-    # Note: mostly duplicated in src/deterministic_metadata.jl
     vals = Dict{Symbol, Any}()
     for (field_name, field_type) in zip(fieldnames(T), fieldtypes(T))
         name_str = string(field_name)

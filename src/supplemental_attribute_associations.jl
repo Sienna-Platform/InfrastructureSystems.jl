@@ -1,20 +1,6 @@
-# Design note:
-# Supplemental attribute associations live in InfraStore, in its
-# `supplemental_attribute_associations` table, alongside the time series catalog. They
-# used to be kept in a separate in-memory SQLite database owned by this package and
-# serialized into the system JSON; both are gone.
-#
-# Consequences worth knowing:
-#   - Associations are persisted by the store's `<path>.h5` / `<path>.sqlite` pair, so a
-#     system with supplemental attributes but no time series now produces a storage
-#     artifact where it previously produced none. `isempty(::Store)`
-#     accounts for association rows so `serialize` writes that artifact.
-#   - The store enforces uniqueness on the `(component_id, attribute_id)` pair. The old
-#     table had no constraint and relied on callers checking first; callers still check,
-#     so the error message can name the objects, but a missed check is now caught.
-#   - There is no reader for the `associations` key older system JSON carries. A system
-#     serialized before this change does not load, matching the equivalent break in
-#     ../infrasys; regenerate it with a build from before the move if you need the data.
+# Associations live in the store's `supplemental_attribute_associations` table, not in the
+# system JSON, so a system with attributes but no time series still produces a storage
+# artifact; the store enforces uniqueness on `(component_id, attribute_id)`.
 
 """
 Tracks which supplemental attributes are attached to which components.
@@ -29,7 +15,25 @@ concrete type-name strings and knows nothing about the Julia type hierarchy, so
 """
 struct SupplementalAttributeAssociations
     store::Store
+    # Deferred-insert buffer for `begin_association_batch`. Empty and inactive otherwise;
+    # `pending_pairs` mirrors `pending` so the duplicate probe stays O(1) without re-scanning.
+    pending::Vector{InfraStore.SupplementalAttributeAssociation}
+    pending_pairs::Set{Tuple{Int, Int}}
+    deferring::Base.RefValue{Bool}
 end
+
+SupplementalAttributeAssociations(store::Store) = SupplementalAttributeAssociations(
+    store,
+    InfraStore.SupplementalAttributeAssociation[],
+    Set{Tuple{Int, Int}}(),
+    Ref(false),
+)
+
+"""
+The [`Store`](@ref) holding these association rows. Shared with the system's
+[`TimeSeriesManager`](@ref).
+"""
+get_data_store(associations::SupplementalAttributeAssociations) = associations.store
 
 # The store handle the queries below run against.
 _assoc_store(associations::SupplementalAttributeAssociations) = associations.store.inner
@@ -38,9 +42,21 @@ _assoc_store(associations::SupplementalAttributeAssociations) = associations.sto
 # `nothing` for "no filter". An abstract type with no concrete subtypes yields an empty
 # vector, which the store treats as "match nothing" — the same answer the old
 # `IN ()`-avoiding special case produced.
+#
+# The two ROOT abstract types are answered with "no filter" rather than by expansion. Every
+# stored row matches them by definition, so the filter would be a no-op — but building it
+# means an `InteractiveUtils.subtypes` walk of the whole hierarchy plus a fresh
+# `Vector{String}` on EVERY call, and these are exactly the shapes the per-component
+# accessors use (`get_supplemental_attributes(component)` passes `SupplementalAttribute`).
+# Callers that need every row at once should use `list_supplemental_attribute_association_rows`
+# instead of one query per component.
 _type_names(::Nothing) = nothing
-_type_names(type::Type{<:InfrastructureSystemsType}) =
-    isabstracttype(type) ? get_all_subtype_names(type) : [string(nameof(type))]
+_type_names(::Type{SupplementalAttribute}) = nothing
+_type_names(::Type{InfrastructureSystemsComponent}) = nothing
+function _type_names(type::Type{<:InfrastructureSystemsType})
+    isabstracttype(type) && return get_all_subtype_names(type)
+    return [string(nameof(type))]
+end
 
 """
 Add an association between a component and a supplemental attribute.
@@ -63,15 +79,50 @@ function add_association!(
         throw(ArgumentError("$(summary(attribute)) does not have an ID assigned"))
     end
 
-    InfraStore.add_supplemental_attribute_association!(
-        _assoc_store(associations),
-        InfraStore.SupplementalAttributeAssociation(
-            component_id,
-            string(nameof(typeof(component))),
-            attribute_id,
-            string(nameof(typeof(attribute))),
-        ),
+    row = InfraStore.SupplementalAttributeAssociation(
+        component_id,
+        string(nameof(typeof(component))),
+        attribute_id,
+        string(nameof(typeof(attribute))),
     )
+    if associations.deferring[]
+        push!(associations.pending, row)
+        push!(associations.pending_pairs, (component_id, attribute_id))
+        return
+    end
+    InfraStore.add_supplemental_attribute_association!(_assoc_store(associations), row)
+    return
+end
+
+"""
+Defer association inserts until `func` returns, then write them all in one store call.
+
+WRITE-ONLY while open: every read except the exact `(component, attribute)`
+[`has_association`](@ref) probe sees the store alone, not the buffered rows; and a throw
+drops the buffer without rolling back the attributes already attached to `mgr.data`, so use
+the `SystemData`-level [`begin_association_batch`](@ref) when the manager must roll back too.
+
+Not reentrant: a nested call errors rather than silently flattening two scopes into one.
+"""
+function begin_association_batch(
+    func::Function,
+    associations::SupplementalAttributeAssociations,
+)
+    associations.deferring[] && error(
+        "begin_association_batch: already inside a batch; nesting is not supported",
+    )
+    associations.deferring[] = true
+    try
+        func()
+        isempty(associations.pending) && return
+        InfraStore.add_supplemental_attribute_associations!(
+            _assoc_store(associations), associations.pending,
+        )
+    finally
+        associations.deferring[] = false
+        empty!(associations.pending)
+        empty!(associations.pending_pairs)
+    end
     return
 end
 
@@ -131,10 +182,36 @@ _assoc_query(args...) = (p for arg in args for p in _assoc_filters(arg))
 Return true if there is at least one association matching the arguments: a component,
 an attribute, both, or a component together with an attribute type (which may be
 abstract).
+
+Reads the store alone. Inside an open [`begin_association_batch`](@ref) this does NOT see
+rows buffered but not yet flushed — only the exact `(component, attribute)` pair overload,
+below, checks the pending buffer too.
 """
 has_association(associations::SupplementalAttributeAssociations, args...) =
     InfraStore.has_supplemental_attribute_association(
         _assoc_store(associations); _assoc_query(args...)...)
+
+"""
+The exact `(component, attribute)` probe, which also sees rows buffered by
+[`begin_association_batch`](@ref).
+
+This is the shape `add_supplemental_attribute!` calls before every attach, and the only one
+a batch has to answer correctly: without it a document naming the same pair twice would be
+buffered twice and only rejected at flush, by the store, without naming the objects.
+"""
+function has_association(
+    associations::SupplementalAttributeAssociations,
+    component::InfrastructureSystemsComponent,
+    attribute::SupplementalAttribute,
+)
+    pair = (get_id(component), get_id(attribute))
+    associations.deferring[] && pair in associations.pending_pairs && return true
+    return InfraStore.has_supplemental_attribute_association(
+        _assoc_store(associations);
+        component_id = pair[1],
+        attribute_id = pair[2],
+    )
+end
 
 """
 Return the IDs of components associated with the given attribute or attribute type,
@@ -228,8 +305,10 @@ function replace_component_id!(
     return
 end
 
-# The raw store rows. Used for the rollback snapshot and for comparison; callers that
-# just want a count should use `get_num_associations`.
+"""
+The raw store rows. Used for the rollback snapshot and for comparison; callers that
+just want a count should use [`get_num_associations`](@ref).
+"""
 _association_rows(associations::SupplementalAttributeAssociations) =
     InfraStore.list_supplemental_attribute_associations(_assoc_store(associations))
 
@@ -245,17 +324,28 @@ get_num_associations(associations::SupplementalAttributeAssociations) =
 """
 Replace every association row with `rows`.
 
-This is the rollback primitive for [`begin_supplemental_attributes_update`](@ref): the
-store has no transaction, so a failed update restores the rows captured on entry.
-Unlike undoing only the newly added rows, this also puts back rows the update removed.
+This is the rollback primitive for [`begin_supplemental_attributes_update`](@ref): a failed
+update restores the rows captured on entry. Unlike undoing only the newly added rows, this
+also puts back rows the update removed.
+
+The clear and the re-add run inside one `InfraStore.transaction`, so a failure partway
+through — the re-add throwing, say — cannot leave the store cleared with nothing put back.
+`InfraStore.transaction` nests (only the outermost commit/rollback is real), so this is safe
+even called from inside another open transaction, and it preserves the error that caused the
+rollback rather than replacing it with one about the rollback itself.
 """
 function restore_associations!(
     associations::SupplementalAttributeAssociations,
     rows::AbstractVector,
 )
-    clear_associations!(associations)
-    isempty(rows) && return
-    InfraStore.add_supplemental_attribute_associations!(_assoc_store(associations), rows)
+    InfraStore.transaction(_assoc_store(associations)) do
+        clear_associations!(associations)
+        isempty(rows) && return
+        InfraStore.add_supplemental_attribute_associations!(
+            _assoc_store(associations),
+            rows,
+        )
+    end
     return
 end
 
@@ -284,10 +374,10 @@ function compare_values(
     match_fn::Union{Function, Nothing},
     x::SupplementalAttributeAssociations,
     y::SupplementalAttributeAssociations;
-    compare_uuids = false,
+    compare_ids = false,
     exclude = Set{Symbol}(),
 )
-    !compare_uuids && return true
+    !compare_ids && return true
     sort_key = row -> (row.attribute_id, row.component_id)
     table_x = sort(_association_rows(x); by = sort_key)
     table_y = sort(_association_rows(y); by = sort_key)

@@ -1,33 +1,22 @@
-# The store's element-type encodings, checked against the cross-language
-# conformance corpus.
-#
-# `conformance/element_type_vectors.json` in the infrastore repo is generated
-# from `infrastore-core`'s `codec::conformance` vectors and read by every
-# binding's codec tests. IS.jl's `_storage_array` / `_decode_static_values` are
-# the Julia implementation of those encodings, so pinning them against the same
-# corpus is what keeps a curve written here readable by the Rust CLI, the Python
-# bindings, and the web app's TypeScript codec.
-#
-# The corpus lives in the infrastore checkout, which is not a Julia dependency;
-# when it cannot be located the tests skip rather than fail, so IS.jl stays
-# testable on its own.
+# Asserts IS's `_storage_array` / `_decode_static_values` against the shared
+# `element_type_vectors.json` conformance corpus.
 
-# Locate `conformance/element_type_vectors.json` next to the InfraStore.jl
-# checkout IS.jl already depends on, or wherever `INFRASTORE_CONFORMANCE_DIR`
-# points. `nothing` when neither is present.
+# `conformance/element_type_vectors.json`, from `INFRASTORE_CONFORMANCE_DIR` or
+# beside the InfraStore.jl checkout. Only meaningful when
+# `has_conformance_corpus()` is true.
 function _element_type_vectors_path()
-    from_env = get(ENV, "INFRASTORE_CONFORMANCE_DIR", nothing)
-    if !isnothing(from_env)
-        path = joinpath(from_env, "element_type_vectors.json")
-        return isfile(path) ? path : nothing
+    from_env = get(ENV, "INFRASTORE_CONFORMANCE_DIR", "")
+    if !isempty(from_env)
+        return joinpath(from_env, "element_type_vectors.json")
     end
     binding = Base.find_package("InfraStore")
-    isnothing(binding) && return nothing
+    isnothing(binding) && return ""
     # <repo>/julia/InfraStore.jl/src/InfraStore.jl -> <repo>/conformance
     repo = abspath(joinpath(dirname(binding), "..", "..", ".."))
-    path = joinpath(repo, "conformance", "element_type_vectors.json")
-    return isfile(path) ? path : nothing
+    return joinpath(repo, "conformance", "element_type_vectors.json")
 end
+
+has_conformance_corpus() = isfile(_element_type_vectors_path())
 
 _load_element_type_vectors(path) = JSON.parsefile(path)["vectors"]
 
@@ -85,10 +74,12 @@ function _vector_expected_values(vector)
 end
 
 @testset "element_type conformance vectors decode to IS values" begin
-    path = _element_type_vectors_path()
-    if isnothing(path)
-        @test_skip "conformance/element_type_vectors.json not found"
+    if !has_conformance_corpus()
+        @warn "Skipping conformance decode tests; corpus not found" path =
+            _element_type_vectors_path()
+        @test_skip false
     else
+        path = _element_type_vectors_path()
         checked = 0
         for vector in _load_element_type_vectors(path)
             _is_representable(vector) || continue
@@ -100,9 +91,8 @@ end
             vector["leading_dims"] == 1 || continue
 
             arr = _vector_storage_array(vector)
-            got = IS._decode_static_values(
-                arr, vector["element_type"], size(arr, 1),
-            )
+            encoding = IS._element_encoding(vector["element_type"])
+            got = IS._decode_static_values(arr, encoding, size(arr, 1))
             @test got == expected
             checked += 1
         end
@@ -113,10 +103,12 @@ end
 end
 
 @testset "element_type conformance vectors round-trip through the encoder" begin
-    path = _element_type_vectors_path()
-    if isnothing(path)
-        @test_skip "conformance/element_type_vectors.json not found"
+    if !has_conformance_corpus()
+        @warn "Skipping conformance round-trip tests; corpus not found" path =
+            _element_type_vectors_path()
+        @test_skip false
     else
+        path = _element_type_vectors_path()
         checked = 0
         for vector in _load_element_type_vectors(path)
             _is_representable(vector) || continue

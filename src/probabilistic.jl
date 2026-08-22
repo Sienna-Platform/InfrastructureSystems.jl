@@ -21,16 +21,14 @@ A Probabilistic forecast for a particular data field in a Component.
   - `percentiles::Vector{Float64}`: Percentiles for the probabilistic forecast
   - `data::SortedDict`: timestamp - scalingfactor
   - `units::Union{Nothing, String}`: optional user-declared units label for the values
-    (e.g. `"MW"`). Set at construction and returned on read; IS neither interprets nor
-    validates it, and it is never part of the time series' identity.
+    (e.g. `"MW"`)
   - `quantity_kind::Union{Nothing, String}`: optional label for the kind of physical
-    quantity the values measure (e.g. `"ActivePower"`). Sits above `units`: it separates
-    active from reactive power, which dimensional analysis cannot, and it is the only
-    record of what per-unit values measure.
+    quantity the values measure (e.g. `"ActivePower"`)
   - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
-    the values are already expressed in (`NU`, `DU`, or `SU`). A declaration, not a
-    conversion; `nothing` means unspecified, which is not the same as `NU`.
+    the values are already expressed in (`NU`, `DU`, or `SU`)
   - `internal::InfrastructureSystemsInternal`
+
+See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref).
 """
 struct Probabilistic{T, N} <: Forecast{T}
     "user-defined name"
@@ -62,16 +60,16 @@ function Probabilistic(
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
-    sorted = data isa SortedDict ? data : SortedDict(data...)
+    sorted = _ensure_sorted_dict(data)
     return Probabilistic{_window_eltype(sorted), _window_ndims(sorted)}(
         String(name),
         sorted,
         Vector{Float64}(percentiles),
         resolution,
         interval,
-        _maybe_units(units),
-        _maybe_quantity_kind(quantity_kind),
-        _maybe_unit_system(unit_system),
+        _maybe_string(units),
+        _maybe_string(quantity_kind),
+        unit_system,
     )
 end
 
@@ -164,7 +162,7 @@ function Probabilistic(
 )
     return Probabilistic(
         name,
-        SortedDict(data...),
+        _ensure_sorted_dict(data),
         percentiles,
         resolution;
         interval = interval,
@@ -229,8 +227,6 @@ function Probabilistic(
     src::Probabilistic,
     name::AbstractString,
 )
-    # `units` is carried over: it describes the values, and the values are shared.
-    # No shared UUID under the key-centric model.
     return Probabilistic(
         name,
         src.data,
@@ -246,7 +242,7 @@ end
 convert_data(
     data::AbstractDict{<:Any, Matrix{T}},
 ) where {T <: Union{CONSTANT, FunctionData}} =
-    SortedDict{Dates.DateTime, Matrix{T}}(data...)
+    SortedDict{Dates.DateTime, Matrix{T}}(data)
 convert_data(
     data::SortedDict{Dates.DateTime, Matrix{T}},
 ) where {T <: Union{CONSTANT, FunctionData}} = data
