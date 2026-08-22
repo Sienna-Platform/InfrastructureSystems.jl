@@ -13,7 +13,6 @@ function assign_new_id_internal!(
     new_id = get_next_id!(data)
     mgr = get_time_series_manager(component)
     if !isnothing(mgr)
-        # TODO: needs an `infrastore.jl` wrapper; this is a direct reach into the store.
         InfraStore.replace_owner!(
             get_data_store(mgr).inner,
             old_id,

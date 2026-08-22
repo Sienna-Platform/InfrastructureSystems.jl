@@ -196,7 +196,6 @@ function deserialize(::Type{T}, data::Dict) where {T <: InfrastructureSystemsTyp
 end
 
 function deserialize_to_dict(::Type{T}, data::Dict) where {T}
-    # Note: mostly duplicated in src/deterministic_metadata.jl
     vals = Dict{Symbol, Any}()
     for (field_name, field_type) in zip(fieldnames(T), fieldtypes(T))
         name_str = string(field_name)

@@ -107,7 +107,7 @@ function _get_all_concrete_subtypes(::Type{T}, sub_types::Vector{DataType}) wher
     return nothing
 end
 
-g_cached_subtype_names = Dict{DataType, Vector{String}}()
+const g_cached_subtype_names = Dict{DataType, Vector{String}}()
 
 """
 Returns the names of all leaf subtypes of T, as Strings. Caches the values for faster
