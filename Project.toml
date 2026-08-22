@@ -36,8 +36,8 @@ YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 # Git rev, not a sibling path: a relative path resolves only in a workspace checkout and
 # fails outright in CI, which clones this repo alone. Pinned to a branch rather than a
 # version because PowerOpenAPIModels is not registered.
-PowerCoreOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "feat/infrastore-integration", subdir = "PowerCoreOpenAPIModels.jl"}
-PowerTimeSeriesOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "feat/infrastore-integration", subdir = "PowerTimeSeriesOpenAPIModels.jl"}
+PowerCoreOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "PowerCoreOpenAPIModels.jl"}
+PowerTimeSeriesOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "PowerTimeSeriesOpenAPIModels.jl"}
 
 [compat]
 InfraStore = "0.8"
