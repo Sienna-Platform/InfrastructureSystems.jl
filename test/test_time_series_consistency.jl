@@ -1,7 +1,7 @@
-# Regression tests for the InfraStore-backed time series paths: copy restricted to one
-# system and one owner kind, typed forecast lookups, reads inside a
-# transaction, calendar periods, key type identity, N-D static series, forecast `len`
-# validation, and transform atomicity.
+# Consistency of the time series API with the store behind it: what a copy may target,
+# typed forecast lookups, visibility inside a transaction, calendar periods, key identity,
+# N-D static series, forecast window bounds, atomicity of transforms, and what a
+# read-only or copied system leaves intact.
 
 const _T0 = Dates.DateTime("2020-01-01T00:00:00")
 
@@ -23,7 +23,7 @@ function _sys_with_component(name = "c")
     return sys, component
 end
 
-@testset "Test store review: copy_time_series! rejects owners from different systems" begin
+@testset "Test copy_time_series! rejects owners from different systems" begin
     sys1, a = _sys_with_component("a")
     sys2, b = _sys_with_component("b")
     # Both components have id 1 in their own systems, so a store-level copy would
@@ -48,7 +48,7 @@ end
     @test_throws ArgumentError IS.copy_time_series!(loose, a)
 end
 
-@testset "Test store review: copy_time_series! rejects a component/attribute pair" begin
+@testset "Test copy_time_series! rejects a component/attribute pair" begin
     sys, component = _sys_with_component()
     attr = IS.TestSupplemental(; value = 1.0)
     IS.add_supplemental_attribute!(sys, component, attr)
@@ -65,7 +65,7 @@ end
     @test length(collect(IS.iterate_supplemental_attributes_with_time_series(sys))) == 1
 end
 
-@testset "Test store review: get_time_series honors the requested forecast type" begin
+@testset "Test get_time_series honors the requested forecast type" begin
     sys, component = _sys_with_component()
     IS.add_time_series!(sys, component, _hourly_det("fx"))
     @test_throws ArgumentError IS.get_time_series(IS.Probabilistic, component, "fx")
@@ -86,7 +86,7 @@ end
     @test_throws ArgumentError IS.get_time_series(IS.Forecast, component, "fx")
 end
 
-@testset "Test store review: reads inside a transaction see staged additions" begin
+@testset "Test reads inside a transaction see staged additions" begin
     sys, component = _sys_with_component()
     IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, _hourly_sts("v"))
@@ -128,7 +128,7 @@ end
     @test isnothing(sys.time_series_manager.active_context)
 end
 
-@testset "Test store review: calendar-interval forecast windows" begin
+@testset "Test calendar-interval forecast windows" begin
     sys, component = _sys_with_component()
     resolution = Dates.Month(1)
     interval = Dates.Month(2)
@@ -174,7 +174,7 @@ end
     @test isnothing(IS.get_next_time(cache))
 end
 
-@testset "Test store review: calendar-resolution static series slicing" begin
+@testset "Test calendar-resolution static series slicing" begin
     sys, component = _sys_with_component()
     sts = IS.SingleTimeSeries(
         "monthly",
@@ -217,7 +217,7 @@ end
     @test vals == collect(3.0:24)
 end
 
-@testset "Test store review: single-window forecast rejects a misaligned start_time" begin
+@testset "Test single-window forecast rejects a misaligned start_time" begin
     sys, component = _sys_with_component()
     IS.add_time_series!(sys, component, _hourly_sts("s"))
     IS.transform_single_time_series!(
@@ -245,7 +245,7 @@ end
     )
 end
 
-@testset "Test store review: component iteration is consistent with and without resolution" begin
+@testset "Test component iteration is consistent with and without resolution" begin
     sys, component = _sys_with_component()
     IS.add_time_series!(sys, component, _hourly_sts("s", 48))
     IS.transform_single_time_series!(
@@ -289,7 +289,7 @@ end
     end
 end
 
-@testset "Test store review: keys and queries use the unparameterized type" begin
+@testset "Test keys and queries use the unparameterized type" begin
     sys, component = _sys_with_component()
     data = SortedDict(_T0 + Dates.Hour(k) => rand(24, 3) for k in 0:23)
     prob = IS.Probabilistic(
@@ -316,7 +316,7 @@ end
     @test !IS.has_time_series(component, IS.SingleTimeSeries, "s")
 end
 
-@testset "Test store review: N-D SingleTimeSeries round-trips through the store" begin
+@testset "Test N-D SingleTimeSeries round-trips through the store" begin
     sys, component = _sys_with_component()
     mat = reshape(collect(1.0:72), 24, 3)
     mts = IS.SingleTimeSeries("matrix", _T0, Dates.Hour(1), mat)
@@ -353,7 +353,7 @@ end
           reshape(collect(1.0:6), 3, 2)
 end
 
-@testset "Test store review: forecast len is validated against the horizon" begin
+@testset "Test forecast len is validated against the horizon" begin
     sys, component = _sys_with_component()
     IS.add_time_series!(sys, component, _hourly_det("fc"))
     @test_throws ArgumentError IS.get_time_series(
@@ -376,7 +376,7 @@ end
     ) == 3
 end
 
-@testset "Test store review: transform_single_time_series! keeps old views on failure" begin
+@testset "Test transform_single_time_series! keeps old views on failure" begin
     sys, component = _sys_with_component()
     IS.add_time_series!(sys, component, _hourly_sts("s", 48))
     IS.transform_single_time_series!(
@@ -394,4 +394,118 @@ end
     )
     @test IS.has_time_series(component, IS.DeterministicSingleTimeSeries, "s")
     @test IS.get_forecast_parameters(sys).horizon == Dates.Hour(24)
+end
+
+@testset "Test remove_component! on a read-only system leaves it consistent" begin
+    sys, component = _sys_with_component()
+    IS.add_time_series!(sys, component, _hourly_sts("s"))
+    sys.time_series_manager.read_only = true
+    @test_throws ArgumentError IS.remove_component!(sys, component)
+    @test IS.get_component(IS.TestComponent, sys, "c") === component
+    @test IS.has_component(sys, component)
+    @test IS.has_time_series(component, IS.SingleTimeSeries, "s")
+    @test_throws ArgumentError IS.assign_new_id!(sys, component)
+    @test IS.has_component(sys, component)
+    # A copy, or another system's component that happens to carry the same id, is not
+    # the stored instance.
+    @test_throws ArgumentError IS.assign_new_id!(sys, deepcopy(component))
+    other_sys, other = _sys_with_component("c")
+    @test IS.get_id(other) == IS.get_id(component)
+    @test_throws ArgumentError IS.assign_new_id!(sys, other)
+    @test IS.get_component(IS.TestComponent, sys, "c") === component
+    @test !IS.has_component(sys, deepcopy(component))
+    @test !IS.has_component(sys, other)
+
+    sys.time_series_manager.read_only = false
+    IS.remove_component!(sys, component)
+    @test isempty(collect(IS.iterate_components(sys)))
+    @test !IS.has_component(sys, component)
+    # The id is free again: the same component can come back.
+    IS.add_component!(sys, component)
+    @test IS.has_component(sys, component)
+end
+
+@testset "Test instance-form forecast window honors len" begin
+    sys, component = _sys_with_component()
+    data = SortedDict(_T0 + Dates.Hour(k) => rand(24, 3) for k in 0:3)
+    prob = IS.Probabilistic(
+        "p",
+        data,
+        [0.25, 0.5, 0.75],
+        Dates.Hour(1);
+        interval = Dates.Hour(1),
+    )
+    IS.add_time_series!(sys, component, prob)
+    full = IS.get_time_series(IS.Probabilistic, component, "p")
+    ta = IS.get_time_series_array(component, full; len = 12)
+    @test size(TimeSeries.values(ta)) == (12, 3)
+    @test TimeSeries.values(ta) == data[_T0][1:12, :]
+    ta =
+        IS.get_time_series_array(component, full; start_time = _T0 + Dates.Hour(2), len = 5)
+    @test TimeSeries.values(ta) == data[_T0 + Dates.Hour(2)][1:5, :]
+    @test_throws ArgumentError IS.get_time_series_array(component, full; len = 25)
+    @test_throws ArgumentError IS.get_time_series_array(component, full; len = 0)
+end
+
+@testset "Test TimeSeriesKey equality and hashing" begin
+    sys, component = _sys_with_component()
+    key_added = IS.add_time_series!(sys, component, _hourly_sts("s"))
+    key_listed = only(IS.get_time_series_keys(component))
+    @test IS.get_resolution(key_added) == Dates.Hour(1)
+    @test IS.get_resolution(key_listed) == Dates.Millisecond(3_600_000)
+    @test key_added == key_listed
+    @test hash(key_added) == hash(key_listed)
+    @test length(Set([key_added, key_listed])) == 1
+
+    fkey_added = IS.add_time_series!(sys, component, _hourly_det("d"))
+    fkey_listed =
+        only(IS.get_time_series_keys(component; time_series_type = IS.Deterministic))
+    @test fkey_added == fkey_listed
+    @test hash(fkey_added) == hash(fkey_listed)
+    @test fkey_added != key_added
+    @test key_added != IS.add_time_series!(sys, component, _hourly_sts("s"); scenario = "a")
+end
+
+@testset "Test fast_deepcopy_system rewires every owner" begin
+    sys, component = _sys_with_component()
+    masked = IS.TestComponent("masked", 5)
+    IS.add_component!(sys, masked)
+    attr = IS.TestSupplemental(; value = 1.0)
+    IS.add_supplemental_attribute!(sys, component, attr)
+    IS.add_time_series!(sys, component, _hourly_sts("s"))
+    IS.add_time_series!(sys, masked, _hourly_sts("m"))
+    IS.add_time_series!(sys, attr, _hourly_sts("a"))
+    IS.mask_component!(sys, masked)
+    @test IS.has_time_series(masked, IS.SingleTimeSeries, "m")
+
+    copied = IS.fast_deepcopy_system(
+        sys;
+        skip_time_series = true,
+        skip_supplemental_attributes = false,
+    )
+    new_mgr = copied.time_series_manager
+    @test new_mgr !== sys.time_series_manager
+    # No time series (the store does hold the copied attribute association rows).
+    @test IS.get_num_time_series(IS.get_data_store(copied)) == 0
+    @test copied.components.time_series_manager === new_mgr
+    @test copied.masked_components.time_series_manager === new_mgr
+    for owner in Iterators.flatten((
+        IS.iterate_components(copied),
+        IS.iterate_components(copied.masked_components),
+        IS.iterate_supplemental_attributes(copied),
+    ))
+        @test IS.get_time_series_manager(owner) === new_mgr
+        @test !IS.has_time_series(owner)
+    end
+    @test length(collect(IS.iterate_supplemental_attributes(copied))) == 1
+
+    # The original is untouched: every owner is back on its own managers and data.
+    for owner in (component, masked, attr)
+        @test IS.get_time_series_manager(owner) === sys.time_series_manager
+    end
+    @test IS.has_time_series(component, IS.SingleTimeSeries, "s")
+    @test IS.has_time_series(masked, IS.SingleTimeSeries, "m")
+    @test IS.has_time_series(attr, IS.SingleTimeSeries, "a")
+    @test sys.components.time_series_manager === sys.time_series_manager
+    @test sys.masked_components.time_series_manager === sys.time_series_manager
 end

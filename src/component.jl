@@ -13,6 +13,9 @@ function assign_new_id_internal!(
     new_id = get_next_id!(data)
     mgr = get_time_series_manager(component)
     if !isnothing(mgr)
+        # Rewrites the owner id on every association row; refuse it in read-only mode
+        # like every other store mutation instead of leaking the store's own error.
+        _throw_if_read_only(mgr)
         InfraStore.replace_owner!(
             get_data_store(mgr).inner,
             old_id,

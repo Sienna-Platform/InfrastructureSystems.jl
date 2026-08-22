@@ -971,17 +971,31 @@ has_component(
     name::AbstractString,
 ) = has_component(data.components, T, name)
 
+# Integer ids are not unique across systems, so this is membership by identity: true
+# only for the very instance stored under that id, not a copy or a same-id component
+# from another system.
 function has_component(data::SystemData, component::InfrastructureSystemsComponent)
-    return get_id(component) in keys(data.component_ids)
+    return get(data.component_ids, get_id(component), nothing) === component
 end
 
 function assign_new_id!(data::SystemData, component::InfrastructureSystemsComponent)
+    # Integer ids are not unique across systems, so membership is by identity: this
+    # must be the very instance the system stores, both by type/name and under its id.
+    _validate(data, component)
     orig_id = get_id(component)
-    if isnothing(pop!(data.component_ids, orig_id, nothing))
-        throw(ArgumentError("component with id = $orig_id is not stored."))
+    if !has_component(data, component)
+        throw(
+            ArgumentError(
+                "$(summary(component)) is not attached to the system.",
+            ),
+        )
     end
 
+    # Re-index only once the id has actually changed: the internal call refuses a
+    # read-only store before mutating anything, and the index must still name the
+    # component under its old id in that case.
     assign_new_id_internal!(data, component)
+    pop!(data.component_ids, orig_id)
     data.component_ids[get_id(component)] = component
     return
 end
@@ -1566,18 +1580,38 @@ function fast_deepcopy_system(
         old_supplemental_attribute_manager
     end
 
+    # Every path from `data` to the old managers has to be redirected, or `deepcopy`
+    # follows it and copies the real store anyway: the two manager fields, the component
+    # containers (each holds the manager), and the shared references on every owner —
+    # main and masked components and supplemental attributes alike.
+    old_components = data.components
+    old_masked_components = data.masked_components
     data.time_series_manager = new_time_series_manager
     data.supplemental_attribute_manager = new_supplemental_attribute_manager
+    data.components = Components(
+        old_components.data,
+        new_time_series_manager,
+        old_components.validation_descriptors,
+    )
+    data.masked_components = Components(
+        old_masked_components.data,
+        new_time_series_manager,
+        old_masked_components.validation_descriptors,
+    )
 
-    old_refs = Dict{Tuple{DataType, String}, SharedSystemReferences}()
-    for comp in iterate_components(data)
-        old_refs[(typeof(comp), get_name(comp))] =
-            comp.internal.shared_system_references
-        new_refs = SharedSystemReferences(;
-            time_series_manager = new_time_series_manager,
-            supplemental_attribute_manager = new_supplemental_attribute_manager,
-        )
-        set_shared_system_references!(comp, new_refs)
+    new_refs = SharedSystemReferences(;
+        time_series_manager = new_time_series_manager,
+        supplemental_attribute_manager = new_supplemental_attribute_manager,
+    )
+    owners = Iterators.flatten((
+        iterate_components(old_components),
+        iterate_components(old_masked_components),
+        iterate_supplemental_attributes(old_supplemental_attribute_manager),
+    ))
+    old_refs = IdDict{Any, Union{Nothing, SharedSystemReferences}}()
+    for owner in owners
+        old_refs[owner] = get_shared_system_references(owner)
+        set_shared_system_references!(owner, new_refs)
     end
 
     new_data = try
@@ -1585,10 +1619,10 @@ function fast_deepcopy_system(
     finally
         data.time_series_manager = old_time_series_manager
         data.supplemental_attribute_manager = old_supplemental_attribute_manager
-
-        for comp in iterate_components(data)
-            set_shared_system_references!(comp,
-                old_refs[(typeof(comp), get_name(comp))])
+        data.components = old_components
+        data.masked_components = old_masked_components
+        for (owner, refs) in old_refs
+            set_shared_system_references!(owner, refs)
         end
     end
 
