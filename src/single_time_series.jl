@@ -375,9 +375,18 @@ function make_time_array(
         return get_time_array(time_series)
     end
 
-    resolution = Dates.Millisecond(get_resolution(time_series))
-    start_index = Int((start_time - first_time) / resolution) + 1
+    # Period arithmetic, so a calendar resolution (`Month`) indexes like a fixed one.
+    start_index =
+        compute_time_array_index(first_time, start_time, get_resolution(time_series))
+    # `len = nothing` means "to the end", per the accessor docstrings.
+    isnothing(len) && (len = n - start_index + 1)
     end_index = start_index + len - 1
+    (len >= 1 && end_index <= n) || throw(
+        ArgumentError(
+            "requested len=$len from start_time=$start_time exceeds the series " *
+            "(length $n from $first_time)",
+        ),
+    )
     colons = ntuple(_ -> Colon(), ndims(time_series.data) - 1)
     sub = time_series.data[start_index:end_index, colons...]
     timestamps = range(start_time; step = get_resolution(time_series), length = len)

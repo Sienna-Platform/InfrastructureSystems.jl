@@ -314,7 +314,11 @@ is selected by dispatch on the first argument. A transaction opened on a `System
 carries its owner validation (`owner_validator`); one opened on a bare manager does not.
 Read paths take no context and allocate nothing — a `TimeSeriesContext` owns an FFI
 `AddBatch` handle, so constructing one per read would be a real cost in per-timestep loops.
-The batch itself is created lazily on the first stage.
+The batch itself is created lazily on the first stage. Inside a block, reads (and
+removals/transforms) still see the block's buffered additions: the manager records the
+innermost open context in `active_context`, and `get_data_store(mgr)` flushes it before
+handing the store out. Code that must *not* flush (the batch commit itself, the
+per-stage forecast-parameter check) reaches `mgr.data_store` directly.
 
 Constraints: blocks nest innermost-first (SQLite savepoints are a stack), and an open block
 holds the store's write lock so gather data *before* opening one.

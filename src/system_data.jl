@@ -600,10 +600,6 @@ function _transform_single_time_series!(
     resolution::Union{Nothing, Dates.Period} = nothing,
     delete_existing::Bool = true,
 )
-    if delete_existing
-        remove_time_series!(data, DeterministicSingleTimeSeries; resolution = resolution)
-    end
-
     # The store derives a DeterministicSingleTimeSeries view over every stored
     # component SingleTimeSeries that shares the array (no data is copied); the
     # window parameters are recorded in the metadata. Supplemental-attribute
@@ -612,12 +608,25 @@ function _transform_single_time_series!(
     # The two policy flags are IS's contract, not store invariants: the single-window
     # interval is stored as zero (what IS looks views up by), and one system holds one
     # forecast grid.
-    outcome = infrastore_transform_single_time_series!(
-        get_data_store(data),
-        horizon,
-        interval;
-        resolution = resolution,
-    )
+    #
+    # The removal of the previous transforms and the new transform are one store
+    # transaction: if the store rejects the new parameters, the old views are still
+    # there, which is the all-or-nothing promise in the docstring.
+    outcome = time_series_transaction(data) do _
+        if delete_existing
+            remove_time_series!(
+                data,
+                DeterministicSingleTimeSeries;
+                resolution = resolution,
+            )
+        end
+        infrastore_transform_single_time_series!(
+            get_data_store(data),
+            horizon,
+            interval;
+            resolution = resolution,
+        )
+    end
 
     if iszero(outcome.sources)
         @warn "There are no SingleTimeSeries arrays to transform"

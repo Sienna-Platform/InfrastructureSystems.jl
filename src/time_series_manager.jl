@@ -9,6 +9,14 @@ directly.
 mutable struct TimeSeriesManager <: AbstractTimeSeriesManager
     data_store::Store
     read_only::Bool
+    """
+    The innermost open [`TimeSeriesContext`](@ref) (a `time_series_transaction` block),
+    or `nothing`. Its buffered additions are not in the store yet; `get_data_store`
+    flushes them before handing the store out, so a read, removal, or transform issued
+    inside the block sees everything the block has added so far. Typed loosely because
+    the context type is parameterized on the manager.
+    """
+    active_context::Any
 end
 
 function TimeSeriesManager(;
@@ -51,13 +59,23 @@ function TimeSeriesManager(;
                 catalog = :memory,
             )
     end
-    return TimeSeriesManager(data_store, read_only)
+    return TimeSeriesManager(data_store, read_only, nothing)
 end
 
 """
 The [`Store`](@ref) holding this manager's time series arrays and their catalog.
+
+Inside a [`time_series_transaction`](@ref) block this first writes the block's
+buffered additions to the store, so whatever is done with the returned store sees
+them. Outside a block it is a plain field access.
 """
-get_data_store(mgr::TimeSeriesManager) = mgr.data_store
+function get_data_store(mgr::TimeSeriesManager)
+    context = mgr.active_context
+    # A closed context is one being torn down (`discard!` rolling back); it has
+    # nothing buffered and must not be touched.
+    isnothing(context) || context.closed || flush!(context)
+    return mgr.data_store
+end
 
 # (owner_id::Int, owner_type::String, owner_category::InfraStore.OwnerCategory)
 # for the InfraStore binding. The owner is identified by its integer id.
@@ -137,6 +155,11 @@ function _time_series_transaction(
         auto_flush_bytes = auto_flush_bytes,
     )
     begin_transaction!(context)
+    # Register the block as the manager's innermost context so reads issued inside it
+    # flush its buffer first (see `get_data_store`). Blocks nest innermost-first, so
+    # the enclosing block's context is restored on exit, whichever way the block ends.
+    outer = mgr.active_context
+    mgr.active_context = context
     # `commit!` must stay inside the protected region: buffered additions are only
     # written (and validated by the store) at the final flush it performs, so a bad
     # add in a small block throws here rather than at `add_time_series!` time. If it
@@ -149,6 +172,8 @@ function _time_series_transaction(
     catch
         discard!(context)
         rethrow()
+    finally
+        mgr.active_context = outer
     end
     return result
 end
