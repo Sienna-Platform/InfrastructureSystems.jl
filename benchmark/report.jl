@@ -105,6 +105,11 @@ end
 
 regressions = Tuple{Any, Float64}[]
 failures = Any[]
+# Ops the baseline has that this run did not produce at all. A subset run
+# (BENCH_KINDS=scaling, say) legitimately omits most rows, so these are reported
+# but do not gate -- an op that ran and broke emits an `error:` row instead, and
+# lands in `failures`.
+not_run = Any[]
 
 println("Current:  $current_path")
 println("Baseline: $baseline_path")
@@ -116,7 +121,9 @@ for k in ordkeys
     b = get(base, k, nothing)
     c = get(cur, k, nothing)
     n = something(c, b).n
-    ok(b) && !ok(c) && push!(failures, k)
+    if ok(b) && !ok(c)
+        push!(isnothing(c) ? not_run : failures, k)
+    end
     delta = if ok(b) && ok(c) && b.us_per_op > 0
         d = c.us_per_op / b.us_per_op - 1
         # Single-op rows (reload_read_one) are one sample and swing ±20%; they
@@ -160,10 +167,19 @@ if length(scaling) == 2
 end
 
 println()
+if !isempty(not_run)
+    println(
+        "$(length(not_run)) op(s) in the baseline were not run here " *
+        "(subset run?); not counted as failures:",
+    )
+    for k in not_run
+        println("  - $(k[1])/$(k[2])/$(k[3])")
+    end
+end
 if !isempty(failures)
     println("$(length(failures)) op(s) failed that passed in the baseline:")
     for k in failures
-        println("  - $(k[1])/$(k[2])/$(k[3]): $(get(cur, k, nothing).status)")
+        println("  - $(k[1])/$(k[2])/$(k[3]): $(cur[k].status)")
     end
 end
 if !isempty(regressions)
