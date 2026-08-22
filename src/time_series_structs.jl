@@ -112,6 +112,21 @@ get_horizon_count(key::ForecastKey) =
     get_horizon_count(get_horizon(key), get_resolution(key))
 Base.length(key::ForecastKey) = get_horizon_count(key)
 
+# Keys are values: two keys naming the same stored association are equal, whatever
+# spelling their periods arrived in (`Hour(1)` from a constructor, `Millisecond(3600000)`
+# back from the catalog — `==` and `hash` on `Period` already agree across those).
+function Base.:(==)(a::T, b::T) where {T <: TimeSeriesKey}
+    return all(getfield(a, f) == getfield(b, f) for f in fieldnames(T))
+end
+
+function Base.hash(key::T, h::UInt) where {T <: TimeSeriesKey}
+    h = hash(T, h)
+    for f in fieldnames(T)
+        h = hash(getfield(key, f), h)
+    end
+    return h
+end
+
 # All concrete key types, for use in struct fields: a `Union` of concrete types
 # union-splits (no boxing / dynamic dispatch in per-timestep paths), unlike the
 # abstract `TimeSeriesKey`.

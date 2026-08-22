@@ -437,7 +437,8 @@ Return a `TimeSeries.TimeArray` from a cached `StaticTimeSeries` instance.
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: the first timestamp to retrieve.
     If nothing, use the `initial_timestamp` of the time series.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number
-    of timestamps). If nothing, use the entire length
+    of timestamps). If nothing, return all timestamps from `start_time` through the end
+    of the time series.
 
 See also: [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing)),
 [`get_time_series_timestamps`](@ref get_time_series_timestamps(owner::TimeSeriesOwners, time_series::StaticTimeSeries; start_time::Union{Nothing, Dates.DateTime} = nothing, len::Union{Nothing, Int} = nothing,)),
@@ -467,10 +468,8 @@ function get_time_series_array(
         start_time = get_initial_timestamp(time_series)
     end
 
-    if len === nothing
-        len = length(time_series)
-    end
-
+    # `len = nothing` means "to the end of the series", which depends on `start_time`;
+    # `make_time_array` resolves it
     return make_time_array(time_series, start_time; len = len)
 end
 
@@ -635,7 +634,8 @@ Return a vector of timestamps from a cached StaticTimeSeries instance.
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: the first timestamp to retrieve.
     If nothing, use the `initial_timestamp` of the time series.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number
-    of timestamps). If nothing, use the entire length
+    of timestamps). If nothing, return all timestamps from `start_time` through the end
+    of the time series.
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
@@ -842,7 +842,8 @@ Return an vector of timeseries data without timestamps from a cached `StaticTime
   - `start_time::Union{Nothing, Dates.DateTime} = nothing`: the first timestamp to retrieve.
     If nothing, use the `initial_timestamp` of the time series.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number
-    of timestamps). If nothing, use the entire length
+    of timestamps). If nothing, return all timestamps from `start_time` through the end
+    of the time series.
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
@@ -963,6 +964,9 @@ has_time_series(
 Efficiently add all time_series in one component to another by copying the underlying
 references.
 
+Both owners must be attached to the same system and be the same kind of owner (two
+components or two supplemental attributes); anything else throws an `ArgumentError`.
+
 # Arguments
 
   - `dst::TimeSeriesOwners`: Destination owner
@@ -986,10 +990,40 @@ function copy_time_series!(
     end
 end
 
-function _copy_time_series!(
+# The store addresses an owner by `(id, category)` and its copy keeps the source's
+# category, so only a component→component or attribute→attribute copy is expressible
+# as the in-store clone; dispatch on the owner kind selects those two.
+_copy_time_series!(
+    dst::InfrastructureSystemsComponent,
+    src::InfrastructureSystemsComponent;
+    name_mapping::Union{Nothing, Dict{Tuple{String, String}, String}} = nothing,
+) = _copy_time_series_same_kind!(dst, src, name_mapping)
+
+_copy_time_series!(
+    dst::SupplementalAttribute,
+    src::SupplementalAttribute;
+    name_mapping::Union{Nothing, Dict{Tuple{String, String}, String}} = nothing,
+) = _copy_time_series_same_kind!(dst, src, name_mapping)
+
+# A component/attribute pair is rejected outright rather than falling back to a
+# read/re-add with different semantics (a derived forecast would materialize).
+_copy_time_series!(
     dst::TimeSeriesOwners,
     src::TimeSeriesOwners;
     name_mapping::Union{Nothing, Dict{Tuple{String, String}, String}} = nothing,
+) = throw(
+    ArgumentError(
+        "$(summary(src)) and $(summary(dst)) are different kinds of owner; " *
+        "copy_time_series! only copies between components or between supplemental " *
+        "attributes. Read the time series from the source and add them to the " *
+        "destination instead.",
+    ),
+)
+
+function _copy_time_series_same_kind!(
+    dst::TimeSeriesOwners,
+    src::TimeSeriesOwners,
+    name_mapping::Union{Nothing, Dict{Tuple{String, String}, String}},
 )
     mgr = get_time_series_manager(dst)
     if isnothing(mgr)
@@ -1001,7 +1035,29 @@ function _copy_time_series!(
         )
     end
 
+    src_mgr = get_time_series_manager(src)
+    if isnothing(src_mgr)
+        throw(
+            ArgumentError(
+                "$(summary(src)) does not have time series storage. " *
+                "It may not be attached to the system.",
+            ),
+        )
+    end
+
     store = get_data_store(mgr)
+    # Ids are only unique within one system: copying from another system would look
+    # `src`'s id up in `dst`'s store and find a different owner (or nothing). The
+    # store handle is the system identity here — the managers of one system share it.
+    if get_data_store(src_mgr) !== store
+        throw(
+            ArgumentError(
+                "$(summary(src)) and $(summary(dst)) are not attached to the same " *
+                "system; copy_time_series! only copies within one system. Read the " *
+                "time series from the source and add them to the destination instead.",
+            ),
+        )
+    end
     dst_id, dst_type, _ = _infrastore_owner_args(dst)
     src_id, category = _infrastore_owner_id_category(src)
 
