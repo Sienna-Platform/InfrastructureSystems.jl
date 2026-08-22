@@ -173,10 +173,10 @@ function add_time_series!(
     data::SystemData,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features...,
+    features::Dict = Dict(),
 )
     _validate(data, owner)
-    return add_time_series!(data.time_series_manager, owner, time_series; features...)
+    return add_time_series!(data.time_series_manager, owner, time_series; features = features)
 end
 
 """
@@ -197,13 +197,13 @@ function add_time_series!(
     data::SystemData,
     components,
     time_series::TimeSeriesData;
-    features...,
+    features::Dict = Dict(),
 )
     # A block opened for just this call, so the components land as one batch,
     # atomically. The transaction's dispatch stores the array once and validates
     # each component against `data`.
     return time_series_transaction(data) do txn
-        add_time_series!(txn, components, time_series; features...)
+        add_time_series!(txn, components, time_series; features = features)
     end
 end
 
@@ -217,7 +217,7 @@ function remove_time_series!(
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}
     return remove_time_series!(
         data.time_series_manager,
@@ -226,7 +226,7 @@ function remove_time_series!(
         name;
         resolution = resolution,
         interval = interval,
-        features...,
+        features = features,
     )
 end
 
@@ -1280,7 +1280,7 @@ function build_forecast_reader(
     ::Type{T};
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: Forecast}
     store = get_data_store(data)
     id_to_owner = _make_id_to_owner(data)
@@ -1290,7 +1290,7 @@ function build_forecast_reader(
         T;
         resolution = resolution,
         name = name,
-        features = Dict{String, Any}(string(k) => v for (k, v) in features),
+        features = features,
     )
 end
 
@@ -1311,7 +1311,7 @@ function build_static_time_series_reader(
     data::SystemData;
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
-    features...,
+    features::Dict = Dict(),
 )
     store = get_data_store(data)
     id_to_owner = _make_id_to_owner(data)
@@ -1320,7 +1320,7 @@ function build_static_time_series_reader(
         id_to_owner;
         resolution = resolution,
         name = name,
-        features = Dict{String, Any}(string(k) => v for (k, v) in features),
+        features = features,
     )
 end
 

@@ -167,10 +167,10 @@ function add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features...,
+    features::Dict = Dict(),
 )
     _throw_if_read_only(mgr)
-    return infrastore_add_time_series!(mgr, owner, time_series; features...)
+    return infrastore_add_time_series!(mgr, owner, time_series; features = features)
 end
 
 """
@@ -181,11 +181,11 @@ function add_time_series!(
     context::TimeSeriesContext,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features...,
+    features::Dict = Dict(),
 )
     _throw_if_closed(context)
     context.owner_validator(owner)
-    return _stage_on_context!(context, owner, time_series; features...)
+    return _stage_on_context!(context, owner, time_series; features = features)
 end
 
 """
@@ -196,7 +196,7 @@ function add_time_series!(
     context::TimeSeriesContext,
     components,
     time_series::TimeSeriesData;
-    features...,
+    features::Dict = Dict(),
 )
     # Component information is not embedded into the key, so every component
     # produces the same one.
@@ -208,9 +208,9 @@ function add_time_series!(
         ),
     )
     first_component, rest = peeled
-    key = add_time_series!(context, first_component, time_series; features...)
+    key = add_time_series!(context, first_component, time_series; features = features)
     for component in rest
-        add_time_series!(context, component, time_series; features...)
+        add_time_series!(context, component, time_series; features = features)
     end
     return key
 end
@@ -219,7 +219,7 @@ function _stage_on_context!(
     context::TimeSeriesContext,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features...,
+    features::Dict = Dict(),
 )
     key, nbytes = _infrastore_stage!(
         _batch!(context),
@@ -227,7 +227,7 @@ function _stage_on_context!(
         context.params_cache,
         owner,
         time_series;
-        features...,
+        features = features,
     )
     push!(context.keys, key)
     # `nbytes` is the exact size of the encoded array the batch copied at stage
@@ -274,14 +274,14 @@ get_time_series_key(
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) = infrastore_get_time_series_key(
     component,
     time_series_type,
     name;
     resolution = resolution,
     interval = interval,
-    features...,
+    features = features,
 )
 
 list_time_series_keys(
@@ -291,14 +291,14 @@ list_time_series_keys(
     name::Union{String, Nothing} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) = infrastore_owner_list_keys(
     component;
     time_series_type = time_series_type,
     name = name,
     resolution = resolution,
     interval = interval,
-    features...,
+    features = features,
 )
 
 """
@@ -311,7 +311,7 @@ function remove_time_series!(
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 )
     _throw_if_read_only(mgr)
     store = get_data_store(mgr)

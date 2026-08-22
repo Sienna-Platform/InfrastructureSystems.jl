@@ -29,7 +29,7 @@ end
     # Both components have id 1 in their own systems, so a store-level copy would
     # address the wrong owner.
     @test IS.get_id(a) == IS.get_id(b)
-    IS.add_time_series!(sys1, a, _hourly_sts("s"); scenario = "x")
+    IS.add_time_series!(sys1, a, _hourly_sts("s"); features = Dict("scenario" => "x"))
     IS.add_time_series!(
         sys2,
         b,
@@ -470,7 +470,7 @@ end
     @test fkey_added == fkey_listed
     @test hash(fkey_added) == hash(fkey_listed)
     @test fkey_added != key_added
-    @test key_added != IS.add_time_series!(sys, component, _hourly_sts("s"); scenario = "a")
+    @test key_added != IS.add_time_series!(sys, component, _hourly_sts("s"); features = Dict("scenario" => "a"))
 end
 
 @testset "Test fast_deepcopy_system rewires every owner" begin

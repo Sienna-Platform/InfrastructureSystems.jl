@@ -42,7 +42,7 @@ Specify `start_time` and `len` if you only need a subset of data.
     entire length.
   - `count::Union{Nothing, Int} = nothing`: Only applicable to subtypes of Forecast. Number
     of forecast windows starting at `start_time` to return. Defaults to all available.
-  - `features...`: User-defined tags that differentiate multiple time series arrays for the
+  - `features::Dict = Dict()`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
 
 See also: [`get_time_series_array`](@ref), [`get_time_series_values`](@ref),
@@ -63,13 +63,13 @@ function get_time_series(
     count::Union{Nothing, Int} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}
     TimerOutputs.@timeit_debug SYSTEM_TIMERS "get_time_series" begin
         return infrastore_get_time_series(
             T, owner, name;
             start_time = start_time, len = len, count = count,
-            resolution = resolution, interval = interval, features...,
+            resolution = resolution, interval = interval, features = features,
         )
     end
 end
@@ -92,7 +92,7 @@ Specify start_time and len if you only need a subset of data.
     entire length.
   - `count::Union{Nothing, Int} = nothing`: Only applicable to subtypes of Forecast. Number
     of forecast windows starting at `start_time` to return. Defaults to all available.
-  - `features...`: User-defined tags that differentiate multiple time series arrays for the
+  - `features::Dict = Dict()`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
 
 See also: [`get_time_series` by name](@ref get_time_series(
@@ -102,7 +102,7 @@ See also: [`get_time_series` by name](@ref get_time_series(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData})
 """
 function get_time_series(
@@ -230,7 +230,7 @@ function get_time_series_key(
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(owner)
     return get_time_series_key(
@@ -240,7 +240,7 @@ function get_time_series_key(
         name;
         resolution = resolution,
         interval = interval,
-        features...,
+        features = features,
     )
 end
 
@@ -265,7 +265,7 @@ Specify `start_time` and `len` if you only need a subset of data.
     `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `features...`: User-defined tags that differentiate multiple time series arrays for the
+  - `features::Dict = Dict()`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
 
 See also: [`get_time_series_values`](@ref get_time_series_values(
@@ -274,14 +274,14 @@ See also: [`get_time_series_values`](@ref get_time_series_values(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-features...,) where {T <: TimeSeriesData}),
+features::Dict = Dict(),) where {T <: TimeSeriesData}),
 [`get_time_series_timestamps`](@ref get_time_series_timestamps(
     ::Type{T},
     owner::TimeSeriesOwners,
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_array` from a `StaticTimeSeriesCache`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
@@ -304,7 +304,7 @@ function get_time_series_array(
     interval::Union{Nothing, Dates.Period} = nothing,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}
     ts = get_time_series(
         T,
@@ -315,7 +315,7 @@ function get_time_series_array(
         start_time = start_time,
         len = len,
         count = 1,
-        features...,
+        features = features,
     )
     if start_time === nothing
         start_time = get_initial_timestamp(ts)
@@ -347,7 +347,7 @@ See also: [`get_time_series_array` by name](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_values`](@ref),
 [`get_time_series_timestamps`](@ref)
@@ -405,7 +405,7 @@ See also [`get_time_series_values`](@ref get_time_series_values(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_array` from a `StaticTimeSeriesCache`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
@@ -449,7 +449,7 @@ See also: [`get_time_series_values`](@ref get_time_series_values(owner::TimeSeri
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_array` from a `ForecastCache`](@ref get_time_series_array(
     owner::TimeSeriesOwners,
@@ -489,7 +489,7 @@ Return a vector of timestamps from storage for the given time series parameters.
     `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `features...`: User-defined tags that differentiate multiple time series arrays for the
+  - `features::Dict = Dict()`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
@@ -498,7 +498,7 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_values`](@ref get_time_series_values(
     ::Type{T},
@@ -506,7 +506,7 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-features...,) where {T <: TimeSeriesData}),
+features::Dict = Dict(),) where {T <: TimeSeriesData}),
 [`get_time_series_timestamps` from a `StaticTimeSeriesCache`](@ref get_time_series_timestamps(
     owner::TimeSeriesOwners,
     time_series::StaticTimeSeries;
@@ -528,7 +528,7 @@ function get_time_series_timestamps(
     interval::Union{Nothing, Dates.Period} = nothing,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}
     return TimeSeries.timestamp(
         get_time_series_array(
@@ -539,7 +539,7 @@ function get_time_series_timestamps(
             interval = interval,
             start_time = start_time,
             len = len,
-            features...,
+            features = features,
         ),
     )
 end
@@ -562,7 +562,7 @@ See also: [`get_time_series_timestamps` by name](@ref get_time_series_timestamps
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_array`](@ref),
 [`get_time_series_values`](@ref)
@@ -605,7 +605,7 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_timestamps` from a `StaticTimeSeriesCache`](@ref get_time_series_timestamps(
     owner::TimeSeriesOwners,
@@ -650,7 +650,7 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_timestamps` from a `ForecastCache`](@ref get_time_series_timestamps(
     owner::TimeSeriesOwners,
@@ -689,7 +689,7 @@ that accepts a cached `TimeSeriesData` instance.
     `start_time` must be the first timestamp of a window.
   - `len::Union{Nothing, Int} = nothing`: Length of time-series to retrieve (i.e. number of
     timestamps). If nothing, use the entire length.
-  - `features...`: User-defined tags that differentiate multiple time series arrays for the
+  - `features::Dict = Dict()`: User-defined tags that differentiate multiple time series arrays for the
     same component attribute, such as different arrays for different scenarios or years
 
 See also: [`get_time_series_array`](@ref get_time_series_array(
@@ -698,7 +698,7 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_timestamps`](@ref get_time_series_timestamps(
     ::Type{T},
@@ -706,7 +706,7 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series`](@ref),
 [`get_time_series_values` from a `StaticTimeSeriesCache`](@ref get_time_series_values(
@@ -730,7 +730,7 @@ function get_time_series_values(
     interval::Union{Nothing, Dates.Period} = nothing,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}
     return TimeSeries.values(
         get_time_series_array(
@@ -741,7 +741,7 @@ function get_time_series_values(
             interval = interval,
             start_time = start_time,
             len = len,
-            features...,
+            features = features,
         ),
     )
 end
@@ -764,7 +764,7 @@ See also: [`get_time_series_values` by name](@ref get_time_series_values(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_array`](@ref),
 [`get_time_series_timestamps`](@ref)
@@ -808,7 +808,7 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+            features = features,
 ) where {T <: TimeSeriesData}),
 [`get_time_series_values` from a `StaticTimeSeriesCache`](@ref get_time_series_values(
     owner::TimeSeriesOwners,
@@ -858,7 +858,7 @@ See also: [`get_time_series_array`](@ref get_time_series_array(
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}),
 [`get_time_series_values` from a `ForecastCache`](@ref get_time_series_values(
     owner::TimeSeriesOwners,
@@ -907,13 +907,13 @@ function has_time_series(
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(val)
     isnothing(mgr) && return false
     return infrastore_has_time_series(
         T, val, name;
-        resolution = resolution, interval = interval, features...,
+        resolution = resolution, interval = interval, features = features,
     )
 end
 
@@ -927,7 +927,7 @@ function has_time_series(
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 )
     return has_time_series(
         owner,
@@ -935,7 +935,7 @@ function has_time_series(
         name;
         resolution = resolution,
         interval = interval,
-        features...,
+        features = features,
     )
 end
 
@@ -950,14 +950,14 @@ has_time_series(
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) = has_time_series(
     owner,
     T,
     name;
     resolution = resolution,
     interval = interval,
-    features...,
+    features = features,
 )
 
 """
@@ -1111,7 +1111,7 @@ function get_time_series_keys(
     name::Union{String, Nothing} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 )
     mgr = get_time_series_manager(owner)
     isnothing(mgr) && return TimeSeriesKey[]
@@ -1122,7 +1122,7 @@ function get_time_series_keys(
         name = name,
         resolution = resolution,
         interval = interval,
-        features...,
+        features = features,
     )
 end
 
@@ -1163,7 +1163,7 @@ get_time_series_hashes(
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features...,
+    features::Dict = Dict(),
 ) where {T <: TimeSeriesData} =
     infrastore_get_time_series_hashes(
         owners,
@@ -1171,7 +1171,7 @@ get_time_series_hashes(
         name;
         resolution = resolution,
         interval = interval,
-        features...,
+        features = features,
     )
 
 function clear_time_series!(owner::TimeSeriesOwners)
