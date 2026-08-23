@@ -82,13 +82,18 @@ _feature_value(k, v) = throw(
     ),
 )
 
-function _infrastore_features(features)
+_infrastore_features(::Nothing) = nothing
+
+function _infrastore_features(features::Dict)
     out = Dict{String, Any}()
     for (k, v) in features
         out[string(k)] = _feature_value(k, v)
     end
     return out
 end
+
+_key_features(::Nothing) = Dict{String, Any}()
+_key_features(features::Dict) = Dict{String, Any}(features)
 
 function _check_interval_supported(::Type{T}, interval) where {T <: TimeSeriesData}
     if T <: StaticTimeSeries && !isnothing(interval)
@@ -178,7 +183,7 @@ function add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features::Dict = Dict{String, Any}(),
+    features::Union{Nothing, Dict} = nothing,
 )
     _throw_if_read_only(mgr)
     return infrastore_add_time_series!(mgr, owner, time_series; features = features)
@@ -192,7 +197,7 @@ function add_time_series!(
     context::TimeSeriesContext,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features::Dict = Dict{String, Any}(),
+    features::Union{Nothing, Dict} = nothing,
 )
     _throw_if_closed(context)
     context.owner_validator(owner)
@@ -207,7 +212,7 @@ function add_time_series!(
     context::TimeSeriesContext,
     components,
     time_series::TimeSeriesData;
-    features::Dict = Dict{String, Any}(),
+    features::Union{Nothing, Dict} = nothing,
 )
     # Component information is not embedded into the key, so every component
     # produces the same one.
@@ -230,7 +235,7 @@ function _stage_on_context!(
     context::TimeSeriesContext,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData;
-    features::Dict = Dict{String, Any}(),
+    features::Union{Nothing, Dict} = nothing,
 )
     key, nbytes = _infrastore_stage!(
         _batch!(context),
@@ -285,7 +290,7 @@ get_time_series_key(
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict{String, Any}(),
+    features::Union{Nothing, Dict} = nothing,
 ) = infrastore_get_time_series_key(
     component,
     time_series_type,
@@ -302,7 +307,7 @@ list_time_series_keys(
     name::Union{String, Nothing} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict{String, Any}(),
+    features::Union{Nothing, Dict} = nothing,
 ) = infrastore_owner_list_keys(
     component;
     time_series_type = time_series_type,
@@ -322,12 +327,12 @@ function remove_time_series!(
     name::String;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    features::Dict = Dict{String, Any}(),
+    features::Union{Nothing, Dict} = nothing,
 )
     _throw_if_read_only(mgr)
     store = get_data_store(mgr)
     owner_id, category = _infrastore_owner_id_category(owner)
-    feats = Dict{String, Any}(string(k) => v for (k, v) in features)
+    feats = _infrastore_features(features)
     # Subset (partial) feature/resolution matching: each bulk catalog call
     # removes every stored series of the query type that contains at least the
     # requested features, in one store transaction — no per-key listing or

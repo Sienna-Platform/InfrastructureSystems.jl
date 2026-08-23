@@ -76,7 +76,7 @@ end
 # Batched adds: stage on the transaction's AddBatch and commit once.
 function bulk_add!(f::Function, sys)
     IS.time_series_transaction(sys) do txn
-        f((c, ts; features = Dict{String, Any}()) ->
+        f((c, ts; features = nothing) ->
             IS.add_time_series!(txn, c, ts; features = features))
     end
 end
