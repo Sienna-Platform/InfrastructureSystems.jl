@@ -453,6 +453,34 @@ end
     @test IS.has_component(sys, component)
 end
 
+@testset "Test removals on a read-only system leave supplemental attributes intact" begin
+    sys, component = _sys_with_component()
+    attr = IS.TestSupplemental(; value = 1.0)
+    IS.add_supplemental_attribute!(sys, component, attr)
+    IS.add_time_series!(sys, attr, _hourly_sts("a"))
+    sys.time_series_manager.read_only = true
+
+    # The component keeps its attribute, and the attribute keeps its series and its
+    # place in the manager, whether the removal is of the component or of the link.
+    @test_throws ArgumentError IS.remove_component!(sys, component)
+    @test IS.has_component(sys, component)
+    @test IS.has_supplemental_attributes(component)
+    @test IS.get_supplemental_attribute(sys, IS.get_id(attr)) === attr
+    @test IS.has_time_series(attr, IS.SingleTimeSeries, "a")
+
+    @test_throws ArgumentError IS.remove_supplemental_attribute!(sys, component, attr)
+    @test IS.has_supplemental_attributes(component)
+    @test IS.get_supplemental_attribute(sys, IS.get_id(attr)) === attr
+    @test IS.has_time_series(attr, IS.SingleTimeSeries, "a")
+
+    # Writable again: the same removals go through and take the attribute with them.
+    sys.time_series_manager.read_only = false
+    IS.remove_component!(sys, component)
+    @test !IS.has_component(sys, component)
+    @test isempty(collect(IS.iterate_supplemental_attributes(sys)))
+    @test isnothing(IS.get_time_series_manager(attr))
+end
+
 @testset "Test assign_new_id! on a masked component sharing a name" begin
     # Main and masked components do not share a name space, so a masked "c" can sit
     # beside a main "c"; membership is by identity under the id, not by name.
