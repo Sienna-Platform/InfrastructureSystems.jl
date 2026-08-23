@@ -1179,18 +1179,30 @@ _infrastore_stage_data!(
 # read the window at `initial_timestamp`.
 function _forecast_window_index(initial_timestamp, interval, start_time)
     start_time == initial_timestamp && return 1
-    misaligned = ArgumentError(
-        "start_time=$start_time is not a forecast window timestamp " *
-        "(initial_timestamp=$initial_timestamp, interval=$(Dates.canonicalize(interval)))",
-    )
-    (start_time < initial_timestamp || iszero(Dates.value(interval))) && throw(misaligned)
+    (start_time < initial_timestamp || iszero(Dates.value(interval))) &&
+        _throw_misaligned(initial_timestamp, interval, start_time)
     return try
         compute_time_array_index(initial_timestamp, start_time, interval)
     catch e
         # `catch`-block exception inspection: the period arithmetic reports an
         # off-grid timestamp as an ArgumentError; name the window contract instead.
-        e isa ArgumentError ? throw(misaligned) : rethrow()
+        if e isa ArgumentError
+            _throw_misaligned(initial_timestamp, interval, start_time)
+        else
+            rethrow()
+        end
     end
+end
+
+# Kept out of line so the aligned path — every forecast read after the first window —
+# never pays for formatting the message.
+@noinline function _throw_misaligned(initial_timestamp, interval, start_time)
+    throw(
+        ArgumentError(
+            "start_time=$start_time is not a forecast window timestamp " *
+            "(initial_timestamp=$initial_timestamp, interval=$(Dates.canonicalize(interval)))",
+        ),
+    )
 end
 
 # Translate IS's `start_time` / `count` window selection into the core's
@@ -1845,17 +1857,22 @@ end
 
 # The three answers `_infrastore_query_types` can give. `AllStoredTypes` means one
 # unfiltered query serves the request; `NoStoredTypes` means no stored type can match (a
-# parameterized concrete such as `SingleTimeSeries{Float64, 1}`, which no stored UnionAll
-# subtypes) and the caller must answer empty WITHOUT querying.
+# `TimeSeriesData` subtype with no stored counterpart; a parameterized concrete such as
+# `SingleTimeSeries{Float64, 1}` is normalized to its UnionAll first) and the caller must
+# answer empty WITHOUT querying.
 struct AllStoredTypes end
 struct NoStoredTypes end
 
 # All InfraStore types whose IS type is a subtype of `T` (strict `<:` semantics —
 # distinct from `_infrastore_type_matches`, which treats a `Deterministic` query
 # as also matching a `DeterministicSingleTimeSeries`). Used by the store-wide
-# filters (`resolutions`, `list_owner_ids`) that key on subtyping.
+# filters (`resolutions`, `list_owner_ids`) that key on subtyping. A parameterized
+# concrete query is normalized the same way `_infrastore_type_matches` does, so a
+# `typeof(ts)` query answers the same on every path.
 _infrastore_subtype_types(::Type{T}) where {T <: TimeSeriesData} =
-    _infrastore_collapse_family(Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if k <: T))
+    _infrastore_collapse_family(
+        Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if k <: _unparameterized_type(T)),
+    )
 
 # The stored InfraStore types a query for `T` should match, under the same
 # `Deterministic`-matches-DST semantics as `_infrastore_type_matches`. `AllStoredTypes()`
@@ -2220,22 +2237,18 @@ function infrastore_get_time_series_resolutions(
 )
     # Calendar resolutions come back as `Month`/`Year`, which neither convert to nor
     # order against fixed periods, so the set is over `Period` and the sort goes
-    # through a nominal-length key.
+    # through `Dates.toms`, which is exact for fixed periods and uses the mean
+    # Gregorian length for calendar ones.
     isnothing(time_series_type) && return sort!(
         Vector{Dates.Period}(InfraStore.get_resolutions(store.inner));
-        by = _period_sort_key,
+        by = Dates.toms,
     )
     res = Set{Dates.Period}()
     for t in _infrastore_subtype_types(time_series_type)
         union!(res, InfraStore.get_resolutions(store.inner; time_series_type = t))
     end
-    return sort!(collect(res); by = _period_sort_key)
+    return sort!(collect(res); by = Dates.toms)
 end
-
-# Ordering key for a mix of fixed and calendar periods: exact milliseconds for fixed
-# periods, nominal (30-day month / 365-day year) milliseconds for calendar ones.
-_period_sort_key(p::Dates.FixedPeriod) = Dates.toms(p)
-_period_sort_key(p::Dates.Period) = Dates.days(p) * 86_400_000
 
 # Counts of time series grouped by type name.
 function infrastore_get_time_series_counts_by_type(store::Store)
@@ -2362,9 +2375,11 @@ function infrastore_list_keys_with_owner(
         time_series_type = _infrastore_pushable_type(time_series_type),
         resolution = resolution)
     out = NamedTuple[]
+    query_type =
+        isnothing(time_series_type) ? nothing : _unparameterized_type(time_series_type)
     for row in rows
-        if !isnothing(time_series_type)
-            _infrastore_is_type(row.time_series_type) <: time_series_type || continue
+        if !isnothing(query_type)
+            _infrastore_is_type(row.time_series_type) <: query_type || continue
         end
         push!(out, (owner_id = Int(row.owner_id), metadata = _key_from_row(row)))
     end
