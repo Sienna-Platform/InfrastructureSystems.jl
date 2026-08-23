@@ -154,6 +154,45 @@ end
         DateTime(2024, 1, 1, 0),
         Hour(1),
     )
+
+    # Calendar periods: the month / quarter / year count must also land exactly on the
+    # timestamp, not just on the same month / quarter / year.
+    @test_throws ArgumentError IS.compute_time_array_index(
+        DateTime(2020, 1, 1),
+        DateTime(2020, 3, 15, 7),
+        Month(2),
+    )
+    @test_throws ArgumentError IS.compute_time_array_index(
+        DateTime(2020, 1, 1),
+        DateTime(2020, 3, 1, 0, 30),
+        Month(1),
+    )
+    @test_throws ArgumentError IS.compute_time_array_index(
+        DateTime(2020, 1, 1),
+        DateTime(2020, 5, 1),
+        Quarter(1),
+    )
+    @test_throws ArgumentError IS.compute_time_array_index(
+        DateTime(2020, 1, 1),
+        DateTime(2021, 6, 1),
+        Year(1),
+    )
+    # Day-of-month clamping follows the grid's own `initial + period * k` arithmetic.
+    @test IS.compute_time_array_index(
+        DateTime(2024, 1, 31),
+        DateTime(2024, 2, 29),
+        Month(1),
+    ) == 2
+    @test IS.compute_time_array_index(
+        DateTime(2024, 1, 31),
+        DateTime(2024, 3, 31),
+        Month(2),
+    ) == 2
+    @test_throws ArgumentError IS.compute_time_array_index(
+        DateTime(2024, 1, 31),
+        DateTime(2024, 2, 28),
+        Month(1),
+    )
 end
 
 @testset "Test get_initial_timestamp" begin

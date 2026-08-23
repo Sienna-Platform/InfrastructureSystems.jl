@@ -168,6 +168,13 @@ end
         "month_fc";
         start_time = t1 + Dates.Month(1),
     )
+    # Same month as a window but not the window's timestamp.
+    @test_throws ArgumentError IS.get_time_series(
+        IS.Deterministic,
+        component,
+        "month_fc";
+        start_time = t2 + Dates.Day(14) + Dates.Hour(7),
+    )
     @test IS.get_time_series_resolutions(sys) == [Dates.Month(1)]
     @test IS.get_time_series_resolutions(sys; time_series_type = IS.Deterministic) ==
           [Dates.Month(1)]
@@ -202,6 +209,20 @@ end
           [4.0, 5.0, 6.0, 7.0]
     @test IS.get_time_series_values(component, full; start_time = _T0 + Dates.Month(20)) ==
           collect(21.0:24)
+    # A mid-month start_time is not one of the series' timestamps.
+    @test_throws ArgumentError IS.get_time_series_values(
+        component,
+        full;
+        start_time = _T0 + Dates.Month(3) + Dates.Day(14),
+        len = 2,
+    )
+    @test_throws ArgumentError IS.get_time_series_values(
+        IS.SingleTimeSeries,
+        component,
+        "monthly";
+        start_time = _T0 + Dates.Month(3) + Dates.Day(14),
+        len = 2,
+    )
     IS.add_time_series!(
         sys,
         component,
