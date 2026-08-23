@@ -453,6 +453,31 @@ end
     @test IS.has_component(sys, component)
 end
 
+@testset "Test assign_new_id! on a masked component sharing a name" begin
+    # Main and masked components do not share a name space, so a masked "c" can sit
+    # beside a main "c"; membership is by identity under the id, not by name.
+    sys, masked = _sys_with_component("c")
+    IS.mask_component!(sys, masked)
+    main = IS.TestComponent("c", 6)
+    IS.add_component!(sys, main)
+    @test IS.get_component(IS.TestComponent, sys, "c") === main
+    @test IS.get_masked_component(IS.TestComponent, sys, "c") === masked
+    masked_id = IS.get_id(masked)
+    main_id = IS.get_id(main)
+
+    IS.assign_new_id!(sys, masked)
+    @test IS.get_id(masked) != masked_id
+    @test IS.has_component(sys, masked)
+    @test IS.get_masked_component(sys, IS.get_id(masked)) === masked
+    @test !haskey(sys.component_ids, masked_id)
+
+    IS.assign_new_id!(sys, main)
+    @test IS.get_id(main) != main_id
+    @test IS.has_component(sys, main)
+    @test IS.get_component(IS.TestComponent, sys, "c") === main
+    @test IS.get_masked_component(IS.TestComponent, sys, "c") === masked
+end
+
 @testset "Test instance-form forecast window honors len" begin
     sys, component = _sys_with_component()
     data = SortedDict(_T0 + Dates.Hour(k) => rand(24, 3) for k in 0:3)

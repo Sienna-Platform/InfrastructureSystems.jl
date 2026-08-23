@@ -985,8 +985,10 @@ end
 
 function assign_new_id!(data::SystemData, component::InfrastructureSystemsComponent)
     # Integer ids are not unique across systems, so membership is by identity: this
-    # must be the very instance the system stores, both by type/name and under its id.
-    _validate(data, component)
+    # must be the very instance the system stores under its id. The id index covers
+    # main and masked components alike, whereas a (type, name) lookup would not — the
+    # two containers do not share a name space, so a masked component may legitimately
+    # share its name with a main one.
     orig_id = get_id(component)
     if !has_component(data, component)
         throw(
