@@ -196,12 +196,16 @@ function get_window_common(
     if isnothing(len)
         len = horizon_count
     end
+    (len >= 1 && len <= horizon_count) || throw(
+        ArgumentError(
+            "requested len=$len is outside the forecast horizon of $horizon_count steps",
+        ),
+    )
 
     data = get_data(forecast)[initial_time]
     if ndims(data) == 2
-        # This is necessary because the Deterministic and Probabilistic are 3D Arrays
-        # We need to do this to make the data a 2D TimeArray. In a get_window the data is always count = 1
-        @assert_op size(data)[1] <= len
+        # A Probabilistic / Scenarios window is a (horizon, member) matrix; the time
+        # axis is the first dimension either way.
         data = @view data[1:len, :]
     else
         data = @view data[1:len]

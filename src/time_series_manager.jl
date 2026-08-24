@@ -97,6 +97,11 @@ Additions made through the yielded [`TimeSeriesContext`](@ref) are buffered and
 written as one bulk call, so the store pays one catalog transaction for the block
 instead of one per series. The block commits when `func` returns.
 
+Buffered additions are not visible to reads through the manager or system until
+the block commits. Call `flush!(txn)` first when a read inside the block must see
+additions staged through `txn`; doing so creates a batching boundary but keeps the
+writes inside the transaction.
+
 If `func` throws, the transaction is rolled back and the whole block is undone —
 buffered additions never reached the store, and everything that did, **including
 removals**, is reversed. A removal is recoverable only in here; outside a block the

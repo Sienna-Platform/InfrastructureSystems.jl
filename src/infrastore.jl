@@ -172,6 +172,12 @@ end
 _storage_array(v::AbstractVector{<:Real}) =
     (collect(v), _element_type_name(eltype(v)))
 
+# N-D per-step scalars (`SingleTimeSeries{T, N}` / `NonSequentialTimeSeries{T, N}` with
+# `N > 1`): the store takes the array whole, with dim 1 as the time axis, and the read
+# side (`_decode_stored_values`) hands it back unchanged.
+_storage_array(v::AbstractArray{<:Real}) =
+    (collect(v), _element_type_name(eltype(v)))
+
 # Encoded width `k` of a vector of structured elements, without encoding it. The forecast
 # encoder needs the widest window's `k` before it allocates, so this is the single source
 # of truth every `_storage_array` below allocates from.
@@ -757,7 +763,7 @@ infrastore_get_time_series(
 # window to its first `len` horizon steps. A forecast stored as a
 # DeterministicSingleTimeSeries is materialized into a regular `Deterministic`.
 infrastore_get_time_series(
-    ::Type{<:Forecast},
+    ::Type{T},
     owner::TimeSeriesOwners,
     name::AbstractString;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
@@ -766,7 +772,8 @@ infrastore_get_time_series(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features...,
-) = _infrastore_get_forecast(owner, name;
+) where {T <: Forecast} = _infrastore_get_forecast(owner, name;
+    time_series_type = T,
     start_time = start_time, len = len, count = count, resolution = resolution,
     interval = interval, features...)
 
@@ -1072,8 +1079,11 @@ function _infrastore_stage_forecast!(
     obj, count = build(initial, resolution, horizon, interval, name)
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
         features = feats)
+    # The key names the stored type as its UnionAll (`Probabilistic`, not
+    # `Probabilistic{Float64, 2}`), exactly as a key listed back from the catalog does,
+    # so the two compare and query alike.
     key = ForecastKey(;
-        time_series_type = typeof(ts), name = name,
+        time_series_type = _unparameterized_type(typeof(ts)), name = name,
         initial_timestamp = initial, resolution = resolution,
         horizon = horizon, interval = interval, count = count,
         features = Dict{String, Any}(feats))
@@ -1160,6 +1170,41 @@ _infrastore_stage_data!(
     "transform_single_time_series!.",
 )
 
+# 1-based index of the forecast window that starts at `start_time`, on the grid
+# `initial_timestamp + k·interval`. `compute_time_array_index` does the period
+# arithmetic, so calendar intervals (`Month`, `Year`) work like fixed ones. A
+# single-window forecast carries a zero interval: its only window starts at
+# `initial_timestamp`, which is then the only valid `start_time` — the zero-interval
+# case must not skip the alignment check, or a misaligned request would silently
+# read the window at `initial_timestamp`.
+function _forecast_window_index(initial_timestamp, interval, start_time)
+    start_time == initial_timestamp && return 1
+    (start_time < initial_timestamp || iszero(Dates.value(interval))) &&
+        _throw_misaligned(initial_timestamp, interval, start_time)
+    return try
+        compute_time_array_index(initial_timestamp, start_time, interval)
+    catch e
+        # `catch`-block exception inspection: the period arithmetic reports an
+        # off-grid timestamp as an ArgumentError; name the window contract instead.
+        if e isa ArgumentError
+            _throw_misaligned(initial_timestamp, interval, start_time)
+        else
+            rethrow()
+        end
+    end
+end
+
+# Kept out of line so the aligned path — every forecast read after the first window —
+# never pays for formatting the message.
+@noinline function _throw_misaligned(initial_timestamp, interval, start_time)
+    throw(
+        ArgumentError(
+            "start_time=$start_time is not a forecast window timestamp " *
+            "(initial_timestamp=$initial_timestamp, interval=$(Dates.canonicalize(interval)))",
+        ),
+    )
+end
+
 # Translate IS's `start_time` / `count` window selection into the core's
 # half-open `[start, end)` `time_range`, validated against the forecast's stored
 # window grid (`initial_timestamp + k·interval`, `total_count` windows). Returns
@@ -1171,23 +1216,10 @@ _infrastore_stage_data!(
 function _forecast_time_range(initial_timestamp, interval, total_count, start_time, count)
     isnothing(start_time) && isnothing(count) && return nothing
 
-    if isnothing(start_time)
-        start_idx = 1
+    start_idx = if isnothing(start_time)
+        1
     else
-        offset = start_time - initial_timestamp  # Millisecond
-        interval_ms = Dates.Millisecond(interval).value
-        if start_time < initial_timestamp ||
-           (!iszero(interval_ms) && !iszero(rem(offset.value, interval_ms)))
-            throw(
-                ArgumentError(
-                    "start_time=$start_time is not a forecast window timestamp"),
-            )
-        end
-        start_idx = if iszero(interval_ms)
-            1
-        else
-            div(offset.value, interval_ms) + 1
-        end
+        _forecast_window_index(initial_timestamp, interval, start_time)
     end
     if start_idx < 1 || start_idx > total_count
         throw(ArgumentError(
@@ -1235,6 +1267,7 @@ honoring `start_time` / `count` slicing on the window axis. Pass `key` (a
 previously resolved `ForecastKey`) to skip the catalog resolution query."""
 function _infrastore_get_forecast(
     owner, name;
+    time_series_type::Type{<:Forecast} = Forecast,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,
@@ -1244,16 +1277,17 @@ function _infrastore_get_forecast(
     features...,
 )
     mgr = get_time_series_manager(owner)
-    store = mgr.data_store::Store
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
-    # Resolve the unique forecast matching a possibly-partial (subset) feature /
-    # resolution / interval query, then read it by its exact stored attributes.
-    # `interval` matters when one series name carries several forecasts that differ only
-    # by interval (`transform_single_time_series!` with `delete_existing = false`);
-    # without it the lookup is ambiguous.
+    # Resolve the unique forecast of the requested type matching a possibly-partial
+    # (subset) feature / resolution / interval query, then read it by its exact stored
+    # attributes. `interval` matters when one series name carries several forecasts
+    # that differ only by interval (`transform_single_time_series!` with
+    # `delete_existing = false`); without it the lookup is ambiguous. The type is part
+    # of the lookup too: one name can carry a Deterministic and a Probabilistic.
     matched = if isnothing(key)
         infrastore_get_time_series_key(
-            owner, Forecast, name;
+            owner, time_series_type, name;
             resolution = resolution, interval = interval, features...,
         )
     else
@@ -1261,6 +1295,18 @@ function _infrastore_get_forecast(
     end
     feats = get_features(matched)
     resolution = get_resolution(matched)
+    # `len` truncates each window to its first `len` steps; validate it against the
+    # horizon here rather than letting the slice fail with a BoundsError (or silently
+    # return empty windows for `len = 0`), matching the static read path.
+    if !isnothing(len)
+        horizon_count = get_horizon_count(matched)
+        (len < 1 || len > horizon_count) && throw(
+            ArgumentError(
+                "requested len=$len is outside the forecast horizon of " *
+                "$horizon_count steps",
+            ),
+        )
+    end
     # Pin every store lookup below to the resolved forecast's exact interval.
     # One name can carry several forecasts differing only by interval, and the
     # typed lookups match on attributes, so without this they would match more
@@ -1771,7 +1817,7 @@ function infrastore_has_time_series(
     features...,
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(owner)
-    store = mgr.data_store::Store
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     feats = _infrastore_features(features)
     # Pure existence probe — a covering-index `SELECT 1 ... LIMIT 1` in the store; nothing
@@ -1811,17 +1857,22 @@ end
 
 # The three answers `_infrastore_query_types` can give. `AllStoredTypes` means one
 # unfiltered query serves the request; `NoStoredTypes` means no stored type can match (a
-# parameterized concrete such as `SingleTimeSeries{Float64, 1}`, which no stored UnionAll
-# subtypes) and the caller must answer empty WITHOUT querying.
+# `TimeSeriesData` subtype with no stored counterpart; a parameterized concrete such as
+# `SingleTimeSeries{Float64, 1}` is normalized to its UnionAll first) and the caller must
+# answer empty WITHOUT querying.
 struct AllStoredTypes end
 struct NoStoredTypes end
 
 # All InfraStore types whose IS type is a subtype of `T` (strict `<:` semantics —
 # distinct from `_infrastore_type_matches`, which treats a `Deterministic` query
 # as also matching a `DeterministicSingleTimeSeries`). Used by the store-wide
-# filters (`resolutions`, `list_owner_ids`) that key on subtyping.
+# filters (`resolutions`, `list_owner_ids`) that key on subtyping. A parameterized
+# concrete query is normalized the same way `_infrastore_type_matches` does, so a
+# `typeof(ts)` query answers the same on every path.
 _infrastore_subtype_types(::Type{T}) where {T <: TimeSeriesData} =
-    _infrastore_collapse_family(Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if k <: T))
+    _infrastore_collapse_family(
+        Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if k <: _unparameterized_type(T)),
+    )
 
 # The stored InfraStore types a query for `T` should match, under the same
 # `Deterministic`-matches-DST semantics as `_infrastore_type_matches`. `AllStoredTypes()`
@@ -1866,7 +1917,7 @@ _infrastore_probe_types(probe, types::Tuple) = any(probe, types)
 # `Any` instead of `Bool` — real cost on the `has_time_series` hot path.
 function infrastore_has_any(owner; time_series_type = nothing)
     mgr = get_time_series_manager(owner)
-    store = mgr.data_store::Store
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     probe =
         t -> InfraStore.has_for_owner(
@@ -1897,8 +1948,17 @@ _infrastore_type_matches(
 _infrastore_type_matches(row_type::Type, ::Type{<:AbstractDeterministic}) =
     row_type <: AbstractDeterministic
 
+# A parameterized concrete query (`SingleTimeSeries{Float64, 1}`, i.e. `typeof(ts)`)
+# matches the same rows as its UnionAll: the catalog does not key on the element
+# type, so the parameters can only restate what the stored array is, never select
+# between arrays.
 _infrastore_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
-    row_type <: T
+    row_type <: _unparameterized_type(T)
+
+# `SingleTimeSeries{Float64, 1}` -> `SingleTimeSeries`; a UnionAll or a `Union` of
+# time series types is returned as is.
+_unparameterized_type(::Type{T}) where {T} =
+    T isa Union ? T : Base.typename(T).wrapper
 
 # `_infrastore_query_types`' answer is static per query type, and its generic
 # method's runtime match loop costs ~2 µs — real money on the
@@ -2003,7 +2063,7 @@ function infrastore_owner_list_keys(
     features...,
 )
     mgr = get_time_series_manager(owner)
-    store = mgr.data_store::Store
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     return _infrastore_list_keys(store, owner_id, category;
         time_series_type = time_series_type, name = name, resolution = resolution,
@@ -2045,7 +2105,7 @@ function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSerie
     mgr = get_time_series_manager(owner)
     isnothing(mgr) &&
         throw(InfraStore.NotFoundError("owner has no time series to hash"))
-    store = mgr.data_store::Store
+    store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     T = get_time_series_type(key)
     rows = InfraStore.list_array_groups(store.inner; owner_id = owner_id,
@@ -2081,7 +2141,7 @@ function infrastore_get_time_series_hashes(
     owner = first(owners)
     mgr = get_time_series_manager(owner)
     isnothing(mgr) && return hashes
-    store = mgr.data_store::Store
+    store = mgr.data_store
     ids = Set{Int}(get_id(o) for o in owners)
     rows = InfraStore.list_array_groups(store.inner;
         owner_category = get_owner_category(owner),
@@ -2175,12 +2235,19 @@ function infrastore_get_time_series_resolutions(
     store::Store;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
 )
-    isnothing(time_series_type) && return sort!(InfraStore.get_resolutions(store.inner))
-    res = Set{Dates.Millisecond}()
+    # Calendar resolutions come back as `Month`/`Year`, which neither convert to nor
+    # order against fixed periods, so the set is over `Period` and the sort goes
+    # through `Dates.toms`, which is exact for fixed periods and uses the mean
+    # Gregorian length for calendar ones.
+    isnothing(time_series_type) && return sort!(
+        Vector{Dates.Period}(InfraStore.get_resolutions(store.inner));
+        by = Dates.toms,
+    )
+    res = Set{Dates.Period}()
     for t in _infrastore_subtype_types(time_series_type)
         union!(res, InfraStore.get_resolutions(store.inner; time_series_type = t))
     end
-    return sort!(collect(res))
+    return sort!(collect(res); by = Dates.toms)
 end
 
 # Counts of time series grouped by type name.
@@ -2272,12 +2339,19 @@ function infrastore_list_owner_ids(
         end
         return collect(ids)
     end
+    # Same `Deterministic`-family semantics as the branch above (the core widens a
+    # pushed `Deterministic` filter to DST rows), so the answer does not change with
+    # the presence of a `resolution` filter.
     ids = Set{Int}()
     for row in
         InfraStore.list_keys(store.inner; owner_category = category,
+        time_series_type = _infrastore_pushable_type(time_series_type),
         resolution = resolution)
         if !isnothing(time_series_type)
-            _infrastore_is_type(row.time_series_type) <: time_series_type || continue
+            _infrastore_type_matches(
+                _infrastore_is_type(row.time_series_type),
+                time_series_type,
+            ) || continue
         end
         push!(ids, Int(row.owner_id))
     end
@@ -2301,9 +2375,11 @@ function infrastore_list_keys_with_owner(
         time_series_type = _infrastore_pushable_type(time_series_type),
         resolution = resolution)
     out = NamedTuple[]
+    query_type =
+        isnothing(time_series_type) ? nothing : _unparameterized_type(time_series_type)
     for row in rows
-        if !isnothing(time_series_type)
-            _infrastore_is_type(row.time_series_type) <: time_series_type || continue
+        if !isnothing(query_type)
+            _infrastore_is_type(row.time_series_type) <: query_type || continue
         end
         push!(out, (owner_id = Int(row.owner_id), metadata = _key_from_row(row)))
     end

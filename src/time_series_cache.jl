@@ -276,9 +276,12 @@ function ForecastCache(
 
     count = get_count(ts_metadata)
     if start_time != initial_timestamp
-        count -=
-            Dates.Millisecond(start_time - initial_timestamp) ÷
-            Dates.Millisecond(get_interval(ts_metadata))
+        # Period arithmetic, so a calendar interval (`Month`) counts like a fixed one.
+        count -= compute_periods_between(
+            initial_timestamp,
+            start_time,
+            get_interval(ts_metadata),
+        )
     end
 
     window_size = row_size * horizon_count
@@ -380,7 +383,12 @@ function StaticTimeSeriesCache(
 
     total_length = length(ts_metadata)
     if start_time != initial_timestamp
-        total_length -= (start_time - initial_timestamp) ÷ get_resolution(ts_metadata)
+        # Period arithmetic, so a calendar resolution (`Month`) counts like a fixed one.
+        total_length -= compute_periods_between(
+            initial_timestamp,
+            start_time,
+            get_resolution(ts_metadata),
+        )
     end
 
     # Get an instance to assess data size.

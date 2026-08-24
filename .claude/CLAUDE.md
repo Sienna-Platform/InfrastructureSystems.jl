@@ -314,7 +314,10 @@ is selected by dispatch on the first argument. A transaction opened on a `System
 carries its owner validation (`owner_validator`); one opened on a bare manager does not.
 Read paths take no context and allocate nothing — a `TimeSeriesContext` owns an FFI
 `AddBatch` handle, so constructing one per read would be a real cost in per-timestep loops.
-The batch itself is created lazily on the first stage.
+The batch itself is created lazily on the first stage. Reads through the manager or system
+do not see buffered additions until the transaction block commits. If code must read,
+remove, or transform a series staged earlier in the same block, call `flush!(txn)` first;
+the write remains transactional but the flush creates a batching boundary.
 
 Constraints: blocks nest innermost-first (SQLite savepoints are a stack), and an open block
 holds the store's write lock so gather data *before* opening one.

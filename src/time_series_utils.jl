@@ -143,7 +143,9 @@ function compute_periods_between(
     year1, month1 = Dates.yearmonth(t1)
     year2, month2 = Dates.yearmonth(t2)
     time_diff = (year2 - year1) * 12 + (month2 - month1)
-    return _compute_periods_between_common(t1, t2, Dates.value(period), time_diff, 0)
+    n = _compute_periods_between_common(t1, t2, Dates.value(period), time_diff, 0)
+    _check_calendar_alignment(t1, t2, Dates.Month(time_diff))
+    return n
 end
 
 function compute_periods_between(
@@ -156,12 +158,27 @@ function compute_periods_between(
     year2 = Dates.year(t2)
     quarter2 = Dates.quarter(t2)
     time_diff = (year2 - year1) * 4 + (quarter2 - quarter1)
-    return _compute_periods_between_common(t1, t2, Dates.value(period), time_diff, 0)
+    n = _compute_periods_between_common(t1, t2, Dates.value(period), time_diff, 0)
+    _check_calendar_alignment(t1, t2, Dates.Quarter(time_diff))
+    return n
 end
 
 function compute_periods_between(t1::Dates.DateTime, t2::Dates.DateTime, period::Dates.Year)
     time_diff = Dates.year(t2) - Dates.year(t1)
-    return _compute_periods_between_common(t1, t2, Dates.value(period), time_diff, 0)
+    n = _compute_periods_between_common(t1, t2, Dates.value(period), time_diff, 0)
+    _check_calendar_alignment(t1, t2, Dates.Year(time_diff))
+    return n
+end
+
+# The calendar methods count whole months / quarters / years from the date fields
+# alone, which says nothing about the day or time of day. A timestamp is on the grid
+# only if stepping `t1` by that many periods lands exactly on it — the same
+# `initial + period * k` arithmetic that generates the grid, so day-of-month clamping
+# (Jan 31 + 1 month == Feb 29) agrees with the series' own timestamps.
+function _check_calendar_alignment(t1::Dates.DateTime, t2::Dates.DateTime, offset)
+    t1 + offset == t2 ||
+        throw(ArgumentError("$t2 is not a whole number of $(typeof(offset)) from $t1"))
+    return
 end
 
 function _compute_periods_between_common(

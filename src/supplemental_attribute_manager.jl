@@ -211,6 +211,7 @@ function remove_supplemental_attribute!(
     attribute::SupplementalAttribute,
 )
     throw_if_not_attached(mgr, attribute)
+    _throw_if_time_series_read_only(attribute)
     remove_association!(mgr.associations, component, attribute)
     if !has_association(mgr.associations, attribute)
         remove_supplemental_attribute!(mgr, attribute)
@@ -231,12 +232,25 @@ function remove_supplemental_attribute!(
         )
     end
 
+    _throw_if_time_series_read_only(supplemental_attribute)
+    # Clear time series before popping, so a failure there leaves the attribute
+    # attached rather than popped with its series still in the store.
+    prepare_for_removal!(supplemental_attribute)
     T = typeof(supplemental_attribute)
     pop!(mgr.data[T], get_id(supplemental_attribute))
-    prepare_for_removal!(supplemental_attribute)
     if isempty(mgr.data[T])
         pop!(mgr.data, T)
     end
+    return
+end
+
+# Removing an attribute ends in `prepare_for_removal!`, which refuses a read-only time
+# series store. Refuse before touching the association rows or the manager's index so
+# the failure leaves nothing half-removed. The manager has no handle on the time series
+# manager; an attached attribute reaches it through its shared references.
+function _throw_if_time_series_read_only(attribute::SupplementalAttribute)
+    mgr = get_time_series_manager(attribute)
+    isnothing(mgr) || _throw_if_read_only(mgr)
     return
 end
 

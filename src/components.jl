@@ -186,17 +186,25 @@ function _remove_component!(
         throw(ArgumentError("component $T name=$name is not stored"))
     end
 
-    component = pop!(components.data[T], name)
-    if isempty(components.data[T])
-        pop!(components.data, T)
-    end
-
+    component = components.data[T][name]
+    # The time series cleanup refuses a read-only store, but only after the
+    # supplemental-attribute cleanup has already removed associations (and possibly
+    # the attribute itself), so check up front, before anything is mutated.
+    remove_time_series && _throw_if_read_only(components.time_series_manager)
+    # Detach before popping: if either cleanup throws, the component is still in the
+    # container and the system's id index, subsystems, and shared references stay
+    # consistent with it.
     if remove_supplemental_attributes && has_supplemental_attributes(component)
         clear_supplemental_attributes!(component)
     end
 
     if remove_time_series
         prepare_for_removal!(component)
+    end
+
+    pop!(components.data[T], name)
+    if isempty(components.data[T])
+        pop!(components.data, T)
     end
 
     @debug "Removed component" _group = LOG_GROUP_SYSTEM T name
