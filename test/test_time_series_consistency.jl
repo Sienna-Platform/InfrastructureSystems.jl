@@ -168,6 +168,13 @@ end
         "month_fc";
         start_time = t1 + Dates.Month(1),
     )
+    # Same month as a window but not the window's timestamp.
+    @test_throws ArgumentError IS.get_time_series(
+        IS.Deterministic,
+        component,
+        "month_fc";
+        start_time = t2 + Dates.Day(14) + Dates.Hour(7),
+    )
     @test IS.get_time_series_resolutions(sys) == [Dates.Month(1)]
     @test IS.get_time_series_resolutions(sys; time_series_type = IS.Deterministic) ==
           [Dates.Month(1)]
@@ -202,6 +209,20 @@ end
           [4.0, 5.0, 6.0, 7.0]
     @test IS.get_time_series_values(component, full; start_time = _T0 + Dates.Month(20)) ==
           collect(21.0:24)
+    # A mid-month start_time is not one of the series' timestamps.
+    @test_throws ArgumentError IS.get_time_series_values(
+        component,
+        full;
+        start_time = _T0 + Dates.Month(3) + Dates.Day(14),
+        len = 2,
+    )
+    @test_throws ArgumentError IS.get_time_series_values(
+        IS.SingleTimeSeries,
+        component,
+        "monthly";
+        start_time = _T0 + Dates.Month(3) + Dates.Day(14),
+        len = 2,
+    )
     IS.add_time_series!(
         sys,
         component,
@@ -360,6 +381,29 @@ end
           reshape(collect(1.0:6), 3, 2)
 end
 
+@testset "Test static series rejects a start_time past the end" begin
+    sys, component = _sys_with_component()
+    IS.add_time_series!(sys, component, _hourly_sts("s"))
+    sts = IS.get_time_series(IS.SingleTimeSeries, component, "s")
+    # Aligned to the grid but one step beyond the last timestamp: the error must name
+    # `start_time`, not a `len` the caller never passed.
+    @test_throws(
+        ArgumentError(
+            "start_time=$(_T0 + Dates.Hour(24)) is past the end of the " *
+            "series (length 24 from $_T0 through $(_T0 + Dates.Hour(23)))",
+        ),
+        IS.get_time_series_values(component, sts; start_time = _T0 + Dates.Hour(24)),
+    )
+    @test_throws ArgumentError IS.get_time_series_values(
+        component,
+        sts;
+        start_time = _T0 + Dates.Hour(24),
+        len = 1,
+    )
+    @test IS.get_time_series_values(component, sts; start_time = _T0 + Dates.Hour(23)) ==
+          [24.0]
+end
+
 @testset "Test forecast len is validated against the horizon" begin
     sys, component = _sys_with_component()
     IS.add_time_series!(sys, component, _hourly_det("fc"))
@@ -430,6 +474,59 @@ end
     # The id is free again: the same component can come back.
     IS.add_component!(sys, component)
     @test IS.has_component(sys, component)
+end
+
+@testset "Test removals on a read-only system leave supplemental attributes intact" begin
+    sys, component = _sys_with_component()
+    attr = IS.TestSupplemental(; value = 1.0)
+    IS.add_supplemental_attribute!(sys, component, attr)
+    IS.add_time_series!(sys, attr, _hourly_sts("a"))
+    sys.time_series_manager.read_only = true
+
+    # The component keeps its attribute, and the attribute keeps its series and its
+    # place in the manager, whether the removal is of the component or of the link.
+    @test_throws ArgumentError IS.remove_component!(sys, component)
+    @test IS.has_component(sys, component)
+    @test IS.has_supplemental_attributes(component)
+    @test IS.get_supplemental_attribute(sys, IS.get_id(attr)) === attr
+    @test IS.has_time_series(attr, IS.SingleTimeSeries, "a")
+
+    @test_throws ArgumentError IS.remove_supplemental_attribute!(sys, component, attr)
+    @test IS.has_supplemental_attributes(component)
+    @test IS.get_supplemental_attribute(sys, IS.get_id(attr)) === attr
+    @test IS.has_time_series(attr, IS.SingleTimeSeries, "a")
+
+    # Writable again: the same removals go through and take the attribute with them.
+    sys.time_series_manager.read_only = false
+    IS.remove_component!(sys, component)
+    @test !IS.has_component(sys, component)
+    @test isempty(collect(IS.iterate_supplemental_attributes(sys)))
+    @test isnothing(IS.get_time_series_manager(attr))
+end
+
+@testset "Test assign_new_id! on a masked component sharing a name" begin
+    # Main and masked components do not share a name space, so a masked "c" can sit
+    # beside a main "c"; membership is by identity under the id, not by name.
+    sys, masked = _sys_with_component("c")
+    IS.mask_component!(sys, masked)
+    main = IS.TestComponent("c", 6)
+    IS.add_component!(sys, main)
+    @test IS.get_component(IS.TestComponent, sys, "c") === main
+    @test IS.get_masked_component(IS.TestComponent, sys, "c") === masked
+    masked_id = IS.get_id(masked)
+    main_id = IS.get_id(main)
+
+    IS.assign_new_id!(sys, masked)
+    @test IS.get_id(masked) != masked_id
+    @test IS.has_component(sys, masked)
+    @test IS.get_masked_component(sys, IS.get_id(masked)) === masked
+    @test !haskey(sys.component_ids, masked_id)
+
+    IS.assign_new_id!(sys, main)
+    @test IS.get_id(main) != main_id
+    @test IS.has_component(sys, main)
+    @test IS.get_component(IS.TestComponent, sys, "c") === main
+    @test IS.get_masked_component(IS.TestComponent, sys, "c") === masked
 end
 
 @testset "Test instance-form forecast window honors len" begin

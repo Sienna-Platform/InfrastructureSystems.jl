@@ -187,9 +187,13 @@ function _remove_component!(
     end
 
     component = components.data[T][name]
-    # Detach before popping: if either cleanup throws (e.g. the time series store is
-    # read-only), the component is still in the container and the system's id index,
-    # subsystems, and shared references stay consistent with it.
+    # The time series cleanup refuses a read-only store, but only after the
+    # supplemental-attribute cleanup has already removed associations (and possibly
+    # the attribute itself), so check up front, before anything is mutated.
+    remove_time_series && _throw_if_read_only(components.time_series_manager)
+    # Detach before popping: if either cleanup throws, the component is still in the
+    # container and the system's id index, subsystems, and shared references stay
+    # consistent with it.
     if remove_supplemental_attributes && has_supplemental_attributes(component)
         clear_supplemental_attributes!(component)
     end
