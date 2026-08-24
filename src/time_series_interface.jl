@@ -898,7 +898,7 @@ function has_time_series(
 ) where {T <: TimeSeriesData}
     mgr = get_time_series_manager(val)
     isnothing(mgr) && return false
-    return infrastore_has_any(val; time_series_type = T)
+    return infrastore_has_any(mgr, val; time_series_type = T)
 end
 
 function has_time_series(
@@ -912,7 +912,7 @@ function has_time_series(
     mgr = get_time_series_manager(val)
     isnothing(mgr) && return false
     return infrastore_has_time_series(
-        T, val, name;
+        T, mgr, val, name;
         resolution = resolution, interval = interval, features = features,
     )
 end

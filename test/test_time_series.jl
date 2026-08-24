@@ -381,12 +381,20 @@ end
     )
     IS.add_time_series!(sys, component, forecast)
 
-    # A parameterized concrete query type matches no stored type; it must not
-    # degrade to an unfiltered probe that answers true for the wrong type.
+    # A parameterized concrete query type is normalized to its UnionAll and narrows
+    # on that; it must not degrade to an unfiltered probe that answers true for the
+    # wrong type. Only a `Deterministic` is stored so far, so this is false.
     @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}, name) == false
     @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}) == false
     @test IS.has_time_series(component, IS.Deterministic, name)
     @test IS.has_time_series(component, IS.Deterministic)
+
+    # A `Union` query type matches each member's stored type, and only those. Unions
+    # are not dispatchable, so this is the case a baked method table would miss.
+    @test IS.has_time_series(component, Union{IS.Deterministic, IS.Probabilistic}, name)
+    @test IS.has_time_series(component, Union{IS.Deterministic, IS.Probabilistic})
+    @test IS.has_time_series(
+        component, Union{IS.SingleTimeSeries, IS.Probabilistic}, name) == false
 
     # The (owner, name) form must apply resolution/interval/feature filters
     # instead of silently dropping them.
@@ -423,6 +431,11 @@ end
     )
         @test_throws ArgumentError operation()
     end
+
+    # ...and the same query spelled as `typeof(ts)` answers identically: the catalog
+    # does not key on the element type, so the parameters cannot select between arrays.
+    @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}, "static")
+    @test IS.has_time_series(component, typeof(sts), "static")
 
     # The redesign's whole point is static `Bool` inference; the deleted
     # kwargs catch-all boxed its type filter as `Any` and broke this.
