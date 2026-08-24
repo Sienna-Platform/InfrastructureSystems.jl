@@ -2,9 +2,7 @@
 Supertype for curve representations that carry their own unit system.
 
 Parameterized by a [`ValueCurve`](@ref) type `T` and an
-[`AbstractUnitSystem`](@ref) type `U`, a compile-time marker for the
-`power_units` of the x-axis, so that unit-dependent operations dispatch on the
-type parameter.
+[`AbstractUnitSystem`](@ref) type `U`, the power_units of the x-axis of the curve.
 
 Subtypes are [`ProductionVariableCostCurve`](@ref) (costs) and
 [`LossCurve`](@ref) (losses). Methods common to both belong here; methods that

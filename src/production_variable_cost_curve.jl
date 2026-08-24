@@ -202,12 +202,8 @@ is_time_series_backed(cost::FuelCurve) =
     is_time_series_backed(get_value_curve(cost)) ||
     is_time_series_backed(get_fuel_cost(cost))
 
-# `get_time_series_key` is intentionally undefined for `FuelCurve`: its value curve and
-# `fuel_cost` are independently time-series-backed, so a single accessor would be
-# ambiguous. Callers resolve explicitly via `get_time_series_key(get_value_curve(c))` or
-# `get_fuel_cost(c)`. These throwing methods shadow the generic TS method above for every
-# `FuelCurve` (the second is needed to resolve dispatch ambiguity with that generic
-# method when the value curve is TS-backed).
+# `get_time_series_key` errors for `FuelCurve`: its value curve and `fuel_cost` are
+# independently time-series-backed. Second method needed to avoid ambiguity.
 _fuel_curve_no_ts_key() = throw(
     ArgumentError(
         "get_time_series_key is not defined for FuelCurve; its value curve and fuel_cost " *
