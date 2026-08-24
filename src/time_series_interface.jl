@@ -961,7 +961,7 @@ has_time_series(
 )
 
 """
-Efficiently add all time_series in one component to another by copying the underlying
+Efficiently add all time_series in one owner to another by copying the underlying
 references.
 
 Both owners must be attached to the same system and be the same kind of owner (two

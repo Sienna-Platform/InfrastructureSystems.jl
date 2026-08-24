@@ -381,6 +381,29 @@ end
           reshape(collect(1.0:6), 3, 2)
 end
 
+@testset "Test static series rejects a start_time past the end" begin
+    sys, component = _sys_with_component()
+    IS.add_time_series!(sys, component, _hourly_sts("s"))
+    sts = IS.get_time_series(IS.SingleTimeSeries, component, "s")
+    # Aligned to the grid but one step beyond the last timestamp: the error must name
+    # `start_time`, not a `len` the caller never passed.
+    @test_throws(
+        ArgumentError(
+            "start_time=$(_T0 + Dates.Hour(24)) is past the end of the " *
+            "series (length 24 from $_T0 through $(_T0 + Dates.Hour(23)))",
+        ),
+        IS.get_time_series_values(component, sts; start_time = _T0 + Dates.Hour(24)),
+    )
+    @test_throws ArgumentError IS.get_time_series_values(
+        component,
+        sts;
+        start_time = _T0 + Dates.Hour(24),
+        len = 1,
+    )
+    @test IS.get_time_series_values(component, sts; start_time = _T0 + Dates.Hour(23)) ==
+          [24.0]
+end
+
 @testset "Test forecast len is validated against the horizon" begin
     sys, component = _sys_with_component()
     IS.add_time_series!(sys, component, _hourly_det("fc"))
