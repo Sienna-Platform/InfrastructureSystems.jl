@@ -525,6 +525,66 @@ end
 "Left shift the `FunctionData` by a scalar: (f << c)(x) = (f >> -c)(x) = f(x + c)"
 Base.:<<(fd::FunctionData, c::Real) = fd >> -c
 
+# SCALE THE AXES
+# `scale_y` is spelled `*`; `scale_x` has no natural operator spelling, so both get a named
+# form and the pair is documented together.
+"""
+Check the factor for `scale_x`. Only strictly positive factors are allowed: a negative
+factor would reverse the x-ordering that the piecewise types require, and zero collapses
+the domain to a point.
+"""
+function _check_x_scale_factor(c::Real)
+    (isfinite(c) && c > 0) || throw(
+        ArgumentError(
+            "scale_x requires a finite, strictly positive factor, got $c; " *
+            "use `~f` to flip about the y-axis",
+        ),
+    )
+    return
+end
+
+"Horizontally scale the `LinearFunctionData`: `scale_x(f, c)(x) = f(c * x)`"
+function scale_x(fd::LinearFunctionData, c::Real)
+    _check_x_scale_factor(c)
+    return LinearFunctionData(
+        c * get_proportional_term(fd),
+        get_constant_term(fd),
+    )
+end
+
+"Horizontally scale the `QuadraticFunctionData`: `scale_x(f, c)(x) = f(c * x)`"
+function scale_x(fd::QuadraticFunctionData, c::Real)
+    _check_x_scale_factor(c)
+    return QuadraticFunctionData(
+        c^2 * get_quadratic_term(fd),
+        c * get_proportional_term(fd),
+        get_constant_term(fd),
+    )
+end
+
+"Horizontally scale the `PiecewiseLinearData`: `scale_x(f, c)(x) = f(c * x)`"
+function scale_x(fd::PiecewiseLinearData, c::Real)
+    _check_x_scale_factor(c)
+    return PiecewiseLinearData([(p.x / c, p.y) for p in get_points(fd)])
+end
+
+"Horizontally scale the `PiecewiseStepData`: `scale_x(f, c)(x) = f(c * x)`"
+function scale_x(fd::PiecewiseStepData, c::Real)
+    _check_x_scale_factor(c)
+    x_coords = get_x_coords(fd)
+    new_x = Vector{Float64}(undef, length(x_coords))
+    for i in eachindex(x_coords, new_x)
+        new_x[i] = x_coords[i] / c
+    end
+    return PiecewiseStepData(new_x, get_y_coords(fd))
+end
+
+"""
+Vertically scale the `FunctionData`: `scale_y(f, c)(x) = c * f(x)`. Named companion of
+[`scale_x`](@ref); equivalent to `c * fd`.
+"""
+scale_y(fd::FunctionData, c::Real) = c * fd
+
 # NEGATION
 "Negate the `FunctionData`: (-f)(x) = -f(x)"
 Base.:-(fd::FunctionData) = -1.0 * fd

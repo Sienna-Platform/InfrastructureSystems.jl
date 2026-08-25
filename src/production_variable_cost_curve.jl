@@ -283,6 +283,120 @@ get_time_series_key(::FuelCurve) = _fuel_curve_no_ts_key()
 get_time_series_key(::FuelCurve{<:ValueCurve{<:TimeSeriesFunctionData}}) =
     _fuel_curve_no_ts_key()
 
+# ── Unit conversion ───────────────────────────────────────────────────────────
+# A change of power units rescales the x-axis: if `ρ` is the ratio such that
+# `x_from = ρ * x_to`, the converted curve represents `f_to(x_to) = f_from(ρ * x_to)`,
+# which is exactly `scale_x(curve, ρ)`. `ρ` comes from the same `_cost_coeff_ratio`
+# dispatch table that backs `convert_cost_coefficient`.
+#
+# Only the x-axis moves. These y-axes are absolute currency or fuel rates (\$/h, MBTU/h)
+# that carry no power units, so nothing rescales them. Note that `scale_x` still changes
+# the stored y *data* of an `IncrementalCurve`/`AverageRateCurve` — those y-axes are rates
+# per unit of x (\$/MWh), so x's units sit in the denominator and must convert with it.
+# That factor is the chain rule inside `scale_x`, not a y-scaling of the curve.
+
+"""
+$(TYPEDSIGNATURES)
+
+Convert `curve` to the `to` unit system, returning a curve of the same outer type whose
+`U` parameter is `typeof(to)`. `system_base_power` and `device_base_power` supply the
+conversion factors; `InfrastructureSystems` has no notion of components, so callers pass
+them explicitly (domain packages are expected to add a component-aware convenience
+method).
+
+The `fuel_cost` of a [`FuelCurve`](@ref) is in currency per unit of fuel and is left
+alone. Time-series-backed value curves cannot be rescaled and raise an `ArgumentError`.
+"""
+function convert_power_units(
+    curve::CostCurve{T, U},
+    to::AbstractUnitSystem,
+    system_base_power::Float64,
+    device_base_power::Float64,
+) where {T, U}
+    ratio = _cost_coeff_ratio(U(), to, system_base_power, device_base_power)
+    return CostCurve(
+        scale_x(get_value_curve(curve), ratio),
+        to,
+        scale_x(get_vom_cost(curve), ratio),
+    )
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Convert a [`FuelCurve`](@ref) to the `to` unit system. Only the value curve and `vom_cost`
+are rescaled — both are functions of the production quantity on the x-axis.
+
+`fuel_cost` is currency per unit of fuel, and `startup_fuel_offtake` is fuel consumed as a
+function of *downtime*: its x-axis is a duration and its y-axis is a fuel quantity, so a
+change of power units touches neither. Both carry over unchanged.
+"""
+function convert_power_units(
+    curve::FuelCurve{T, U},
+    to::AbstractUnitSystem,
+    system_base_power::Float64,
+    device_base_power::Float64,
+) where {T, U}
+    ratio = _cost_coeff_ratio(U(), to, system_base_power, device_base_power)
+    # `startup_fuel_offtake` is fuel vs. downtime — neither axis is in power units.
+    return FuelCurve(
+        scale_x(get_value_curve(curve), ratio),
+        to,
+        get_fuel_cost(curve),
+        get_startup_fuel_offtake(curve),
+        scale_x(get_vom_cost(curve), ratio),
+    )
+end
+
+# Converting to the unit system a curve is already in is the identity, dispatched rather
+# than branched. Written per concrete type to stay unambiguous against the methods above.
+convert_power_units(curve::CostCurve{T, U}, ::U, ::Float64, ::Float64) where {T, U} = curve
+convert_power_units(curve::FuelCurve{T, U}, ::U, ::Float64, ::Float64) where {T, U} = curve
+
+# ── FuelCurve → CostCurve ─────────────────────────────────────────────────────
+
+_scalar_fuel_cost(fuel_cost::Float64) = fuel_cost
+_scalar_fuel_cost(::TimeSeriesKey) = throw(
+    ArgumentError(
+        "cannot convert a FuelCurve with a time-series-backed fuel_cost to a CostCurve; " *
+        "resolve the fuel cost for the timestep of interest first",
+    ),
+)
+
+_check_no_startup_fuel(startup::LinearCurve) = _check_no_startup_fuel(
+    get_function_data(startup),
+)
+function _check_no_startup_fuel(fd::LinearFunctionData)
+    (iszero(get_proportional_term(fd)) && iszero(get_constant_term(fd))) || throw(
+        ArgumentError(
+            "cannot convert a FuelCurve with a nonzero startup_fuel_offtake to a " *
+            "CostCurve: a CostCurve has nowhere to record startup fuel, so the " *
+            "startup cost would be silently lost",
+        ),
+    )
+    return
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Convert a [`FuelCurve`](@ref) with a scalar `fuel_cost` into the equivalent
+[`CostCurve`](@ref) by multiplying the value curve through by the fuel cost. The unit
+system and the (already-in-currency) `vom_cost` carry over unchanged.
+
+Throws an `ArgumentError` if `fuel_cost` is a [`TimeSeriesKey`](@ref) rather than a
+scalar, or if `startup_fuel_offtake` is nonzero — a `CostCurve` cannot represent it.
+"""
+function CostCurve(curve::FuelCurve{T, U}) where {T, U}
+    fuel_cost = _scalar_fuel_cost(get_fuel_cost(curve))
+    _check_no_startup_fuel(get_startup_fuel_offtake(curve))
+    return CostCurve(
+        fuel_cost * get_value_curve(curve),
+        U(),
+        get_vom_cost(curve),
+    )
+end
+
 # ── Serialization ─────────────────────────────────────────────────────────────
 # The U type parameter has no corresponding field, so we serialize it under the
 # conventional "power_units" key (preserving the field name from the previous
