@@ -206,7 +206,7 @@ end
     attrs = collect(IS.get_supplemental_attributes(IS.TestSupplemental, sys2))
     @test length(attrs) == 2
     for attr in attrs
-        @test IS.has_time_series(IS.SingleTimeSeries, attr)
+        @test IS.has_time_series(attr, IS.SingleTimeSeries)
         ts2 = IS.get_time_series(IS.SingleTimeSeries, attr, "test")
         @test IS.get_data(ts2) == ta
     end

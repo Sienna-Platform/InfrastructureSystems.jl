@@ -1809,11 +1809,14 @@ _decode_element(element, ::ScalarEncoding) = element
 _decode_element(element, encoding::RowEncoding) =
     _decode_static_values(reshape(element, 1, :), encoding, 1)[1]
 
-"""Route `has_time_series(owner, T, name; ...)` to the InfraStore store. Honors partial
-(subset) feature / resolution queries: matches if any stored series of type `T`
-contains at least the requested features. `name = nothing` probes across all names.
-`mgr` is the caller's already-resolved manager: every public entry point null-checks
-one before reaching here, so re-resolving it would be a second lookup per probe."""
+"""Route a narrowed `has_time_series` query to the InfraStore store — the general
+catalog filter, serving every query the owner-scoped probe in `infrastore_has_any`
+cannot. Honors partial (subset) feature / resolution queries: matches if any stored
+series of type `T` carries at least the requested features. Each of `name`,
+`resolution`, `interval`, and `features` is optional; `name = nothing` probes across
+all names. `mgr` is the caller's already-resolved manager: the public entry point
+null-checks one before reaching here, so re-resolving it would be a second lookup per
+probe."""
 function infrastore_has_time_series(
     ::Type{T},
     mgr::TimeSeriesManager,

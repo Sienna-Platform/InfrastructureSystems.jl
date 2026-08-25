@@ -396,6 +396,12 @@ end
     @test IS.has_time_series(
         component, Union{IS.SingleTimeSeries, IS.Probabilistic}, name) == false
 
+    # A parameterized concrete *inside* a `Union` is normalized member-wise, like a bare
+    # one. Left un-normalized this answers false for every row, since no stored UnionAll
+    # is a subtype of `SingleTimeSeries{Float64, 1}`.
+    @test IS.has_time_series(
+        component, Union{IS.Deterministic{Float64, 2}, IS.Probabilistic}, name)
+
     # The (owner, name) form must apply resolution/interval/feature filters
     # instead of silently dropping them.
     sts = IS.SingleTimeSeries(;
@@ -437,10 +443,53 @@ end
     @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}, "static")
     @test IS.has_time_series(component, typeof(sts), "static")
 
+    # Every filter also works without a name — the name is one more optional narrowing,
+    # not a precondition for the others.
+    @test IS.has_time_series(component; resolution = resolution)
+    @test IS.has_time_series(component; resolution = Dates.Minute(5)) == false
+    @test IS.has_time_series(component; features = Dict("scenario" => "a"))
+    @test IS.has_time_series(component; features = Dict("scenario" => "b")) == false
+    @test IS.has_time_series(
+        component, IS.SingleTimeSeries; features = Dict("scenario" => "a"))
+    # ...and the type still narrows: only the static series carries `scenario`.
+    @test IS.has_time_series(
+        component, IS.Deterministic; features = Dict("scenario" => "a")) == false
+
     # The redesign's whole point is static `Bool` inference; the deleted
     # kwargs catch-all boxed its type filter as `Any` and broke this.
     @test Base.return_types(IS.has_time_series, (typeof(component),)) == [Bool]
     @test Base.return_types(IS.has_time_series, (typeof(component), String)) == [Bool]
+    @test Base.return_types(
+        IS.has_time_series, (typeof(component), Type{IS.Deterministic})) == [Bool]
+    @test Base.return_types(
+        IS.has_time_series,
+        (typeof(component), Type{IS.SingleTimeSeries}, String),
+    ) == [Bool]
+
+    # An unnarrowed query must keep taking the cheaper owner-scoped probe: the route is
+    # a dispatch, so the wrong method here is a silent ~40% regression, not a failure.
+    mgr = IS.get_time_series_manager(component)
+    fast = which(
+        IS._has_time_series,
+        (typeof(mgr), typeof(component), Type{IS.Deterministic},
+            Nothing, Nothing, Nothing, Nothing),
+    )
+    for narrowed in (
+        (String, Nothing, Nothing, Nothing),
+        (Nothing, Dates.Hour, Nothing, Nothing),
+        (Nothing, Nothing, Dates.Hour, Nothing),
+        (Nothing, Nothing, Nothing, Dict{String, Any}),
+    )
+        @test which(
+            IS._has_time_series,
+            (typeof(mgr), typeof(component), Type{IS.Deterministic}, narrowed...),
+        ) !== fast
+    end
+
+    # The legacy type-first spellings are gone, not silently forwarded.
+    @test !hasmethod(IS.has_time_series, (Type{IS.SingleTimeSeries}, typeof(component)))
+    @test !hasmethod(
+        IS.has_time_series, (Type{IS.SingleTimeSeries}, typeof(component), String))
 end
 
 @testset "Test add forecast with irregular resolution and interval" begin
