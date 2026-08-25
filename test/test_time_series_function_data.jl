@@ -1,5 +1,8 @@
 @testset "TimeSeriesFunctionData" begin
     forecast_key = IS.ForecastKey(;
+        owner_id = 1,
+        owner_category = IS.InfraStore.Component,
+        association_id = 1,
         time_series_type = IS.Deterministic,
         name = "test_forecast",
         initial_timestamp = Dates.DateTime("2020-01-01"),
@@ -231,6 +234,9 @@ end
 
 @testset "TimeSeriesValueCurve" begin
     forecast_key = IS.ForecastKey(;
+        owner_id = 1,
+        owner_category = IS.InfraStore.Component,
+        association_id = 1,
         time_series_type = IS.Deterministic,
         name = "test_forecast",
         initial_timestamp = Dates.DateTime("2020-01-01"),
@@ -242,6 +248,9 @@ end
     )
 
     ii_key = IS.ForecastKey(;
+        owner_id = 1,
+        owner_category = IS.InfraStore.Component,
+        association_id = 1,
         time_series_type = IS.Deterministic,
         name = "initial_input",
         initial_timestamp = Dates.DateTime("2020-01-01"),
@@ -253,6 +262,9 @@ end
     )
 
     iaz_key = IS.ForecastKey(;
+        owner_id = 1,
+        owner_category = IS.InfraStore.Component,
+        association_id = 1,
         time_series_type = IS.Deterministic,
         name = "input_at_zero",
         initial_timestamp = Dates.DateTime("2020-01-01"),

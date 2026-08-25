@@ -195,6 +195,8 @@ Add the same time series data to multiple components.
 
 This is significantly more efficent than calling `add_time_series!` for each component
 individually with the same data because in this case, only one time series array is stored.
+Each component gets its own association, so this returns a `Vector` of keys, one per
+component, in the order of `components`.
 
 Throws ArgumentError if a component is not stored in the system.
 """

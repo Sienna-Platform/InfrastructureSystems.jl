@@ -206,7 +206,8 @@ end
 
 """
 Add the same time series to multiple components through an open transaction. Only
-one copy of the array is stored.
+one copy of the array is stored, but each component gets its own association row
+(and so its own key), so this returns one `ConcreteTimeSeriesKey` per component.
 """
 function add_time_series!(
     context::TimeSeriesContext,
@@ -214,8 +215,6 @@ function add_time_series!(
     time_series::TimeSeriesData;
     features::Union{Nothing, Dict} = nothing,
 )
-    # Component information is not embedded into the key, so every component
-    # produces the same one.
     peeled = Iterators.peel(components)
     isnothing(peeled) && throw(
         ArgumentError(
@@ -224,11 +223,13 @@ function add_time_series!(
         ),
     )
     first_component, rest = peeled
-    key = add_time_series!(context, first_component, time_series; features = features)
+    keys = ConcreteTimeSeriesKey[add_time_series!(
+        context, first_component, time_series; features = features,
+    )]
     for component in rest
-        add_time_series!(context, component, time_series; features = features)
+        push!(keys, add_time_series!(context, component, time_series; features = features))
     end
-    return key
+    return keys
 end
 
 function _stage_on_context!(

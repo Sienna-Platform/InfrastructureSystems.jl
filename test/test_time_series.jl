@@ -2246,6 +2246,95 @@ end
     )
 end
 
+@testset "Test add_time_series key carries owner and association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    data = TimeSeries.TimeArray(
+        range(initial_time; length = 24, step = resolution),
+        ones(24),
+    )
+    ts = IS.SingleTimeSeries(; data = data, name = "val")
+    key = IS.add_time_series!(sys, component, ts)
+
+    @test IS.get_owner_id(key) == IS.get_id(component)
+    @test IS.get_owner_category(key) == IS.get_owner_category(component)
+    read_back_key = only(IS.get_time_series_keys(component))
+    @test IS.get_association_id(key) == IS.get_association_id(read_back_key)
+end
+
+@testset "Test add_time_series (Deterministic) key carries owner and association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    other_time = initial_time + resolution
+    horizon_count = 24
+    data = Dict(initial_time => rand(horizon_count), other_time => rand(horizon_count))
+    forecast = IS.Deterministic("fx", data, resolution)
+
+    key = IS.time_series_transaction(sys) do txn
+        return IS.add_time_series!(txn, component, forecast)
+    end
+
+    @test IS.get_owner_id(key) == IS.get_id(component)
+    @test IS.get_owner_category(key) == IS.get_owner_category(component)
+    read_back_key = only(IS.get_time_series_keys(component))
+    @test IS.get_association_id(key) == IS.get_association_id(read_back_key)
+end
+
+@testset "Test add_time_series (NonSequentialTimeSeries) key carries owner and association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+        Dates.DateTime("2020-01-03T00:00:00"),
+        Dates.DateTime("2020-01-10T00:00:00"),
+    ]
+    values = [10.0, 20.0, 30.0, 40.0]
+    ts = IS.NonSequentialTimeSeries("events", timestamps, values)
+    key = IS.add_time_series!(sys, component, ts)
+
+    @test IS.get_owner_id(key) == IS.get_id(component)
+    @test IS.get_owner_category(key) == IS.get_owner_category(component)
+    read_back_key = only(IS.get_time_series_keys(component))
+    @test IS.get_association_id(key) == IS.get_association_id(read_back_key)
+end
+
+@testset "Test get_time_series_key resolves by association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    data = collect(1:24)
+    ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
+    ts = IS.SingleTimeSeries(; name = "val", data = ta)
+    key = IS.add_time_series!(sys, component, ts)
+
+    store = IS.get_data_store(sys)
+    resolved_key = IS.get_time_series_key(store, IS.get_association_id(key))
+    @test resolved_key == key
+
+    bogus_id = IS.get_association_id(key) + 1
+    e = try
+        IS.get_time_series_key(store, bogus_id)
+        nothing
+    catch err
+        err
+    end
+    @test e isa ArgumentError
+    @test occursin(string(bogus_id), e.msg)
+end
+
 @testset "Test add_time_series" begin
     sys = IS.SystemData()
     name = "Component1"
@@ -2294,7 +2383,13 @@ end
         name = name,
         data = ta,
     )
-    IS.add_time_series!(sys, components, ts)
+    keys = IS.add_time_series!(sys, components, ts)
+    @test keys isa Vector
+    @test length(keys) == len
+    @test length(unique(IS.get_association_id.(keys))) == len
+    for (i, key) in enumerate(keys)
+        @test IS.get_owner_id(key) == IS.get_id(components[i])
+    end
 
     hash_ta_main = nothing
     for i in 1:len
@@ -3865,13 +3960,16 @@ end
 end
 
 @testset "Test serialization of time series keys" begin
-    key = IS.StaticTimeSeriesKey(
-        IS.SingleTimeSeries,
-        "test",
-        Dates.now(),
-        Dates.Hour(1),
-        12,
-        Dict("scenario" => "high"),
+    key = IS.StaticTimeSeriesKey(;
+        owner_id = 1,
+        owner_category = IS.InfraStore.Component,
+        association_id = 1,
+        time_series_type = IS.SingleTimeSeries,
+        name = "test",
+        initial_timestamp = Dates.now(),
+        resolution = Dates.Hour(1),
+        length = 12,
+        features = Dict("scenario" => "high"),
     )
     key2 = IS.deserialize(IS.StaticTimeSeriesKey, IS.serialize(key))
     @test key2 !== key

@@ -12,6 +12,9 @@ through the key-addressed paths (reads, removal, copy, hashing).
 
 Every concrete key implements the interface below, which generic key-consuming
 code may call on any key:
+- `get_owner_id`
+- `get_owner_category`
+- `get_association_id` — the derived surrogate id of the stored association
 - `get_name`
 - `get_resolution` — `nothing` for a key with no regular resolution
 - `get_time_series_type`
@@ -20,13 +23,17 @@ code may call on any key:
 - `get_initial_timestamp` — `nothing` for a key with no regular initial timestamp
 - `get_count`, `Base.length`
 
-The default methods rely on the field names `name`, `time_series_type`,
-`resolution`, `initial_timestamp`, `features`, and `length`, and default to a
-single window with no interval; each concrete key defines the methods its
-fields don't cover (as [`NonSequentialTimeSeriesKey`](@ref) does).
+The default methods rely on the field names `owner_id`, `owner_category`,
+`association_id`, `name`, `time_series_type`, `resolution`,
+`initial_timestamp`, `features`, and `length`, and default to a single window
+with no interval; each concrete key defines the methods its fields don't cover
+(as [`NonSequentialTimeSeriesKey`](@ref) does).
 """
 abstract type TimeSeriesKey <: InfrastructureSystemsType end
 
+get_owner_id(key::TimeSeriesKey) = key.owner_id
+get_owner_category(key::TimeSeriesKey) = key.owner_category
+get_association_id(key::TimeSeriesKey) = key.association_id
 get_name(key::TimeSeriesKey) = key.name
 get_resolution(key::TimeSeriesKey) = key.resolution
 get_time_series_type(key::TimeSeriesKey) = key.time_series_type
@@ -60,6 +67,9 @@ A unique key to identify and retrieve a [`StaticTimeSeries`](@ref)
 See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
 """
 @kwdef struct StaticTimeSeriesKey <: TimeSeriesKey
+    owner_id::Int
+    owner_category::InfraStore.OwnerCategory
+    association_id::Int
     time_series_type::Type{<:StaticTimeSeries}
     name::String
     initial_timestamp::Dates.DateTime
@@ -79,6 +89,9 @@ non-sequential key in the InfraStore backend.
 See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
 """
 @kwdef struct NonSequentialTimeSeriesKey <: TimeSeriesKey
+    owner_id::Int
+    owner_category::InfraStore.OwnerCategory
+    association_id::Int
     time_series_type::Type{<:NonSequentialTimeSeries}
     name::String
     length::Int
@@ -95,6 +108,9 @@ A unique key to identify and retrieve a [`Forecast`](@ref)
 See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
 """
 @kwdef struct ForecastKey <: TimeSeriesKey
+    owner_id::Int
+    owner_category::InfraStore.OwnerCategory
+    association_id::Int
     time_series_type::Type{<:Forecast}
     name::String
     initial_timestamp::Dates.DateTime
