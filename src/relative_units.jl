@@ -1,7 +1,7 @@
 ###############################
 # Relative (per-unit) markers and RelativeQuantity wrapper.
 #
-# These types are domain-agnostic — they express "device base" / "system base"
+# These types are domain-agnostic — they express "component base" / "system base"
 # / "natural unit" without assuming any particular physical domain. Downstream
 # packages (e.g. PowerSystems) attach domain-specific meaning via categories
 # and conversions.
@@ -64,7 +64,7 @@ A quantity tagged with a per-unit marker.
 
 # Examples
 ```julia
-0.6 * DU  # 0.6 per-unit on device base
+0.6 * DU  # 0.6 per-unit on component base
 0.3 * SU  # 0.3 per-unit on system base
 ```
 """
@@ -245,7 +245,7 @@ Base.show(io::IO, ::NaturalUnit) = print(io, "NU")
     display_string(x) -> String
 
 Render `x` for human-facing display, spelling relative-unit tags out in full
-("0.6 p.u. in device base") where `show` prints the terse "0.6 DU". `DU`/`SU`
+("0.6 p.u. in component base") where `show` prints the terse "0.6 DU". `DU`/`SU`
 are convenient to type but are not standard terminology, so verbose output
 (e.g. a component's `text/plain` display) spells them out; terse contexts such
 as tabular cells keep the short tags.
@@ -263,7 +263,7 @@ display_string(q::RelativeQuantity) =
     string(_per_unit_string(q), " in ", _base_label(unit(q)))
 
 _per_unit_string(q::RelativeQuantity) = string(q.value, " p.u.")
-_base_label(::DeviceBaseUnit) = "device base"
+_base_label(::DeviceBaseUnit) = "component base"
 _base_label(::SystemBaseUnit) = "system base"
 
 function display_string(t::NamedTuple)
