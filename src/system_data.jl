@@ -176,7 +176,12 @@ function add_time_series!(
     features::Union{Nothing, Dict} = nothing,
 )
     _validate(data, owner)
-    return add_time_series!(data.time_series_manager, owner, time_series; features = features)
+    return add_time_series!(
+        data.time_series_manager,
+        owner,
+        time_series;
+        features = features,
+    )
 end
 
 """

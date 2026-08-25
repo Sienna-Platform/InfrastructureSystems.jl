@@ -567,7 +567,12 @@ end
     @test fkey_added == fkey_listed
     @test hash(fkey_added) == hash(fkey_listed)
     @test fkey_added != key_added
-    @test key_added != IS.add_time_series!(sys, component, _hourly_sts("s"); features = Dict("scenario" => "a"))
+    @test key_added != IS.add_time_series!(
+        sys,
+        component,
+        _hourly_sts("s");
+        features = Dict("scenario" => "a"),
+    )
 end
 
 @testset "Test fast_deepcopy_system rewires every owner" begin

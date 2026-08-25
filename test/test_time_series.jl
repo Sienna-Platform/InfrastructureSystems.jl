@@ -306,7 +306,12 @@ end
     sys = IS.SystemData()
     component = IS.TestComponent("Component1", 5)
     IS.add_component!(sys, component)
-    key_subset = IS.add_time_series!(sys, component, mk(collect(1.0:24.0)); features = Dict("scenario" => "a"))
+    key_subset = IS.add_time_series!(
+        sys,
+        component,
+        mk(collect(1.0:24.0));
+        features = Dict("scenario" => "a"),
+    )
     key_superset = IS.add_time_series!(
         sys,
         component,
@@ -340,7 +345,12 @@ end
 
     # The removal is exact in the other direction too: removing the superset key
     # leaves the subset series alone.
-    IS.add_time_series!(sys, component, mk(collect(1.0:24.0)); features = Dict("scenario" => "a"))
+    IS.add_time_series!(
+        sys,
+        component,
+        mk(collect(1.0:24.0));
+        features = Dict("scenario" => "a"),
+    )
     IS.remove_time_series!(sys, component, key_superset)
     left = IS.get_time_series_keys(component)
     @test length(left) == 1
@@ -388,7 +398,8 @@ end
     @test IS.has_time_series(component, "static"; resolution = resolution)
     @test IS.has_time_series(component, "static"; resolution = Dates.Minute(5)) == false
     @test IS.has_time_series(component, "static"; features = Dict("scenario" => "a"))
-    @test IS.has_time_series(component, "static"; features = Dict("scenario" => "b")) == false
+    @test IS.has_time_series(component, "static"; features = Dict("scenario" => "b")) ==
+          false
     @test IS.has_time_series(
         component,
         IS.SingleTimeSeries,
@@ -946,7 +957,12 @@ end
         ts;
         features = (scenario = "low",),
     )
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "low", "model_year" => "2030"))
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "low", "model_year" => "2030"),
+    )
     # get_time_series with partial query works if there is only 1.
     @test IS.get_data(IS.get_time_series(IS.SingleTimeSeries, component, ts_name)) == data
     @test IS.get_data(
@@ -978,9 +994,24 @@ end
         features = Dict("scenario" => "low", "model_year" => "2030"),
     ) == TimeSeries.timestamp(data)
 
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "high", "model_year" => "2030"))
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "low", "model_year" => "2035"))
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "high", "model_year" => "2035"))
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "high", "model_year" => "2030"),
+    )
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "low", "model_year" => "2035"),
+    )
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "high", "model_year" => "2035"),
+    )
 
     @test_throws ArgumentError IS.get_time_series(
         IS.SingleTimeSeries,
@@ -1061,7 +1092,12 @@ end
     )
     ts_name = "test"
     ts = IS.SingleTimeSeries(; data = data, name = ts_name)
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "low", "model_year" => "2030"))
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "low", "model_year" => "2030"),
+    )
     @test IS.has_time_series(
         component,
         IS.SingleTimeSeries,
@@ -1074,14 +1110,24 @@ end
         ts_name;
         features = Dict("scenario" => "low", "model_year" => 2030),
     )
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "low", "model_year" => 2030))
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "low", "model_year" => 2030),
+    )
     @test IS.has_time_series(
         component,
         IS.SingleTimeSeries,
         ts_name;
         features = Dict("scenario" => "low", "model_year" => 2030),
     )
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "low", "model_year" => 2035))
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "low", "model_year" => 2035),
+    )
     @test IS.has_time_series(
         component,
         IS.SingleTimeSeries,
@@ -1094,14 +1140,24 @@ end
         ts_name;
         features = Dict("scenario" => "low", "model_year" => "2035"),
     )
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "low", "model_year" => "2035"))
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "low", "model_year" => "2035"),
+    )
     @test IS.has_time_series(
         component,
         IS.SingleTimeSeries,
         ts_name;
         features = Dict("scenario" => "low", "model_year" => "2035"),
     )
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "low", "some_condition" => true))
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "low", "some_condition" => true),
+    )
     @test IS.has_time_series(
         component,
         IS.SingleTimeSeries,
@@ -1114,14 +1170,24 @@ end
         ts_name;
         features = Dict("some_condition" => "true"),
     )
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "low", "some_condition" => "false"))
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "low", "some_condition" => "false"),
+    )
     @test !IS.has_time_series(
         component,
         IS.SingleTimeSeries,
         ts_name;
         features = Dict("some_condition" => false),
     )
-    IS.add_time_series!(sys, component, ts; features = Dict("scenario" => "low", "some_condition" => false))
+    IS.add_time_series!(
+        sys,
+        component,
+        ts;
+        features = Dict("scenario" => "low", "some_condition" => false),
+    )
     @test IS.has_time_series(
         component,
         IS.SingleTimeSeries,
@@ -1165,14 +1231,24 @@ end
         SortedDict(initial_time => rand(horizon_count), other_time => rand(horizon_count))
 
     forecast = IS.Deterministic(; data = data, name = ts_name, resolution = resolution)
-    IS.add_time_series!(sys, component, forecast; features = Dict("scenario" => "low", "model_year" => "2030"))
+    IS.add_time_series!(
+        sys,
+        component,
+        forecast;
+        features = Dict("scenario" => "low", "model_year" => "2030"),
+    )
     IS.add_time_series!(
         sys,
         component,
         forecast;
         features = Dict("scenario" => "high", "model_year" => "2030"),
     )
-    IS.add_time_series!(sys, component, forecast; features = Dict("scenario" => "low", "model_year" => "2035"))
+    IS.add_time_series!(
+        sys,
+        component,
+        forecast;
+        features = Dict("scenario" => "low", "model_year" => "2035"),
+    )
     IS.add_time_series!(
         sys,
         component,
@@ -1234,7 +1310,13 @@ end
     @test IS.get_time_series_type(IS.get_time_series_keys(component)[1]) ===
           IS.Deterministic
 
-    IS.remove_time_series!(sys, IS.Deterministic, component, ts_name; features = Dict("scenario" => "low"))
+    IS.remove_time_series!(
+        sys,
+        IS.Deterministic,
+        component,
+        ts_name;
+        features = Dict("scenario" => "low"),
+    )
     @test length(
         IS.get_time_series_keys(component; time_series_type = IS.Deterministic),
     ) == 2
@@ -2064,7 +2146,12 @@ end
     IS.add_time_series!(sys2, component2, forecast2)
 
     ts_with_features = IS.SingleTimeSeries(name, ta)
-    IS.add_time_series!(sys2, component2, ts_with_features; features = Dict("scenario" => "high"))
+    IS.add_time_series!(
+        sys2,
+        component2,
+        ts_with_features;
+        features = Dict("scenario" => "high"),
+    )
 
     IS.transform_single_time_series!(
         sys2,
@@ -2074,7 +2161,12 @@ end
     )
     @test IS.has_time_series(component2, IS.DeterministicSingleTimeSeries, name)
     @test IS.has_time_series(component2, IS.Deterministic, name)
-    @test IS.has_time_series(component2, IS.SingleTimeSeries, name; features = Dict("scenario" => "high"))
+    @test IS.has_time_series(
+        component2,
+        IS.SingleTimeSeries,
+        name;
+        features = Dict("scenario" => "high"),
+    )
 
     # Test 3: Transformation succeeds when resolution is different
     sys3 = IS.SystemData()
@@ -3966,7 +4058,8 @@ end
         ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
         ts_name = "power"
         ts = IS.SingleTimeSeries(; data = ta, name = ts_name)
-        key = IS.add_time_series!(sys, component, ts; features = Dict("scenario" => scenario))
+        key =
+            IS.add_time_series!(sys, component, ts; features = Dict("scenario" => scenario))
         push!(ts_keys, key)
     end
 
@@ -4056,7 +4149,12 @@ end
                 ),
                 name = "ts_$(i)", resolution = resolution,
             )
-            IS.add_time_series!(txn, component, forecast; features = Dict("model_year" => "high"))
+            IS.add_time_series!(
+                txn,
+                component,
+                forecast;
+                features = Dict("model_year" => "high"),
+            )
         end
     end
     ts_keys = IS.get_time_series_keys(component)
@@ -4098,7 +4196,12 @@ end
     # A duplicate anywhere in the batch rejects the whole batch.
     @test_throws ArgumentError IS.time_series_transaction(sys) do txn
         for year in ("high", "low", "high")
-            IS.add_time_series!(txn, component, forecast; features = Dict("model_year" => year))
+            IS.add_time_series!(
+                txn,
+                component,
+                forecast;
+                features = Dict("model_year" => year),
+            )
         end
     end
     @test isempty(IS.get_time_series_keys(component))
@@ -4134,7 +4237,12 @@ end
                 ),
                 name = "ts_$(i)", resolution = resolution,
             )
-            IS.add_time_series!(txn, component, forecast; features = Dict("model_year" => "high"))
+            IS.add_time_series!(
+                txn,
+                component,
+                forecast;
+                features = Dict("model_year" => "high"),
+            )
         end
     end
     ts_keys = IS.get_time_series_keys(component)
@@ -5661,7 +5769,7 @@ end
         [c4], IS.SingleTimeSeries, "wind",
     )
     @test IS.get_time_series_hashes(
-        [c4], IS.SingleTimeSeries, "wind"; features = Dict("scenario" => "high",)
+        [c4], IS.SingleTimeSeries, "wind"; features = Dict("scenario" => "high"),
     ) == Dict(id(c4) => IS.get_time_series_hash(c4, wk))
     # Multiple matches that resolve to the SAME array are not ambiguous.
     IS.add_time_series!(sys, c1, mk(copy(shared)); features = Dict("scenario" => "alt"))
