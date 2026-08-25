@@ -146,23 +146,27 @@ $(TYPEDEF)
 $(TYPEDFIELDS)
 
     FuelCurve(value_curve, fuel_cost)
+    FuelCurve(value_curve, fuel_cost_time_series)
     FuelCurve(value_curve, fuel_cost, startup_fuel_offtake, vom_cost)
     FuelCurve(value_curve, power_units, fuel_cost)
     FuelCurve(value_curve, power_units, fuel_cost, startup_fuel_offtake, vom_cost)
-    FuelCurve(; value_curve, power_units, fuel_cost, startup_fuel_offtake, vom_cost)
+    FuelCurve(; value_curve, power_units, fuel_cost, fuel_cost_time_series, startup_fuel_offtake, vom_cost)
 
 Representation of the variable operation cost of a power plant in terms of fuel (MBTU,
 liters, m^3, etc.), coupled with a conversion factor between fuel and currency. Composed of
 a [`ValueCurve`](@ref) that may represent input-output, incremental, or average rate data.
 The x-axis units are encoded as the second type parameter `U <: AbstractUnitSystem`;
 `power_units` at construction is the singleton instance `U()` (default `NaturalUnit()`).
+Exactly one of `fuel_cost` or `fuel_cost_time_series` must be provided.
 """
 struct FuelCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
        ProductionVariableCostCurve{T, U}
     "The underlying `ValueCurve` representation of this `ProductionVariableCostCurve`"
     value_curve::T
-    "Either a fixed value for fuel cost or the [`TimeSeriesKey`](@ref) to a fuel cost time series"
-    fuel_cost::Union{Float64, TimeSeriesKey}
+    "A fixed value for fuel cost; mutually exclusive with `fuel_cost_time_series`"
+    fuel_cost::Union{Nothing, Float64}
+    "The [`TimeSeriesKey`](@ref) to a fuel cost time series; mutually exclusive with `fuel_cost`"
+    fuel_cost_time_series::Union{Nothing, ConcreteTimeSeriesKey}
     "(default of 0) Fuel consumption at the unit startup proceedure. Additional cost to the startup costs and related only to the initial fuel required to start the unit.
     represented as a [`LinearCurve`](@ref)"
     startup_fuel_offtake::LinearCurve
@@ -170,40 +174,66 @@ struct FuelCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
     represented as a [`LinearCurve`](@ref)"
     vom_cost::LinearCurve
 
-    FuelCurve{T, U}(
+    function FuelCurve{T, U}(
         value_curve::T,
-        fuel_cost::Union{Float64, TimeSeriesKey},
+        fuel_cost::Union{Nothing, Float64},
+        fuel_cost_time_series::Union{Nothing, ConcreteTimeSeriesKey},
         startup_fuel_offtake::LinearCurve,
         vom_cost::LinearCurve,
-    ) where {T, U} =
-        new{T, U}(value_curve, fuel_cost, startup_fuel_offtake, vom_cost)
+    ) where {T, U}
+        if isnothing(fuel_cost) == isnothing(fuel_cost_time_series)
+            throw(
+                ArgumentError(
+                    "FuelCurve requires exactly one of fuel_cost (fixed) or " *
+                    "fuel_cost_time_series (time-varying); got " *
+                    "fuel_cost=$fuel_cost, fuel_cost_time_series=$fuel_cost_time_series",
+                ),
+            )
+        end
+        return new{T, U}(value_curve, fuel_cost, fuel_cost_time_series,
+            startup_fuel_offtake, vom_cost)
+    end
 end
 
 FuelCurve{T, U}(;
     value_curve::T,
-    fuel_cost::Union{Float64, TimeSeriesKey},
+    fuel_cost::Union{Nothing, Float64} = nothing,
+    fuel_cost_time_series::Union{Nothing, ConcreteTimeSeriesKey} = nothing,
     startup_fuel_offtake::LinearCurve = LinearCurve(0.0),
     vom_cost::LinearCurve = LinearCurve(0.0),
 ) where {T, U} =
-    FuelCurve{T, U}(value_curve, fuel_cost, startup_fuel_offtake, vom_cost)
+    FuelCurve{T, U}(value_curve, fuel_cost, fuel_cost_time_series,
+        startup_fuel_offtake, vom_cost)
 
+_normalize_fuel_cost(::Nothing) = nothing
 _normalize_fuel_cost(x::Real) = Float64(x)
-_normalize_fuel_cost(x::TimeSeriesKey) = x
 
 # Outer constructors — mirror the CostCurve style
 FuelCurve(value_curve::T, fuel_cost::Real) where {T <: ValueCurve} =
     FuelCurve{T, NaturalUnit}(; value_curve, fuel_cost = Float64(fuel_cost))
 FuelCurve(value_curve::T, fuel_cost::TimeSeriesKey) where {T <: ValueCurve} =
-    FuelCurve{T, NaturalUnit}(; value_curve, fuel_cost)
+    FuelCurve{T, NaturalUnit}(; value_curve, fuel_cost_time_series = fuel_cost)
 
 FuelCurve(
     value_curve::T,
-    fuel_cost::Union{Real, TimeSeriesKey},
+    fuel_cost::Real,
     startup_fuel_offtake::LinearCurve,
     vom_cost::LinearCurve,
 ) where {T <: ValueCurve} = FuelCurve{T, NaturalUnit}(;
     value_curve,
-    fuel_cost = _normalize_fuel_cost(fuel_cost),
+    fuel_cost = Float64(fuel_cost),
+    startup_fuel_offtake,
+    vom_cost,
+)
+
+FuelCurve(
+    value_curve::T,
+    fuel_cost::TimeSeriesKey,
+    startup_fuel_offtake::LinearCurve,
+    vom_cost::LinearCurve,
+) where {T <: ValueCurve} = FuelCurve{T, NaturalUnit}(;
+    value_curve,
+    fuel_cost_time_series = fuel_cost,
     startup_fuel_offtake,
     vom_cost,
 )
@@ -211,21 +241,43 @@ FuelCurve(
 FuelCurve(
     value_curve::T,
     power_units::U,
-    fuel_cost::Union{Real, TimeSeriesKey},
+    fuel_cost::Real,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
     value_curve,
-    fuel_cost = _normalize_fuel_cost(fuel_cost),
+    fuel_cost = Float64(fuel_cost),
 )
 
 FuelCurve(
     value_curve::T,
     power_units::U,
-    fuel_cost::Union{Real, TimeSeriesKey},
+    fuel_cost::TimeSeriesKey,
+) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
+    value_curve,
+    fuel_cost_time_series = fuel_cost,
+)
+
+FuelCurve(
+    value_curve::T,
+    power_units::U,
+    fuel_cost::Real,
     startup_fuel_offtake::LinearCurve,
     vom_cost::LinearCurve,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
     value_curve,
-    fuel_cost = _normalize_fuel_cost(fuel_cost),
+    fuel_cost = Float64(fuel_cost),
+    startup_fuel_offtake,
+    vom_cost,
+)
+
+FuelCurve(
+    value_curve::T,
+    power_units::U,
+    fuel_cost::TimeSeriesKey,
+    startup_fuel_offtake::LinearCurve,
+    vom_cost::LinearCurve,
+) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
+    value_curve,
+    fuel_cost_time_series = fuel_cost,
     startup_fuel_offtake,
     vom_cost,
 )
@@ -234,13 +286,15 @@ FuelCurve(
 function FuelCurve(;
     value_curve,
     power_units::AbstractUnitSystem = NaturalUnit(),
-    fuel_cost::Union{Real, TimeSeriesKey},
+    fuel_cost::Union{Nothing, Real} = nothing,
+    fuel_cost_time_series::Union{Nothing, TimeSeriesKey} = nothing,
     startup_fuel_offtake::LinearCurve = LinearCurve(0.0),
     vom_cost::LinearCurve = LinearCurve(0.0),
 )
     return FuelCurve{typeof(value_curve), typeof(power_units)}(;
         value_curve,
         fuel_cost = _normalize_fuel_cost(fuel_cost),
+        fuel_cost_time_series,
         startup_fuel_offtake,
         vom_cost,
     )
@@ -251,8 +305,10 @@ Base.zero(::Type{FuelCurve}) = FuelCurve(zero(ValueCurve), 0.0)
 "Get a `FuelCurve` representing zero fuel usage and zero fuel cost, preserving the unit system of `c`"
 Base.zero(::FuelCurve{T, U}) where {T, U} = FuelCurve(zero(ValueCurve), U(), 0.0)
 
-"Get the fuel cost or the name of the fuel cost time series"
+"Get the fixed fuel cost, or `nothing` if it is time-series-backed"
 get_fuel_cost(cost::FuelCurve) = cost.fuel_cost
+"Get the fuel cost time series key, or `nothing` if it is a fixed value"
+get_fuel_cost_time_series(cost::FuelCurve) = cost.fuel_cost_time_series
 "Get the function for the fuel consumption at startup"
 get_startup_fuel_offtake(cost::FuelCurve) = cost.startup_fuel_offtake
 
@@ -261,22 +317,23 @@ is_time_series_backed(::Union{Nothing, Float64}) = false
 "Check if the cost curve is backed by time series data"
 is_time_series_backed(cost::ProductionVariableCostCurve) =
     is_time_series_backed(get_value_curve(cost))
-# FuelCurve's fuel_cost is Union{Float64, TimeSeriesKey} — check both the value curve and fuel_cost.
+# FuelCurve's fuel_cost and fuel_cost_time_series are orthogonal fields — check the value
+# curve and fuel_cost_time_series.
 is_time_series_backed(cost::FuelCurve) =
     is_time_series_backed(get_value_curve(cost)) ||
-    is_time_series_backed(get_fuel_cost(cost))
+    !isnothing(get_fuel_cost_time_series(cost))
 
 # `get_time_series_key` is intentionally undefined for `FuelCurve`: its value curve and
 # `fuel_cost` are independently time-series-backed, so a single accessor would be
 # ambiguous. Callers resolve explicitly via `get_time_series_key(get_value_curve(c))` or
-# `get_fuel_cost(c)`. These throwing methods shadow the generic TS method above for every
+# `get_fuel_cost_time_series(c)`. These throwing methods shadow the generic TS method above for every
 # `FuelCurve` (the second is needed to resolve dispatch ambiguity with that generic
 # method when the value curve is TS-backed).
 _fuel_curve_no_ts_key() = throw(
     ArgumentError(
         "get_time_series_key is not defined for FuelCurve; its value curve and fuel_cost " *
         "are independently time-series-backed — resolve explicitly via " *
-        "get_time_series_key(get_value_curve(c)) or get_fuel_cost(c)",
+        "get_time_series_key(get_value_curve(c)) or get_fuel_cost_time_series(c)",
     ),
 )
 get_time_series_key(::FuelCurve) = _fuel_curve_no_ts_key()
@@ -313,14 +370,25 @@ _deserialize_pvcc_field(::Val{:value_curve}, raw::AbstractDict) =
 _deserialize_pvcc_field(::Val{:vom_cost}, raw) = deserialize(LinearCurve, raw)
 _deserialize_pvcc_field(::Val{:startup_fuel_offtake}, raw) = deserialize(LinearCurve, raw)
 _deserialize_pvcc_field(::Val{:fuel_cost}, raw) = _deserialize_fuel_cost(raw)
+_deserialize_pvcc_field(::Val{:fuel_cost_time_series}, raw) =
+    _deserialize_fuel_cost_time_series(raw)
 
-_deserialize_fuel_cost(raw::AbstractDict) =
-    deserialize(get_type_from_serialization_data(raw), raw)
+_deserialize_fuel_cost(::Nothing) = nothing
 _deserialize_fuel_cost(raw::Real) = Float64(raw)
 _deserialize_fuel_cost(raw) =
     throw(
         ArgumentError(
-            "FuelCurve fuel_cost must be a number or serialized TimeSeriesKey, got $(typeof(raw))",
+            "FuelCurve fuel_cost must be a number or nothing, got $(typeof(raw))",
+        ),
+    )
+
+_deserialize_fuel_cost_time_series(::Nothing) = nothing
+_deserialize_fuel_cost_time_series(raw::AbstractDict) =
+    deserialize(get_type_from_serialization_data(raw), raw)
+_deserialize_fuel_cost_time_series(raw) =
+    throw(
+        ArgumentError(
+            "FuelCurve fuel_cost_time_series must be a serialized TimeSeriesKey or nothing, got $(typeof(raw))",
         ),
     )
 
@@ -348,7 +416,7 @@ end
 function _show_compact(io::IO, ::MIME"text/plain", curve::FuelCurve)
     print(
         io,
-        "$(nameof(typeof(curve))) with power_units $(get_power_units(curve)), fuel_cost $(curve.fuel_cost), startup_fuel_offtake $(curve.startup_fuel_offtake), vom_cost $(curve.vom_cost), and value_curve:\n  ",
+        "$(nameof(typeof(curve))) with power_units $(get_power_units(curve)), fuel_cost $(curve.fuel_cost), fuel_cost_time_series $(curve.fuel_cost_time_series), startup_fuel_offtake $(curve.startup_fuel_offtake), vom_cost $(curve.vom_cost), and value_curve:\n  ",
     )
     vc_printout = sprint(show, "text/plain", curve.value_curve; context = io)
     print(io, replace(vc_printout, "\n" => "\n  "))
