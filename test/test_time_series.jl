@@ -490,6 +490,18 @@ end
     @test !hasmethod(IS.has_time_series, (Type{IS.SingleTimeSeries}, typeof(component)))
     @test !hasmethod(
         IS.has_time_series, (Type{IS.SingleTimeSeries}, typeof(component), String))
+
+    # The query type is a required positional, not a defaulted one: the two type-less
+    # shapes are their own methods, so reaching `name` never means passing a type first.
+    @test length(methods(IS.has_time_series)) == 4
+    for shape in (
+        (typeof(component),),
+        (typeof(component), String),
+        (typeof(component), Type{IS.SingleTimeSeries}),
+        (typeof(component), Type{IS.SingleTimeSeries}, String),
+    )
+        @test hasmethod(IS.has_time_series, shape)
+    end
 end
 
 @testset "Test add forecast with irregular resolution and interval" begin

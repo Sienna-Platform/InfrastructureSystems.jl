@@ -885,23 +885,19 @@ end
 
 """
 $(TYPEDSIGNATURES)
-Return true if the component or supplemental attribute has time series data matching the
-query.
+Return true if the component or supplemental attribute has time series data of type `T`,
+optionally narrowed further.
 
-Every argument past `owner` narrows the query, and each may be omitted:
-
-  - `T` restricts the match to one time series type or family, defaulting to any
-    (`TimeSeriesData`). A `Deterministic` query also matches a series stored by
-    [`transform_single_time_series!`](@ref), which reads back as a `Deterministic`.
-  - `name` restricts it to one series name, defaulting to any name.
-  - `resolution`, `interval`, and `features` narrow it further. A feature query is a
-    subset match: a series carrying features beyond those given still matches.
+`name` restricts the match to one series name; omitted, any name matches. `resolution`,
+`interval`, and `features` narrow it further, with or without a name. A feature query is
+a subset match: a series carrying features beyond those given still matches. A
+`Deterministic` query also matches a series stored by
+[`transform_single_time_series!`](@ref), which reads back as a `Deterministic`.
 
 ```julia
-has_time_series(component)                                # any series at all
 has_time_series(component, Deterministic)                 # any forecast of that type
-has_time_series(component, "max_active_power")            # any series by that name
-has_time_series(component; resolution = Dates.Hour(1))    # any hourly series
+has_time_series(component, SingleTimeSeries, "load")
+has_time_series(component, SingleTimeSeries; resolution = Dates.Hour(1))
 has_time_series(component, SingleTimeSeries, "load";
                 features = Dict("scenario" => "high"))
 ```
@@ -909,10 +905,12 @@ has_time_series(component, SingleTimeSeries, "load";
 Answering is a pure existence probe in the store — a `SELECT 1 ... LIMIT 1` against a
 covering index. Nothing is listed, hydrated, or deserialized, so this is safe to call in
 a per-component loop.
+
+See also the two type-less forms below, which query across every time series type.
 """
 function has_time_series(
     owner::TimeSeriesOwners,
-    ::Type{T} = TimeSeriesData,
+    ::Type{T},
     name::Union{Nothing, AbstractString} = nothing;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
@@ -925,9 +923,23 @@ end
 
 """
 $(TYPEDSIGNATURES)
+Return true if the component or supplemental attribute has any time series data,
+optionally narrowed by `resolution`, `interval`, or `features`.
+"""
+has_time_series(
+    owner::TimeSeriesOwners;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features::Union{Nothing, Dict} = nothing,
+) = has_time_series(
+    owner, TimeSeriesData, nothing;
+    resolution = resolution, interval = interval, features = features,
+)
+
+"""
+$(TYPEDSIGNATURES)
 Return true if the component or supplemental attribute has time series data named `name`,
-of any type. The `T = TimeSeriesData` case of the method above, which a default argument
-cannot express because the type and the name occupy the same position.
+of any type, optionally narrowed by `resolution`, `interval`, or `features`.
 """
 has_time_series(
     owner::TimeSeriesOwners,
