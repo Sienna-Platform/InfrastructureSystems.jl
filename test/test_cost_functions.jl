@@ -532,27 +532,39 @@ end
 
 @testset "Test IS.LossCurve" begin
     vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1.0, 2.0, 3.0))
-    lc = IS.LossCurve(vc)
+    lc = IS.LossCurve(vc, IS.NaturalUnit())
 
     @test lc isa IS.LossCurve{IS.QuadraticCurve, IS.NaturalUnit}
     @test IS.get_value_curve(lc) == vc
     @test IS.get_function_data(lc) == IS.QuadraticFunctionData(1.0, 2.0, 3.0)
     @test IS.get_power_units(lc) == IS.NaturalUnit()
-    @test lc == IS.LossCurve(vc)
-    @test isequal(lc, IS.LossCurve(vc))
-    @test hash(lc) == hash(IS.LossCurve(vc))
+    @test lc == IS.LossCurve(vc, IS.NaturalUnit())
+    @test isequal(lc, IS.LossCurve(vc, IS.NaturalUnit()))
+    @test hash(lc) == hash(IS.LossCurve(vc, IS.NaturalUnit()))
 
     # `power_units` is a type parameter, so curves that differ only in units are distinct
     @test IS.LossCurve(vc, IS.SystemBaseUnit()) != lc
 
     @test IS.LossCurve(vc, IS.SystemBaseUnit()) ==
           IS.LossCurve(; value_curve = vc, power_units = IS.SystemBaseUnit())
-    @test IS.LossCurve(; value_curve = vc) == lc
 
     @test sprint(show, "text/plain", lc) ==
           "LossCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  power_units: NU"
     @test sprint(show, "text/plain", lc; context = :compact => true) ==
           "LossCurve with power_units NU, and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
+end
+
+@testset "LossCurve requires explicit power_units" begin
+    # An unstated base is the ambiguity the type exists to remove, so there is no default
+    # and no `zero(::Type{LossCurve})` to smuggle one in.
+    vc = IS.InputOutputCurve(IS.LinearFunctionData(1.0, 1.0))
+    @test_throws MethodError IS.LossCurve(vc)
+    @test_throws Union{MethodError, UndefKeywordError} IS.LossCurve(; value_curve = vc)
+    @test_throws MethodError zero(IS.LossCurve)
+    # ...but a curve that already has a base can hand it to its own zero
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+        @test IS.get_power_units(zero(IS.LossCurve(vc, U))) == U
+    end
 end
 
 @testset "LossCurve serialize round-trip all unit systems" begin
@@ -567,12 +579,115 @@ end
     end
 end
 
-@testset "zero LossCurve preserves unit system" begin
-    vc = IS.InputOutputCurve(IS.LinearFunctionData(1.0, 1.0))
-    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
-        @test IS.get_power_units(zero(IS.LossCurve(vc, U))) == U
+@testset "y_axis_power_dimension trait" begin
+    # The whole difference between the families under a change of base, as one number.
+    @test IS.y_axis_power_dimension(IS.CostCurve{IS.LinearCurve, IS.NaturalUnit}) == Val(0)
+    @test IS.y_axis_power_dimension(IS.FuelCurve{IS.LinearCurve, IS.NaturalUnit}) == Val(0)
+    @test IS.y_axis_power_dimension(IS.LossCurve{IS.LinearCurve, IS.NaturalUnit}) == Val(1)
+end
+
+@testset "LossCurve convert_power_units" begin
+    sys_base, dev_base = 100.0, 50.0
+
+    # y = 0.05 x + 2.0: 5% marginal loss plus 2 MW of fixed loss.
+    lc = IS.LossCurve(IS.LinearCurve(0.05, 2.0), IS.NaturalUnit())
+
+    su = IS.convert_power_units(lc, IS.SystemBaseUnit(), sys_base, dev_base)
+    @test su isa IS.LossCurve{IS.LinearCurve, IS.SystemBaseUnit}
+    # Both axes are power, so the proportional term is dimensionless and does not move;
+    # only the constant term, which is a bare power, rescales.
+    @test IS.get_function_data(su) == IS.LinearFunctionData(0.05, 2.0 / sys_base)
+
+    du = IS.convert_power_units(lc, IS.DeviceBaseUnit(), sys_base, dev_base)
+    @test IS.get_function_data(du) == IS.LinearFunctionData(0.05, 2.0 / dev_base)
+
+    # SU <-> DU directly, and every round trip
+    @test IS.convert_power_units(su, IS.DeviceBaseUnit(), sys_base, dev_base) == du
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit()),
+        V in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+
+        start = IS.convert_power_units(lc, U, sys_base, dev_base)
+        there = IS.convert_power_units(start, V, sys_base, dev_base)
+        @test IS.convert_power_units(there, U, sys_base, dev_base) == start
     end
-    @test IS.get_power_units(zero(IS.LossCurve)) == IS.NaturalUnit()
+
+    # Converting to the base the curve already carries is the identity, not a rebuild
+    @test IS.convert_power_units(lc, IS.NaturalUnit(), sys_base, dev_base) === lc
+
+    # The converted curve agrees pointwise with the original: the same physical loss,
+    # read off in the new base.
+    f = IS.get_value_curve(lc)
+    f_su = IS.get_value_curve(su)
+    for x_mw in (0.0, 10.0, 55.0, 100.0)
+        @test f_su(x_mw / sys_base) ≈ f(x_mw) / sys_base
+    end
+
+    # A quadratic loss curve: the quadratic term picks up one net power of the base.
+    qc = IS.LossCurve(IS.QuadraticCurve(0.01, 0.05, 2.0), IS.NaturalUnit())
+    q_su = IS.convert_power_units(qc, IS.SystemBaseUnit(), sys_base, dev_base)
+    @test IS.get_function_data(q_su) ==
+          IS.QuadraticFunctionData(0.01 * sys_base, 0.05, 2.0 / sys_base)
+
+    # A piecewise loss curve: breakpoints are power and move; segment slopes do not.
+    pw = IS.LossCurve(
+        IS.PiecewiseIncrementalCurve(0.0, [0.0, 50.0, 100.0], [0.03, 0.06]),
+        IS.NaturalUnit(),
+    )
+    pw_su = IS.convert_power_units(pw, IS.SystemBaseUnit(), sys_base, dev_base)
+    fd = IS.get_function_data(pw_su)
+    @test IS.get_x_coords(fd) == [0.0, 0.5, 1.0]
+    @test IS.get_y_coords(fd) == [0.03, 0.06]
+    @test IS.get_initial_input(pw_su) == 0.0
+
+    # Time-series-backed curves have no data to rescale
+    forecast_key = IS.ForecastKey(;
+        time_series_type = IS.Deterministic,
+        name = "loss",
+        initial_timestamp = Dates.DateTime("2020-01-01"),
+        resolution = Dates.Hour(1),
+        horizon = Dates.Hour(24),
+        interval = Dates.Hour(24),
+        count = 1,
+        features = Dict{String, Any}(),
+    )
+    ts_vc = IS.TimeSeriesInputOutputCurve(IS.TimeSeriesLinearFunctionData(forecast_key))
+    @test_throws ArgumentError IS.convert_power_units(
+        IS.LossCurve(ts_vc, IS.NaturalUnit()), IS.SystemBaseUnit(), sys_base, dev_base)
+end
+
+@testset "convert_power_units resolves at compile time" begin
+    # The design requirement: the y-axis dimension is a `Val`, so the branch between the
+    # families is dispatched, not tested at run time, and the arithmetic folds to
+    # multiplies and divides -- never a call to `^`.
+    sys_base, dev_base = 100.0, 50.0
+    curves = (
+        IS.LossCurve(IS.LinearCurve(0.05, 2.0), IS.NaturalUnit()),
+        IS.LossCurve(IS.QuadraticCurve(0.01, 0.05, 2.0), IS.NaturalUnit()),
+        IS.CostCurve(IS.LinearCurve(30.0, 100.0), IS.NaturalUnit()),
+        IS.FuelCurve(IS.LinearCurve(10.0, 5.0), IS.NaturalUnit(), 2.5),
+    )
+    for curve in curves
+        T = typeof(curve)
+        # Fully inferred, to a concrete type carrying the target unit system
+        @test isconcretetype(
+            Base.promote_op(
+                IS.convert_power_units, T, IS.SystemBaseUnit, Float64, Float64),
+        )
+        @test (@inferred IS.convert_power_units(
+            curve, IS.SystemBaseUnit(), sys_base, dev_base,
+        )) isa Union{IS.LossCurve, IS.ProductionVariableCostCurve}
+
+        # No runtime power call and no dynamic dispatch survive optimization
+        src, _ = only(
+            code_typed(
+                IS.convert_power_units, (T, IS.SystemBaseUnit, Float64, Float64);
+                optimize = true,
+            ),
+        )
+        ir = string(src.code)
+        @test !occursin("power_by_squaring", ir)
+        @test !occursin("jl_apply_generic", ir)
+    end
 end
 
 @testset "FuelCurve deserialize garbage fuel_cost (PVC-003)" begin

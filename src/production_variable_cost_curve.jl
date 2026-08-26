@@ -11,6 +11,9 @@ abstract type ProductionVariableCostCurve{T <: ValueCurve, U <: AbstractUnitSyst
 "Get the variable operation and maintenance cost in currency/(power_units h)"
 get_vom_cost(cost::ProductionVariableCostCurve) = cost.vom_cost
 
+# y is currency or fuel, which no change of power base touches; only x moves.
+y_axis_power_dimension(::Type{<:ProductionVariableCostCurve}) = Val(0)
+
 """
 $(TYPEDEF)
 $(TYPEDFIELDS)
@@ -257,11 +260,14 @@ get_time_series_key(::FuelCurve{<:ValueCurve{<:TimeSeriesFunctionData}}) =
 # which is exactly `scale_x(curve, ρ)`. `ρ` comes from the same `_cost_coeff_ratio`
 # dispatch table that backs `convert_cost_coefficient`.
 #
-# Only the x-axis moves. These y-axes are absolute currency or fuel rates (\$/h, MBTU/h)
-# that carry no power units, so nothing rescales them. Note that `scale_x` still changes
-# the stored y *data* of an `IncrementalCurve`/`AverageRateCurve` — those y-axes are rates
-# per unit of x (\$/MWh), so x's units sit in the denominator and must convert with it.
-# That factor is the chain rule inside `scale_x`, not a y-scaling of the curve.
+# For these families only the x-axis moves — their y-axes are absolute currency or fuel
+# rates (\$/h, MBTU/h) that carry no power units — which is what
+# `y_axis_power_dimension == Val(0)` records, and why `_convert_value_curve` reduces to a
+# bare `scale_x` here. (A `LossCurve`, whose y-axis is power, picks up the y-scaling.)
+# Note that `scale_x` still changes the stored y *data* of an
+# `IncrementalCurve`/`AverageRateCurve` — those y-axes are rates per unit of x (\$/MWh),
+# so x's units sit in the denominator and must convert with it. That factor is the chain
+# rule inside `scale_x`, not a y-scaling of the curve.
 
 """
 $(TYPEDSIGNATURES)
@@ -277,13 +283,13 @@ alone. Time-series-backed value curves cannot be rescaled and raise an `Argument
 """
 function convert_power_units(
     curve::CostCurve{T, U},
-    to::AbstractUnitSystem,
+    to::V,
     system_base_power::Float64,
     device_base_power::Float64,
-) where {T, U}
+) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem}
     ratio = _cost_coeff_ratio(U(), to, system_base_power, device_base_power)
     return CostCurve(
-        scale_x(get_value_curve(curve), ratio),
+        _convert_value_curve(curve, ratio),
         to,
         scale_x(get_vom_cost(curve), ratio),
     )
@@ -301,14 +307,14 @@ change of power units touches neither. Both carry over unchanged.
 """
 function convert_power_units(
     curve::FuelCurve{T, U},
-    to::AbstractUnitSystem,
+    to::V,
     system_base_power::Float64,
     device_base_power::Float64,
-) where {T, U}
+) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem}
     ratio = _cost_coeff_ratio(U(), to, system_base_power, device_base_power)
     # `startup_fuel_offtake` is fuel vs. downtime — neither axis is in power units.
     return FuelCurve(
-        scale_x(get_value_curve(curve), ratio),
+        _convert_value_curve(curve, ratio),
         to,
         get_fuel_cost(curve),
         get_startup_fuel_offtake(curve),
@@ -318,8 +324,18 @@ end
 
 # Converting to the unit system a curve is already in is the identity, dispatched rather
 # than branched. Written per concrete type to stay unambiguous against the methods above.
-convert_power_units(curve::CostCurve{T, U}, ::U, ::Float64, ::Float64) where {T, U} = curve
-convert_power_units(curve::FuelCurve{T, U}, ::U, ::Float64, ::Float64) where {T, U} = curve
+convert_power_units(
+    curve::CostCurve{T, U},
+    ::U,
+    ::Float64,
+    ::Float64,
+) where {T <: ValueCurve, U <: AbstractUnitSystem} = curve
+convert_power_units(
+    curve::FuelCurve{T, U},
+    ::U,
+    ::Float64,
+    ::Float64,
+) where {T <: ValueCurve, U <: AbstractUnitSystem} = curve
 
 # ── FuelCurve → CostCurve ─────────────────────────────────────────────────────
 
