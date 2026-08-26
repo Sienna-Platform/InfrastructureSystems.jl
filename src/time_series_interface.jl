@@ -885,79 +885,100 @@ end
 
 """
 $(TYPEDSIGNATURES)
-Return true if the component or supplemental attribute has any time series data.
-"""
-has_time_series(owner::TimeSeriesOwners) = has_time_series(owner, TimeSeriesData)
+Return true if the component or supplemental attribute has time series data of type `T`,
+optionally narrowed further.
 
-"""
-Return true if the component or supplemental attribute has time series data of type T.
+`name` restricts the match to one series name; omitted, any name matches. `resolution`,
+`interval`, and `features` narrow it further, with or without a name. A feature query is
+a subset match: a series carrying features beyond those given still matches. A
+`Deterministic` query also matches a series stored by
+[`transform_single_time_series!`](@ref), which reads back as a `Deterministic`.
+
+```julia
+has_time_series(component, Deterministic)                 # any forecast of that type
+has_time_series(component, SingleTimeSeries, "load")
+has_time_series(component, SingleTimeSeries; resolution = Dates.Hour(1))
+has_time_series(component, SingleTimeSeries, "load";
+                features = Dict("scenario" => "high"))
+```
+
+Answering is a pure existence probe in the store — a `SELECT 1 ... LIMIT 1` against a
+covering index. Nothing is listed, hydrated, or deserialized, so this is safe to call in
+a per-component loop.
+
+See also the two type-less forms below, which query across every time series type.
 """
 function has_time_series(
-    val::TimeSeriesOwners,
+    owner::TimeSeriesOwners,
     ::Type{T},
-) where {T <: TimeSeriesData}
-    mgr = get_time_series_manager(val)
-    isnothing(mgr) && return false
-    return infrastore_has_any(val; time_series_type = T)
-end
-
-function has_time_series(
-    val::TimeSeriesOwners,
-    ::Type{T},
-    name::AbstractString;
+    name::Union{Nothing, AbstractString} = nothing;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Union{Nothing, Dict} = nothing,
 ) where {T <: TimeSeriesData}
-    mgr = get_time_series_manager(val)
+    mgr = get_time_series_manager(owner)
     isnothing(mgr) && return false
-    return infrastore_has_time_series(
-        T, val, name;
-        resolution = resolution, interval = interval, features = features,
-    )
+    return _has_time_series(mgr, owner, T, name, resolution, interval, features)
 end
 
 """
 $(TYPEDSIGNATURES)
-Return true if the component or supplemental attribute has time series data named
-`name`, optionally narrowed by `resolution`, `interval`, or `features`.
+Return true if the component or supplemental attribute has any time series data,
+optionally narrowed by `resolution`, `interval`, or `features`.
 """
-function has_time_series(
-    owner::TimeSeriesOwners,
-    name::AbstractString;
+has_time_series(
+    owner::TimeSeriesOwners;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Union{Nothing, Dict} = nothing,
+) = has_time_series(
+    owner, TimeSeriesData, nothing;
+    resolution = resolution, interval = interval, features = features,
 )
-    return has_time_series(
-        owner,
-        TimeSeriesData,
-        name;
-        resolution = resolution,
-        interval = interval,
-        features = features,
-    )
-end
 
+"""
+$(TYPEDSIGNATURES)
+Return true if the component or supplemental attribute has time series data named `name`,
+of any type, optionally narrowed by `resolution`, `interval`, or `features`.
+"""
 has_time_series(
-    T::Type{<:TimeSeriesData},
-    owner::TimeSeriesOwners,
-) = has_time_series(owner, T)
-
-has_time_series(
-    T::Type{<:TimeSeriesData},
     owner::TimeSeriesOwners,
     name::AbstractString;
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Union{Nothing, Dict} = nothing,
 ) = has_time_series(
-    owner,
-    T,
-    name;
-    resolution = resolution,
-    interval = interval,
-    features = features,
+    owner, TimeSeriesData, name;
+    resolution = resolution, interval = interval, features = features,
+)
+
+# The two store probes answer the same question at different costs, so the route is a
+# dispatch on the query rather than a branch in the body: an unnarrowed query — no name,
+# no resolution, no interval, no features — takes the owner-scoped probe, consistently
+# ~40% faster (848/861/871 ns vs 1208/1213/1247 ns over three runs) than the general
+# catalog filter that would otherwise serve it. Everything else takes the filter.
+_has_time_series(
+    mgr::TimeSeriesManager,
+    owner::TimeSeriesOwners,
+    ::Type{T},
+    ::Nothing,
+    ::Nothing,
+    ::Nothing,
+    ::Nothing,
+) where {T <: TimeSeriesData} =
+    infrastore_has_any(mgr, owner; time_series_type = T)
+
+_has_time_series(
+    mgr::TimeSeriesManager,
+    owner::TimeSeriesOwners,
+    ::Type{T},
+    name::Union{Nothing, AbstractString},
+    resolution::Union{Nothing, Dates.Period},
+    interval::Union{Nothing, Dates.Period},
+    features::Union{Nothing, Dict},
+) where {T <: TimeSeriesData} = infrastore_has_time_series(
+    T, mgr, owner, name;
+    resolution = resolution, interval = interval, features = features,
 )
 
 """

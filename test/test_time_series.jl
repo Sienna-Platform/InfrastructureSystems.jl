@@ -381,12 +381,26 @@ end
     )
     IS.add_time_series!(sys, component, forecast)
 
-    # A parameterized concrete query type matches no stored type; it must not
-    # degrade to an unfiltered probe that answers true for the wrong type.
+    # A parameterized concrete query type is normalized to its UnionAll and narrows
+    # on that; it must not degrade to an unfiltered probe that answers true for the
+    # wrong type. Only a `Deterministic` is stored so far, so this is false.
     @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}, name) == false
     @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}) == false
     @test IS.has_time_series(component, IS.Deterministic, name)
     @test IS.has_time_series(component, IS.Deterministic)
+
+    # A `Union` query type matches each member's stored type, and only those. Unions
+    # are not dispatchable, so this is the case a baked method table would miss.
+    @test IS.has_time_series(component, Union{IS.Deterministic, IS.Probabilistic}, name)
+    @test IS.has_time_series(component, Union{IS.Deterministic, IS.Probabilistic})
+    @test IS.has_time_series(
+        component, Union{IS.SingleTimeSeries, IS.Probabilistic}, name) == false
+
+    # A parameterized concrete *inside* a `Union` is normalized member-wise, like a bare
+    # one. Left un-normalized this answers false for every row, since no stored UnionAll
+    # is a subtype of `SingleTimeSeries{Float64, 1}`.
+    @test IS.has_time_series(
+        component, Union{IS.Deterministic{Float64, 2}, IS.Probabilistic}, name)
 
     # The (owner, name) form must apply resolution/interval/feature filters
     # instead of silently dropping them.
@@ -424,10 +438,70 @@ end
         @test_throws ArgumentError operation()
     end
 
+    # ...and the same query spelled as `typeof(ts)` answers identically: the catalog
+    # does not key on the element type, so the parameters cannot select between arrays.
+    @test IS.has_time_series(component, IS.SingleTimeSeries{Float64, 1}, "static")
+    @test IS.has_time_series(component, typeof(sts), "static")
+
+    # Every filter also works without a name — the name is one more optional narrowing,
+    # not a precondition for the others.
+    @test IS.has_time_series(component; resolution = resolution)
+    @test IS.has_time_series(component; resolution = Dates.Minute(5)) == false
+    @test IS.has_time_series(component; features = Dict("scenario" => "a"))
+    @test IS.has_time_series(component; features = Dict("scenario" => "b")) == false
+    @test IS.has_time_series(
+        component, IS.SingleTimeSeries; features = Dict("scenario" => "a"))
+    # ...and the type still narrows: only the static series carries `scenario`.
+    @test IS.has_time_series(
+        component, IS.Deterministic; features = Dict("scenario" => "a")) == false
+
     # The redesign's whole point is static `Bool` inference; the deleted
     # kwargs catch-all boxed its type filter as `Any` and broke this.
     @test Base.return_types(IS.has_time_series, (typeof(component),)) == [Bool]
     @test Base.return_types(IS.has_time_series, (typeof(component), String)) == [Bool]
+    @test Base.return_types(
+        IS.has_time_series, (typeof(component), Type{IS.Deterministic})) == [Bool]
+    @test Base.return_types(
+        IS.has_time_series,
+        (typeof(component), Type{IS.SingleTimeSeries}, String),
+    ) == [Bool]
+
+    # An unnarrowed query must keep taking the cheaper owner-scoped probe: the route is
+    # a dispatch, so the wrong method here is a silent ~40% regression, not a failure.
+    mgr = IS.get_time_series_manager(component)
+    fast = which(
+        IS._has_time_series,
+        (typeof(mgr), typeof(component), Type{IS.Deterministic},
+            Nothing, Nothing, Nothing, Nothing),
+    )
+    for narrowed in (
+        (String, Nothing, Nothing, Nothing),
+        (Nothing, Dates.Hour, Nothing, Nothing),
+        (Nothing, Nothing, Dates.Hour, Nothing),
+        (Nothing, Nothing, Nothing, Dict{String, Any}),
+    )
+        @test which(
+            IS._has_time_series,
+            (typeof(mgr), typeof(component), Type{IS.Deterministic}, narrowed...),
+        ) !== fast
+    end
+
+    # The legacy type-first spellings are gone, not silently forwarded.
+    @test !hasmethod(IS.has_time_series, (Type{IS.SingleTimeSeries}, typeof(component)))
+    @test !hasmethod(
+        IS.has_time_series, (Type{IS.SingleTimeSeries}, typeof(component), String))
+
+    # The query type is a required positional, not a defaulted one: the two type-less
+    # shapes are their own methods, so reaching `name` never means passing a type first.
+    @test length(methods(IS.has_time_series)) == 4
+    for shape in (
+        (typeof(component),),
+        (typeof(component), String),
+        (typeof(component), Type{IS.SingleTimeSeries}),
+        (typeof(component), Type{IS.SingleTimeSeries}, String),
+    )
+        @test hasmethod(IS.has_time_series, shape)
+    end
 end
 
 @testset "Test add forecast with irregular resolution and interval" begin
