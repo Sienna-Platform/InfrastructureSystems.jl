@@ -1006,10 +1006,11 @@ function _infrastore_stage_data!(
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(time_series)
     feats = _infrastore_features(features)
-    # Reserved before staging: the key below carries this id and callers embed it,
-    # so the row has to be written under the very same value rather than one the
-    # insert would mint for itself.
-    association_id = InfraStore.reserve_association_ids!(get_data_store(mgr).inner)
+    # Taken before staging: the key below carries this id and callers embed it, so
+    # the row has to be written under the very same value rather than one the insert
+    # would mint for itself. Drawn from a block the binding holds, so staging N
+    # series costs one round trip per block rather than N.
+    association_id = InfraStore.next_association_id!(get_data_store(mgr).inner)
     nbytes = serialize_single!(batch, owner_id, owner_type, category, name,
         time_series; features = feats, association_id = association_id)
     resolution = get_resolution(time_series)
@@ -1038,7 +1039,7 @@ function _infrastore_stage_data!(
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(time_series)
     feats = _infrastore_features(features)
-    association_id = InfraStore.reserve_association_ids!(get_data_store(mgr).inner)
+    association_id = InfraStore.next_association_id!(get_data_store(mgr).inner)
     nbytes = serialize_non_sequential!(batch, owner_id, owner_type, category, name,
         time_series; features = feats, association_id = association_id)
     key = NonSequentialTimeSeriesKey(;
@@ -1099,7 +1100,7 @@ function _infrastore_stage_forecast!(
     horizon = get_horizon(ts)
     feats = _infrastore_features(features)
     obj, count = build(initial, resolution, horizon, interval, name)
-    association_id = InfraStore.reserve_association_ids!(get_data_store(mgr).inner)
+    association_id = InfraStore.next_association_id!(get_data_store(mgr).inner)
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
         features = feats, association_id = association_id)
     # The key names the stored type as its UnionAll (`Probabilistic`, not
