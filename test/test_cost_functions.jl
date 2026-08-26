@@ -586,33 +586,46 @@ end
     @test IS.y_axis_power_dimension(IS.LossCurve{IS.LinearCurve, IS.NaturalUnit}) == Val(1)
 end
 
+# `convert_power_units` takes the x-axis ratio between two bases; `PowerSystems` derives it
+# per component, so these tests spell it out. Writing `x_U = P / base_U` (with `base_NU`
+# = 1, i.e. P already in MW) gives `x_from = (base_to / base_from) * x_to`.
+_x_base(::IS.NaturalUnit, _, _) = 1.0
+_x_base(::IS.SystemBaseUnit, sb, _) = sb
+_x_base(::IS.DeviceBaseUnit, _, db) = db
+
+_convert(curve, to, sb, db) = IS.convert_power_units(
+    curve,
+    to,
+    _x_base(to, sb, db) / _x_base(IS.get_power_units(curve), sb, db),
+)
+
 @testset "LossCurve convert_power_units" begin
     sys_base, dev_base = 100.0, 50.0
 
     # y = 0.05 x + 2.0: 5% marginal loss plus 2 MW of fixed loss.
     lc = IS.LossCurve(IS.LinearCurve(0.05, 2.0), IS.NaturalUnit())
 
-    su = IS.convert_power_units(lc, IS.SystemBaseUnit(), sys_base, dev_base)
+    su = _convert(lc, IS.SystemBaseUnit(), sys_base, dev_base)
     @test su isa IS.LossCurve{IS.LinearCurve, IS.SystemBaseUnit}
     # Both axes are power, so the proportional term is dimensionless and does not move;
     # only the constant term, which is a bare power, rescales.
     @test IS.get_function_data(su) == IS.LinearFunctionData(0.05, 2.0 / sys_base)
 
-    du = IS.convert_power_units(lc, IS.DeviceBaseUnit(), sys_base, dev_base)
+    du = _convert(lc, IS.DeviceBaseUnit(), sys_base, dev_base)
     @test IS.get_function_data(du) == IS.LinearFunctionData(0.05, 2.0 / dev_base)
 
     # SU <-> DU directly, and every round trip
-    @test IS.convert_power_units(su, IS.DeviceBaseUnit(), sys_base, dev_base) == du
+    @test _convert(su, IS.DeviceBaseUnit(), sys_base, dev_base) == du
     for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit()),
         V in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
 
-        start = IS.convert_power_units(lc, U, sys_base, dev_base)
-        there = IS.convert_power_units(start, V, sys_base, dev_base)
-        @test IS.convert_power_units(there, U, sys_base, dev_base) == start
+        start = _convert(lc, U, sys_base, dev_base)
+        there = _convert(start, V, sys_base, dev_base)
+        @test _convert(there, U, sys_base, dev_base) == start
     end
 
     # Converting to the base the curve already carries is the identity, not a rebuild
-    @test IS.convert_power_units(lc, IS.NaturalUnit(), sys_base, dev_base) === lc
+    @test _convert(lc, IS.NaturalUnit(), sys_base, dev_base) === lc
 
     # The converted curve agrees pointwise with the original: the same physical loss,
     # read off in the new base.
@@ -624,7 +637,7 @@ end
 
     # A quadratic loss curve: the quadratic term picks up one net power of the base.
     qc = IS.LossCurve(IS.QuadraticCurve(0.01, 0.05, 2.0), IS.NaturalUnit())
-    q_su = IS.convert_power_units(qc, IS.SystemBaseUnit(), sys_base, dev_base)
+    q_su = _convert(qc, IS.SystemBaseUnit(), sys_base, dev_base)
     @test IS.get_function_data(q_su) ==
           IS.QuadraticFunctionData(0.01 * sys_base, 0.05, 2.0 / sys_base)
 
@@ -633,7 +646,7 @@ end
         IS.PiecewiseIncrementalCurve(0.0, [0.0, 50.0, 100.0], [0.03, 0.06]),
         IS.NaturalUnit(),
     )
-    pw_su = IS.convert_power_units(pw, IS.SystemBaseUnit(), sys_base, dev_base)
+    pw_su = _convert(pw, IS.SystemBaseUnit(), sys_base, dev_base)
     fd = IS.get_function_data(pw_su)
     @test IS.get_x_coords(fd) == [0.0, 0.5, 1.0]
     @test IS.get_y_coords(fd) == [0.03, 0.06]
@@ -651,7 +664,7 @@ end
         features = Dict{String, Any}(),
     )
     ts_vc = IS.TimeSeriesInputOutputCurve(IS.TimeSeriesLinearFunctionData(forecast_key))
-    @test_throws ArgumentError IS.convert_power_units(
+    @test_throws ArgumentError _convert(
         IS.LossCurve(ts_vc, IS.NaturalUnit()), IS.SystemBaseUnit(), sys_base, dev_base)
 end
 
@@ -670,17 +683,16 @@ end
         T = typeof(curve)
         # Fully inferred, to a concrete type carrying the target unit system
         @test isconcretetype(
-            Base.promote_op(
-                IS.convert_power_units, T, IS.SystemBaseUnit, Float64, Float64),
+            Base.promote_op(IS.convert_power_units, T, IS.SystemBaseUnit, Float64),
         )
         @test (@inferred IS.convert_power_units(
-            curve, IS.SystemBaseUnit(), sys_base, dev_base,
+            curve, IS.SystemBaseUnit(), 2.0,
         )) isa Union{IS.LossCurve, IS.ProductionVariableCostCurve}
 
         # No runtime power call and no dynamic dispatch survive optimization
         src, _ = only(
             code_typed(
-                IS.convert_power_units, (T, IS.SystemBaseUnit, Float64, Float64);
+                IS.convert_power_units, (T, IS.SystemBaseUnit, Float64);
                 optimize = true,
             ),
         )
@@ -800,7 +812,7 @@ end
 
     cc = IS.CostCurve(IS.QuadraticCurve(2.0, 3.0, 4.0), IS.NU, IS.LinearCurve(7.0, 1.0))
     for to in (IS.NU, IS.SU, IS.DU)
-        converted = IS.convert_power_units(cc, to, sb, db)
+        converted = _convert(cc, to, sb, db)
         @test converted isa IS.CostCurve
         @test IS.get_power_units(converted) == to
         for mw in (10.0, 55.0)
@@ -812,23 +824,23 @@ end
 
     # Round trips through every intermediate unit system return the original curve
     for mid in (IS.NU, IS.SU, IS.DU)
-        there = IS.convert_power_units(cc, mid, sb, db)
-        back = IS.convert_power_units(there, IS.NU, sb, db)
+        there = _convert(cc, mid, sb, db)
+        back = _convert(there, IS.NU, sb, db)
         @test fd_approx(IS.get_function_data(back), IS.get_function_data(cc))
         @test IS.get_vom_cost(back) == IS.get_vom_cost(cc)
     end
 
     # Converting to the unit system a curve already carries is the identity
-    @test IS.convert_power_units(cc, IS.NU, sb, db) === cc
+    @test _convert(cc, IS.NU, sb, db) === cc
     cc_su = IS.CostCurve(IS.LinearCurve(5.0), IS.SU)
-    @test IS.convert_power_units(cc_su, IS.SU, sb, db) === cc_su
+    @test _convert(cc_su, IS.SU, sb, db) === cc_su
 
     # Piecewise and incremental representations convert too
     pw = IS.CostCurve(
         IS.PiecewiseIncrementalCurve(1.0, [1.0, 2.0, 4.0], [10.0, 20.0]),
         IS.NU,
     )
-    pw_su = IS.convert_power_units(pw, IS.SU, sb, db)
+    pw_su = _convert(pw, IS.SU, sb, db)
     @test IS.get_x_coords(IS.get_function_data(pw_su)) ≈ [0.01, 0.02, 0.04]
     @test IS.get_y_coords(IS.get_function_data(pw_su)) ≈ [1000.0, 2000.0]
     @test IS.get_initial_input(pw_su) == IS.get_initial_input(pw)
@@ -841,7 +853,7 @@ end
         IS.LinearCurve(3.0),
         IS.LinearCurve(7.0),
     )
-    fc_su = IS.convert_power_units(fc, IS.SU, sb, db)
+    fc_su = _convert(fc, IS.SU, sb, db)
     @test fc_su isa IS.FuelCurve
     @test IS.get_power_units(fc_su) == IS.SU
     @test IS.get_fuel_cost(fc_su) == 12.5
@@ -854,10 +866,10 @@ end
     # it. Guards against it being swept up with the power-indexed fields.
     @test IS.get_startup_fuel_offtake(fc_su) == IS.get_startup_fuel_offtake(fc)
     for to in (IS.NU, IS.SU, IS.DU)
-        @test IS.get_startup_fuel_offtake(IS.convert_power_units(fc, to, sb, db)) ==
+        @test IS.get_startup_fuel_offtake(_convert(fc, to, sb, db)) ==
               IS.get_startup_fuel_offtake(fc)
     end
-    @test IS.convert_power_units(fc, IS.NU, sb, db) === fc
+    @test _convert(fc, IS.NU, sb, db) === fc
 
     # A time-series-backed fuel_cost is fine (it carries no power units); a
     # time-series-backed value curve is not
@@ -866,8 +878,8 @@ end
         IS.NU,
         IS.get_time_series_key(ts_input_output_curve()),
     )
-    @test IS.get_power_units(IS.convert_power_units(fc_ts_cost, IS.SU, sb, db)) == IS.SU
-    @test_throws ArgumentError IS.convert_power_units(
+    @test IS.get_power_units(_convert(fc_ts_cost, IS.SU, sb, db)) == IS.SU
+    @test_throws ArgumentError _convert(
         IS.CostCurve(ts_input_output_curve(), IS.NU), IS.SU, sb, db,
     )
 end

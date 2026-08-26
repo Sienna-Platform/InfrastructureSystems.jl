@@ -257,8 +257,8 @@ get_time_series_key(::FuelCurve{<:ValueCurve{<:TimeSeriesFunctionData}}) =
 # ── Unit conversion ───────────────────────────────────────────────────────────
 # A change of power units rescales the x-axis: if `ρ` is the ratio such that
 # `x_from = ρ * x_to`, the converted curve represents `f_to(x_to) = f_from(ρ * x_to)`,
-# which is exactly `scale_x(curve, ρ)`. `ρ` comes from the same `_cost_coeff_ratio`
-# dispatch table that backs `convert_cost_coefficient`.
+# which is exactly `scale_x(curve, ρ)`. `ρ` is supplied by the caller: resolving it needs
+# base powers, which belong to the domain package that owns components.
 #
 # For these families only the x-axis moves — their y-axes are absolute currency or fuel
 # rates (\$/h, MBTU/h) that carry no power units — which is what
@@ -273,27 +273,27 @@ get_time_series_key(::FuelCurve{<:ValueCurve{<:TimeSeriesFunctionData}}) =
 $(TYPEDSIGNATURES)
 
 Convert `curve` to the `to` unit system, returning a curve of the same outer type whose
-`U` parameter is `typeof(to)`. `system_base_power` and `device_base_power` supply the
-conversion factors; `InfrastructureSystems` has no notion of components, so callers pass
-them explicitly (domain packages are expected to add a component-aware convenience
-method).
+`U` parameter is `typeof(to)`.
+
+`ratio` is the x-axis ratio between the two bases: `x_from = ratio * x_to`. It is passed
+in rather than derived here because `InfrastructureSystems` has no notion of a component
+or a base power to derive it from — the base arithmetic belongs to the domain package that
+owns the bases (in the Sienna stack, `PowerSystems`, which resolves it per component and
+physical category and provides the component-aware accessors on top of this).
 
 The `fuel_cost` of a [`FuelCurve`](@ref) is in currency per unit of fuel and is left
 alone. Time-series-backed value curves cannot be rescaled and raise an `ArgumentError`.
 """
-function convert_power_units(
+convert_power_units(
     curve::CostCurve{T, U},
     to::V,
-    system_base_power::Float64,
-    device_base_power::Float64,
-) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem}
-    ratio = _cost_coeff_ratio(U(), to, system_base_power, device_base_power)
-    return CostCurve(
+    ratio::Real,
+) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem} =
+    CostCurve(
         _convert_value_curve(curve, ratio),
         to,
         scale_x(get_vom_cost(curve), ratio),
     )
-end
 
 """
 $(TYPEDSIGNATURES)
@@ -308,10 +308,8 @@ change of power units touches neither. Both carry over unchanged.
 function convert_power_units(
     curve::FuelCurve{T, U},
     to::V,
-    system_base_power::Float64,
-    device_base_power::Float64,
+    ratio::Real,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem}
-    ratio = _cost_coeff_ratio(U(), to, system_base_power, device_base_power)
     # `startup_fuel_offtake` is fuel vs. downtime — neither axis is in power units.
     return FuelCurve(
         _convert_value_curve(curve, ratio),
@@ -327,14 +325,12 @@ end
 convert_power_units(
     curve::CostCurve{T, U},
     ::U,
-    ::Float64,
-    ::Float64,
+    ::Real,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = curve
 convert_power_units(
     curve::FuelCurve{T, U},
     ::U,
-    ::Float64,
-    ::Float64,
+    ::Real,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = curve
 
 # ── FuelCurve → CostCurve ─────────────────────────────────────────────────────

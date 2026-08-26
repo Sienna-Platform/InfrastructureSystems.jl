@@ -352,41 +352,19 @@ Base.:/(a::RelativeQuantity, b::RelativeQuantity) = throw(
 )
 
 """
-    convert_cost_coefficient(value, U_from, U_to,
-                             system_base_power, device_base_power,
-                             exponent::Int = 1) → Float64
+    convert_cost_coefficient(value, ratio, exponent::Int = 1) → Float64
 
-Convert a cost coefficient (e.g. \$/MW for `exponent=1`, \$/MW² for
-`exponent=2`) between unit systems. The conversion ratio is the inverse of
-the corresponding power-value ratio raised to `exponent`, since if
-`obj = c · x_from` and `x_from = r · x_to`, then the equivalent coefficient
-under `x_to` is `c · r`.
+Convert a cost coefficient (e.g. \$/MW for `exponent=1`, \$/MW² for `exponent=2`) between
+unit systems, given the x-axis `ratio` between them: if `obj = c · x_from` and
+`x_from = ratio · x_to`, the equivalent coefficient under `x_to` is `c · ratio^exponent`.
 
-Deliberately not exported: it currently has no consumer in the Sienna stack;
-it is kept available (as `IS.convert_cost_coefficient`) for downstream
-packages that convert objective-function coefficients (e.g. PowerSimulations).
+`InfrastructureSystems` has no notion of components or base powers, so it does not resolve
+the ratio itself — the base arithmetic lives in the domain package that owns the bases
+(in the Sienna stack, `PowerSystems`, whose units engine derives it per component and
+physical category). Deliberately not exported.
 """
-convert_cost_coefficient(
-    value::Float64,
-    U_from::AbstractUnitSystem,
-    U_to::AbstractUnitSystem,
-    system_base_power::Float64,
-    device_base_power::Float64,
-    exponent::Int = 1,
-) =
-    value * _cost_coeff_ratio(U_from, U_to, system_base_power, device_base_power)^exponent
-
-_cost_coeff_ratio(::SystemBaseUnit, ::SystemBaseUnit, _, _) = 1.0
-_cost_coeff_ratio(::DeviceBaseUnit, ::DeviceBaseUnit, _, _) = 1.0
-_cost_coeff_ratio(::NaturalUnit, ::NaturalUnit, _, _) = 1.0
-_cost_coeff_ratio(::DeviceBaseUnit, ::SystemBaseUnit, sb, db) = sb / db
-_cost_coeff_ratio(::SystemBaseUnit, ::DeviceBaseUnit, sb, db) = db / sb
-_cost_coeff_ratio(::NaturalUnit, ::SystemBaseUnit, sb, _) = sb
-_cost_coeff_ratio(::SystemBaseUnit, ::NaturalUnit, sb, _) = 1 / sb
-_cost_coeff_ratio(::NaturalUnit, ::DeviceBaseUnit, _, db) = db
-_cost_coeff_ratio(::DeviceBaseUnit, ::NaturalUnit, _, db) = 1 / db
-_cost_coeff_ratio(from::AbstractUnitSystem, to::AbstractUnitSystem, _, _) =
-    throw(ArgumentError("unsupported unit-system conversion: $from → $to"))
+convert_cost_coefficient(value::Float64, ratio::Float64, exponent::Int = 1) =
+    value * ratio^exponent
 
 """
     display_units_arg(f, ::Type{T})

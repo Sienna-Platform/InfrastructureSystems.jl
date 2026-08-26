@@ -101,9 +101,9 @@ function y_axis_power_dimension end
 
 """
 Rescale the value curve of `curve` by `ratio`, applying the change of base to whichever
-axes the family's units govern. `ratio` comes from [`_cost_coeff_ratio`](@ref), the same
-dispatch table that backs `convert_cost_coefficient`, so no new conversion math is
-introduced here.
+axes the family's units govern. `ratio` is the x-axis ratio between the two bases
+(`x_from = ratio * x_to`), resolved by the caller — `InfrastructureSystems` has no
+component or base power to derive it from.
 """
 @inline _convert_value_curve(curve::C, ratio::Real) where {C <: ValueCurveWithUnits} =
     _convert_curve_axes(get_value_curve(curve), ratio, y_axis_power_dimension(C))

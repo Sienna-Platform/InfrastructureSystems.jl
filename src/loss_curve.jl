@@ -9,17 +9,11 @@ Representation of the losses of a component as a function of its flow or current
 of a [`ValueCurve`](@ref) that may represent input-output, incremental, or average rate
 data.
 
-Unlike a [`CostCurve`](@ref) or [`FuelCurve`](@ref), **both** axes of a `LossCurve` are
-power, and both are in the unit system given by the second type parameter
-`U <: AbstractUnitSystem`: x is the flow through the component and y is the loss incurred
-at that flow, in the same base. See [`y_axis_power_dimension`](@ref).
+**Both** axes of a `LossCurve` are power, and both are in the unit system given 
+by the second type parameter`U <: AbstractUnitSystem`: x is the flow through the component
+and y is the loss incurred at that flow, in the same base. See [`y_axis_power_dimension`](@ref).
 
-`power_units` has deliberately **no default**: an unstated base is exactly the ambiguity
-this type exists to remove, so every construction site must name the base it means.
-
-Note that the proportional term of a linear loss curve (loss per unit of flow) is
-dimensionless, and so is numerically the same in every unit system — only the constant
-term, the piecewise breakpoints, and any quadratic term move under a change of base.
+`power_units` has deliberately **no default**: an unstated base is ambiguous.
 """
 struct LossCurve{T <: ValueCurve, U <: AbstractUnitSystem} <: ValueCurveWithUnits{T, U}
     "The underlying `ValueCurve` representation of this `LossCurve`"
@@ -32,9 +26,11 @@ LossCurve{T, U}(; value_curve::T) where {T, U} = LossCurve{T, U}(value_curve)
 
 LossCurve(
     value_curve::T,
-    power_units::U,
+    ::U,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = LossCurve{T, U}(value_curve)
 
+# `power_units` keeps its name here: a keyword argument is addressed by name, and
+# `deserialize` reconstructs through `LossCurve(; value_curve, power_units)`.
 LossCurve(;
     value_curve::T,
     power_units::U,
@@ -58,27 +54,26 @@ y_axis_power_dimension(::Type{<:LossCurve}) = Val(1)
 """
 $(TYPEDSIGNATURES)
 
-Convert `curve` to the `to` unit system. Both axes are power, so the y-axis rescales along
-with the x-axis: the result represents `f_to(x) = f_from(ρ * x) / ρ`, where `ρ` is the
-ratio between the two bases.
+Convert `curve` to the `to` unit system, given the x-axis `ratio` between the two bases
+(`x_from = ratio * x_to`). Both axes are power, so the y-axis rescales along with the
+x-axis: the result represents `f_to(x) = f_from(ratio * x) / ratio`.
+
+See [`convert_power_units(::CostCurve, ::Any, ::Real)`](@ref) on where `ratio` comes from.
 """
-function convert_power_units(
+convert_power_units(
     curve::LossCurve{T, U},
     to::V,
-    system_base_power::Float64,
-    device_base_power::Float64,
-) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem}
-    ratio = _cost_coeff_ratio(U(), to, system_base_power, device_base_power)
-    return LossCurve(_convert_value_curve(curve, ratio), to)
-end
+    ratio::Real,
+) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem} =
+    LossCurve(_convert_value_curve(curve, ratio), to)
 
 # Converting to the unit system the curve already carries is the identity, dispatched
-# rather than branched.
+# rather than branched -- and it needs no ratio, so a caller that would have to resolve
+# bases to compute one can skip that work entirely.
 convert_power_units(
     curve::LossCurve{T, U},
     ::U,
-    ::Float64,
-    ::Float64,
+    ::Real,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = curve
 
 function _show_compact(io::IO, ::MIME"text/plain", curve::LossCurve)
