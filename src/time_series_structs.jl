@@ -14,7 +14,7 @@ Every concrete key implements the interface below, which generic key-consuming
 code may call on any key:
 - `get_owner_id`
 - `get_owner_category`
-- `get_association_id` — the derived surrogate id of the stored association
+- `get_association_id` — the store-minted surrogate id of the stored association
 - `get_name`
 - `get_resolution` — `nothing` for a key with no regular resolution
 - `get_time_series_type`
