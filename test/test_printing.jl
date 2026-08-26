@@ -87,7 +87,7 @@ end
     @test first(val2_pos) < first(val_pos)
 
     # A column-to-unit mapping sets units per column; a column missing from the
-    # mapping keeps its own trait default rather than inheriting a neighbour's.
+    # mapping keeps its own trait default rather than inheriting a neighbor's.
     IS.show_components(
         io,
         sys.components,

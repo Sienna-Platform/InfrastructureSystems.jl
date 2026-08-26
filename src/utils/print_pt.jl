@@ -88,7 +88,7 @@ _resolve_column_accessors(::Type, ::Dict; units = nothing) = nothing
 # Per-column units: `units` is either one unit applied to every column, or a
 # mapping from column name to that column's unit. A column missing from the
 # mapping keeps its own `display_units_arg` default rather than inheriting a
-# neighbour's unit.
+# neighbor's unit.
 _column_units(::Nothing, _, trait_arg) = trait_arg
 _column_units(units::AbstractDict, column, trait_arg) = get(units, column, trait_arg)
 _column_units(units::NamedTuple, column, trait_arg) =
