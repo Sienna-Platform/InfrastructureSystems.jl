@@ -3960,26 +3960,113 @@ end
 end
 
 @testset "Test serialization of time series keys" begin
-    key = IS.StaticTimeSeriesKey(;
-        owner_id = 1,
-        owner_category = IS.InfraStore.Component,
-        association_id = 1,
-        time_series_type = IS.SingleTimeSeries,
-        name = "test",
-        initial_timestamp = Dates.now(),
-        resolution = Dates.Hour(1),
-        length = 12,
+    sys = IS.SystemData(; time_series_in_memory = true)
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    ta = TimeSeries.TimeArray(
+        range(Dates.DateTime("2020-09-01"); length = 12, step = Dates.Hour(1)),
+        collect(1.0:12.0),
+    )
+    key = IS.add_time_series!(
+        sys,
+        component,
+        IS.SingleTimeSeries("test", ta);
         features = Dict("scenario" => "high"),
     )
-    key2 = IS.deserialize(IS.StaticTimeSeriesKey, IS.serialize(key))
+
+    # The whole key goes on the wire as its association id.
+    serialized = IS.serialize(key)
+    @test serialized == IS.get_association_id(key)
+
+    key2 = IS.with_deserialization_store(key_store(sys)) do
+        IS.deserialize(IS.StaticTimeSeriesKey, serialized)
+    end
     @test key2 !== key
     for field in fieldnames(IS.StaticTimeSeriesKey)
-        if field == :features
-            @test key2.features["scenario"] == key.features["scenario"]
-        else
-            @test getproperty(key2, field) == getproperty(key, field)
-        end
+        @test getproperty(key2, field) == getproperty(key, field)
     end
+
+    # Without a bound store the id names nothing.
+    @test_throws ArgumentError IS.deserialize(IS.StaticTimeSeriesKey, serialized)
+end
+
+@testset "Test time series key survives system serialization as its association id" begin
+    sys = IS.SystemData()
+    owner = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, owner)
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    ta = TimeSeries.TimeArray(
+        range(initial_time; length = 24, step = resolution),
+        collect(1.0:24.0),
+    )
+    key = IS.add_time_series!(
+        sys,
+        owner,
+        IS.SingleTimeSeries("closing_the_circle", ta),
+    )
+    original_values = IS.get_time_series_values(owner, key)
+
+    # The key only reaches the JSON because a component holds it.
+    holder = IS.TimeSeriesKeyTestComponent("KeyHolder", key)
+    IS.add_component!(sys, holder)
+
+    directory = mktempdir()
+    filename = joinpath(directory, "key_round_trip.json")
+    IS.prepare_for_serialization_to_file!(sys, filename; force = true)
+    raw = IS.serialize(sys)
+    open(filename, "w") do io
+        JSON.json(io, raw)
+    end
+
+    holder_json = only(filter(c -> c["name"] == "KeyHolder", raw["components"]))
+    @test holder_json["time_series_key"] == IS.get_association_id(key)
+
+    # The field-by-field spelling is gone: nothing but the id crosses the wire, so none
+    # of the key's other fields appear anywhere in the document.
+    json_text = read(filename, String)
+    @test !occursin("owner_category", json_text)
+    @test !occursin("association_id", json_text)
+    @test !occursin("closing_the_circle", json_text)
+
+    # Move the JSON and both store halves to a fresh directory, the way a shipped
+    # system travels.
+    test_dir = mktempdir(directory)
+    path = mv(filename, joinpath(test_dir, basename(filename)))
+    ts_base = raw["time_series_storage_file"]
+    for f in (ts_base, ts_base * ".sqlite")
+        src = joinpath(directory, f)
+        isfile(src) && mv(src, joinpath(test_dir, basename(f)))
+    end
+    parsed = open(path) do io
+        return JSON.parse(io; dicttype = Dict{String, Any})
+    end
+
+    orig = pwd()
+    sys2 = try
+        cd(dirname(path))
+        restored = IS.deserialize(IS.SystemData, parsed)
+        IS.with_deserialization_store(key_store(restored)) do
+            for component in parsed["components"]
+                type = IS.get_type_from_serialization_data(component)
+                comp = IS.deserialize(type, component)
+                IS.add_component!(restored, comp; allow_existing_time_series = true)
+            end
+        end
+        restored
+    finally
+        cd(orig)
+    end
+
+    holder2 = IS.get_component(IS.TimeSeriesKeyTestComponent, sys2, "KeyHolder")
+    restored_key = holder2.time_series_key
+    @test restored_key == key
+    for field in fieldnames(IS.StaticTimeSeriesKey)
+        @test getproperty(restored_key, field) == getproperty(key, field)
+    end
+
+    owner2 = IS.get_component(IS.TestComponent, sys2, "Component1")
+    @test IS.get_time_series_values(owner2, restored_key) == original_values
 end
 
 @testset "Test get_time_series_timestamps with TimeSeriesKey" begin

@@ -121,3 +121,30 @@ function create_simple_system_data()
 end
 
 sort_name!(x) = sort!(collect(x); by = IS.get_name)
+
+"""
+A system holding one `Deterministic` per name in `names`, returned with the real
+`TimeSeriesKey` for each, in order.
+
+A key serializes to its association id alone, so a serialization round trip needs keys the
+system's store can resolve; a fabricated key no longer survives one.
+"""
+function create_forecast_key_fixture(names...; horizon_count = 24)
+    sys = IS.SystemData(; time_series_in_memory = true)
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+    keys = map(names) do name
+        forecast = IS.Deterministic(;
+            data = SortedDict(initial_time => rand(horizon_count)),
+            name = name,
+            resolution = resolution,
+        )
+        return IS.add_time_series!(sys, component, forecast)
+    end
+    return sys, keys
+end
+
+"The store a system's keys resolve against during deserialization."
+key_store(sys::IS.SystemData) = IS.get_data_store(sys.time_series_manager)

@@ -49,14 +49,18 @@
     end
 
     @testset "Serialization round-trip" begin
+        sys, (stored_key,) = create_forecast_key_fixture("test_forecast")
+        store = key_store(sys)
         for T in ts_types
-            fd = T(forecast_key)
+            fd = T(stored_key)
             serialized = IS.serialize(fd)
-            deserialized = IS.deserialize(T, serialized)
-            @test deserialized isa T
-            deserialized_key = IS.get_time_series_key(deserialized)
-            @test IS.get_name(deserialized_key) == IS.get_name(forecast_key)
-            @test IS.get_resolution(deserialized_key) == IS.get_resolution(forecast_key)
+            # The key is on the wire as its association id and nothing else.
+            @test serialized["time_series_key"] == IS.get_association_id(stored_key)
+            deserialized = IS.with_deserialization_store(store) do
+                IS.deserialize(T, serialized)
+            end
+            @test typeof(deserialized) == T
+            @test IS.get_time_series_key(deserialized) == stored_key
         end
     end
 
@@ -355,45 +359,53 @@ end
     end
 
     @testset "Serialization round-trip" begin
+        # Real keys: a serialized key is only its association id, so the round trip needs
+        # a store that can resolve it.
+        sys, (stored_key, stored_ii_key) =
+            create_forecast_key_fixture("test_forecast", "initial_input")
+        store = key_store(sys)
         ts_curves = [
             (
                 IS.TimeSeriesInputOutputCurve(
-                    IS.TimeSeriesLinearFunctionData(forecast_key),
+                    IS.TimeSeriesLinearFunctionData(stored_key),
                 ),
                 IS.TimeSeriesInputOutputCurve,
             ),
             (
                 IS.TimeSeriesInputOutputCurve(
-                    IS.TimeSeriesLinearFunctionData(forecast_key), 42.0,
+                    IS.TimeSeriesLinearFunctionData(stored_key), 42.0,
                 ),
                 IS.TimeSeriesInputOutputCurve,
             ),
             (
                 IS.TimeSeriesIncrementalCurve(
-                    IS.TimeSeriesPiecewiseStepData(forecast_key), ii_key,
+                    IS.TimeSeriesPiecewiseStepData(stored_key), stored_ii_key,
                 ),
                 IS.TimeSeriesIncrementalCurve,
             ),
             (
                 IS.TimeSeriesAverageRateCurve(
-                    IS.TimeSeriesPiecewiseStepData(forecast_key), ii_key,
+                    IS.TimeSeriesPiecewiseStepData(stored_key), stored_ii_key,
                 ),
                 IS.TimeSeriesAverageRateCurve,
             ),
         ]
 
         for (curve, curve_type) in ts_curves
-            deserialized = IS.deserialize(curve_type, IS.serialize(curve))
+            deserialized = IS.with_deserialization_store(store) do
+                IS.deserialize(curve_type, IS.serialize(curve))
+            end
             @test typeof(deserialized) == typeof(curve)
-            @test IS.get_name(IS.get_time_series_key(deserialized)) ==
-                  IS.get_name(IS.get_time_series_key(curve))
+            @test IS.get_time_series_key(deserialized) == IS.get_time_series_key(curve)
         end
 
         # CostCurve wrapping TS ValueCurve round-trips
-        cc = IS.CostCurve(IS.TimeSeriesLinearCurve(forecast_key))
-        cc_deser = IS.deserialize(IS.CostCurve, IS.serialize(cc))
+        cc = IS.CostCurve(IS.TimeSeriesLinearCurve(stored_key))
+        cc_deser = IS.with_deserialization_store(store) do
+            IS.deserialize(IS.CostCurve, IS.serialize(cc))
+        end
         @test IS.is_time_series_backed(cc_deser) == true
-        @test IS.get_name(IS.get_time_series_key(cc_deser)) == "test_forecast"
+        @test IS.get_time_series_key(cc_deser) == stored_key
     end
 
     @testset "CostCurve and FuelCurve wrapping" begin

@@ -42,6 +42,39 @@ function SimpleTestComponent(; name, val, internal = InfrastructureSystemsIntern
     return SimpleTestComponent(name, val, internal)
 end
 
+"""
+A component that carries a [`TimeSeriesKey`](@ref) in a field, the way a
+time-series-backed cost curve does. It exists so tests can prove a key survives a whole
+system round trip: on the wire the field is nothing but the key's association id, which
+only the store that minted it can resolve back into a key.
+"""
+mutable struct TimeSeriesKeyTestComponent <: InfrastructureSystemsComponent
+    name::String
+    time_series_key::ConcreteTimeSeriesKey
+    internal::InfrastructureSystemsInternal
+end
+
+function TimeSeriesKeyTestComponent(name, time_series_key)
+    return TimeSeriesKeyTestComponent(
+        name,
+        time_series_key,
+        InfrastructureSystemsInternal(),
+    )
+end
+
+function TimeSeriesKeyTestComponent(;
+    name,
+    time_series_key,
+    internal = InfrastructureSystemsInternal(),
+)
+    return TimeSeriesKeyTestComponent(name, time_series_key, internal)
+end
+
+get_internal(component::TimeSeriesKeyTestComponent) = component.internal
+get_available(::TimeSeriesKeyTestComponent) = true
+set_available!(::TimeSeriesKeyTestComponent, val) = nothing
+supports_time_series(::TimeSeriesKeyTestComponent) = true
+
 get_internal(component::TestComponent) = component.internal
 get_internal(component::AdditionalTestComponent) = component.internal
 get_available(::TestComponent) = true

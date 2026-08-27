@@ -46,19 +46,55 @@ get_interval(::TimeSeriesKey) = nothing
 get_count(::TimeSeriesKey) = 1
 Base.length(key::TimeSeriesKey) = get_length(key)
 
-function deserialize_struct(T::Type{<:TimeSeriesKey}, data::Dict)
-    vals = Dict{Symbol, Any}()
-    for (field_name, field_type) in zip(fieldnames(T), fieldtypes(T))
-        val = data[string(field_name)]
-        if field_type <: Type{<:TimeSeriesData}
-            metadata = get_serialization_metadata(val)
-            val = get_type_from_serialization_metadata(metadata)
-        else
-            val = deserialize(field_type, val)
-        end
-        vals[field_name] = val
-    end
-    return T(; vals...)
+# The store a deserialization resolves association ids against. A key travels as its
+# association id alone, so rebuilding one needs the catalog that minted it; the
+# `deserialize` signatures are fixed by callers outside IS, so the store arrives out of
+# band rather than as an argument.
+const DESERIALIZATION_STORE = Base.ScopedValues.ScopedValue{Store}()
+
+"Whether a store is bound for the current deserialization scope."
+has_deserialization_store() =
+    !isnothing(Base.ScopedValues.get(DESERIALIZATION_STORE))
+
+"The store bound by the innermost enclosing [`with_deserialization_store`](@ref)."
+get_deserialization_store() = DESERIALIZATION_STORE[]
+
+"""
+    with_deserialization_store(f, store::Store)
+
+Run `f()` with `store` bound as the catalog that [`TimeSeriesKey`](@ref)
+deserialization resolves association ids against, and return its result.
+
+A serialized key is nothing but its `association_id`, so anything that
+deserializes a key-carrying struct — a component with a time-series-backed cost
+curve, a supplemental attribute — has to run inside this block. `deserialize` of a
+[`SystemData`](@ref) binds the store it just opened around its own work; a parent
+package that deserializes components itself must wrap that pass in this function.
+"""
+function with_deserialization_store(f, store::Store)
+    return Base.ScopedValues.with(f, DESERIALIZATION_STORE => store)
+end
+
+"""
+A key serializes to its `association_id` alone. The id is the store-minted surrogate
+for the whole association, so every other field of the key is a copy of something the
+catalog already holds; writing them out invites the two to disagree.
+"""
+serialize(key::TimeSeriesKey) = get_association_id(key)
+
+"""
+Rebuild a key from the association id it serialized to, against the store bound by
+[`with_deserialization_store`](@ref).
+"""
+function deserialize(::Type{<:TimeSeriesKey}, association_id::Integer)
+    has_deserialization_store() || throw(
+        ArgumentError(
+            "Deserializing a TimeSeriesKey needs the store that minted " *
+            "association_id=$association_id; run the deserialization inside " *
+            "`with_deserialization_store`.",
+        ),
+    )
+    return get_time_series_key(get_deserialization_store(), Int(association_id))
 end
 
 """

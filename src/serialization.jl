@@ -91,8 +91,7 @@ function serialize(vals::Vector{T}) where {T <: InfrastructureSystemsType}
     return serialize_struct.(vals)
 end
 
-# A time series *type* (not an instance) serializes to bare metadata, so a
-# `TimeSeriesKey`'s `time_series_type` field round-trips.
+# A time series *type* (not an instance) serializes to bare metadata.
 function serialize(::Type{T}) where {T <: TimeSeriesData}
     @debug "serialize" _group = LOG_GROUP_SERIALIZATION T
     data = Dict{String, Any}()
@@ -261,6 +260,15 @@ function deserialize(T::Union, data::Dict)
     maybe_from_dict = filter(x -> !(x <: _NOT_FROM_DICT), types_within)
     (length(maybe_from_dict) == 1) && (return deserialize(first(maybe_from_dict), data))
     throw(ArgumentError("Cannot pick which of union type $T to deserialize to"))
+end
+
+# Mirror of the `Dict` and `AbstractString` union dispatchers above for an integer
+# payload: a `TimeSeriesKey` serializes to its bare `association_id`, so an optional
+# key field (`Union{Nothing, ConcreteTimeSeriesKey}`) arrives as an integer. A union
+# with no key in it keeps the generic scalar behavior.
+function deserialize(T::Union, data::Integer)
+    any(x -> x <: TimeSeriesKey, Base.uniontypes(T)) || return deepcopy(data)
+    return deserialize(TimeSeriesKey, data)
 end
 
 function deserialize(::Type{T}, data::Array) where {T <: Vector{<:Tuple}}

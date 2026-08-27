@@ -208,32 +208,26 @@ FuelCurve{T, U}(;
 _normalize_fuel_cost(::Nothing) = nothing
 _normalize_fuel_cost(x::Real) = Float64(x)
 
+# Which field a positionally supplied fuel cost lands in: the fixed value and the
+# time series key are separate fields, so the routing is dispatched, not branched.
+_fuel_cost_kwargs(fuel_cost::Real) = (; fuel_cost = _normalize_fuel_cost(fuel_cost))
+_fuel_cost_kwargs(fuel_cost::TimeSeriesKey) = (; fuel_cost_time_series = fuel_cost)
+
 # Outer constructors — mirror the CostCurve style
-FuelCurve(value_curve::T, fuel_cost::Real) where {T <: ValueCurve} =
-    FuelCurve{T, NaturalUnit}(; value_curve, fuel_cost = Float64(fuel_cost))
-FuelCurve(value_curve::T, fuel_cost::TimeSeriesKey) where {T <: ValueCurve} =
-    FuelCurve{T, NaturalUnit}(; value_curve, fuel_cost_time_series = fuel_cost)
+FuelCurve(
+    value_curve::T,
+    fuel_cost::Union{Real, TimeSeriesKey},
+) where {T <: ValueCurve} =
+    FuelCurve{T, NaturalUnit}(; value_curve, _fuel_cost_kwargs(fuel_cost)...)
 
 FuelCurve(
     value_curve::T,
-    fuel_cost::Real,
+    fuel_cost::Union{Real, TimeSeriesKey},
     startup_fuel_offtake::LinearCurve,
     vom_cost::LinearCurve,
 ) where {T <: ValueCurve} = FuelCurve{T, NaturalUnit}(;
     value_curve,
-    fuel_cost = Float64(fuel_cost),
-    startup_fuel_offtake,
-    vom_cost,
-)
-
-FuelCurve(
-    value_curve::T,
-    fuel_cost::TimeSeriesKey,
-    startup_fuel_offtake::LinearCurve,
-    vom_cost::LinearCurve,
-) where {T <: ValueCurve} = FuelCurve{T, NaturalUnit}(;
-    value_curve,
-    fuel_cost_time_series = fuel_cost,
+    _fuel_cost_kwargs(fuel_cost)...,
     startup_fuel_offtake,
     vom_cost,
 )
@@ -241,43 +235,21 @@ FuelCurve(
 FuelCurve(
     value_curve::T,
     power_units::U,
-    fuel_cost::Real,
+    fuel_cost::Union{Real, TimeSeriesKey},
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
     value_curve,
-    fuel_cost = Float64(fuel_cost),
+    _fuel_cost_kwargs(fuel_cost)...,
 )
 
 FuelCurve(
     value_curve::T,
     power_units::U,
-    fuel_cost::TimeSeriesKey,
-) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
-    value_curve,
-    fuel_cost_time_series = fuel_cost,
-)
-
-FuelCurve(
-    value_curve::T,
-    power_units::U,
-    fuel_cost::Real,
+    fuel_cost::Union{Real, TimeSeriesKey},
     startup_fuel_offtake::LinearCurve,
     vom_cost::LinearCurve,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
     value_curve,
-    fuel_cost = Float64(fuel_cost),
-    startup_fuel_offtake,
-    vom_cost,
-)
-
-FuelCurve(
-    value_curve::T,
-    power_units::U,
-    fuel_cost::TimeSeriesKey,
-    startup_fuel_offtake::LinearCurve,
-    vom_cost::LinearCurve,
-) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
-    value_curve,
-    fuel_cost_time_series = fuel_cost,
+    _fuel_cost_kwargs(fuel_cost)...,
     startup_fuel_offtake,
     vom_cost,
 )
@@ -383,12 +355,14 @@ _deserialize_fuel_cost(raw) =
     )
 
 _deserialize_fuel_cost_time_series(::Nothing) = nothing
-_deserialize_fuel_cost_time_series(raw::AbstractDict) =
-    deserialize(get_type_from_serialization_data(raw), raw)
+# A key is on the wire as its association id alone; the store bound for the
+# deserialization turns it back into a key.
+_deserialize_fuel_cost_time_series(association_id::Integer) =
+    deserialize(TimeSeriesKey, association_id)
 _deserialize_fuel_cost_time_series(raw) =
     throw(
         ArgumentError(
-            "FuelCurve fuel_cost_time_series must be a serialized TimeSeriesKey or nothing, got $(typeof(raw))",
+            "FuelCurve fuel_cost_time_series must be a time series association id or nothing, got $(typeof(raw))",
         ),
     )
 

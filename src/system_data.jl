@@ -813,15 +813,20 @@ function deserialize(
         )
     end
     next_id = Int(raw["next_id"])
-    supplemental_attribute_manager = deserialize(
-        SupplementalAttributeManager,
-        get(
-            raw,
-            "supplemental_attribute_manager",
-            Dict("attributes" => [], "associations" => []),
-        ),
-        time_series_manager,
-    )
+    # An attribute may carry a `TimeSeriesKey`, which arrives as a bare association id
+    # and is resolved against the store opened above.
+    supplemental_attribute_manager =
+        with_deserialization_store(get_data_store(time_series_manager)) do
+            deserialize(
+                SupplementalAttributeManager,
+                get(
+                    raw,
+                    "supplemental_attribute_manager",
+                    Dict("attributes" => [], "associations" => []),
+                ),
+                time_series_manager,
+            )
+        end
     internal = deserialize(InfrastructureSystemsInternal, raw["internal"])
     validation_descriptors = if isnothing(validation_descriptor_file)
         []
@@ -861,7 +866,9 @@ function deserialize(
     end
 
     # Note: components need to be deserialized by the parent so that they can go through
-    # the proper checks.
+    # the proper checks. A component may carry a `TimeSeriesKey`, which is on the wire as
+    # a bare association id, so the parent must run that pass inside
+    # `with_deserialization_store(get_data_store(sys.time_series_manager))`.
     return sys
 end
 

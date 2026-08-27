@@ -110,6 +110,13 @@ keys = get_time_series_keys(owner)      # enumerate the owner's associations
 ts = get_time_series(owner, keys[1])    # retrieve one by its key
 ```
 
+A key serializes to nothing but its `association_id`, the store-minted surrogate for the
+whole association; every other field is a copy of something the catalog already holds.
+Rebuilding one therefore needs that catalog, so any deserialization that may meet a key runs
+inside `with_deserialization_store(store) do ... end`. `deserialize(::Type{SystemData}, ...)`
+binds the store it just opened around its own work, but components are deserialized by the
+parent package, which must wrap that pass the same way.
+
 ## Debugging
 
 Inspect a persisted (closed) store with standard HDF5 and SQLite tools. For example,

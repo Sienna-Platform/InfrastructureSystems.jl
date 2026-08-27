@@ -2080,8 +2080,7 @@ end
 # (periods are canonicalized to ISO-8601 on both write and query, so a regular
 # `Hour(1)` matches a stored `Minute(60)`); an abstract `time_series_type` (or
 # `Deterministic`, which also matches a DST) is not a catalog filter column, so
-# it is applied as a residual on the already-narrowed rows. `list_time_series`
-# rather than `list_keys` because only it carries `association_id`.
+# it is applied as a residual on the already-narrowed rows.
 function _infrastore_list_keys(
     store::Store,
     owner_id::Integer,
@@ -2237,8 +2236,6 @@ end
 # `id_to_owner` callback resolves an `(owner_id, owner_category)` row back to the
 # owner object (the system holds the component / supplemental-attribute maps).
 # One catalog query returns the hash on every row, so no per-row metadata fetch.
-# `list_time_series` rather than `list_array_groups` because only it carries
-# `association_id`; it also carries `data_hash`, so nothing else changes.
 #
 # `DeterministicSingleTimeSeries` rows are excluded: such a forecast is a view of
 # its own `SingleTimeSeries` and so always reports that array's hash, which is an
@@ -2428,8 +2425,7 @@ end
 # resolution, and — when the type maps to a single core filter — the time series
 # type are pushed into the core query; the pushed set is a superset of the strict
 # match (`Deterministic`-family semantics), so the strict type filter is still
-# applied on the returned keys. `list_time_series` rather than `list_keys` because
-# only it carries `association_id`.
+# applied on the returned keys.
 function infrastore_list_keys_with_owner(
     store::Store,
     owner_type::Type;

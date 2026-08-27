@@ -281,23 +281,17 @@ end
     # FuelCurve whose fuel_cost is a TimeSeriesKey must round-trip to the
     # concrete key subtype (regression: previously dispatched on the abstract
     # `TimeSeriesKey` and crashed in `fieldnames`).
+    sys, (fuel_key,) = create_forecast_key_fixture("fuel_price")
     fc_ts = IS.FuelCurve(
         IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3)),
-        IS.ForecastKey(;
-            owner_id = 1,
-            owner_category = IS.InfraStore.Component,
-            association_id = 1,
-            time_series_type = IS.Deterministic,
-            name = "fuel_price",
-            initial_timestamp = Dates.DateTime("2020-01-01"),
-            resolution = Dates.Hour(1),
-            horizon = Dates.Hour(24),
-            interval = Dates.Hour(24),
-            count = 1,
-            features = Dict{String, Any}(),
-        ),
+        fuel_key,
     )
-    @test IS.compare_values(IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts)), fc_ts)
+    @test IS.serialize(fc_ts)["fuel_cost_time_series"] ==
+          IS.get_association_id(fuel_key)
+    fc_ts_rt = IS.with_deserialization_store(key_store(sys)) do
+        IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts))
+    end
+    @test IS.compare_values(fc_ts_rt, fc_ts)
 
     @test zero(cc) == IS.CostCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)))
     @test zero(IS.CostCurve) ==
@@ -421,19 +415,7 @@ end
 
 @testset "FuelCurve fuel_cost / fuel_cost_time_series are mutually exclusive" begin
     vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1.0, 2.0, 3.0))
-    key = IS.ForecastKey(;
-        owner_id = 1,
-        owner_category = IS.InfraStore.Component,
-        association_id = 1,
-        time_series_type = IS.Deterministic,
-        name = "fuel_price",
-        initial_timestamp = Dates.DateTime("2020-01-01"),
-        resolution = Dates.Hour(1),
-        horizon = Dates.Hour(24),
-        interval = Dates.Hour(24),
-        count = 1,
-        features = Dict{String, Any}(),
-    )
+    sys, (key,) = create_forecast_key_fixture("fuel_price")
 
     # Float form
     fc_float = IS.FuelCurve(vc, 3.0)
@@ -460,9 +442,12 @@ end
     # Serialization round-trip of the float form
     @test IS.deserialize(IS.FuelCurve, IS.serialize(fc_float)) == fc_float
 
-    # The key-form round trip goes through IS's native serialize/deserialize dicts
-    # in-memory, since a key cannot be authored from JSON.
-    @test IS.compare_values(IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts)), fc_ts)
+    # The key-form round trip resolves the serialized association id against the store
+    # that minted it.
+    fc_ts_rt = IS.with_deserialization_store(key_store(sys)) do
+        IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts))
+    end
+    @test IS.compare_values(fc_ts_rt, fc_ts)
 end
 
 @testset "Test prohibited FunctionData types" begin
