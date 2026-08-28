@@ -479,7 +479,6 @@ function serialize_single!(
     units::Union{Nothing, AbstractString} = get_units(sts),
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(sts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(sts),
-    association_id::Integer = 0,
 )
     # `get_array` returns the raw `Array{T, N}` (no TimeArray allocation).
     arr, element_type = _storage_array(get_array(sts))
@@ -493,8 +492,7 @@ function serialize_single!(
     InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features, units = units,
         quantity_kind = quantity_kind,
-        unit_system = _to_store_unit_system(unit_system),
-        association_id = association_id)
+        unit_system = _to_store_unit_system(unit_system))
     # The encoded array is what the batch buffers; its byte size drives auto-flush.
     return sizeof(arr)
 end
@@ -523,7 +521,6 @@ function serialize_non_sequential!(
     units::Union{Nothing, AbstractString} = get_units(nts),
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(nts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(nts),
-    association_id::Integer = 0,
 )
     arr, element_type = _storage_array(get_array(nts))
     tss_ts = InfraStore.NonSequentialTimeSeries(
@@ -535,8 +532,7 @@ function serialize_non_sequential!(
     InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features, units = units,
         quantity_kind = quantity_kind,
-        unit_system = _to_store_unit_system(unit_system),
-        association_id = association_id)
+        unit_system = _to_store_unit_system(unit_system))
     # The staged bytes are the encoded array plus the timestamps the association carries.
     return sizeof(arr) + sizeof(get_timestamps(nts))
 end
@@ -712,7 +708,7 @@ function infrastore_add_time_series!(
     features::Union{Nothing, Dict} = nothing,
 )
     batch = InfraStore.AddBatch()
-    key, _ = _infrastore_stage!(
+    staged, _ = _infrastore_stage!(
         batch,
         mgr,
         Dict{Tuple{Dates.Period, Dates.Period}, Any}(),
@@ -720,7 +716,7 @@ function infrastore_add_time_series!(
         time_series;
         features = features,
     )
-    try
+    added = try
         InfraStore.add_time_series_bulk!(mgr.data_store.inner, batch)
     catch e
         _infrastore_rethrow_duplicate(
@@ -729,7 +725,9 @@ function infrastore_add_time_series!(
             get_name(time_series),
         )
     end
-    return key
+    # The row is written by the time we get here, so the key is built around the id
+    # the catalog actually filed it under.
+    return build_key(staged, only(added).id)
 end
 
 # The store's duplicate-association rejection, which the add paths rely on
@@ -948,14 +946,20 @@ end
 # batch-sized datasets with whole-chunk writes (no per-add read-modify-write).
 
 """
-Commit a staged `AddBatch` to the store as one all-or-nothing bulk add.
+Commit a staged `AddBatch` to the store as one all-or-nothing bulk add, returning
+the store's `InfraStore.AddedTimeSeries` per request, in the order they were staged.
 
 The backend packs the arrays into batch-sized datasets written whole-chunk, so
 this is materially cheaper than the same adds issued one at a time — which is why
 the client-side buffer exists even though the store now has transactions.
+
+Each returned entry carries the `association_id` the catalog minted for that row.
+That id is the reason the write, not the staging, is where a `TimeSeriesKey` can
+first be built: the store owns the id stream, so nothing before this call knows
+what a staged association will be filed under.
 """
 function _infrastore_commit_batch!(mgr::AbstractTimeSeriesManager, batch)
-    try
+    added = try
         InfraStore.add_time_series_bulk!(mgr.data_store.inner, batch)
     catch e
         _infrastore_is_duplicate_error(e) && throw(
@@ -964,16 +968,17 @@ function _infrastore_commit_batch!(mgr::AbstractTimeSeriesManager, batch)
         rethrow()
     end
     flush!(mgr.data_store)
-    return
+    return added
 end
 
 """
 Stage one `(owner, time_series)` association onto `batch`, applying the same
-validation as the per-add path, and return its `TimeSeriesKey`. The write
-happens when the batch is committed. `params_cache` carries the forecast window
-parameters per `(resolution, interval)` group so staged forecasts are checked
-for compatibility against both the store and each other with one catalog query
-per group.
+validation as the per-add path, and return its [`StagedKey`](@ref) together with
+the bytes it buffered. The write happens when the batch is committed, and only
+then does the association have an id to build a `TimeSeriesKey` around — see
+[`build_key`](@ref). `params_cache` carries the forecast window parameters per
+`(resolution, interval)` group so staged forecasts are checked for compatibility
+against both the store and each other with one catalog query per group.
 """
 function _infrastore_stage!(
     batch::InfraStore.AddBatch,
@@ -1006,26 +1011,19 @@ function _infrastore_stage_data!(
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(time_series)
     feats = _infrastore_features(features)
-    # Taken before staging: the key below carries this id and callers embed it, so
-    # the row has to be written under the very same value rather than one the insert
-    # would mint for itself. Drawn from a block the binding holds, so staging N
-    # series costs one round trip per block rather than N.
-    association_id = InfraStore.next_association_id!(get_data_store(mgr).inner)
     nbytes = serialize_single!(batch, owner_id, owner_type, category, name,
-        time_series; features = feats, association_id = association_id)
-    resolution = get_resolution(time_series)
-    key = StaticTimeSeriesKey(;
+        time_series; features = feats)
+    staged = StagedKey{StaticTimeSeriesKey}((
         owner_id = owner_id,
         owner_category = category,
-        association_id = association_id,
         time_series_type = SingleTimeSeries,
         name = name,
         initial_timestamp = get_initial_timestamp(time_series),
-        resolution = resolution,
+        resolution = get_resolution(time_series),
         length = length(time_series),
         features = _key_features(feats),
-    )
-    return key, nbytes
+    ))
+    return staged, nbytes
 end
 
 function _infrastore_stage_data!(
@@ -1039,19 +1037,17 @@ function _infrastore_stage_data!(
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(time_series)
     feats = _infrastore_features(features)
-    association_id = InfraStore.next_association_id!(get_data_store(mgr).inner)
     nbytes = serialize_non_sequential!(batch, owner_id, owner_type, category, name,
-        time_series; features = feats, association_id = association_id)
-    key = NonSequentialTimeSeriesKey(;
+        time_series; features = feats)
+    staged = StagedKey{NonSequentialTimeSeriesKey}((
         owner_id = owner_id,
         owner_category = category,
-        association_id = association_id,
         time_series_type = NonSequentialTimeSeries,
         name = name,
         length = length(time_series),
         features = _key_features(feats),
-    )
-    return key, nbytes
+    ))
+    return staged, nbytes
 end
 
 # Validate a staged forecast's window parameters against its `(resolution,
@@ -1100,23 +1096,20 @@ function _infrastore_stage_forecast!(
     horizon = get_horizon(ts)
     feats = _infrastore_features(features)
     obj, count = build(initial, resolution, horizon, interval, name)
-    association_id = InfraStore.next_association_id!(get_data_store(mgr).inner)
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
-        features = feats, association_id = association_id)
+        features = feats)
     # The key names the stored type as its UnionAll (`Probabilistic`, not
     # `Probabilistic{Float64, 2}`), exactly as a key listed back from the catalog does,
     # so the two compare and query alike.
-    stored_type = _unparameterized_type(typeof(ts))
-    key = ForecastKey(;
+    staged = StagedKey{ForecastKey}((
         owner_id = owner_id, owner_category = category,
-        association_id = association_id,
-        time_series_type = stored_type, name = name,
+        time_series_type = _unparameterized_type(typeof(ts)), name = name,
         initial_timestamp = initial, resolution = resolution,
         horizon = horizon, interval = interval, count = count,
-        features = _key_features(feats))
+        features = _key_features(feats)))
     # `obj.data` is the encoded dense array the batch buffers; its byte size drives
     # auto-flush.
-    return key, sizeof(obj.data)
+    return staged, sizeof(obj.data)
 end
 
 function _infrastore_stage_data!(
@@ -2006,12 +1999,11 @@ for T in (
 end
 
 # Build the matching IS `TimeSeriesKey` from a catalog row — a
-# `list_time_series` metadata row (the only row kind that carries
-# `association_id`; a bare `list_keys`/`list_array_groups` row does not, so
-# every caller lists through `list_time_series` instead). The key is the
-# single descriptor for a stored association; forecast-only fields
-# (percentiles, scenario_count) are not carried — they come from the data on
-# read.
+# `list_time_series` metadata row (the only row kind that carries the store's
+# `id`; a bare `list_keys`/`list_array_groups` row does not, so every caller
+# lists through `list_time_series` instead). The key is the single descriptor
+# for a stored association; forecast-only fields (percentiles, scenario_count)
+# are not carried — they come from the data on read.
 _key_from_row(row) = _key_from_row(_infrastore_is_type(row.time_series_type), row)
 
 _row_features(row) = Dict{String, Any}(string(k) => v for (k, v) in row.features)
@@ -2020,7 +2012,7 @@ _key_from_row(::Type{T}, row) where {T <: NonSequentialTimeSeries} =
     NonSequentialTimeSeriesKey(;
         owner_id = row.owner_id,
         owner_category = row.owner_category,
-        association_id = row.association_id,
+        association_id = row.id,
         time_series_type = T,
         name = row.name,
         length = row.length,
@@ -2031,7 +2023,7 @@ _key_from_row(::Type{T}, row) where {T <: StaticTimeSeries} =
     StaticTimeSeriesKey(;
         owner_id = row.owner_id,
         owner_category = row.owner_category,
-        association_id = row.association_id,
+        association_id = row.id,
         time_series_type = T,
         name = row.name,
         initial_timestamp = row.initial_timestamp,
@@ -2044,7 +2036,7 @@ _key_from_row(::Type{T}, row) where {T <: Forecast} =
     ForecastKey(;
         owner_id = row.owner_id,
         owner_category = row.owner_category,
-        association_id = row.association_id,
+        association_id = row.id,
         time_series_type = T,
         name = row.name,
         initial_timestamp = row.initial_timestamp,
@@ -2062,16 +2054,15 @@ is meaningful only against that store — resolve it against the same artifact t
 document was exported from.
 """
 function get_time_series_key(store::Store, association_id::Int)
-    row = try
-        InfraStore.get_time_series_metadata(store.inner, Int64(association_id))
-    catch e
-        e isa InfraStore.NotFoundError || rethrow()
-        throw(
-            ArgumentError(
-                "association_id=$association_id: no association in this store carries this id",
-            ),
-        )
-    end
+    # `nothing`, not a raised error: the store treats a stale reference as an answer
+    # to "does this still resolve?". Resolving one is past that question, so the miss
+    # becomes an error here.
+    row = InfraStore.get_metadata_by_id(store.inner, Int64(association_id))
+    isnothing(row) && throw(
+        ArgumentError(
+            "association_id=$association_id: no association in this store carries this id",
+        ),
+    )
     return _key_from_row(row)
 end
 

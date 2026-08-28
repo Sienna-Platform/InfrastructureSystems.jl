@@ -2278,8 +2278,12 @@ end
     data = Dict(initial_time => rand(horizon_count), other_time => rand(horizon_count))
     forecast = IS.Deterministic("fx", data, resolution)
 
-    key = IS.time_series_transaction(sys) do txn
-        return IS.add_time_series!(txn, component, forecast)
+    # A staged addition has no key until the store writes it and mints the id, so the
+    # block flushes and reads the keys back off the transaction.
+    key = IS.time_series_transaction(sys; collect_keys = true) do txn
+        IS.add_time_series!(txn, component, forecast)
+        IS.flush!(txn)
+        return only(IS.added_keys(txn))
     end
 
     @test IS.get_owner_id(key) == IS.get_id(component)
@@ -6317,6 +6321,86 @@ end
     end
     names = Set(IS.get_name(k) for k in IS.get_time_series_keys(component))
     @test names == union(Set("ts_$i" for i in 1:7), Set("bytes_$i" for i in 1:7))
+end
+
+@testset "Test staged additions take their ids from the store" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    make_ts(name) = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = 8, step = resolution), collect(1.0:8.0),
+        ),
+        name = name,
+    )
+
+    # A staged addition has no id until the store writes it, so there is no key to
+    # hand back at stage time.
+    IS.time_series_transaction(sys) do txn
+        @test isnothing(IS.add_time_series!(txn, component, make_ts("staged")))
+    end
+
+    # Without `collect_keys` the context keeps none, so a bulk ingest does not retain
+    # a key per series.
+    IS.time_series_transaction(sys) do txn
+        IS.add_time_series!(txn, component, make_ts("uncollected"))
+        IS.flush!(txn)
+        @test isempty(IS.added_keys(txn))
+    end
+
+    # With it, the keys appear as the block flushes -- including the auto-flushes -- and
+    # carry the ids the catalog actually filed the rows under.
+    keys = IS.time_series_transaction(
+        sys;
+        collect_keys = true,
+        auto_flush_threshold = 2,
+    ) do txn
+        for i in 1:5
+            IS.add_time_series!(txn, component, make_ts("collected_$i"))
+        end
+        # Auto-flushes at 2 and 4 have resolved four of the five.
+        @test length(IS.added_keys(txn)) == 4
+        IS.flush!(txn)
+        return copy(IS.added_keys(txn))
+    end
+    @test length(keys) == 5
+    @test IS.get_name.(keys) == ["collected_$i" for i in 1:5]
+
+    stored = Dict(
+        IS.get_association_id(k) => k for k in IS.get_time_series_keys(component)
+    )
+    for key in keys
+        @test stored[IS.get_association_id(key)] == key
+    end
+end
+
+@testset "Test a rolled-back block leaves no keys behind" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    ts = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(Dates.DateTime("2020-09-01"); length = 8, step = Dates.Hour(1)),
+            collect(1.0:8.0),
+        ),
+        name = "rolled",
+    )
+
+    context = nothing
+    @test_throws ErrorException IS.time_series_transaction(
+        sys; collect_keys = true, auto_flush_threshold = 1,
+    ) do txn
+        context = txn
+        IS.add_time_series!(txn, component, ts)
+        # The auto-flush has already minted an id and built its key.
+        @test length(IS.added_keys(txn)) == 1
+        error("boom")
+    end
+    # The rollback unwrote the row, so the key naming it is dropped with it.
+    @test isempty(IS.added_keys(context))
+    @test isempty(IS.get_time_series_keys(component))
 end
 
 @testset "Test time series context nesting and reuse" begin

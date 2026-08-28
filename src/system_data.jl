@@ -139,6 +139,11 @@ A batch that grows past `auto_flush_threshold` staged additions or
 mid-block, so an arbitrarily large block holds a bounded amount of data in memory.
 Flushed work stays inside the transaction and rolls back with it.
 
+`add_time_series!` through the yielded context returns `nothing`: an addition has no
+key until the store writes it and mints its association id. Pass `collect_keys = true`
+to keep one key per written addition, and read them with [`added_keys`](@ref) after
+the block — or call `flush!(txn)` first to see the ones staged so far.
+
 ```julia
 time_series_transaction(data) do txn
     for (component, profile) in profiles
@@ -208,8 +213,13 @@ function add_time_series!(
 )
     # A block opened for just this call, so the components land as one batch,
     # atomically. The transaction's dispatch stores the array once and validates
-    # each component against `data`.
-    return time_series_transaction(data) do txn
+    # each component against `data`. The keys come from the context rather than the
+    # block's return value: they exist only once the block has committed, which is
+    # after the block itself has run.
+    return _transaction_added_keys(
+        data.time_series_manager,
+        owner -> _validate(data, owner),
+    ) do txn
         add_time_series!(txn, components, time_series; features = features)
     end
 end

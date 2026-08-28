@@ -117,6 +117,20 @@ inside `with_deserialization_store(store) do ... end`. `deserialize(::Type{Syste
 binds the store it just opened around its own work, but components are deserialized by the
 parent package, which must wrap that pass the same way.
 
+The store mints that id as it inserts the row, which is why a key exists only once the
+addition has been written. A direct `add_time_series!(sys, owner, ts)` writes on the spot and
+returns the key. An addition staged into a `time_series_transaction` is still buffered, so it
+has no id yet and the call returns `nothing`; open the block with `collect_keys = true` and
+read `added_keys(txn)` once it has flushed:
+
+```julia
+key = time_series_transaction(sys; collect_keys = true) do txn
+    add_time_series!(txn, component, ts)
+    flush!(txn)
+    only(added_keys(txn))
+end
+```
+
 ## Debugging
 
 Inspect a persisted (closed) store with standard HDF5 and SQLite tools. For example,

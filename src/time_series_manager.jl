@@ -131,6 +131,11 @@ A batch that grows past `auto_flush_threshold` staged additions or
 mid-block, so an arbitrarily large block holds a bounded amount of data in memory.
 Flushed work stays inside the transaction and rolls back with it.
 
+`add_time_series!` through the yielded context returns `nothing`: an addition has no
+key until the store writes it and mints its association id. Pass `collect_keys = true`
+to keep one key per written addition, and read them with [`added_keys`](@ref) after
+the block — or call `flush!(txn)` first to see the ones staged so far.
+
 ```julia
 time_series_transaction(mgr) do txn
     for (component, profile) in profiles
@@ -149,6 +154,7 @@ function _time_series_transaction(
     owner_validator::Function;
     auto_flush_threshold::Int = AUTO_FLUSH_THRESHOLD,
     auto_flush_bytes::Int = AUTO_FLUSH_BYTES,
+    collect_keys::Bool = false,
 )
     _throw_if_read_only(mgr)
     context = TimeSeriesContext(
@@ -156,7 +162,28 @@ function _time_series_transaction(
         owner_validator;
         auto_flush_threshold = auto_flush_threshold,
         auto_flush_bytes = auto_flush_bytes,
+        collect_keys = collect_keys,
     )
+    return _run_transaction(func, context)
+end
+
+# The keys an add produced exist only once the store has written the rows and minted
+# their ids, which happens in `commit!` — after `func` has already returned. So a
+# caller that wants them runs the block for its effect and reads them off the context
+# afterwards, rather than through the block's own return value.
+function _transaction_added_keys(
+    func::Function,
+    mgr::TimeSeriesManager,
+    owner_validator::Function;
+    kwargs...,
+)
+    _throw_if_read_only(mgr)
+    context = TimeSeriesContext(mgr, owner_validator; collect_keys = true, kwargs...)
+    _run_transaction(func, context)
+    return added_keys(context)
+end
+
+function _run_transaction(func::Function, context::TimeSeriesContext)
     begin_transaction!(context)
     # `commit!` must stay inside the protected region: buffered additions are only
     # written (and validated by the store) at the final flush it performs, so a bad
@@ -192,6 +219,12 @@ end
 """
 Add a time series through an open transaction, buffering it into the block's one
 bulk write. If the block throws, the addition is rolled back with the rest of it.
+
+Returns `nothing`. The addition has no key yet: the store mints the association id
+as it inserts the row, which has not happened while the addition is still buffered.
+Open the block with `collect_keys = true` and read [`added_keys`](@ref) once it has
+flushed, or use the direct `add_time_series!(mgr, owner, ts)`, which writes on the
+spot and hands back the key.
 """
 function add_time_series!(
     context::TimeSeriesContext,
@@ -201,13 +234,16 @@ function add_time_series!(
 )
     _throw_if_closed(context)
     context.owner_validator(owner)
-    return _stage_on_context!(context, owner, time_series; features = features)
+    _stage_on_context!(context, owner, time_series; features = features)
+    return
 end
 
 """
 Add the same time series to multiple components through an open transaction. Only
-one copy of the array is stored, but each component gets its own association row
-(and so its own key), so this returns one `ConcreteTimeSeriesKey` per component.
+one copy of the array is stored, but each component gets its own association row —
+and so its own key, available through [`added_keys`](@ref) once the block flushes.
+
+Returns `nothing`, as the single-owner method does and for the same reason.
 """
 function add_time_series!(
     context::TimeSeriesContext,
@@ -223,13 +259,11 @@ function add_time_series!(
         ),
     )
     first_component, rest = peeled
-    keys = ConcreteTimeSeriesKey[add_time_series!(
-        context, first_component, time_series; features = features,
-    )]
+    add_time_series!(context, first_component, time_series; features = features)
     for component in rest
-        push!(keys, add_time_series!(context, component, time_series; features = features))
+        add_time_series!(context, component, time_series; features = features)
     end
-    return keys
+    return
 end
 
 function _stage_on_context!(
@@ -238,7 +272,7 @@ function _stage_on_context!(
     time_series::TimeSeriesData;
     features::Union{Nothing, Dict} = nothing,
 )
-    key, nbytes = _infrastore_stage!(
+    staged, nbytes = _infrastore_stage!(
         _batch!(context),
         context.mgr,
         context.params_cache,
@@ -246,16 +280,16 @@ function _stage_on_context!(
         time_series;
         features = features,
     )
-    push!(context.keys, key)
+    push!(context.staged, staged)
     # `nbytes` is the exact size of the encoded array the batch copied at stage
     # time (computed where the array is materialized — never derived by walking
     # the source objects, which costs more than the rest of the stage combined).
     context.staged_bytes += nbytes
-    if length(context.keys) >= context.auto_flush_threshold ||
+    if length(context.staged) >= context.auto_flush_threshold ||
        context.staged_bytes >= context.auto_flush_bytes
         flush!(context)
     end
-    return key
+    return
 end
 
 function clear_time_series!(mgr::TimeSeriesManager)

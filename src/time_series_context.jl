@@ -42,8 +42,20 @@ mutable struct TimeSeriesContext{M <: AbstractTimeSeriesManager, V}
     mgr::M
     "Created on the first stage; a context that never adds never allocates one."
     batch::Union{Nothing, InfraStore.AddBatch}
-    "Keys for the buffered additions, in stage order."
-    keys::Vector{ConcreteTimeSeriesKey}
+    """
+    The buffered additions, in stage order, as everything their keys need bar the
+    association id — which the store mints on insert, so a staged addition has none
+    until [`flush!`](@ref) writes it.
+    """
+    staged::Vector{StagedKey}
+    """
+    Keys for the additions this block has written, in stage order, built from the ids
+    the store minted for them. Only collected when `collect_keys` is set; a bulk
+    ingest that never asks for its keys should not pay to retain one per series.
+    """
+    added::Vector{ConcreteTimeSeriesKey}
+    "Whether to retain a key per written addition in `added`."
+    collect_keys::Bool
     "Forecast window parameters per `(resolution, interval)` group."
     params_cache::Dict{
         Tuple{Dates.Period, Dates.Period},
@@ -74,6 +86,7 @@ function TimeSeriesContext(
     owner_validator = no_owner_validation;
     auto_flush_threshold::Int = AUTO_FLUSH_THRESHOLD,
     auto_flush_bytes::Int = AUTO_FLUSH_BYTES,
+    collect_keys::Bool = false,
 )
     auto_flush_threshold >= 1 ||
         throw(ArgumentError("auto_flush_threshold must be positive: $auto_flush_threshold"))
@@ -82,7 +95,9 @@ function TimeSeriesContext(
     return TimeSeriesContext(
         mgr,
         nothing,
+        StagedKey[],
         ConcreteTimeSeriesKey[],
+        collect_keys,
         Dict{Tuple{Dates.Period, Dates.Period}, Union{Nothing, ForecastParameters}}(),
         false,
         false,
@@ -96,7 +111,7 @@ end
 """
 Whether `context` has additions buffered but not yet written.
 """
-has_staged_data(context::TimeSeriesContext) = !isempty(context.keys)
+has_staged_data(context::TimeSeriesContext) = !isempty(context.staged)
 
 function _throw_if_closed(context::TimeSeriesContext)
     context.closed && throw(
@@ -129,9 +144,11 @@ function begin_transaction!(context::TimeSeriesContext)
     return
 end
 
+# A fresh vector rather than `empty!`: `flush!` holds the staged entries it is about
+# to write, and emptying them in place would clear that reference too.
 function _reset_buffer!(context::TimeSeriesContext)
     context.batch = nothing
-    empty!(context.keys)
+    context.staged = StagedKey[]
     empty!(context.params_cache)
     context.staged_bytes = 0
     return
@@ -144,17 +161,36 @@ buffered.
 Any operation needing the arrays physically present — a read, a reader build, a
 removal — flushes first. Inside a transactional context that is free of consequence:
 the write lands in the open transaction and rolls back with it.
+
+This is also where a staged addition becomes a [`TimeSeriesKey`](@ref): the store
+mints the association ids as it inserts, and hands them back in stage order, so the
+keys are built here and nowhere earlier. See [`added_keys`](@ref).
 """
 function flush!(context::TimeSeriesContext)
     _throw_if_closed(context)
-    isempty(context.keys) && return
+    isempty(context.staged) && return
     batch = context.batch
+    staged = context.staged
     # Reset before writing so a failed write cannot leave the entries buffered a
     # second time, and so the context stays usable for further additions.
     _reset_buffer!(context)
-    _infrastore_commit_batch!(context.mgr, batch)
+    added = _infrastore_commit_batch!(context.mgr, batch)
+    context.collect_keys && append!(
+        context.added,
+        (build_key(entry, item.id) for (entry, item) in zip(staged, added)),
+    )
     return
 end
+
+"""
+The keys for every addition `context` has written so far, in stage order.
+
+A staged addition has no key until the store writes it and mints its association id,
+so this covers what has been flushed — everything, once the block has committed — and
+is empty unless the context was opened with `collect_keys = true`. Call
+[`flush!`](@ref) first to include additions still buffered.
+"""
+added_keys(context::TimeSeriesContext) = context.added
 
 """
 Flush buffered additions, commit the transaction, and close `context`.
@@ -183,6 +219,8 @@ the caller needs to see.
 """
 function discard!(context::TimeSeriesContext)
     _reset_buffer!(context)
+    # The rollback below unwrites the rows these name, ids included.
+    empty!(context.added)
     context.closed = true
     context.transactional || return
     try
