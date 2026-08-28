@@ -186,6 +186,32 @@ const ConcreteTimeSeriesKey =
     Union{StaticTimeSeriesKey, NonSequentialTimeSeriesKey, ForecastKey}
 
 """
+Everything a [`TimeSeriesKey`](@ref) needs except its `association_id`, held for the
+span between staging an addition onto a batch and the store writing it.
+
+The catalog mints the id on insert, so a staged addition does not have one yet — and
+a key is a value, immutable, never patched after the fact. Staging therefore produces
+this instead, and [`build_key`](@ref) turns it into the real key once the write hands
+back the id it was filed under. `K` is the concrete key type the fields belong to, so
+the built key's type is known from the staged one alone.
+"""
+struct StagedKey{K <: TimeSeriesKey, NT <: NamedTuple}
+    fields::NT
+end
+
+StagedKey{K}(fields::NT) where {K <: TimeSeriesKey, NT <: NamedTuple} =
+    StagedKey{K, NT}(fields)
+
+"""
+    build_key(staged::StagedKey, association_id) -> ConcreteTimeSeriesKey
+
+The key `staged` describes, filed under `association_id` — the id the store minted for
+its row.
+"""
+build_key(staged::StagedKey{K}, association_id::Integer) where {K} =
+    K(; staged.fields..., association_id = Int(association_id))
+
+"""
 Provides counts of time series including attachments to components and supplemental
 attributes.
 """
