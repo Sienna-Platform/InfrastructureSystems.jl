@@ -2488,6 +2488,227 @@ end
     @test occursin(string(bogus_id), e.msg)
 end
 
+# The key-addressed accessors look the association up by `association_id` and take every
+# lookup attribute off the row it resolves to, so a key whose other fields have been
+# doctored still reads the series the id names. These tests doctor them all to prove it:
+# before, the name / resolution / features were the actual lookup and every one of these
+# reads raised.
+@testset "Test key accessors address a SingleTimeSeries by association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), [IS.get_name(component)])
+    key = IS.add_time_series!(
+        sys, component, IS.SingleTimeSeries(; name = "val", data = ta);
+        features = Dict("scenario" => "high"),
+    )
+
+    doctored = IS.StaticTimeSeriesKey(;
+        # The owner is deliberately NOT doctored: it is the one thing an accessor
+        # checks, because the `owner` argument is not something the id can confirm.
+        owner_id = IS.get_owner_id(key),
+        owner_category = IS.get_owner_category(key),
+        association_id = IS.get_association_id(key),
+        time_series_type = IS.SingleTimeSeries,
+        name = "wrong-name",
+        initial_timestamp = Dates.DateTime("1999-01-01T00:00:00"),
+        resolution = Dates.Minute(5),
+        length = 999,
+        features = Dict{String, Any}("scenario" => "low"),
+    )
+
+    @test IS.get_time_series_values(component, doctored) ==
+          IS.get_time_series_values(component, key)
+    @test IS.get_time_series_timestamps(component, doctored) ==
+          IS.get_time_series_timestamps(component, key)
+    @test IS.get_time_series_array(component, doctored) ==
+          IS.get_time_series_array(component, key)
+    @test IS.get_time_series_hash(component, doctored) ==
+          IS.get_time_series_hash(component, key)
+
+    # Slicing is computed from the resolved row's grid, not the doctored one.
+    start_time = Dates.DateTime("2020-01-01T04:00:00")
+    @test IS.get_time_series_values(
+        component,
+        doctored;
+        start_time = start_time,
+        len = 3,
+    ) ==
+          [5.0, 6.0, 7.0]
+
+    IS.remove_time_series!(sys, component, doctored)
+    @test isempty(IS.get_time_series_keys(component))
+end
+
+@testset "Test key accessors address a Deterministic by association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    other_time = initial_time + resolution
+    data = Dict(initial_time => collect(1.0:24.0), other_time => collect(25.0:48.0))
+    key = IS.time_series_transaction(sys; collect_keys = true) do txn
+        IS.add_time_series!(txn, component, IS.Deterministic("fx", data, resolution))
+        IS.flush!(txn)
+        return only(IS.added_keys(txn))
+    end
+
+    doctored = IS.ForecastKey(;
+        # The owner is deliberately NOT doctored: it is the one thing an accessor
+        # checks, because the `owner` argument is not something the id can confirm.
+        owner_id = IS.get_owner_id(key),
+        owner_category = IS.get_owner_category(key),
+        association_id = IS.get_association_id(key),
+        time_series_type = IS.Deterministic,
+        name = "wrong-name",
+        initial_timestamp = Dates.DateTime("1999-01-01T00:00:00"),
+        resolution = Dates.Minute(5),
+        horizon = Dates.Minute(15),
+        interval = Dates.Minute(10),
+        count = 99,
+        features = Dict{String, Any}("scenario" => "low"),
+    )
+
+    @test IS.get_data(IS.get_time_series(component, doctored)) ==
+          IS.get_data(IS.get_time_series(component, key))
+    @test IS.get_time_series_hash(component, doctored) ==
+          IS.get_time_series_hash(component, key)
+    @test IS.get_time_series_values(component, doctored; start_time = other_time) ==
+          collect(25.0:48.0)
+end
+
+@testset "Test key accessors address a NonSequentialTimeSeries by association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+        Dates.DateTime("2020-01-03T00:00:00"),
+    ]
+    values = [10.0, 20.0, 30.0]
+    key = IS.add_time_series!(
+        sys, component, IS.NonSequentialTimeSeries("events", timestamps, values),
+    )
+
+    doctored = IS.NonSequentialTimeSeriesKey(;
+        # The owner is deliberately NOT doctored: it is the one thing an accessor
+        # checks, because the `owner` argument is not something the id can confirm.
+        owner_id = IS.get_owner_id(key),
+        owner_category = IS.get_owner_category(key),
+        association_id = IS.get_association_id(key),
+        time_series_type = IS.NonSequentialTimeSeries,
+        name = "wrong-name",
+        length = 999,
+        features = Dict{String, Any}("scenario" => "low"),
+    )
+
+    @test IS.get_time_series_values(component, doctored) == values
+    @test IS.get_time_series_hash(component, doctored) ==
+          IS.get_time_series_hash(component, key)
+end
+
+# The `owner` argument is not something the id can confirm, so it is checked: a key read
+# or removed against the wrong owner is a caller error, not a request to act on that
+# owner's same-named series. Removal is the case that matters — without the check it would
+# delete a series off a component the caller never named.
+@testset "Test key accessors reject a key belonging to another owner" begin
+    sys = IS.SystemData()
+    component1 = IS.TestComponent("Component1", 5)
+    component2 = IS.TestComponent("Component2", 6)
+    IS.add_component!(sys, component1)
+    IS.add_component!(sys, component2)
+
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    values1 = collect(1.0:24.0)
+    values2 = collect(101.0:124.0)
+    for (component, values) in ((component1, values1), (component2, values2))
+        ta = TimeSeries.TimeArray(dates, values, [IS.get_name(component)])
+        IS.add_time_series!(sys, component, IS.SingleTimeSeries(; name = "val", data = ta))
+    end
+    key1 = only(IS.get_time_series_keys(component1))
+
+    @test_throws ArgumentError IS.get_time_series(component2, key1)
+    @test_throws ArgumentError IS.get_time_series_values(component2, key1)
+    @test_throws ArgumentError IS.get_time_series_values(component2, key1; len = 3)
+    @test_throws ArgumentError IS.get_time_series_array(component2, key1)
+    @test_throws ArgumentError IS.get_time_series_hash(component2, key1)
+    @test_throws ArgumentError IS.remove_time_series!(sys, component2, key1)
+
+    # Both series survive the rejected calls, and each reads from its own owner.
+    @test IS.get_time_series_values(component1, key1) == values1
+    @test IS.get_time_series_values(
+        component2, only(IS.get_time_series_keys(component2)),
+    ) == values2
+end
+
+# A key whose association is gone is not probed for first — the accessors are already
+# committed to acting on it, so the miss surfaces as an error naming the id.
+@testset "Test key accessors on a removed association" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), [IS.get_name(component)])
+    key =
+        IS.add_time_series!(sys, component, IS.SingleTimeSeries(; name = "val", data = ta))
+    IS.remove_time_series!(sys, component, key)
+
+    @test_throws ArgumentError IS.get_time_series(component, key)
+    @test_throws ArgumentError IS.get_time_series_values(component, key; len = 3)
+    @test_throws ArgumentError IS.get_time_series_hash(component, key)
+    @test_throws ArgumentError IS.remove_time_series!(sys, component, key)
+end
+
+# An id names exactly one catalog row. The attribute-addressed removal it replaced was
+# blunter: a `nothing` interval matched *any* interval, so a SingleTimeSeries key could
+# reach the DeterministicSingleTimeSeries derived from it, which shares its name,
+# resolution and features and differs only by carrying one.
+@testset "Test remove_time_series! by key removes exactly one association" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    resolution = Dates.Hour(1)
+    dates = create_dates("2020-01-01T00:00:00", resolution, "2020-01-02T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:length(dates)), ["val"])
+    sts_key = IS.add_time_series!(sys, component, IS.SingleTimeSeries("val", ta))
+    IS.transform_single_time_series!(
+        sys, IS.DeterministicSingleTimeSeries, Dates.Hour(12), Dates.Hour(6),
+    )
+    @test length(IS.get_time_series_keys(component)) == 2
+
+    # The derived forecast holds the SingleTimeSeries down: removing its backing series
+    # would orphan it, and the store refuses rather than removing either.
+    e = try
+        IS.remove_time_series!(sys, component, sts_key)
+        nothing
+    catch err
+        err
+    end
+    @test e isa ArgumentError
+    @test occursin("DeterministicSingleTimeSeries", e.msg)
+    @test length(IS.get_time_series_keys(component)) == 2
+
+    # Removing the forecast by its own key leaves the SingleTimeSeries alone, even
+    # though the two agree on name, resolution and features.
+    dst_key = only(
+        IS.get_time_series_keys(
+            component; time_series_type = IS.DeterministicSingleTimeSeries,
+        ),
+    )
+    IS.remove_time_series!(sys, component, dst_key)
+    @test IS.get_association_id(only(IS.get_time_series_keys(component))) ==
+          IS.get_association_id(sts_key)
+    @test length(IS.get_time_series_values(component, sts_key)) == length(dates)
+end
+
 @testset "Test add_time_series" begin
     sys = IS.SystemData()
     name = "Component1"
@@ -4700,7 +4921,7 @@ end
         e
     end
     @test e isa ArgumentError
-    @test !occursin("stale", e.msg)
+    @test !occursin("association_id", e.msg)
 
     # Replace the series with a shorter one under the same name.
     IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "x")
@@ -4712,7 +4933,7 @@ end
         e
     end
     @test e isa ArgumentError
-    @test occursin("stale", e.msg)
+    @test occursin("association_id", e.msg)
     # Even a window that fits the replacement is rejected by the id, not the shape.
     @test_throws ArgumentError IS.get_time_series_values(
         component, key; start_time = dates[1], len = 5,
@@ -4756,7 +4977,7 @@ end
         e
     end
     @test e isa ArgumentError
-    @test !occursin("stale", e.msg)
+    @test !occursin("association_id", e.msg)
 
     # Replace with the same count but a shorter horizon: the old shape heuristic
     # (start + count) would have passed this and then over-read the window.
@@ -4773,7 +4994,7 @@ end
         e
     end
     @test e isa ArgumentError
-    @test occursin("stale", e.msg)
+    @test occursin("association_id", e.msg)
     @test_throws ArgumentError IS.get_time_series(component, key; len = 3)
 
     IS.remove_time_series!(sys, IS.Deterministic, component, "f")

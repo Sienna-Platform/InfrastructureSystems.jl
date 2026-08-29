@@ -143,15 +143,16 @@ function get_time_series(
             count = count,
         )
     catch e
-        # `catch`-block exception inspection: a stale key — the series was
-        # removed after the key was obtained — surfaces as the store's
-        # NotFoundError; keep the accessors' public ArgumentError contract.
+        # `catch`-block exception inspection: an id that no longer resolves — the
+        # series was removed after the key was obtained — surfaces as the store's
+        # NotFoundError; keep the accessors' public ArgumentError contract, and
+        # name the id, which is what the read was addressed by.
         if e isa InfraStore.NotFoundError
             throw(
                 ArgumentError(
-                    "No time series matches the key $(summary(key)) with " *
-                    "name='$(get_name(key))' on $(summary(owner)); " *
-                    "it may have been removed.",
+                    "TimeSeriesKey names association_id=$(get_association_id(key)), " *
+                    "which is no longer in this store: $(summary(key)) with " *
+                    "name='$(get_name(key))' on $(summary(owner)) may have been removed.",
                 ),
             )
         end

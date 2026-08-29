@@ -562,13 +562,17 @@ function get_non_sequential(
     nts = InfraStore.get_time_series(InfraStore.NonSequentialTimeSeries, store.inner,
         owner_id,
         owner_category, name; features = features, time_range = time_range)
-    values = _decode_stored_values(nts.data, _element_encoding(nts.element_type))
-    return NonSequentialTimeSeries(
-        String(name), nts.timestamps, values; units = nts.units,
-        quantity_kind = nts.quantity_kind,
-        unit_system = _from_store_unit_system(nts.unit_system),
-    )
+    return _non_sequential_from_store(nts, name)
 end
+
+# Rebuild the IS `NonSequentialTimeSeries` from whatever the store handed back,
+# however the read was addressed.
+_non_sequential_from_store(nts, name::AbstractString) = NonSequentialTimeSeries(
+    String(name), nts.timestamps,
+    _decode_stored_values(nts.data, _element_encoding(nts.element_type));
+    units = nts.units, quantity_kind = nts.quantity_kind,
+    unit_system = _from_store_unit_system(nts.unit_system),
+)
 
 function get_num_time_series(store::Store)
     c = InfraStore.get_counts(store.inner)
@@ -632,52 +636,43 @@ much smaller the file got. An in-memory store has no file to rewrite.
 compact_time_series!(store::Store) = InfraStore.compact!(store.inner)
 
 """
-Remove exactly the association that a fully-resolved `TimeSeriesKey` names.
+Remove exactly the association that a `TimeSeriesKey` names, and nothing else.
 
-The key carries the complete stored identity — type, name, resolution, interval,
-and the *whole* feature set — so this routes to the store's exact-key removal
-(the core matches the features by set hash) instead of the subset feature filter
-that the by-name removals use. A sibling series whose feature set is a strict
-superset of the key's therefore survives, which the subset filter would have
-deleted along with the keyed series.
+The key's `association_id` names one catalog row, so this is the store's
+`remove_by_ids!` — a single id-addressed call that deletes that row and no
+other. The attribute-addressed removal it replaces was blunter than the
+docstring implied: an identity with no interval matches *any* interval, so a
+keyed removal could sweep a whole forecast family, and a `nothing` resolution
+likewise. Neither is reachable through an id.
 """
 function infrastore_remove_time_series!(
     store::Store,
     owner::TimeSeriesOwners,
     key::TimeSeriesKey,
 )
-    owner_id = get_owner_id(key)
-    category = get_owner_category(key)
-    name = get_name(key)
+    # `owner` is an argument in its own right, so it is confirmed against the key
+    # before anything is deleted; the id itself is taken as valid.
+    _check_association_owner(owner, key)
     try
-        InfraStore.remove_time_series!(
-            _infrastore_type(get_time_series_type(key)),
-            store.inner,
-            owner_id,
-            category,
-            name;
-            resolution = get_resolution(key),
-            interval = get_interval(key),
-            features = get_features(key),
-        )
+        InfraStore.remove_by_ids!(store.inner, [Int64(get_association_id(key))])
     catch e
         # `catch`-block exception inspection: the core reports both conditions
         # through its own error types, which IS maps to the errors callers
-        # dispatch on. The DST-orphan guard can only fire for a SingleTimeSeries
-        # key; an InvalidParameterError for any other key type is something else
-        # and propagates as itself.
-        if e isa InfraStore.InvalidParameterError &&
-           get_time_series_type(key) <: SingleTimeSeries
+        # dispatch on. `InvalidParameterError` out of a removal is the core's
+        # orphaned-DST guard, which fires only for a SingleTimeSeries backing one.
+        if e isa InfraStore.InvalidParameterError
             throw(
                 ArgumentError(
-                    "Cannot remove SingleTimeSeries '$name' because it is attached to a " *
-                    "DeterministicSingleTimeSeries."),
+                    "Cannot remove SingleTimeSeries '$(get_name(key))' because it is " *
+                    "attached to a DeterministicSingleTimeSeries."),
             )
         elseif e isa InfraStore.NotFoundError
             throw(
                 ArgumentError(
-                    "No time series matches the key $(summary(key)) with name='$name' " *
-                    "on $(summary(owner)); it may already have been removed."),
+                    "TimeSeriesKey names association_id=$(get_association_id(key)), which " *
+                    "is no longer in this store: $(summary(key)) with " *
+                    "name='$(get_name(key))' on $(summary(owner)) may already have been " *
+                    "removed."),
             )
         end
         rethrow()
@@ -875,68 +870,129 @@ function _validate_window(index::Integer, len, total::Integer)
     return n
 end
 
-# Key-addressed SingleTimeSeries read: the key carries the exact stored attributes
-# plus the `(initial_timestamp, resolution, length)` needed to validate the
-# requested window, so no catalog query is issued. The store slices the half-open
-# `[start, start + n·resolution)` window server-side; only the requested steps are
-# read and decoded.
+# ---- Key addressing --------------------------------------------------------
+# `association_id` is the identity of a stored association: the store mints it,
+# never reissues it, and every other field a `TimeSeriesKey` carries is a
+# snapshot of the catalog row it names. So a key is addressed by its id alone —
+# its `name`, `resolution`, `interval` and `features` are display state, never
+# lookup arguments. A key handed to an accessor is otherwise taken as valid:
+# nothing probes it for staleness first, and a dangling id surfaces as an error
+# from the call that was already committed to acting on it.
+#
+# The exception is the owner. `owner` is an argument in its own right, not
+# something the id can confirm, so every accessor checks that the association is
+# actually attached to the owner it was handed. Without it,
+# `remove_time_series!(sys, wrong_component, key)` would quietly delete a series
+# off some other component.
+#
+# How far that reaches is bounded by the core's id-addressed surface:
+# `read_by_ids` (whole series, no slicing), `remove_by_ids!`, and
+# `get_metadata_by_id`. A whole-series read and a removal are therefore each one
+# id-addressed call. A *sliced* read has no id-addressed entry point — the store
+# needs a time range, and `read_by_ids` takes none — so there the id resolves the
+# row and the row's own attributes drive the read. The id stays the only thing
+# the caller supplies, but it costs a second round trip until `read_by_ids`
+# grows a time range.
 
-# A key is a snapshot of one stored association, and every key carries the id the store
-# minted for it. Ids are never reissued, so "does this id still resolve?" is the exact
-# staleness test: if the series was removed (and possibly re-added under the same name and
-# features), the id is gone. This is a primary-key probe that fetches no row. Checking it
-# up front means every later mismatch is the caller's — an out-of-range `start_time`,
-# `len`, or `count` — and is reported as such rather than blamed on a stale key.
-function _throw_if_key_stale(store::Store, key::TimeSeriesKey)
+# The catalog row `id` names. `nothing` from the core means the row is gone, which
+# is an error here: the caller is already committed to acting on it.
+function _resolve_association(store::Store, key::TimeSeriesKey)
     id = get_association_id(key)
-    InfraStore.association_exists(store.inner, id) && return
+    row = InfraStore.get_metadata_by_id(store.inner, Int64(id))
+    isnothing(row) && throw(
+        ArgumentError(
+            "TimeSeriesKey names association_id=$id, which is no longer in this " *
+            "store: '$(get_name(key))' was removed after the key was obtained.",
+        ),
+    )
+    return row
+end
+
+# Confirm the association `key` names is attached to `owner`. Checked against the
+# catalog row wherever one is resolved anyway (removal, sliced reads); against the
+# key's own owner fields on the paths that address the store by id alone and never
+# fetch a row, where it is still the check that catches the mistake this guards
+# against — the caller naming the wrong component.
+_check_association_owner(owner::TimeSeriesOwners, key::TimeSeriesKey) =
+    _check_association_owner(owner, key, get_owner_id(key), get_owner_category(key))
+
+_check_association_owner(owner::TimeSeriesOwners, key::TimeSeriesKey, row) =
+    _check_association_owner(owner, key, row.owner_id, row.owner_category)
+
+function _check_association_owner(
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey,
+    association_owner_id,
+    association_category,
+)
+    owner_id, category = _infrastore_owner_id_category(owner)
+    (association_owner_id == owner_id && association_category == category) && return
     throw(
         ArgumentError(
-            "TimeSeriesKey is stale: the $(nameof(get_time_series_type(key))) " *
-            "'$(get_name(key))' it names (association_id=$id) is no longer in the " *
-            "store; it was removed after the key was obtained. Re-fetch the key with " *
+            "TimeSeriesKey '$(get_name(key))' (association_id=$(get_association_id(key))) " *
+            "is attached to owner id=$association_owner_id, not to $(summary(owner)); " *
+            "pass the owner it belongs to, or look up a key on this one with " *
             "get_time_series_key.",
         ),
     )
 end
 
+# The store an owner's manager holds, and the row `key`'s id resolves to in it,
+# confirmed to be attached to `owner`.
+function _store_and_association(owner::TimeSeriesOwners, key::TimeSeriesKey)
+    store = _get_time_series_manager_or_throw(owner).data_store
+    row = _resolve_association(store, key)
+    _check_association_owner(owner, key, row)
+    return (store, row)
+end
+
+# The one association `id` names, read whole in a single id-addressed call — no
+# catalog round trip, and no attribute off the key. `read_by_ids` takes no time
+# range, so this is the unsliced path only; it throws the core's `NotFoundError`
+# when the id dangles, which the public accessors map to an `ArgumentError`.
+_read_association_by_id(store::Store, key::TimeSeriesKey) =
+    only(InfraStore.read_by_ids(store.inner, [Int64(get_association_id(key))]))
+
+# Rebuild the IS `SingleTimeSeries` from whatever the store handed back, however
+# the read was addressed.
+_single_from_store(sts, name::AbstractString) = SingleTimeSeries(
+    String(name), sts.initial_timestamp, sts.resolution,
+    _decode_stored_values(sts.data, _element_encoding(sts.element_type));
+    units = sts.units, quantity_kind = sts.quantity_kind,
+    unit_system = _from_store_unit_system(sts.unit_system),
+)
+
+# Key-addressed SingleTimeSeries read. Unsliced, the id is the whole request. A
+# window needs the `(initial_timestamp, resolution, length)` grid to validate
+# against and a time range to push down, neither of which `read_by_ids` takes,
+# so it resolves the row and reads the half-open
+# `[start, start + n·resolution)` window server-side — only the requested steps
+# are read and decoded.
 function _infrastore_read_single(
     owner::TimeSeriesOwners,
     key::StaticTimeSeriesKey;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
-    _throw_if_key_stale(store, key)
-    owner_id, _, category = _infrastore_owner_args(owner)
-    name = get_name(key)
-    initial_timestamp = get_initial_timestamp(key)
-    resolution = get_resolution(key)
-    total = get_length(key)
-    feats = get_features(key)
-
-    start = if isnothing(start_time)
-        initial_timestamp
-    else
-        start_time
+    store = _get_time_series_manager_or_throw(owner).data_store
+    if isnothing(start_time) && isnothing(len)
+        _check_association_owner(owner, key)
+        sts = _read_association_by_id(store, key)::InfraStore.SingleTimeSeries
+        return _single_from_store(sts, sts.name)
     end
+    row = _resolve_association(store, key)
+    _check_association_owner(owner, key, row)
+    initial_timestamp = row.initial_timestamp
+    resolution = row.resolution
+    start = isnothing(start_time) ? initial_timestamp : start_time
     index = compute_time_array_index(initial_timestamp, start, resolution)
-    n = _validate_window(index, len, total)
-    time_range = if (isnothing(start_time) && isnothing(len))
-        nothing
-    else
-        (start, start + resolution * n)
-    end
-    sts = InfraStore.get_time_series(InfraStore.SingleTimeSeries, store.inner, owner_id,
-        category, name;
-        resolution = resolution, features = feats, time_range = time_range)
-    values = _decode_stored_values(sts.data, _element_encoding(sts.element_type))
-    return SingleTimeSeries(
-        String(name), sts.initial_timestamp, sts.resolution, values; units = sts.units,
-        quantity_kind = sts.quantity_kind,
-        unit_system = _from_store_unit_system(sts.unit_system),
-    )
+    n = _validate_window(index, len, row.length)
+    sts =
+        InfraStore.get_time_series(InfraStore.SingleTimeSeries, store.inner, row.owner_id,
+            row.owner_category, row.name;
+            resolution = resolution, features = _row_features(row),
+            time_range = (start, start + resolution * n))
+    return _single_from_store(sts, row.name)
 end
 
 """
@@ -962,11 +1018,11 @@ function infrastore_get_time_series(
     return _infrastore_read_non_sequential(owner, key; start_time = start_time, len = len)
 end
 
-# Key-addressed NonSequentialTimeSeries read (no catalog re-resolution). Only `start_time`
-# pushes down: `len` is a POINT COUNT, and turning it into an end timestamp needs to know
-# which irregular timestamps exist — which is what the read is for. The store has no
-# sentinel for "no upper bound" (`typemax(DateTime)` overflows the FFI's millisecond range
-# check), so the suffix read stands one in and `len` slices the result client-side.
+# Key-addressed NonSequentialTimeSeries read. Only `start_time` pushes down: `len` is a
+# POINT COUNT, and turning it into an end timestamp needs to know which irregular
+# timestamps exist — which is what the read is for. The store has no sentinel for "no upper
+# bound" (`typemax(DateTime)` overflows the FFI's millisecond range check), so the suffix
+# read stands one in and `len` slices the result client-side.
 const _FAR_FUTURE_DATETIME = Dates.DateTime(9999, 12, 31, 23, 59, 59)
 function _infrastore_read_non_sequential(
     owner::TimeSeriesOwners,
@@ -974,21 +1030,24 @@ function _infrastore_read_non_sequential(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
-    _throw_if_key_stale(store, key)
-    owner_id, _, category = _infrastore_owner_args(owner)
-    feats = get_features(key)
+    store = _get_time_series_manager_or_throw(owner).data_store
+    if isnothing(start_time) && isnothing(len)
+        _check_association_owner(owner, key)
+        raw = _read_association_by_id(store, key)::InfraStore.NonSequentialTimeSeries
+        return _non_sequential_from_store(raw, raw.name)
+    end
+    row = _resolve_association(store, key)
+    _check_association_owner(owner, key, row)
+    name = row.name
     time_range = if isnothing(start_time)
         nothing
     else
         (start_time, _FAR_FUTURE_DATETIME)
     end
     nts = get_non_sequential(
-        store, owner_id, category, get_name(key);
-        features = feats, time_range = time_range,
+        store, row.owner_id, row.owner_category, name;
+        features = _row_features(row), time_range = time_range,
     )
-    (isnothing(start_time) && isnothing(len)) && return nts
 
     # Slice the values directly (not via a TimeArray) so FunctionData / N-D series slice
     # too. With `start_time` given, `nts` is already the store-side suffix, so this narrows
@@ -1010,7 +1069,7 @@ function _infrastore_read_non_sequential(
     vals = full[index:(index + n - 1), colons...]
     # A slice is the same values over a shorter window, so it keeps the label.
     return NonSequentialTimeSeries(
-        String(get_name(key)), timestamps[index:(index + n - 1)], vals;
+        String(name), timestamps[index:(index + n - 1)], vals;
         units = get_units(nts), quantity_kind = get_quantity_kind(nts),
         unit_system = get_unit_system(nts))
 end
@@ -1359,8 +1418,10 @@ function _assemble_forecast_windows(initial_timestamp, interval, count, window)
 end
 
 """Reconstruct a forecast from the InfraStore store (matches the STORED type),
-honoring `start_time` / `count` slicing on the window axis. Pass `key` (a
-previously resolved `ForecastKey`) to skip the catalog resolution query."""
+honoring `start_time` / `count` slicing on the window axis. Pass `key` to address
+the forecast by its `association_id` instead of resolving one by name; the `name`
+argument is then only a label for error messages, and every lookup attribute
+comes off the row the id resolves to."""
 function _infrastore_get_forecast(
     owner, name;
     time_series_type::Type{<:Forecast} = Forecast,
@@ -1372,25 +1433,32 @@ function _infrastore_get_forecast(
     key::Union{Nothing, ForecastKey} = nothing,
     features::Union{Nothing, Dict} = nothing,
 )
-    mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
-    owner_id, _, category = _infrastore_owner_args(owner)
     # Resolve the unique forecast of the requested type matching a possibly-partial
     # (subset) feature / resolution / interval query, then read it by its exact stored
     # attributes. `interval` matters when one series name carries several forecasts
     # that differ only by interval (`transform_single_time_series!` with
     # `delete_existing = false`); without it the lookup is ambiguous. The type is part
     # of the lookup too: one name can carry a Deterministic and a Probabilistic.
-    matched = if isnothing(key)
-        infrastore_get_time_series_key(
-            owner, time_series_type, name;
-            resolution = resolution, interval = interval, features = features,
+    #
+    # A caller-supplied key skips that query: its `association_id` names the row
+    # directly, and the key rebuilt from that row — not the caller's snapshot of it —
+    # is what every lookup below is driven from.
+    store, matched = if isnothing(key)
+        mgr = _get_time_series_manager_or_throw(owner)
+        (
+            mgr.data_store,
+            infrastore_get_time_series_key(
+                owner, time_series_type, name;
+                resolution = resolution, interval = interval, features = features,
+            ),
         )
     else
-        # A caller-supplied key may predate a removal; a freshly resolved one cannot.
-        _throw_if_key_stale(store, key)
-        key
+        s, row = _store_and_association(owner, key)
+        (s, _key_from_row(row))
     end
+    owner_id = get_owner_id(matched)
+    category = get_owner_category(matched)
+    name = get_name(matched)
     feats = get_features(matched)
     resolution = get_resolution(matched)
     # `len` truncates each window to its first `len` steps; validate it against the
@@ -2264,34 +2332,13 @@ function infrastore_get_time_series_key(
 end
 
 # Content hash (64-char lowercase hex, the documented public form of the
-# wrapper's 32-byte hash) of the array `key` resolves to under `owner`. Pushes
-# the key's type/name/resolution/interval into one catalog query (a `nothing`
-# resolution or interval — a key type that has none — constrains nothing), so
-# the store applies its canonical comparisons; only the type residual and the
-# whole-feature-set match stay in-memory.
+# wrapper's 32-byte hash) of the array `key` resolves to under `owner`. The
+# catalog row the `association_id` names carries the hash, so this is one
+# primary-key fetch — no filtered listing, and no in-memory type residual or
+# whole-feature-set match to sift its results with.
 function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
-    mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
-    owner_id, _, category = _infrastore_owner_args(owner)
-    T = get_time_series_type(key)
-    rows = InfraStore.list_array_groups(store.inner; owner_id = owner_id,
-        owner_category = category,
-        time_series_type = _infrastore_pushable_type(T), name = get_name(key),
-        resolution = get_resolution(key), interval = get_interval(key))
-    target_feats = get_features(key)
-    for row in rows
-        _infrastore_type_matches(_infrastore_is_type(row.time_series_type), T) || continue
-        row.features == target_feats || continue
-        return bytes2hex(row.data_hash)
-    end
-    throw(
-        ArgumentError(
-            "No time series matched the key for $(summary(owner)): " *
-            "type=$T name=$(get_name(key)) resolution=$(get_resolution(key)) " *
-            "interval=$(get_interval(key)) features=$(target_feats). The series may " *
-            "have been removed; re-fetch the key with get_time_series_key.",
-        ),
-    )
+    _, row = _store_and_association(owner, key)
+    return bytes2hex(row.data_hash)
 end
 
 # Content hashes for a homogeneous collection of owners, resolved by ONE catalog
