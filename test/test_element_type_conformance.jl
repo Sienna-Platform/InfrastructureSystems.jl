@@ -1,22 +1,35 @@
 # Asserts IS's `_storage_array` / `_decode_static_values` against the shared
 # `element_type_vectors.json` conformance corpus.
 
-# `conformance/element_type_vectors.json`, from `INFRASTORE_CONFORMANCE_DIR` or
-# beside the InfraStore.jl checkout. Only meaningful when
-# `has_conformance_corpus()` is true.
-function _element_type_vectors_path()
+# The corpus is vendored at `test/conformance/element_type_vectors.json` (see the README
+# there) so the parity check always runs. A live copy — from `INFRASTORE_CONFORMANCE_DIR`
+# or beside an InfraStore.jl source checkout — wins when one is present, so an infrastore
+# dev tests against the corpus they are editing.
+const VENDORED_ELEMENT_TYPE_VECTORS =
+    joinpath(BASE_DIR, "test", "conformance", "element_type_vectors.json")
+
+# The live corpus, or "" when this checkout has none. `Base.find_package` points at
+# <repo>/julia/InfraStore.jl/src/InfraStore.jl in an infrastore checkout, and at
+# ~/.julia/packages/... for the registered package, which ships no corpus.
+function _live_element_type_vectors_path()
     from_env = get(ENV, "INFRASTORE_CONFORMANCE_DIR", "")
     if !isempty(from_env)
-        return joinpath(from_env, "element_type_vectors.json")
+        path = joinpath(from_env, "element_type_vectors.json")
+        isfile(path) || error("INFRASTORE_CONFORMANCE_DIR holds no corpus: $path")
+        return path
     end
     binding = Base.find_package("InfraStore")
     isnothing(binding) && return ""
-    # <repo>/julia/InfraStore.jl/src/InfraStore.jl -> <repo>/conformance
     repo = abspath(joinpath(dirname(binding), "..", "..", ".."))
-    return joinpath(repo, "conformance", "element_type_vectors.json")
+    path = joinpath(repo, "conformance", "element_type_vectors.json")
+    return isfile(path) ? path : ""
 end
 
-has_conformance_corpus() = isfile(_element_type_vectors_path())
+function _element_type_vectors_path()
+    live = _live_element_type_vectors_path()
+    isempty(live) && return VENDORED_ELEMENT_TYPE_VECTORS
+    return live
+end
 
 _load_element_type_vectors(path) = JSON.parsefile(path)["vectors"]
 
@@ -74,57 +87,45 @@ function _vector_expected_values(vector)
 end
 
 @testset "element_type conformance vectors decode to IS values" begin
-    if !has_conformance_corpus()
-        @warn "Skipping conformance decode tests; corpus not found" path =
-            _element_type_vectors_path()
-        @test_skip false
-    else
-        path = _element_type_vectors_path()
-        checked = 0
-        for vector in _load_element_type_vectors(path)
-            _is_representable(vector) || continue
-            expected = _vector_expected_values(vector)
-            isnothing(expected) && continue
-            # Only the static layouts decode through `_decode_static_values`;
-            # forecast layouts go through `_decode_forecast_window`, which slices
-            # a window out first and is covered separately.
-            vector["leading_dims"] == 1 || continue
+    path = _element_type_vectors_path()
+    checked = 0
+    for vector in _load_element_type_vectors(path)
+        _is_representable(vector) || continue
+        expected = _vector_expected_values(vector)
+        isnothing(expected) && continue
+        # Only the static layouts decode through `_decode_static_values`;
+        # forecast layouts go through `_decode_forecast_window`, which slices
+        # a window out first and is covered separately.
+        vector["leading_dims"] == 1 || continue
 
-            arr = _vector_storage_array(vector)
-            encoding = IS._element_encoding(vector["element_type"])
-            got = IS._decode_static_values(arr, encoding, size(arr, 1))
-            @test got == expected
-            checked += 1
-        end
-        # A corpus whose vectors all became unrepresentable would silently stop
-        # testing anything; every element type IS maps must stay covered.
-        @test checked >= 5
+        arr = _vector_storage_array(vector)
+        encoding = IS._element_encoding(vector["element_type"])
+        got = IS._decode_static_values(arr, encoding, size(arr, 1))
+        @test got == expected
+        checked += 1
     end
+    # A corpus whose vectors all became unrepresentable would silently stop
+    # testing anything; every element type IS maps must stay covered.
+    @test checked >= 5
 end
 
 @testset "element_type conformance vectors round-trip through the encoder" begin
-    if !has_conformance_corpus()
-        @warn "Skipping conformance round-trip tests; corpus not found" path =
-            _element_type_vectors_path()
-        @test_skip false
-    else
-        path = _element_type_vectors_path()
-        checked = 0
-        for vector in _load_element_type_vectors(path)
-            _is_representable(vector) || continue
-            expected = _vector_expected_values(vector)
-            isnothing(expected) && continue
-            vector["leading_dims"] == 1 || continue
+    path = _element_type_vectors_path()
+    checked = 0
+    for vector in _load_element_type_vectors(path)
+        _is_representable(vector) || continue
+        expected = _vector_expected_values(vector)
+        isnothing(expected) && continue
+        vector["leading_dims"] == 1 || continue
 
-            encoded, element_type = IS._storage_array(expected)
-            # The element type IS tags the array with is the store's own name...
-            @test element_type == vector["element_type"]
-            # ...and the bytes it produces are the ones the corpus pins.
-            @test encoded == _vector_storage_array(vector)
-            checked += 1
-        end
-        @test checked >= 5
+        encoded, element_type = IS._storage_array(expected)
+        # The element type IS tags the array with is the store's own name...
+        @test element_type == vector["element_type"]
+        # ...and the bytes it produces are the ones the corpus pins.
+        @test encoded == _vector_storage_array(vector)
+        checked += 1
     end
+    @test checked >= 5
 end
 
 @testset "element_type names are the store's neutral vocabulary" begin
@@ -144,4 +145,20 @@ end
 
     # An element type IS cannot represent is a loud error, not a silent scalar.
     @test_throws ErrorException IS._storage_array([1.0 + 2.0im])
+end
+
+@testset "the vendored corpus matches the live one when both are present" begin
+    live = _live_element_type_vectors_path()
+    if isempty(live) || live == VENDORED_ELEMENT_TYPE_VECTORS
+        @test isfile(VENDORED_ELEMENT_TYPE_VECTORS)
+    elseif read(live) != read(VENDORED_ELEMENT_TYPE_VECTORS)
+        # Not a failure: the live checkout may be mid-edit. The testsets above ran
+        # against `live`, so the contract is still asserted — only the pinned copy
+        # is stale, and refreshing it is a deliberate step (see the README).
+        @warn "Vendored conformance corpus differs from the live one; refresh it" live vendored =
+            VENDORED_ELEMENT_TYPE_VECTORS
+        @test_skip false
+    else
+        @test true
+    end
 end

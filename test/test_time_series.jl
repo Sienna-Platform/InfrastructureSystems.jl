@@ -5465,10 +5465,9 @@ end
     ) == 1
 end
 
-# KNOWN PARITY GAP (InfraStore backend): the store's uniqueness key omits `interval`, so
-# two forecasts that share name/resolution/features but differ only by interval cannot
-# coexist. Every testset built on this pair stays broken/skipped until the store key
-# includes interval (a core schema/key change).
+# A component carrying two `Deterministic` forecasts that share name/resolution/features
+# and differ only by `interval`. The store's uniqueness key includes `interval`, so the
+# pair coexists and every query below must disambiguate on it.
 function setup_for_multi_interval_tests(; f_name = "test_det", horizon_count = 24)
     sys = IS.SystemData()
     name = "Component1"
@@ -5525,14 +5524,7 @@ function setup_for_multi_interval_tests(; f_name = "test_det", horizon_count = 2
 end
 
 @testset "Test Deterministic with multiple intervals" begin
-    # KNOWN PARITY GAP: see setup_for_multi_interval_tests.
-    params = try
-        setup_for_multi_interval_tests()
-    catch
-        @test_broken false
-        nothing
-    end
-    isnothing(params) && return
+    params = setup_for_multi_interval_tests()
     component = params.component
     f_name = params.f_name
     initial_time = params.initial_time
@@ -5753,91 +5745,85 @@ end
 end
 
 @testset "Test Deterministic retrieval with multiple intervals" begin
-    # KNOWN PARITY GAP: see setup_for_multi_interval_tests.
-    try
-        params = setup_for_multi_interval_tests(;
-            f_name = "max_active_power",
-            horizon_count = 12,
-        )
-        component = params.component
-        f_name = params.f_name
-        interval1 = params.interval1
-        interval2 = params.interval2
-        f1 = params.forecast1
-        f2 = params.forecast2
-        horizon_count = length(first(values(IS.get_data(f1))))
+    params = setup_for_multi_interval_tests(;
+        f_name = "max_active_power",
+        horizon_count = 12,
+    )
+    component = params.component
+    f_name = params.f_name
+    interval1 = params.interval1
+    interval2 = params.interval2
+    f1 = params.forecast1
+    f2 = params.forecast2
+    horizon_count = length(first(values(IS.get_data(f1))))
 
-        # Retrieve by interval returns correct data
-        ts1 = IS.get_time_series(
-            IS.Deterministic,
-            component,
-            f_name;
-            interval = interval1,
-        )
-        @test IS.get_interval(ts1) == interval1
-        @test IS.get_data(ts1) == IS.get_data(f1)
+    # Retrieve by interval returns correct data
+    ts1 = IS.get_time_series(
+        IS.Deterministic,
+        component,
+        f_name;
+        interval = interval1,
+    )
+    @test IS.get_interval(ts1) == interval1
+    @test IS.get_data(ts1) == IS.get_data(f1)
 
-        ts2 = IS.get_time_series(
-            IS.Deterministic,
-            component,
-            f_name;
-            interval = interval2,
-        )
-        @test IS.get_interval(ts2) == interval2
-        @test IS.get_data(ts2) == IS.get_data(f2)
+    ts2 = IS.get_time_series(
+        IS.Deterministic,
+        component,
+        f_name;
+        interval = interval2,
+    )
+    @test IS.get_interval(ts2) == interval2
+    @test IS.get_data(ts2) == IS.get_data(f2)
 
-        # Without interval, ambiguous query throws
-        @test_throws ArgumentError IS.get_time_series(
-            IS.Deterministic,
-            component,
-            f_name,
-        )
+    # Without interval, ambiguous query throws
+    @test_throws ArgumentError IS.get_time_series(
+        IS.Deterministic,
+        component,
+        f_name,
+    )
 
-        # get_time_series_array with interval
-        ta1 = IS.get_time_series_array(
-            IS.Deterministic,
-            component,
-            f_name;
-            interval = interval1,
-        )
-        @test length(ta1) == horizon_count
-        @test_throws ArgumentError IS.get_time_series_array(
-            IS.Deterministic,
-            component,
-            f_name,
-        )
+    # get_time_series_array with interval
+    ta1 = IS.get_time_series_array(
+        IS.Deterministic,
+        component,
+        f_name;
+        interval = interval1,
+    )
+    @test length(ta1) == horizon_count
+    @test_throws ArgumentError IS.get_time_series_array(
+        IS.Deterministic,
+        component,
+        f_name,
+    )
 
-        # get_time_series_values with interval
-        vals = IS.get_time_series_values(
-            IS.Deterministic,
-            component,
-            f_name;
-            interval = interval1,
-        )
-        @test vals == TimeSeries.values(ta1)
-        @test_throws ArgumentError IS.get_time_series_values(
-            IS.Deterministic,
-            component,
-            f_name,
-        )
+    # get_time_series_values with interval
+    vals = IS.get_time_series_values(
+        IS.Deterministic,
+        component,
+        f_name;
+        interval = interval1,
+    )
+    @test vals == TimeSeries.values(ta1)
+    @test_throws ArgumentError IS.get_time_series_values(
+        IS.Deterministic,
+        component,
+        f_name,
+    )
 
-        # get_time_series_timestamps with interval
-        ts_stamps = IS.get_time_series_timestamps(
-            IS.Deterministic,
-            component,
-            f_name;
-            interval = interval2,
-        )
-        @test length(ts_stamps) == horizon_count
-        @test_throws ArgumentError IS.get_time_series_timestamps(
-            IS.Deterministic,
-            component,
-            f_name,
-        )
-    catch e
-        e isa ArgumentError || rethrow()
-        @test_broken false
-    end
+    # get_time_series_timestamps with interval
+    ts_stamps = IS.get_time_series_timestamps(
+        IS.Deterministic,
+        component,
+        f_name;
+        interval = interval2,
+    )
+    @test length(ts_stamps) == horizon_count
+    @test_throws ArgumentError IS.get_time_series_timestamps(
+        IS.Deterministic,
+        component,
+        f_name,
+    )
 end
 
 @testset "Test DeterministicSingleTimeSeries with multiple intervals" begin
@@ -5936,14 +5922,7 @@ end
 end
 
 @testset "Test ForecastCache with multiple intervals" begin
-    # KNOWN PARITY GAP: see setup_for_multi_interval_tests.
-    params = try
-        setup_for_multi_interval_tests()
-    catch
-        @test_broken false
-        nothing
-    end
-    isnothing(params) && return
+    params = setup_for_multi_interval_tests()
     component = params.component
     f_name = params.f_name
     initial_time = params.initial_time
