@@ -368,7 +368,9 @@ _decode_stored_values(data::AbstractArray, encoding::ElementEncoding) =
     _decode_static_values(data, encoding, size(data, 1))
 
 # ---- Forecast element encoding ---------------------------------------------
-# Forecast windows of scalars store as a `(horizon, count)` array of `f64`.
+# Forecast windows of scalars store as a `(horizon, count)` array in the window's own
+# element type, tagged with it — matching the static path, so a `Deterministic{Int64}`
+# round-trips as one instead of coming back widened to Float64.
 # FunctionData windows store as `(horizon, count, k)` tagged with the element
 # type; each window column is encoded with the same scheme as a SingleTimeSeries
 # via `_storage_array`.
@@ -376,11 +378,12 @@ _decode_stored_values(data::AbstractArray, encoding::ElementEncoding) =
 function _storage_forecast_array(windows::Vector{<:AbstractVector{<:Real}})
     count = length(windows)
     horizon = length(first(windows))
-    arr = Matrix{Float64}(undef, horizon, count)
+    T = eltype(first(windows))
+    arr = Matrix{T}(undef, horizon, count)
     for (c, w) in enumerate(windows)
         copyto!(view(arr, :, c), w)
     end
-    return (arr, "f64")
+    return (arr, _element_type_name(T))
 end
 
 # FunctionData windows encode row-wise like a SingleTimeSeries (ragged PWL is
@@ -755,11 +758,59 @@ infrastore_get_time_series(
     name::AbstractString;
     kwargs...,
 ) where {T <: TimeSeriesData} =
-    error(
-        "InfraStore backend supports SingleTimeSeries, Deterministic, " *
-        "DeterministicSingleTimeSeries, Probabilistic, and Scenarios " *
-        "(requested $T)",
+    throw(
+        ArgumentError(
+            "InfraStore backend supports SingleTimeSeries, NonSequentialTimeSeries, " *
+            "Deterministic, DeterministicSingleTimeSeries, Probabilistic, and Scenarios " *
+            "(requested $T)",
+        ),
     )
+
+# An abstract query type names a family rather than a stored type, so it cannot be read
+# directly. Resolve it against the catalog first — `infrastore_get_time_series_key` errors
+# when nothing matches and when the family is ambiguous for this owner — then read the
+# resolved key. `Forecast` needs no method here: its own route already resolves the stored
+# forecast type.
+function _infrastore_get_time_series_via_key(
+    ::Type{T},
+    owner::TimeSeriesOwners,
+    name::AbstractString;
+    start_time::Union{Nothing, Dates.DateTime} = nothing,
+    len::Union{Nothing, Int} = nothing,
+    count::Union{Nothing, Int} = nothing,
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features::Union{Nothing, Dict} = nothing,
+) where {T <: TimeSeriesData}
+    key = infrastore_get_time_series_key(
+        owner,
+        T,
+        name;
+        resolution = resolution,
+        interval = interval,
+        features = features,
+    )
+    return get_time_series(owner, key; start_time = start_time, len = len, count = count)
+end
+
+# `StaticTimeSeries` (and any static subtype without its own route): resolve through the
+# key. The `SingleTimeSeries` / `NonSequentialTimeSeries` methods below are more specific
+# and still win.
+infrastore_get_time_series(
+    ::Type{T},
+    owner::TimeSeriesOwners,
+    name::AbstractString;
+    kwargs...,
+) where {T <: StaticTimeSeries} =
+    _infrastore_get_time_series_via_key(T, owner, name; kwargs...)
+
+# `TimeSeriesData` itself: the widest query, spanning static series and forecasts.
+infrastore_get_time_series(
+    ::Type{TimeSeriesData},
+    owner::TimeSeriesOwners,
+    name::AbstractString;
+    kwargs...,
+) = _infrastore_get_time_series_via_key(TimeSeriesData, owner, name; kwargs...)
 
 # Forecasts reconstruct from the stored forecast type, honoring `start_time` /
 # `count` slicing on the forecast window axis. `len`, when given, truncates each
@@ -833,7 +884,7 @@ function _infrastore_read_single(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    mgr = get_time_series_manager(owner)
+    mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     name = get_name(key)
@@ -858,6 +909,21 @@ function _infrastore_read_single(
         category, name;
         resolution = resolution, features = feats, time_range = time_range)
     values = _decode_stored_values(sts.data, _element_encoding(sts.element_type))
+    # A key holds a snapshot of the series' shape. If the series was removed and re-added
+    # under the same name and features, the key still resolves but describes a different
+    # array — and the window arithmetic above was computed against the stale shape. Catch
+    # that here rather than returning silently wrong values.
+    if sts.initial_timestamp != start || size(values, 1) != n
+        throw(
+            ArgumentError(
+                "TimeSeriesKey is stale: the stored series for '$name' starts at " *
+                "$(sts.initial_timestamp) with $(size(values, 1)) steps in the requested " *
+                "window, but the key says it starts at $start with $n. The series was " *
+                "replaced after the key was obtained; re-fetch it with " *
+                "get_time_series_key.",
+            ),
+        )
+    end
     return SingleTimeSeries(
         String(name), sts.initial_timestamp, sts.resolution, values; units = sts.units,
         quantity_kind = sts.quantity_kind,
@@ -900,7 +966,7 @@ function _infrastore_read_non_sequential(
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    mgr = get_time_series_manager(owner)
+    mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     feats = get_features(key)
@@ -1296,7 +1362,7 @@ function _infrastore_get_forecast(
     key::Union{Nothing, ForecastKey} = nothing,
     features::Union{Nothing, Dict} = nothing,
 )
-    mgr = get_time_series_manager(owner)
+    mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     # Resolve the unique forecast of the requested type matching a possibly-partial
@@ -1336,7 +1402,7 @@ function _infrastore_get_forecast(
     # The resolved key names the stored concrete type; it selects the
     # reconstruction method (function barrier — the key's type is not known
     # statically).
-    return _reconstruct_forecast(
+    forecast = _reconstruct_forecast(
         get_time_series_type(matched),
         store,
         owner_id,
@@ -1348,6 +1414,39 @@ function _infrastore_get_forecast(
         tr,
         len,
     )
+    _check_forecast_key_fresh(forecast, matched, name, start_time, count)
+    return forecast
+end
+
+# A key holds a snapshot of the forecast's window grid, and `tr` above was computed from
+# it. If the series was removed and re-added under the same name and features, the key
+# still resolves but describes a different grid, so the read can come back shifted or
+# truncated (the store clamps an out-of-grid range rather than erroring). Compare what
+# came back against what the key promised.
+function _check_forecast_key_fresh(forecast, key, name, start_time, count)
+    expected_start = isnothing(start_time) ? get_initial_timestamp(key) : start_time
+    got_count = get_count(forecast)
+    expected_count = if !isnothing(count)
+        count
+    elseif isnothing(start_time)
+        get_count(key)
+    else
+        # A suffix read from an explicit start_time: the key's total count does not
+        # bound the result, so only the start is meaningful to check.
+        got_count
+    end
+    if get_initial_timestamp(forecast) != expected_start || got_count != expected_count
+        throw(
+            ArgumentError(
+                "TimeSeriesKey is stale: the stored forecast for '$name' came back " *
+                "starting at $(get_initial_timestamp(forecast)) with $got_count " *
+                "windows, but the key says $expected_start with $expected_count. The " *
+                "series was replaced after the key was obtained; re-fetch it with " *
+                "get_time_series_key.",
+            ),
+        )
+    end
+    return
 end
 
 # `len`, when given, truncates a window to its first `len` horizon steps (the
@@ -1371,6 +1470,23 @@ _forecast_window(
 # `(horizon, member)` matrix IS hands users.
 _member_window(data::AbstractArray{<:Any, 3}, i) = permutedims(@view data[:, :, i])
 
+# `Probabilistic` and `Scenarios` pin `Matrix{Float64}` windows, so an array written in
+# another element type by a different client would reach their constructors as a
+# `MethodError`. Name the stored type instead. (`Deterministic` carries its element type
+# through, so it needs no such guard.)
+_check_member_window_type(::AbstractArray{Float64, 3}, _type, _name, _element_type) =
+    nothing
+
+_check_member_window_type(
+    ::AbstractArray{T, 3}, forecast_type, name, element_type,
+) where {T} = throw(
+    ArgumentError(
+        "$forecast_type '$name' is stored with element type " *
+        "$(isempty(element_type) ? T : element_type); IS reads $forecast_type windows as " *
+        "Matrix{Float64} only. It was likely written by another InfraStore client.",
+    ),
+)
+
 # Reconstruct a forecast read from the store as its user-facing type. Every
 # InfraStore read below is already sliced to the requested window range.
 function _reconstruct_forecast(
@@ -1390,6 +1506,7 @@ function _reconstruct_forecast(
         category, name;
         resolution = resolution, interval = interval, features = feats,
         time_range = time_range)
+    _check_member_window_type(p.data, Probabilistic, name, p.element_type)
     window(i) = _truncate_window(_member_window(p.data, i), len)
     data = _assemble_forecast_windows(p.initial_timestamp, p.interval, p.count, window)
     return Probabilistic(; name = name, data = data,
@@ -1460,6 +1577,7 @@ function _reconstruct_forecast(
         category, name;
         resolution = resolution, interval = interval, features = feats,
         time_range = time_range)
+    _check_member_window_type(s_ts.data, Scenarios, name, s_ts.element_type)
     window(i) = _truncate_window(_member_window(s_ts.data, i), len)
     data = _assemble_forecast_windows(
         s_ts.initial_timestamp, s_ts.interval, s_ts.count, window,
@@ -1837,7 +1955,7 @@ function infrastore_has_time_series(
     features::Union{Nothing, Dict} = nothing,
 ) where {T <: TimeSeriesData}
     _check_interval_supported(T, interval)
-    mgr = get_time_series_manager(owner)
+    mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     feats = _infrastore_features(features)
@@ -1937,7 +2055,7 @@ _infrastore_probe_types(probe, types::Tuple) = any(probe, types)
 # propagation through `_infrastore_query_types` and boxes this function's return as
 # `Any` instead of `Bool` — real cost on the `has_time_series` hot path.
 function infrastore_has_any(owner; time_series_type = nothing)
-    mgr = get_time_series_manager(owner)
+    mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     probe =
@@ -2114,7 +2232,7 @@ function infrastore_owner_list_keys(
 )
     !isnothing(time_series_type) &&
         _check_interval_supported(time_series_type, interval)
-    mgr = get_time_series_manager(owner)
+    mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     return _infrastore_list_keys(store, owner_id, category;
@@ -2154,9 +2272,7 @@ end
 # the store applies its canonical comparisons; only the type residual and the
 # whole-feature-set match stay in-memory.
 function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
-    mgr = get_time_series_manager(owner)
-    isnothing(mgr) &&
-        throw(InfraStore.NotFoundError("owner has no time series to hash"))
+    mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
     T = get_time_series_type(key)
@@ -2170,7 +2286,14 @@ function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSerie
         row.features == target_feats || continue
         return bytes2hex(row.data_hash)
     end
-    throw(InfraStore.NotFoundError("no stored array matches key name=$(get_name(key))"))
+    throw(
+        ArgumentError(
+            "No time series matched the key for $(summary(owner)): " *
+            "type=$T name=$(get_name(key)) resolution=$(get_resolution(key)) " *
+            "interval=$(get_interval(key)) features=$(target_feats). The series may " *
+            "have been removed; re-fetch the key with get_time_series_key.",
+        ),
+    )
 end
 
 # Content hashes for a homogeneous collection of owners, resolved by ONE catalog
@@ -2192,12 +2315,25 @@ function infrastore_get_time_series_hashes(
     hashes = Dict{Int, String}()
     isempty(owners) && return hashes
     owner = first(owners)
-    mgr = get_time_series_manager(owner)
-    isnothing(mgr) && return hashes
+    mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
-    ids = Set{Int}(get_id(o) for o in owners)
+    # The single-query design filters on ONE owner category, so a mixed collection would
+    # silently drop every owner of the other kind. The id collection already walks
+    # `owners`, so checking the category costs nothing.
+    category = get_owner_category(owner)
+    ids = Set{Int}()
+    for o in owners
+        get_owner_category(o) == category || throw(
+            ArgumentError(
+                "get_time_series_hashes requires owners of one kind; " *
+                "$(summary(owner)) is a $category but $(summary(o)) is a " *
+                "$(get_owner_category(o)). Call it once per owner kind.",
+            ),
+        )
+        push!(ids, get_id(o))
+    end
     rows = InfraStore.list_array_groups(store.inner;
-        owner_category = get_owner_category(owner),
+        owner_category = category,
         time_series_type = _infrastore_pushable_type(T),
         name = name,
         resolution = resolution,

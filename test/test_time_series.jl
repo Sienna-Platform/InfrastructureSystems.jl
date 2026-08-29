@@ -1870,6 +1870,64 @@ end
     )
 end
 
+@testset "Test check_transform_single_time_series after a transform" begin
+    sys = IS.SystemData(; time_series_in_memory = true)
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    resolution = Dates.Hour(1)
+    dates = create_dates("2020-01-01T00:00:00", resolution, "2020-01-02T23:00:00")
+    @test length(dates) == 48
+    ta = TimeSeries.TimeArray(dates, rand(length(dates)), [IS.get_name(component)])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("val1", ta))
+
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Hour(24),
+        Dates.Hour(1),
+    )
+    original = IS.get_time_series(IS.DeterministicSingleTimeSeries, component, "val1")
+    @test IS.get_horizon(original) == Dates.Hour(24)
+
+    # The transform would delete the existing views first, so the check must too.
+    @test IS.check_transform_single_time_series(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Hour(12),
+        Dates.Hour(1),
+    )
+
+    # The check rolled back: the original transform is untouched.
+    after = IS.get_time_series(IS.DeterministicSingleTimeSeries, component, "val1")
+    @test IS.get_horizon(after) == Dates.Hour(24)
+    @test IS.get_interval(after) == IS.get_interval(original)
+    @test IS.get_count(after) == IS.get_count(original)
+
+    # Asking about the *existing* views instead: incompatible parameters.
+    @test !IS.check_transform_single_time_series(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Hour(12),
+        Dates.Hour(1);
+        delete_existing = false,
+    )
+    @test IS.get_horizon(
+        IS.get_time_series(IS.DeterministicSingleTimeSeries, component, "val1"),
+    ) == Dates.Hour(24)
+
+    # And the transform itself still succeeds with the parameters the check accepted.
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Hour(12),
+        Dates.Hour(1),
+    )
+    @test IS.get_horizon(
+        IS.get_time_series(IS.DeterministicSingleTimeSeries, component, "val1"),
+    ) == Dates.Hour(12)
+end
+
 @testset "Test Deterministic with a wrapped SingleTimeSeries different offsets" begin
     for in_memory in (true, false)
         sys = IS.SystemData(; time_series_in_memory = in_memory)
@@ -2723,6 +2781,44 @@ end
     )
 end
 
+@testset "Test copy time_series name mapping between supplemental attributes" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    attr1 = IS.TestSupplemental(; value = 1.0)
+    attr2 = IS.TestSupplemental(; value = 2.0)
+    IS.add_supplemental_attribute!(sys, component, attr1)
+    IS.add_supplemental_attribute!(sys, component, attr2)
+
+    initial_time = Dates.DateTime("2020-01-01T00:00:00")
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), ["x"])
+    IS.add_time_series!(sys, attr1, IS.SingleTimeSeries("x", ta))
+
+    # An attribute has no name, so the mapping key is its integer id as a string.
+    src_label = string(IS.get_id(attr1))
+    IS.copy_time_series!(
+        attr2,
+        attr1;
+        name_mapping = Dict((src_label, "x") => "y"),
+    )
+    copied = IS.get_time_series(IS.SingleTimeSeries, attr2, "y")
+    @test copied isa IS.SingleTimeSeries
+    @test IS.get_initial_timestamp(copied) == initial_time
+    @test IS.get_name(copied) == "y"
+
+    # A non-matching key copies nothing, and does not error.
+    attr3 = IS.TestSupplemental(; value = 3.0)
+    IS.add_supplemental_attribute!(sys, component, attr3)
+    IS.copy_time_series!(
+        attr3,
+        attr1;
+        name_mapping = Dict(("not-a-real-label", "x") => "y"),
+    )
+    @test isempty(IS.get_time_series_keys(attr3))
+end
+
 @testset "Test copy time_series with transformed time series" begin
     sys = create_system_data(; time_series_in_memory = true)
     components = collect(IS.get_components(IS.InfrastructureSystemsComponent, sys))
@@ -2797,9 +2893,36 @@ end
     # Indexing
     @test length(time_series[1:16]) == 16
 
-    # when
+    # when always returns a NonSequentialTimeSeries: the selected timestamps are a
+    # calendar-predicate subset, not a regular grid.
     fcast = IS.when(time_series, TimeSeries.minute, 0)
+    @test fcast isa IS.NonSequentialTimeSeries
     @test length(fcast) == 24
+end
+
+@testset "Test when returns the selected timestamps" begin
+    initial_time = Dates.DateTime("2020-01-01T00:00:00")
+    resolution = Dates.Hour(1)
+    dates = create_dates("2020-01-01T00:00:00", resolution, "2020-01-03T23:00:00")
+    vals = collect(1.0:length(dates))
+    ta = TimeSeries.TimeArray(dates, vals, ["val"])
+    ts = IS.SingleTimeSeries("val", ta; units = "MW")
+
+    selected = IS.when(ts, Dates.hour, 3)
+    @test selected isa IS.NonSequentialTimeSeries
+    @test length(selected) == 3
+    @test IS.get_timestamps(selected) == [
+        initial_time + Dates.Hour(3),
+        initial_time + Dates.Day(1) + Dates.Hour(3),
+        initial_time + Dates.Day(2) + Dates.Hour(3),
+    ]
+    @test IS.get_array(selected) == [4.0, 28.0, 52.0]
+    @test IS.get_units(selected) == "MW"
+
+    # An empty selection is an error, not a series with invented timestamps.
+    @test_throws ArgumentError IS.when(ts, Dates.hour, 25)
+    @test_throws ArgumentError IS.from(ts, last(dates) + resolution)
+    @test_throws ArgumentError IS.to(ts, first(dates) - resolution)
 end
 
 @testset "Test time_series head" begin
@@ -4307,8 +4430,427 @@ end
 
     forecast = IS.Deterministic(; data = data, name = name, resolution = resolution)
     IS.add_time_series!(sys, component, forecast)
+    # The period runs to the *last timestamp* of the last window, which starts at
+    # other_time, not one resolution past it.
     @test IS.get_forecast_total_period(sys) ==
-          other_time + horizon_count * resolution - initial_time
+          other_time + (horizon_count - 1) * resolution - initial_time
+end
+
+@testset "Test forecast window validation uses horizon, not length" begin
+    t1 = Dates.DateTime("2020-01-01T00:00:00")
+    t2 = t1 + Dates.Hour(1)
+    resolution = Dates.Hour(1)
+
+    # (horizon, member) windows with different horizons but the same element count:
+    # `length` sees 6 for both, only `size(x, 1)` sees the mismatch.
+    mismatched = IS.Probabilistic(;
+        name = "test",
+        data = SortedDict(t1 => zeros(2, 3), t2 => zeros(3, 2)),
+        percentiles = [0.1, 0.5, 0.9],
+        resolution = resolution,
+    )
+    @test_throws DimensionMismatch IS.check_time_series_data(mismatched)
+
+    # A single-step horizon is too short even though the window holds five values.
+    too_short = IS.Probabilistic(;
+        name = "test",
+        data = SortedDict(t1 => zeros(1, 5), t2 => zeros(1, 5)),
+        percentiles = [0.1, 0.2, 0.3, 0.4, 0.5],
+        resolution = resolution,
+    )
+    @test_throws ArgumentError IS.check_time_series_data(too_short)
+
+    # 2.8: an empty forecast dict is an ArgumentError, not a destructuring MethodError.
+    @test_throws ArgumentError IS.Deterministic(;
+        name = "test",
+        data = SortedDict{Dates.DateTime, Vector{Float64}}(),
+        resolution = resolution,
+    )
+end
+
+@testset "Test by-name remove_time_series! reports a miss" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), ["x"])
+    IS.add_time_series!(
+        sys,
+        component,
+        IS.SingleTimeSeries("x", ta);
+        features = Dict("s" => "a"),
+    )
+
+    @test_throws ArgumentError IS.remove_time_series!(
+        sys,
+        IS.SingleTimeSeries,
+        component,
+        "unknown",
+    )
+    @test_throws ArgumentError IS.remove_time_series!(
+        sys,
+        IS.Deterministic,
+        component,
+        "x",
+    )
+    @test_throws ArgumentError IS.remove_time_series!(
+        sys,
+        IS.SingleTimeSeries,
+        component,
+        "x";
+        features = Dict("s" => "b"),
+    )
+    # Nothing was removed by any of those.
+    @test IS.has_time_series(component, IS.SingleTimeSeries, "x")
+
+    # The system-wide bulk form stays a no-op on zero matches.
+    empty_sys = IS.SystemData()
+    IS.remove_time_series!(empty_sys, IS.SingleTimeSeries)
+    @test IS.get_num_time_series(IS.get_data_store(empty_sys)) == 0
+
+    # A real match still removes.
+    IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "x")
+    @test !IS.has_time_series(component, IS.SingleTimeSeries, "x")
+end
+
+@testset "Test scalar forecast windows keep their element type" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    resolution = Dates.Hour(1)
+    t0 = Dates.DateTime("2020-01-01T00:00:00")
+
+    for T in (Int64, Float32, Float64)
+        data = SortedDict(
+            t0 + (i - 1) * resolution => T[T(j + i) for j in 1:4] for i in 1:3
+        )
+        name = "d_$(T)"
+        ts = IS.Deterministic(; name = name, data = data, resolution = resolution)
+        @test eltype(ts) === T
+        IS.add_time_series!(sys, component, ts)
+        got = IS.get_time_series(IS.Deterministic, component, name)
+        @test typeof(got) == typeof(ts)
+        @test eltype(got) === T
+        @test IS.get_data(got) == IS.get_data(ts)
+    end
+end
+
+@testset "Test N-D static series reject ambiguous iteration" begin
+    t0 = Dates.DateTime("2020-01-01T00:00:00")
+    resolution = Dates.Hour(1)
+    nd = IS.SingleTimeSeries("x", t0, resolution, rand(3, 2))
+    @test length(nd) == 3
+    @test_throws ArgumentError collect(nd)
+    @test_throws ArgumentError iterate(nd)
+    # eachslice over the raw array is the documented alternative.
+    @test length(collect(eachslice(IS.get_array(nd); dims = 1))) == 3
+
+    nd_ns = IS.NonSequentialTimeSeries(
+        "x",
+        [t0, t0 + resolution, t0 + Dates.Hour(5)],
+        rand(3, 2),
+    )
+    @test length(nd_ns) == 3
+    @test_throws ArgumentError collect(nd_ns)
+
+    # 1-D iteration is unchanged.
+    one_d = IS.SingleTimeSeries("x", t0, resolution, [1.0, 2.0, 3.0])
+    @test collect(one_d) == [1.0, 2.0, 3.0]
+    one_d_ns = IS.NonSequentialTimeSeries(
+        "x",
+        [t0, t0 + resolution, t0 + Dates.Hour(5)],
+        [1.0, 2.0, 3.0],
+    )
+    @test collect(one_d_ns) == [1.0, 2.0, 3.0]
+end
+
+@testset "Test stale TimeSeriesKey reads are rejected" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    resolution = Dates.Hour(1)
+    dates = create_dates("2020-01-01T00:00:00", resolution, "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), ["x"])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("x", ta))
+    key = IS.get_time_series_key(IS.SingleTimeSeries, component, "x")
+    @test length(IS.get_time_series_values(component, key)) == 24
+
+    # Replace the series with a shorter one under the same name.
+    IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "x")
+    short_ta = TimeSeries.TimeArray(dates[1:10], collect(1.0:10.0), ["x"])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("x", short_ta))
+    @test_throws ArgumentError IS.get_time_series_values(component, key)
+
+    # A fresh key reads fine.
+    fresh = IS.get_time_series_key(IS.SingleTimeSeries, component, "x")
+    @test length(IS.get_time_series_values(component, fresh)) == 10
+end
+
+@testset "Test stale forecast TimeSeriesKey reads are rejected" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    resolution = Dates.Hour(1)
+    t0 = Dates.DateTime("2020-01-01T00:00:00")
+    data = SortedDict(t0 + (i - 1) * resolution => collect(1.0:4.0) for i in 1:6)
+    IS.add_time_series!(
+        sys,
+        component,
+        IS.Deterministic(; name = "f", data = data, resolution = resolution),
+    )
+    key = IS.get_time_series_key(IS.Deterministic, component, "f")
+    @test IS.get_count(IS.get_time_series(component, key)) == 6
+
+    IS.remove_time_series!(sys, IS.Deterministic, component, "f")
+    short = SortedDict(t0 + (i - 1) * resolution => collect(1.0:4.0) for i in 1:3)
+    IS.add_time_series!(
+        sys,
+        component,
+        IS.Deterministic(; name = "f", data = short, resolution = resolution),
+    )
+    @test_throws ArgumentError IS.get_time_series(component, key)
+    @test IS.get_count(
+        IS.get_time_series(
+            component,
+            IS.get_time_series_key(IS.Deterministic, component, "f"),
+        ),
+    ) == 3
+end
+
+@testset "Test get_time_series_hashes rejects mixed owner kinds" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    attr = IS.TestSupplemental(; value = 1.0)
+    IS.add_supplemental_attribute!(sys, component, attr)
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), ["x"])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("x", ta))
+    IS.add_time_series!(sys, attr, IS.SingleTimeSeries("x", ta))
+
+    @test length(IS.get_time_series_hashes([component], IS.SingleTimeSeries, "x")) == 1
+    @test length(IS.get_time_series_hashes([attr], IS.SingleTimeSeries, "x")) == 1
+    @test_throws ArgumentError IS.get_time_series_hashes(
+        [component, attr],
+        IS.SingleTimeSeries,
+        "x",
+    )
+end
+
+@testset "Test orphaned time series owner ids are reported" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), ["x"])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("x", ta))
+
+    # The only way to orphan an association: drop the component from the container while
+    # keeping its time series rows, then clear the system's id index for it. (There is no
+    # single public call that does this; `remove_component!(::SystemData, ...)` always
+    # removes the series.)
+    IS.remove_component!(sys.components, component; remove_time_series = false)
+    IS._handle_component_removal!(sys, component)
+
+    @test_throws ArgumentError collect(IS.get_time_series_multiple(sys))
+    @test_throws ArgumentError collect(IS.iterate_components_with_time_series(sys))
+    @test_throws ArgumentError IS.get_time_series_array_groups(sys; only_shared = false)
+end
+
+@testset "Test detached owner reads throw ArgumentError" begin
+    c = IS.TestComponent("detached", 1)
+    @test_throws ArgumentError IS.get_time_series(IS.SingleTimeSeries, c, "x")
+    @test_throws ArgumentError IS.get_time_series_array(IS.SingleTimeSeries, c, "x")
+    @test_throws ArgumentError IS.get_time_series_values(IS.SingleTimeSeries, c, "x")
+    @test_throws ArgumentError IS.get_time_series_key(IS.SingleTimeSeries, c, "x")
+
+    # A key from an attached component, used against a detached one.
+    sys = IS.SystemData()
+    attached = IS.TestComponent("attached", 1)
+    IS.add_component!(sys, attached)
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), ["x"])
+    IS.add_time_series!(sys, attached, IS.SingleTimeSeries("x", ta))
+    key = IS.get_time_series_key(IS.SingleTimeSeries, attached, "x")
+    @test_throws ArgumentError IS.get_time_series_hash(c, key)
+
+    # The nothing-tolerant accessors keep answering "empty".
+    @test !IS.has_time_series(c)
+    @test isempty(IS.get_time_series_keys(c))
+    @test isempty(collect(IS.get_time_series_multiple(c)))
+end
+
+@testset "Test get_time_series_hash on a removed series" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), ["x"])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("x", ta))
+    key = IS.get_time_series_key(IS.SingleTimeSeries, component, "x")
+    @test IS.get_time_series_hash(component, key) isa String
+
+    IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "x")
+    @test_throws ArgumentError IS.get_time_series_hash(component, key)
+end
+
+@testset "Test abstract query types resolve through the key" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), ["x"])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("x", ta))
+
+    resolved = IS.get_time_series(IS.StaticTimeSeries, component, "x")
+    @test resolved isa IS.SingleTimeSeries
+    @test IS.get_array(resolved) == collect(1.0:24.0)
+    @test IS.get_time_series(IS.TimeSeriesData, component, "x") isa IS.SingleTimeSeries
+
+    # A second static series of a different type under the same name is ambiguous.
+    IS.add_time_series!(
+        sys,
+        component,
+        IS.NonSequentialTimeSeries(
+            "x",
+            [dates[1], dates[2], dates[5]],
+            [1.0, 2.0, 3.0],
+        ),
+    )
+    @test_throws ArgumentError IS.get_time_series(IS.StaticTimeSeries, component, "x")
+    # The concrete types still resolve unambiguously.
+    @test IS.get_time_series(IS.SingleTimeSeries, component, "x") isa IS.SingleTimeSeries
+    @test IS.get_time_series(IS.NonSequentialTimeSeries, component, "x") isa
+          IS.NonSequentialTimeSeries
+end
+
+@testset "Test get_time_series_key on non-TS-backed curves" begin
+    @test_throws ArgumentError IS.get_time_series_key(IS.LinearCurve(1.0, 2.0))
+    @test_throws ArgumentError IS.get_time_series_key(IS.LinearFunctionData(1.0, 2.0))
+end
+
+@testset "Test get_length agrees with Base.length for every key type" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    resolution = Dates.Hour(1)
+    initial_time = Dates.DateTime("2020-01-01T00:00:00")
+    horizon_count = 24
+    data = SortedDict(
+        initial_time + (i - 1) * resolution => collect(1.0:horizon_count) for i in 1:3
+    )
+    IS.add_time_series!(
+        sys,
+        component,
+        IS.Deterministic(; name = "f", data = data, resolution = resolution),
+    )
+    key = IS.get_time_series_key(IS.Deterministic, component, "f")
+    @test IS.get_length(key) == IS.get_horizon_count(key) == horizon_count
+    @test IS.get_length(key) == length(key)
+    @test IS.get_count(key) == 3
+end
+
+@testset "Test instance-form forecast accessors reject a non-window start_time" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    resolution = Dates.Hour(1)
+    interval = Dates.Hour(6)
+    t0 = Dates.DateTime("2020-01-01T00:00:00")
+    data = SortedDict(t0 + (i - 1) * interval => collect(1.0:24.0) for i in 1:3)
+    forecast = IS.Deterministic(;
+        name = "f",
+        data = data,
+        resolution = resolution,
+        interval = interval,
+    )
+    IS.add_time_series!(sys, component, forecast)
+
+    @test_throws ArgumentError IS.get_time_series_values(
+        component,
+        forecast;
+        start_time = t0 + Dates.Hour(9),
+    )
+    @test_throws ArgumentError IS.get_window(forecast, t0 + Dates.Hour(9))
+end
+
+@testset "Test NonSequentialTimeSeries accessors reject len <= 0" begin
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T01:00:00"),
+        Dates.DateTime("2020-01-01T05:00:00"),
+    ]
+    ts = IS.NonSequentialTimeSeries("x", timestamps, [1.0, 2.0, 3.0])
+    for bad_len in (0, -1)
+        @test_throws ArgumentError IS.make_time_array(
+            ts,
+            timestamps[1];
+            len = bad_len,
+        )
+    end
+    @test length(IS.make_time_array(ts, timestamps[1]; len = 2)) == 2
+end
+
+@testset "Test get_window by index is 1-based" begin
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    interval = Dates.Hour(6)
+    horizon_count = 24
+    count = 3
+    data = SortedDict(
+        initial_time + (i - 1) * interval => collect(1.0:horizon_count) .* i
+        for i in 1:count
+    )
+    forecast = IS.Deterministic(;
+        name = "test",
+        data = data,
+        resolution = resolution,
+        interval = interval,
+    )
+
+    @test IS.index_to_initial_time(forecast, 1) == initial_time
+    @test IS.index_to_initial_time(forecast, count) ==
+          initial_time + interval * (count - 1)
+
+    first_window = IS.get_window(forecast, 1)
+    @test first(TimeSeries.timestamp(first_window)) == initial_time
+    @test TimeSeries.values(first_window) == data[initial_time]
+
+    last_window = IS.get_window(forecast, IS.get_count(forecast))
+    last_it = initial_time + interval * (count - 1)
+    @test first(TimeSeries.timestamp(last_window)) == last_it
+    @test TimeSeries.values(last_window) == data[last_it]
+
+    @test_throws ArgumentError IS.get_window(forecast, 0)
+    @test_throws ArgumentError IS.get_window(forecast, IS.get_count(forecast) + 1)
+end
+
+@testset "Test get_total_period with interval != resolution" begin
+    initial_timestamp = Dates.DateTime("2020-09-01")
+    # Two daily windows of 12 five-minute steps each.
+    @test IS.get_total_period(
+        initial_timestamp,
+        2,
+        Dates.Day(1),
+        Dates.Hour(1),
+        Dates.Minute(5),
+    ) == Dates.Day(1) + Dates.Minute(55)
+    # A single window spans only its own horizon.
+    @test IS.get_total_period(
+        initial_timestamp,
+        1,
+        Dates.Day(1),
+        Dates.Hour(1),
+        Dates.Minute(5),
+    ) == Dates.Minute(55)
+    # interval == resolution
+    @test IS.get_total_period(
+        initial_timestamp,
+        2,
+        Dates.Hour(1),
+        Dates.Hour(24),
+        Dates.Hour(1),
+    ) == Dates.Hour(24)
 end
 
 @testset "Test forecast utils" begin
@@ -4514,18 +5056,101 @@ end
     dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T02:00:00")
     data = [0.0, 0.0, 0.0]
     ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
-    @test_throws ErrorException IS.SingleTimeSeries(
+    @test_throws ArgumentError IS.SingleTimeSeries(
         "val",
         ta;
         normalization_factor = IS.NormalizationTypes.MAX,
     )
     data = [1.1, 1.2, 1.3]
     ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
-    @test_throws ErrorException IS.SingleTimeSeries(
+    @test_throws ArgumentError IS.SingleTimeSeries(
         "val",
         ta;
         normalization_factor = 0.0,
     )
+end
+
+@testset "Test normalization factor handling for forecasts" begin
+    t1 = Dates.DateTime("2020-01-01T00:00:00")
+    t2 = t1 + Dates.Hour(1)
+    resolution = Dates.Hour(1)
+
+    # 1.2: the positional Deterministic constructor must forward normalization_factor.
+    user_data = SortedDict(t1 => [2.0, 4.0], t2 => [6.0, 8.0])
+    positional = IS.Deterministic("test", user_data, resolution; normalization_factor = 2.0)
+    kwarg = IS.Deterministic(;
+        name = "test",
+        data = user_data,
+        resolution = resolution,
+        normalization_factor = 2.0,
+    )
+    @test IS.get_data(positional) == IS.get_data(kwarg)
+    @test IS.get_data(positional)[t1] == [1.0, 2.0]
+
+    positional_max = IS.Deterministic(
+        "test",
+        user_data,
+        resolution;
+        normalization_factor = IS.NormalizationTypes.MAX,
+    )
+    kwarg_max = IS.Deterministic(;
+        name = "test",
+        data = user_data,
+        resolution = resolution,
+        normalization_factor = IS.NormalizationTypes.MAX,
+    )
+    @test IS.get_data(positional_max) == IS.get_data(kwarg_max)
+
+    # 1.10: the caller's dictionary must never be mutated.
+    @test user_data[t1] == [2.0, 4.0]
+    @test user_data[t2] == [6.0, 8.0]
+
+    # 3.4: MAX normalizes by the max across *all* windows, not per window.
+    @test IS.get_data(kwarg_max)[t1] == [0.25, 0.5]
+    @test IS.get_data(kwarg_max)[t2] == [0.75, 1.0]
+
+    normalized = IS.Deterministic(;
+        name = "test",
+        data = SortedDict(t1 => [1.0, 2.0], t2 => [4.0, 8.0]),
+        resolution = resolution,
+        normalization_factor = IS.NormalizationTypes.MAX,
+    )
+    @test IS.get_data(normalized)[t1] == [0.125, 0.25]
+    @test IS.get_data(normalized)[t2] == [0.5, 1.0]
+
+    # 1.3: MAX must work on matrix windows (Probabilistic / Scenarios).
+    matrix_data = SortedDict(
+        t1 => [1.0 2.0; 3.0 4.0],
+        t2 => [5.0 6.0; 7.0 8.0],
+    )
+    prob = IS.Probabilistic(;
+        name = "test",
+        data = matrix_data,
+        percentiles = [0.5, 0.9],
+        resolution = resolution,
+        normalization_factor = IS.NormalizationTypes.MAX,
+    )
+    @test IS.get_data(prob)[t2] == [5.0 6.0; 7.0 8.0] ./ 8.0
+    scenarios = IS.Scenarios(;
+        name = "test",
+        data = matrix_data,
+        scenario_count = 2,
+        resolution = resolution,
+        normalization_factor = IS.NormalizationTypes.MAX,
+    )
+    @test IS.get_data(scenarios)[t1] == [1.0 2.0; 3.0 4.0] ./ 8.0
+
+    # 1.10 again, for the matrix forms.
+    scenarios2 = IS.Scenarios(;
+        name = "test",
+        data = matrix_data,
+        scenario_count = 2,
+        resolution = resolution,
+        normalization_factor = 2.0,
+    )
+    @test IS.get_data(scenarios2)[t1] == [0.5 1.0; 1.5 2.0]
+    @test matrix_data[t1] == [1.0 2.0; 3.0 4.0]
+    @test matrix_data[t2] == [5.0 6.0; 7.0 8.0]
 end
 
 """
@@ -5878,10 +6503,11 @@ end
         for pairs in values(all_groups) for (_, k) in pairs
     )
 
-    # A key with no matching stored array (an owner that has none) raises.
+    # A key with no matching stored array (an owner that has none) raises the public
+    # ArgumentError, not the store's NotFoundError.
     c4 = IS.TestComponent("c4", 5)
     IS.add_component!(sys, c4)
-    @test_throws IS.InfraStore.NotFoundError IS.get_time_series_hash(c4, k1)
+    @test_throws ArgumentError IS.get_time_series_hash(c4, k1)
 end
 
 @testset "Test bulk time series content hashes" begin
@@ -5933,9 +6559,14 @@ end
         (c1, c2), IS.SingleTimeSeries, "load"; resolution = resolution,
     ) == Dict(id(c1) => hashes[id(c1)], id(c2) => hashes[id(c2)])
 
-    # Owners outside any system have no store to consult.
+    # Owners outside any system have no store to consult; that is a caller mistake, not
+    # an empty answer.
     loose = IS.TestComponent("loose", 5)
-    @test isempty(IS.get_time_series_hashes([loose], IS.SingleTimeSeries, "load"))
+    @test_throws ArgumentError IS.get_time_series_hashes(
+        [loose],
+        IS.SingleTimeSeries,
+        "load",
+    )
 
     # A Deterministic query matches derived DSTs, which resolve to the
     # underlying SingleTimeSeries array; the STS query is unaffected by the

@@ -230,9 +230,14 @@ function NonSequentialTimeSeries(
     )
 end
 
+# One value per timestep: iteration agrees with `length` only for a 1-D series. See the
+# erroring N >= 2 fallback in `static_time_series.jl`.
+Base.iterate(ts::NonSequentialTimeSeries{T, 1}, n = 1) where {T} =
+    iterate(get_array(ts), n)
+
 # Hook for the shared `StaticTimeSeries` slicing methods.
 _from_time_array(ts::NonSequentialTimeSeries, data::TimeSeries.TimeArray) =
-    NonSequentialTimeSeries(ts, data)
+    NonSequentialTimeSeries(ts, _check_non_empty_subset(data))
 
 function check_time_series_data(ts::NonSequentialTimeSeries)
     len = size(ts.data, 1)
@@ -315,6 +320,7 @@ function make_time_array(
         ArgumentError("start_time=$start_time is not a timestamp in the series"),
     )
     count = isnothing(len) ? n - start_index + 1 : len
+    count >= 1 || throw(ArgumentError("len must be >= 1; got $count"))
     end_index = start_index + count - 1
     end_index <= n || throw(
         ArgumentError(

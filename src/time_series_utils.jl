@@ -215,6 +215,13 @@ end
 get_sorted_keys(x::AbstractDict) = sort(collect(keys(x)))
 get_sorted_keys(x::SortedDict) = collect(keys(x))
 
+"""
+Return the period spanned by a forecast: the distance from the first timestamp of the
+first window to the last timestamp of the last window.
+
+The last window starts at `initial_timestamp + interval * (count - 1)`, so a single-window
+forecast (`count == 1`) spans `resolution * (horizon_count - 1)`.
+"""
 function get_total_period(
     initial_timestamp::Dates.DateTime,
     count::Int,
@@ -223,7 +230,7 @@ function get_total_period(
     resolution::Dates.Period,
 )
     horizon_count = get_horizon_count(horizon, resolution)
-    last_it = initial_timestamp + interval * count
+    last_it = initial_timestamp + interval * (count - 1)
     last_timestamp = last_it + resolution * (horizon_count - 1)
     return last_timestamp - initial_timestamp
 end
@@ -271,18 +278,31 @@ const PERIOD_NAME_TO_TYPE = Dict(
 
 @assert keys(REGEX_PERIODS) == keys(PERIOD_NAME_TO_TYPE)
 
+"""
+Parse a decimal seconds string (e.g. `"1.003"`) into an integer count of milliseconds.
+Throws an `ArgumentError` for sub-millisecond precision.
+"""
+function _parse_seconds_as_milliseconds(seconds::AbstractString)
+    whole, frac = split(seconds, '.')
+    length(frac) <= 3 || throw(
+        ArgumentError(
+            "Fractional milliseconds are not supported: $(seconds)S has " *
+            "$(length(frac)) fractional digits",
+        ),
+    )
+    return parse(Int, whole) * 1000 + parse(Int, rpad(frac, 3, '0'))
+end
+
 # this return type annotation saves significant inference time in PSI.
 function from_iso_8601(period::String)::Dates.Period
     for (name, regex) in REGEX_PERIODS
         m = match(regex, period)
         if !isnothing(m)
             if name == "milliseconds"
-                value = parse(Float64, m.captures[1]) * 1000
-                if value % 1 != 0.0
-                    throw(
-                        ArgumentError("Fractional milliseconds are not supported: $value"),
-                    )
-                end
+                # Integer arithmetic on the two halves of the decimal: parsing the
+                # capture as a Float64 and multiplying by 1000 rounds off for values
+                # a binary float cannot represent exactly (e.g. "P0DT1.003S").
+                value = _parse_seconds_as_milliseconds(m.captures[1])
             else
                 value = parse(Int, m.captures[1])
             end

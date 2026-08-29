@@ -323,3 +323,54 @@ end
     IS.get_time_series_array!(cache, initial_timestamp)
     @test_throws IS.InvalidValue IS.get_time_series_array!(cache, initial_times[3])
 end
+
+@testset "Test ForecastCache with a window larger than the cache" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    resolution = Dates.Hour(1)
+    first_timestamp = Dates.DateTime("2020-01-01T00:00:00")
+    horizon_count = 24
+    window_count = 5
+    data = SortedDict(
+        first_timestamp + (i - 1) * resolution => collect(1.0:horizon_count) .+ i
+        for i in 1:window_count
+    )
+    forecast = IS.Deterministic(; name = "test", data = data, resolution = resolution)
+    initial_times = collect(IS.get_initial_times(forecast))
+    IS.add_time_series!(sys, component, forecast)
+
+    # 100 bytes cannot hold a 24-element Float64 window; the cache must grow to fit one
+    # window rather than caching zero of them.
+    cache = IS.ForecastCache(IS.Deterministic, component, "test"; cache_size_bytes = 100)
+    @test cache.in_memory_count == 1
+    @test length(cache) == window_count
+
+    windows = collect(cache)
+    @test length(windows) == window_count
+    for (i, ta) in enumerate(windows)
+        it = initial_times[i]
+        @test first(TimeSeries.timestamp(ta)) == it
+        @test TimeSeries.values(ta) ==
+              IS.get_time_series_values(component, forecast; start_time = it)
+    end
+end
+
+@testset "Test StaticTimeSeriesCache rejects NonSequentialTimeSeries" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T01:00:00"),
+        Dates.DateTime("2020-01-01T05:00:00"),
+    ]
+    ts = IS.NonSequentialTimeSeries("test", timestamps, [1.0, 2.0, 3.0])
+    IS.add_time_series!(sys, component, ts)
+
+    @test_throws ArgumentError IS.StaticTimeSeriesCache(
+        IS.NonSequentialTimeSeries,
+        component,
+        "test",
+    )
+end

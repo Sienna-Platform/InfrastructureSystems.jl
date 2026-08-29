@@ -110,8 +110,9 @@ ValueCurve{T<:FunctionData}
 ├─ InputOutputCurve / IncrementalCurve / AverageRateCurve          (static)
 └─ TimeSeriesInputOutputCurve / TimeSeriesIncrementalCurve /
    TimeSeriesAverageRateCurve   <: ValueCurve{<:TimeSeriesFunctionData}
-    (TimeSeriesIncrementalCurve carries initial_input / input_at_zero as
-     Union{Nothing, Float64, TimeSeriesKey} fields — do NOT "fix" the union for boxing)
+    (TimeSeriesIncrementalCurve and TimeSeriesAverageRateCurve carry initial_input /
+     input_at_zero as Union{Nothing, ConcreteTimeSeriesKey} fields — do NOT "fix" the
+     union for boxing)
 
 Cost aliases (cost_aliases.jl): LinearCurve, QuadraticCurve, PiecewisePointCurve,
 PiecewiseIncrementalCurve, PiecewiseAverageCurve + TimeSeries* counterparts (all exported).

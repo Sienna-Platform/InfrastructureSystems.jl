@@ -39,6 +39,13 @@ get_resolution(key::TimeSeriesKey) = key.resolution
 get_time_series_type(key::TimeSeriesKey) = key.time_series_type
 get_initial_timestamp(key::TimeSeriesKey) = key.initial_timestamp
 get_features(key::TimeSeriesKey) = key.features
+
+"""
+Return the number of values one window of the series holds, so `get_length` and
+`Base.length` agree for every key type. A [`ForecastKey`](@ref) has no `length` field: for
+it this is the horizon count (the per-window length), **not** the number of windows — use
+[`get_count`](@ref) for that.
+"""
 get_length(key::TimeSeriesKey) = key.length
 
 # A key represents a single window unless it is a forecast.
@@ -162,6 +169,8 @@ get_interval(key::ForecastKey) = key.interval
 get_count(key::ForecastKey) = key.count
 get_horizon_count(key::ForecastKey) =
     get_horizon_count(get_horizon(key), get_resolution(key))
+# A ForecastKey has no `length` field; its per-window length is the horizon count.
+get_length(key::ForecastKey) = get_horizon_count(key)
 Base.length(key::ForecastKey) = get_horizon_count(key)
 
 # Keys are values: two keys naming the same stored association are equal, whatever

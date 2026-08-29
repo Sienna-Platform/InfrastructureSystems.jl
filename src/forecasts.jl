@@ -35,12 +35,14 @@ end
 function _check_forecast_data(forecast::Forecast)
     data = get_data(forecast)
     isempty(data) && throw(ArgumentError("Forecast data cannot be empty"))
-    required_length = length(first(values(data)))
-    required_length < 2 &&
+    # Dimension 1 is time for every window shape; `length` would count the members of a
+    # (horizon, member) Probabilistic/Scenarios matrix instead of its horizon.
+    required_horizon = size(first(values(data)), 1)
+    required_horizon < 2 &&
         throw(ArgumentError("Forecast arrays must have a length of at least 2."))
-    lengths = Set((length(x) for x in values(data)))
-    length(lengths) != 1 &&
-        throw(DimensionMismatch("All forecast arrays must have the same length"))
+    horizons = Set((size(x, 1) for x in values(data)))
+    length(horizons) != 1 &&
+        throw(DimensionMismatch("All forecast windows must have the same horizon"))
     return
 end
 
@@ -104,7 +106,8 @@ function get_initial_times_common(forecast::Forecast)
 end
 
 """
-Return the total period covered by the forecast.
+Return the total period covered by the forecast: from its first timestamp to the last
+timestamp of its last window.
 """
 function get_total_period(f::Forecast)
     return get_total_period(
@@ -127,7 +130,8 @@ function get_horizon_count(horizon::Dates.Period, resolution::Dates.Period)
 end
 
 """
-Return the forecast window corresponsing to interval index.
+Return the forecast window corresponding to a 1-based interval index: `index = 1` is the
+first window, `index = get_count(forecast)` is the last.
 """
 function get_window(forecast::Forecast, index::Int; len = nothing)
     return get_window(forecast, index_to_initial_time(forecast, index); len = len)
@@ -138,10 +142,18 @@ function iterate_windows_common(forecast)
 end
 
 """
-Return the Dates.DateTime corresponding to an interval index.
+Return the Dates.DateTime corresponding to a 1-based interval index: `index = 1` maps to
+the forecast's initial timestamp and `index = get_count(forecast)` to the last window.
 """
 function index_to_initial_time(forecast::Forecast, index::Int)
-    return get_initial_timestamp(forecast) + get_interval(forecast) * index
+    count = get_count(forecast)
+    (index >= 1 && index <= count) || throw(
+        ArgumentError(
+            "window index=$index is out of range; the forecast has $count windows " *
+            "(valid indices are 1 through $count)",
+        ),
+    )
+    return get_initial_timestamp(forecast) + get_interval(forecast) * (index - 1)
 end
 
 """
@@ -173,6 +185,7 @@ end
 Return the interval by subtracting the first two initial times.
 """
 function get_interval_from_initial_times(initial_times::Vector{Dates.DateTime})
+    isempty(initial_times) && throw(ArgumentError("Forecast data cannot be empty"))
     if length(initial_times) == 1
         return Dates.Second(0)
     end
@@ -202,7 +215,18 @@ function get_window_common(
         ),
     )
 
-    data = get_data(forecast)[initial_time]
+    all_data = get_data(forecast)
+    if !haskey(all_data, initial_time)
+        initial_times = collect(keys(all_data))
+        throw(
+            ArgumentError(
+                "start_time=$initial_time is not a forecast window initial time; " *
+                "valid windows run from $(first(initial_times)) to " *
+                "$(last(initial_times)) every $(get_interval(forecast))",
+            ),
+        )
+    end
+    data = all_data[initial_time]
     if ndims(data) == 2
         # A Probabilistic / Scenarios window is a (horizon, member) matrix; the time
         # axis is the first dimension either way.

@@ -354,6 +354,10 @@ list_time_series_keys(
 
 """
 Remove the time series data for a component.
+
+Throws an `ArgumentError` when nothing matched, matching the by-key removal below: a
+by-name removal names one series, so a miss means the caller has the wrong
+type/name/filters.
 """
 function remove_time_series!(
     mgr::TimeSeriesManager,
@@ -374,7 +378,7 @@ function remove_time_series!(
     # per-key transactions. The core refuses to remove a SingleTimeSeries whose
     # array still backs a DeterministicSingleTimeSeries; surface that as the
     # IS-level error.
-    try
+    removed = try
         _infrastore_remove_by_filter!(
             store,
             time_series_type;
@@ -399,6 +403,15 @@ function remove_time_series!(
         end
         rethrow()
     end
+    # A by-name removal names one series; matching nothing means the caller has the wrong
+    # type/name/filters, which the by-key removal already reports rather than swallowing.
+    iszero(removed) && throw(
+        ArgumentError(
+            "No time series matched type=$time_series_type name=$name " *
+            "resolution=$resolution interval=$interval features=$features on " *
+            "$(summary(owner)); nothing was removed.",
+        ),
+    )
     return
 end
 

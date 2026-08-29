@@ -133,6 +133,7 @@ function Deterministic(
         data = data,
         resolution = resolution,
         interval = interval,
+        normalization_factor = normalization_factor,
         units = units,
         quantity_kind = quantity_kind,
         unit_system = unit_system,
