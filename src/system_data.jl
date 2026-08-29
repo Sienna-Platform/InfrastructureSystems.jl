@@ -475,9 +475,11 @@ compact_time_series!(data::SystemData) = compact_time_series!(data.time_series_m
 function _orphaned_owner_error(kind::AbstractString, id::Int)
     return ArgumentError(
         "a time series association refers to $kind id $id, which is no longer in the " *
-        "system; the owner was removed with remove_time_series = false. Call " *
-        "clear_time_series! before removing it, or remove the orphaned rows with " *
-        "remove_time_series!.",
+        "system; the owner was removed with remove_time_series = false. The orphaned " *
+        "rows can no longer be addressed by owner, so the only remedy is " *
+        "clear_time_series!, which drops every time series in the system; in future, " *
+        "remove the owner with remove_time_series = true (the default) or call " *
+        "clear_time_series!(data, owner) before removing it.",
     )
 end
 
@@ -653,33 +655,25 @@ function check_transform_single_time_series(
        (!isnothing(resolution) && is_irregular_period(resolution))
         return false
     end
+    # A dry run in the store first: every check the real transform would run, nothing
+    # written, O(distinct resolutions), and legal on a read-only store.
+    _transform_dry_run_passes(data, horizon, interval, resolution) && return true
+    delete_existing || return false
+    # Rejected as the store stands — possibly only by a conflict with the
+    # DeterministicSingleTimeSeries that a committing call would delete first. A
+    # read-only store cannot delete them, so the committing call would fail too.
+    data.time_series_manager.read_only && return false
+    # Re-run the dry run with those views removed, then unwind the removal: the
+    # transaction is rolled back by the sentinel exception, so nothing is written.
     valid = Ref(false)
     try
         time_series_transaction(data) do _
-            if delete_existing
-                remove_time_series!(
-                    data,
-                    DeterministicSingleTimeSeries;
-                    resolution = resolution,
-                )
-            end
-            valid[] = try
-                # A dry run in the store: every check the real transform would run,
-                # nothing written.
-                infrastore_transform_single_time_series!(
-                    get_data_store(data),
-                    horizon,
-                    interval;
-                    resolution = resolution,
-                    dry_run = true,
-                )
-                true
-            catch e
-                # `catch`-block exception inspection.
-                e isa ConflictingInputsError || rethrow()
-                false
-            end
-            # The removal above is speculative: unwind it along with everything else.
+            remove_time_series!(
+                data,
+                DeterministicSingleTimeSeries;
+                resolution = resolution,
+            )
+            valid[] = _transform_dry_run_passes(data, horizon, interval, resolution)
             throw(_TransformCheckRollback())
         end
     catch e
@@ -687,6 +681,23 @@ function check_transform_single_time_series(
         e isa _TransformCheckRollback || rethrow()
     end
     return valid[]
+end
+
+function _transform_dry_run_passes(data::SystemData, horizon, interval, resolution)
+    try
+        infrastore_transform_single_time_series!(
+            get_data_store(data),
+            horizon,
+            interval;
+            resolution = resolution,
+            dry_run = true,
+        )
+    catch e
+        # `catch`-block exception inspection.
+        e isa ConflictingInputsError || rethrow()
+        return false
+    end
+    return true
 end
 
 function _transform_single_time_series!(

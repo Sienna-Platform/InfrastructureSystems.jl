@@ -35,17 +35,25 @@ Base.eachindex(ts::StaticTimeSeries) = eachindex(get_array(ts))
 
 # Iteration yields one *value* per step, so it is only well defined for a 1-D series:
 # `length` counts rows (dimension 1 is time), while iterating an N-D array would walk
-# every element in column-major order and disagree with it. The concrete types carry the
-# rank parameter and define the `N == 1` methods in their own files (they are not yet
-# defined here); this is the N >= 2 fallback.
-Base.iterate(ts::StaticTimeSeries, n = 1) = throw(
+# every element in column-major order and disagree with it. Dispatch on the rank of the
+# array rather than on the series type, so every `StaticTimeSeries` subtype — including
+# ones defined outside IS — gets the same rule without defining its own method.
+Base.iterate(ts::StaticTimeSeries, n = 1) = _iterate_values(ts, get_array(ts), n)
+
+_iterate_values(::StaticTimeSeries, values::AbstractVector, n) = iterate(values, n)
+
+_iterate_values(ts::StaticTimeSeries, values::AbstractArray, _) = throw(
     ArgumentError(
-        "iteration over a $(ndims(get_array(ts)))-dimensional $(nameof(typeof(ts))) is " *
+        "iteration over a $(ndims(values))-dimensional $(nameof(typeof(ts))) is " *
         "ambiguous: length(ts) counts timesteps but the values are per-step arrays. " *
         "Iterate eachslice(get_array(ts); dims = 1) for one row per timestep, or " *
         "get_array(ts) for the raw elements.",
     ),
 )
+
+# Base's generic `isempty` goes through `iterate`, which is ambiguous (above) for an N-D
+# series; emptiness is a row count either way.
+Base.isempty(ts::StaticTimeSeries) = length(ts) == 0
 
 Base.first(ts::StaticTimeSeries) = head(ts, 1)
 

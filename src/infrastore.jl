@@ -408,15 +408,17 @@ end
 
 # Densify a Probabilistic/Scenarios forecast — a SortedDict of
 # `(horizon_count, dim1)` window matrices — into the `(dim1, horizon_count,
-# count)` array the store's forecast constructors take.
-function _dense_forecast_array(forecast::Forecast, dim1::Integer)
-    arr = Array{Float64, 3}(
+# count)` array the store's forecast constructors take, in the windows' own element
+# type and tagged with it, so a `Probabilistic{Int64}` round-trips as one (matching
+# the Deterministic and static paths) instead of coming back widened to Float64.
+function _dense_forecast_array(forecast::Forecast{T}, dim1::Integer) where {T}
+    arr = Array{T, 3}(
         undef, dim1, get_horizon_count(forecast), get_count(forecast),
     )
     for (ix, window) in enumerate(values(get_data(forecast)))
         arr[:, :, ix] = transpose(window)
     end
-    return arr
+    return (arr, _element_type_name(T))
 end
 
 # Decode window `c` (1-based) of a `(horizon, count, k)` forecast array into a Vector of
@@ -878,6 +880,26 @@ end
 # requested window, so no catalog query is issued. The store slices the half-open
 # `[start, start + n·resolution)` window server-side; only the requested steps are
 # read and decoded.
+
+# A key is a snapshot of one stored association, and every key carries the id the store
+# minted for it. Ids are never reissued, so "does this id still resolve?" is the exact
+# staleness test: if the series was removed (and possibly re-added under the same name and
+# features), the id is gone. This is a primary-key probe that fetches no row. Checking it
+# up front means every later mismatch is the caller's — an out-of-range `start_time`,
+# `len`, or `count` — and is reported as such rather than blamed on a stale key.
+function _throw_if_key_stale(store::Store, key::TimeSeriesKey)
+    id = get_association_id(key)
+    InfraStore.association_exists(store.inner, id) && return
+    throw(
+        ArgumentError(
+            "TimeSeriesKey is stale: the $(nameof(get_time_series_type(key))) " *
+            "'$(get_name(key))' it names (association_id=$id) is no longer in the " *
+            "store; it was removed after the key was obtained. Re-fetch the key with " *
+            "get_time_series_key.",
+        ),
+    )
+end
+
 function _infrastore_read_single(
     owner::TimeSeriesOwners,
     key::StaticTimeSeriesKey;
@@ -886,6 +908,7 @@ function _infrastore_read_single(
 )
     mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
+    _throw_if_key_stale(store, key)
     owner_id, _, category = _infrastore_owner_args(owner)
     name = get_name(key)
     initial_timestamp = get_initial_timestamp(key)
@@ -909,21 +932,6 @@ function _infrastore_read_single(
         category, name;
         resolution = resolution, features = feats, time_range = time_range)
     values = _decode_stored_values(sts.data, _element_encoding(sts.element_type))
-    # A key holds a snapshot of the series' shape. If the series was removed and re-added
-    # under the same name and features, the key still resolves but describes a different
-    # array — and the window arithmetic above was computed against the stale shape. Catch
-    # that here rather than returning silently wrong values.
-    if sts.initial_timestamp != start || size(values, 1) != n
-        throw(
-            ArgumentError(
-                "TimeSeriesKey is stale: the stored series for '$name' starts at " *
-                "$(sts.initial_timestamp) with $(size(values, 1)) steps in the requested " *
-                "window, but the key says it starts at $start with $n. The series was " *
-                "replaced after the key was obtained; re-fetch it with " *
-                "get_time_series_key.",
-            ),
-        )
-    end
     return SingleTimeSeries(
         String(name), sts.initial_timestamp, sts.resolution, values; units = sts.units,
         quantity_kind = sts.quantity_kind,
@@ -968,6 +976,7 @@ function _infrastore_read_non_sequential(
 )
     mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
+    _throw_if_key_stale(store, key)
     owner_id, _, category = _infrastore_owner_args(owner)
     feats = get_features(key)
     time_range = if isnothing(start_time)
@@ -1189,10 +1198,11 @@ function _infrastore_stage_data!(
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
     ) do initial, resolution, horizon, interval, name
-        arr = _dense_forecast_array(ts, length(get_percentiles(ts)))
+        arr, element_type = _dense_forecast_array(ts, length(get_percentiles(ts)))
         prob = InfraStore.Probabilistic(initial, resolution, horizon, interval,
             get_count(ts), Float64.(get_percentiles(ts)), arr, name;
-            units = get_units(ts), quantity_kind = get_quantity_kind(ts),
+            element_type = element_type, units = get_units(ts),
+            quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (prob, get_count(ts))
     end
@@ -1233,10 +1243,10 @@ function _infrastore_stage_data!(
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
     ) do initial, resolution, horizon, interval, name
-        arr = _dense_forecast_array(ts, get_scenario_count(ts))
+        arr, element_type = _dense_forecast_array(ts, get_scenario_count(ts))
         scen = InfraStore.Scenarios(initial, resolution, horizon, interval,
-            get_count(ts), arr, name; units = get_units(ts),
-            quantity_kind = get_quantity_kind(ts),
+            get_count(ts), arr, name; element_type = element_type,
+            units = get_units(ts), quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (scen, get_count(ts))
     end
@@ -1377,6 +1387,8 @@ function _infrastore_get_forecast(
             resolution = resolution, interval = interval, features = features,
         )
     else
+        # A caller-supplied key may predate a removal; a freshly resolved one cannot.
+        _throw_if_key_stale(store, key)
         key
     end
     feats = get_features(matched)
@@ -1414,39 +1426,7 @@ function _infrastore_get_forecast(
         tr,
         len,
     )
-    _check_forecast_key_fresh(forecast, matched, name, start_time, count)
     return forecast
-end
-
-# A key holds a snapshot of the forecast's window grid, and `tr` above was computed from
-# it. If the series was removed and re-added under the same name and features, the key
-# still resolves but describes a different grid, so the read can come back shifted or
-# truncated (the store clamps an out-of-grid range rather than erroring). Compare what
-# came back against what the key promised.
-function _check_forecast_key_fresh(forecast, key, name, start_time, count)
-    expected_start = isnothing(start_time) ? get_initial_timestamp(key) : start_time
-    got_count = get_count(forecast)
-    expected_count = if !isnothing(count)
-        count
-    elseif isnothing(start_time)
-        get_count(key)
-    else
-        # A suffix read from an explicit start_time: the key's total count does not
-        # bound the result, so only the start is meaningful to check.
-        got_count
-    end
-    if get_initial_timestamp(forecast) != expected_start || got_count != expected_count
-        throw(
-            ArgumentError(
-                "TimeSeriesKey is stale: the stored forecast for '$name' came back " *
-                "starting at $(get_initial_timestamp(forecast)) with $got_count " *
-                "windows, but the key says $expected_start with $expected_count. The " *
-                "series was replaced after the key was obtained; re-fetch it with " *
-                "get_time_series_key.",
-            ),
-        )
-    end
-    return
 end
 
 # `len`, when given, truncates a window to its first `len` horizon steps (the
@@ -1470,20 +1450,17 @@ _forecast_window(
 # `(horizon, member)` matrix IS hands users.
 _member_window(data::AbstractArray{<:Any, 3}, i) = permutedims(@view data[:, :, i])
 
-# `Probabilistic` and `Scenarios` pin `Matrix{Float64}` windows, so an array written in
-# another element type by a different client would reach their constructors as a
-# `MethodError`. Name the stored type instead. (`Deterministic` carries its element type
-# through, so it needs no such guard.)
-_check_member_window_type(::AbstractArray{Float64, 3}, _type, _name, _element_type) =
-    nothing
+# `Probabilistic` and `Scenarios` windows are per-member scalars: the stored array is
+# handed back in its own element type (any scalar dtype), but an encoded element type
+# (FunctionData / NTuple rows, written by another InfraStore client) has no IS member
+# window shape, so name it rather than let the reconstruction mis-slice it.
+_check_member_window_type(::ScalarEncoding, _type, _name, _element_type) = nothing
 
-_check_member_window_type(
-    ::AbstractArray{T, 3}, forecast_type, name, element_type,
-) where {T} = throw(
+_check_member_window_type(::ElementEncoding, forecast_type, name, element_type) = throw(
     ArgumentError(
-        "$forecast_type '$name' is stored with element type " *
-        "$(isempty(element_type) ? T : element_type); IS reads $forecast_type windows as " *
-        "Matrix{Float64} only. It was likely written by another InfraStore client.",
+        "$forecast_type '$name' is stored with element type $element_type; IS reads " *
+        "$forecast_type windows as per-member scalar matrices only. It was likely " *
+        "written by another InfraStore client.",
     ),
 )
 
@@ -1506,13 +1483,18 @@ function _reconstruct_forecast(
         category, name;
         resolution = resolution, interval = interval, features = feats,
         time_range = time_range)
-    _check_member_window_type(p.data, Probabilistic, name, p.element_type)
+    _check_member_window_type(
+        _element_encoding(p.element_type), Probabilistic, name, p.element_type,
+    )
     window(i) = _truncate_window(_member_window(p.data, i), len)
     data = _assemble_forecast_windows(p.initial_timestamp, p.interval, p.count, window)
-    return Probabilistic(; name = name, data = data,
-        percentiles = p.percentiles, resolution = p.resolution,
-        interval = p.interval, units = p.units, quantity_kind = p.quantity_kind,
-        unit_system = _from_store_unit_system(p.unit_system))
+    # The positional constructor infers `{T, N}` from the windows; the keyword form pins
+    # `Matrix{Float64}`.
+    return Probabilistic(
+        name, data, p.percentiles, p.resolution, p.interval;
+        units = p.units, quantity_kind = p.quantity_kind,
+        unit_system = _from_store_unit_system(p.unit_system),
+    )
 end
 
 _reconstruct_forecast(::Type{<:Deterministic}, args...) =
@@ -1577,16 +1559,18 @@ function _reconstruct_forecast(
         category, name;
         resolution = resolution, interval = interval, features = feats,
         time_range = time_range)
-    _check_member_window_type(s_ts.data, Scenarios, name, s_ts.element_type)
+    _check_member_window_type(
+        _element_encoding(s_ts.element_type), Scenarios, name, s_ts.element_type,
+    )
     window(i) = _truncate_window(_member_window(s_ts.data, i), len)
     data = _assemble_forecast_windows(
         s_ts.initial_timestamp, s_ts.interval, s_ts.count, window,
     )
-    return Scenarios(; name = name, data = data,
-        scenario_count = s_ts.scenario_count, resolution = s_ts.resolution,
-        interval = s_ts.interval, units = s_ts.units,
-        quantity_kind = s_ts.quantity_kind,
-        unit_system = _from_store_unit_system(s_ts.unit_system))
+    return Scenarios(
+        name, data, s_ts.scenario_count, s_ts.resolution, s_ts.interval;
+        units = s_ts.units, quantity_kind = s_ts.quantity_kind,
+        unit_system = _from_store_unit_system(s_ts.unit_system),
+    )
 end
 
 # ---- ForecastReader --------------------------------------------------------

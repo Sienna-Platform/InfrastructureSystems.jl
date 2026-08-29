@@ -230,11 +230,6 @@ function NonSequentialTimeSeries(
     )
 end
 
-# One value per timestep: iteration agrees with `length` only for a 1-D series. See the
-# erroring N >= 2 fallback in `static_time_series.jl`.
-Base.iterate(ts::NonSequentialTimeSeries{T, 1}, n = 1) where {T} =
-    iterate(get_array(ts), n)
-
 # Hook for the shared `StaticTimeSeries` slicing methods.
 _from_time_array(ts::NonSequentialTimeSeries, data::TimeSeries.TimeArray) =
     NonSequentialTimeSeries(ts, _check_non_empty_subset(data))

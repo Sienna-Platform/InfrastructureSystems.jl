@@ -1990,6 +1990,23 @@ end
         IS.get_time_series(IS.DeterministicSingleTimeSeries, component, "val1"),
     ) == Dates.Hour(24)
 
+    # The check is a query: it answers on a read-only store, where the committing call
+    # could not delete the existing views, so only compatible parameters pass.
+    sys.time_series_manager.read_only = true
+    @test !IS.check_transform_single_time_series(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Hour(12),
+        Dates.Hour(1),
+    )
+    @test IS.check_transform_single_time_series(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        Dates.Hour(24),
+        Dates.Hour(1),
+    )
+    sys.time_series_manager.read_only = false
+
     # And the transform itself still succeeds with the parameters the check accepted.
     IS.transform_single_time_series!(
         sys,
@@ -4542,7 +4559,7 @@ end
     )
 end
 
-@testset "Test by-name remove_time_series! reports a miss" begin
+@testset "Test by-name remove_time_series! tolerates a miss" begin
     sys = IS.SystemData()
     component = IS.TestComponent("Component1", 5)
     IS.add_component!(sys, component)
@@ -4555,24 +4572,18 @@ end
         features = Dict("s" => "a"),
     )
 
-    @test_throws ArgumentError IS.remove_time_series!(
-        sys,
-        IS.SingleTimeSeries,
-        component,
-        "unknown",
-    )
-    @test_throws ArgumentError IS.remove_time_series!(
-        sys,
-        IS.Deterministic,
-        component,
-        "x",
-    )
-    @test_throws ArgumentError IS.remove_time_series!(
-        sys,
-        IS.SingleTimeSeries,
-        component,
-        "x";
-        features = Dict("s" => "b"),
+    # A by-name removal that matches nothing is a tolerated no-op ("remove if present"
+    # idioms downstream rely on it); only the by-key form is strict.
+    @test isnothing(IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "unknown"))
+    @test isnothing(IS.remove_time_series!(sys, IS.Deterministic, component, "x"))
+    @test isnothing(
+        IS.remove_time_series!(
+            sys,
+            IS.SingleTimeSeries,
+            component,
+            "x";
+            features = Dict("s" => "b"),
+        ),
     )
     # Nothing was removed by any of those.
     @test IS.has_time_series(component, IS.SingleTimeSeries, "x")
@@ -4609,11 +4620,43 @@ end
     end
 end
 
+@testset "Test member forecast windows keep their element type" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    resolution = Dates.Hour(1)
+    t0 = Dates.DateTime("2020-01-01T00:00:00")
+
+    for T in (Int64, Float32, Float64)
+        # (horizon, member) windows
+        data = SortedDict(
+            t0 + (i - 1) * resolution => T[T(h + m + i) for h in 1:4, m in 1:2] for
+            i in 1:3
+        )
+        prob = IS.Probabilistic("p_$T", data, [0.25, 0.75], resolution, resolution)
+        @test prob isa IS.Probabilistic{T, 2}
+        IS.add_time_series!(sys, component, prob)
+        got = IS.get_time_series(IS.Probabilistic, component, "p_$T")
+        @test typeof(got) == typeof(prob)
+        @test IS.get_data(got) == IS.get_data(prob)
+        @test IS.get_percentiles(got) == [0.25, 0.75]
+
+        scen = IS.Scenarios("s_$T", data, 2, resolution, resolution)
+        @test scen isa IS.Scenarios{T, 2}
+        IS.add_time_series!(sys, component, scen)
+        got = IS.get_time_series(IS.Scenarios, component, "s_$T")
+        @test typeof(got) == typeof(scen)
+        @test IS.get_data(got) == IS.get_data(scen)
+        @test IS.get_scenario_count(got) == 2
+    end
+end
+
 @testset "Test N-D static series reject ambiguous iteration" begin
     t0 = Dates.DateTime("2020-01-01T00:00:00")
     resolution = Dates.Hour(1)
     nd = IS.SingleTimeSeries("x", t0, resolution, rand(3, 2))
     @test length(nd) == 3
+    @test !isempty(nd)  # goes through `length`, not the ambiguous `iterate`
     @test_throws ArgumentError collect(nd)
     @test_throws ArgumentError iterate(nd)
     # eachslice over the raw array is the documented alternative.
@@ -4625,6 +4668,7 @@ end
         rand(3, 2),
     )
     @test length(nd_ns) == 3
+    @test !isempty(nd_ns)
     @test_throws ArgumentError collect(nd_ns)
 
     # 1-D iteration is unchanged.
@@ -4649,15 +4693,45 @@ end
     key = IS.get_time_series_key(IS.SingleTimeSeries, component, "x")
     @test length(IS.get_time_series_values(component, key)) == 24
 
+    # A bad window on a live key is the caller's error, not a stale key.
+    e = try
+        IS.get_time_series_values(component, key; start_time = dates[1], len = 25)
+    catch e
+        e
+    end
+    @test e isa ArgumentError
+    @test !occursin("stale", e.msg)
+
     # Replace the series with a shorter one under the same name.
     IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "x")
     short_ta = TimeSeries.TimeArray(dates[1:10], collect(1.0:10.0), ["x"])
     IS.add_time_series!(sys, component, IS.SingleTimeSeries("x", short_ta))
-    @test_throws ArgumentError IS.get_time_series_values(component, key)
+    e = try
+        IS.get_time_series_values(component, key)
+    catch e
+        e
+    end
+    @test e isa ArgumentError
+    @test occursin("stale", e.msg)
+    # Even a window that fits the replacement is rejected by the id, not the shape.
+    @test_throws ArgumentError IS.get_time_series_values(
+        component, key; start_time = dates[1], len = 5,
+    )
 
     # A fresh key reads fine.
     fresh = IS.get_time_series_key(IS.SingleTimeSeries, component, "x")
     @test length(IS.get_time_series_values(component, fresh)) == 10
+
+    # The same for a NonSequentialTimeSeries, which has no shape to compare.
+    ns = IS.NonSequentialTimeSeries("ns", collect(dates[1:5]), collect(1.0:5.0))
+    IS.add_time_series!(sys, component, ns)
+    ns_key = IS.get_time_series_key(IS.NonSequentialTimeSeries, component, "ns")
+    IS.remove_time_series!(sys, IS.NonSequentialTimeSeries, component, "ns")
+    IS.add_time_series!(
+        sys, component,
+        IS.NonSequentialTimeSeries("ns", collect(dates[6:10]), collect(6.0:10.0)),
+    )
+    @test_throws ArgumentError IS.get_time_series(component, ns_key)
 end
 
 @testset "Test stale forecast TimeSeriesKey reads are rejected" begin
@@ -4674,6 +4748,33 @@ end
     )
     key = IS.get_time_series_key(IS.Deterministic, component, "f")
     @test IS.get_count(IS.get_time_series(component, key)) == 6
+
+    # A bad window on a live key is the caller's error, not a stale key.
+    e = try
+        IS.get_time_series(component, key; start_time = t0, count = 7)
+    catch e
+        e
+    end
+    @test e isa ArgumentError
+    @test !occursin("stale", e.msg)
+
+    # Replace with the same count but a shorter horizon: the old shape heuristic
+    # (start + count) would have passed this and then over-read the window.
+    IS.remove_time_series!(sys, IS.Deterministic, component, "f")
+    short = SortedDict(t0 + (i - 1) * resolution => collect(1.0:2.0) for i in 1:6)
+    IS.add_time_series!(
+        sys,
+        component,
+        IS.Deterministic(; name = "f", data = short, resolution = resolution),
+    )
+    e = try
+        IS.get_time_series(component, key)
+    catch e
+        e
+    end
+    @test e isa ArgumentError
+    @test occursin("stale", e.msg)
+    @test_throws ArgumentError IS.get_time_series(component, key; len = 3)
 
     IS.remove_time_series!(sys, IS.Deterministic, component, "f")
     short = SortedDict(t0 + (i - 1) * resolution => collect(1.0:4.0) for i in 1:3)

@@ -216,7 +216,9 @@ function get_window_common(
     )
 
     all_data = get_data(forecast)
-    if !haskey(all_data, initial_time)
+    # One tree lookup on the per-window path; the miss branch is cold.
+    data = get(all_data, initial_time, nothing)
+    if isnothing(data)
         initial_times = collect(keys(all_data))
         throw(
             ArgumentError(
@@ -226,7 +228,6 @@ function get_window_common(
             ),
         )
     end
-    data = all_data[initial_time]
     if ndims(data) == 2
         # A Probabilistic / Scenarios window is a (horizon, member) matrix; the time
         # axis is the first dimension either way.

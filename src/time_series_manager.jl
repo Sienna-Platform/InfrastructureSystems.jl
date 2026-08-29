@@ -403,15 +403,13 @@ function remove_time_series!(
         end
         rethrow()
     end
-    # A by-name removal names one series; matching nothing means the caller has the wrong
-    # type/name/filters, which the by-key removal already reports rather than swallowing.
-    iszero(removed) && throw(
-        ArgumentError(
-            "No time series matched type=$time_series_type name=$name " *
-            "resolution=$resolution interval=$interval features=$features on " *
-            "$(summary(owner)); nothing was removed.",
-        ),
-    )
+    # Matching nothing is a tolerated no-op, not an error: downstream "remove if present"
+    # idioms (e.g. PowerSystemCaseBuilder clearing a service's requirement DST before
+    # removing the service) rely on it. The by-key removal, which names one exact stored
+    # association, is the strict form.
+    iszero(removed) &&
+        @debug "No time series matched" time_series_type name resolution interval features owner =
+            summary(owner)
     return
 end
 
