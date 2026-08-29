@@ -2506,8 +2506,8 @@ end
     )
 
     doctored = IS.StaticTimeSeriesKey(;
-        # The owner is deliberately NOT doctored: it is the one thing an accessor
-        # checks, because the `owner` argument is not something the id can confirm.
+        # The owner is deliberately NOT doctored: it is the one field an accessor
+        # does read off the key, to confirm the caller named the right owner.
         owner_id = IS.get_owner_id(key),
         owner_category = IS.get_owner_category(key),
         association_id = IS.get_association_id(key),
@@ -2558,8 +2558,8 @@ end
     end
 
     doctored = IS.ForecastKey(;
-        # The owner is deliberately NOT doctored: it is the one thing an accessor
-        # checks, because the `owner` argument is not something the id can confirm.
+        # The owner is deliberately NOT doctored: it is the one field an accessor
+        # does read off the key, to confirm the caller named the right owner.
         owner_id = IS.get_owner_id(key),
         owner_category = IS.get_owner_category(key),
         association_id = IS.get_association_id(key),
@@ -2597,8 +2597,8 @@ end
     )
 
     doctored = IS.NonSequentialTimeSeriesKey(;
-        # The owner is deliberately NOT doctored: it is the one thing an accessor
-        # checks, because the `owner` argument is not something the id can confirm.
+        # The owner is deliberately NOT doctored: it is the one field an accessor
+        # does read off the key, to confirm the caller named the right owner.
         owner_id = IS.get_owner_id(key),
         owner_category = IS.get_owner_category(key),
         association_id = IS.get_association_id(key),

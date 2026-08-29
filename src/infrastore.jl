@@ -879,11 +879,12 @@ end
 # nothing probes it for staleness first, and a dangling id surfaces as an error
 # from the call that was already committed to acting on it.
 #
-# The exception is the owner. `owner` is an argument in its own right, not
-# something the id can confirm, so every accessor checks that the association is
-# actually attached to the owner it was handed. Without it,
+# The exception is the owner. `owner` is an argument in its own right, so every
+# accessor confirms the key belongs to it before doing anything — without that,
 # `remove_time_series!(sys, wrong_component, key)` would quietly delete a series
-# off some other component.
+# off some other component. The key carries `owner_id` and `owner_category`, so
+# this is a comparison against the key, ahead of any store access: no probe, no
+# round trip, and the same check on every path.
 #
 # How far that reaches is bounded by the core's id-addressed surface:
 # `read_by_ids` (whole series, no slicing), `remove_by_ids!`, and
@@ -908,29 +909,16 @@ function _resolve_association(store::Store, key::TimeSeriesKey)
     return row
 end
 
-# Confirm the association `key` names is attached to `owner`. Checked against the
-# catalog row wherever one is resolved anyway (removal, sliced reads); against the
-# key's own owner fields on the paths that address the store by id alone and never
-# fetch a row, where it is still the check that catches the mistake this guards
-# against — the caller naming the wrong component.
-_check_association_owner(owner::TimeSeriesOwners, key::TimeSeriesKey) =
-    _check_association_owner(owner, key, get_owner_id(key), get_owner_category(key))
-
-_check_association_owner(owner::TimeSeriesOwners, key::TimeSeriesKey, row) =
-    _check_association_owner(owner, key, row.owner_id, row.owner_category)
-
-function _check_association_owner(
-    owner::TimeSeriesOwners,
-    key::TimeSeriesKey,
-    association_owner_id,
-    association_category,
-)
+# Confirm the association `key` names is attached to `owner`. The key carries the
+# owner it was minted for, so this is two field comparisons — the category matters
+# too, since a component and a supplemental attribute can share an integer id.
+function _check_association_owner(owner::TimeSeriesOwners, key::TimeSeriesKey)
     owner_id, category = _infrastore_owner_id_category(owner)
-    (association_owner_id == owner_id && association_category == category) && return
+    (get_owner_id(key) == owner_id && get_owner_category(key) == category) && return
     throw(
         ArgumentError(
             "TimeSeriesKey '$(get_name(key))' (association_id=$(get_association_id(key))) " *
-            "is attached to owner id=$association_owner_id, not to $(summary(owner)); " *
+            "belongs to owner id=$(get_owner_id(key)), not to $(summary(owner)); " *
             "pass the owner it belongs to, or look up a key on this one with " *
             "get_time_series_key.",
         ),
@@ -938,12 +926,12 @@ function _check_association_owner(
 end
 
 # The store an owner's manager holds, and the row `key`'s id resolves to in it,
-# confirmed to be attached to `owner`.
+# for the paths the core cannot serve by id alone. The owner is confirmed first,
+# so a mismatched call costs no store access.
 function _store_and_association(owner::TimeSeriesOwners, key::TimeSeriesKey)
     store = _get_time_series_manager_or_throw(owner).data_store
-    row = _resolve_association(store, key)
-    _check_association_owner(owner, key, row)
-    return (store, row)
+    _check_association_owner(owner, key)
+    return (store, _resolve_association(store, key))
 end
 
 # The one association `id` names, read whole in a single id-addressed call — no
@@ -975,13 +963,12 @@ function _infrastore_read_single(
     len::Union{Nothing, Int} = nothing,
 )
     store = _get_time_series_manager_or_throw(owner).data_store
+    _check_association_owner(owner, key)
     if isnothing(start_time) && isnothing(len)
-        _check_association_owner(owner, key)
         sts = _read_association_by_id(store, key)::InfraStore.SingleTimeSeries
         return _single_from_store(sts, sts.name)
     end
     row = _resolve_association(store, key)
-    _check_association_owner(owner, key, row)
     initial_timestamp = row.initial_timestamp
     resolution = row.resolution
     start = isnothing(start_time) ? initial_timestamp : start_time
@@ -1031,13 +1018,12 @@ function _infrastore_read_non_sequential(
     len::Union{Nothing, Int} = nothing,
 )
     store = _get_time_series_manager_or_throw(owner).data_store
+    _check_association_owner(owner, key)
     if isnothing(start_time) && isnothing(len)
-        _check_association_owner(owner, key)
         raw = _read_association_by_id(store, key)::InfraStore.NonSequentialTimeSeries
         return _non_sequential_from_store(raw, raw.name)
     end
     row = _resolve_association(store, key)
-    _check_association_owner(owner, key, row)
     name = row.name
     time_range = if isnothing(start_time)
         nothing
