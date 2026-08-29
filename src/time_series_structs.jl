@@ -94,7 +94,7 @@ function deserialize(::Type{<:TimeSeriesKey}, association_id::Integer)
             "`with_deserialization_store`.",
         ),
     )
-    return get_time_series_key(get_deserialization_store(), Int(association_id))
+    return get_time_series_key(get_deserialization_store(), association_id)
 end
 
 """

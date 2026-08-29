@@ -2067,7 +2067,7 @@ store's catalog. The id is minted by the store that holds the association, so it
 is meaningful only against that store — resolve it against the same artifact the
 document was exported from.
 """
-function get_time_series_key(store::Store, association_id::Int)
+function get_time_series_key(store::Store, association_id::Integer)
     # `nothing`, not a raised error: the store treats a stale reference as an answer
     # to "does this still resolve?". Resolving one is past that question, so the miss
     # becomes an error here.
