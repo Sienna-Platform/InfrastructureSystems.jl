@@ -12,6 +12,9 @@ through the key-addressed paths (reads, removal, copy, hashing).
 
 Every concrete key implements the interface below, which generic key-consuming
 code may call on any key:
+- `get_owner_id`
+- `get_owner_category`
+- `get_association_id` — the store-minted surrogate id of the stored association
 - `get_name`
 - `get_resolution` — `nothing` for a key with no regular resolution
 - `get_time_series_type`
@@ -20,13 +23,17 @@ code may call on any key:
 - `get_initial_timestamp` — `nothing` for a key with no regular initial timestamp
 - `get_count`, `Base.length`
 
-The default methods rely on the field names `name`, `time_series_type`,
-`resolution`, `initial_timestamp`, `features`, and `length`, and default to a
-single window with no interval; each concrete key defines the methods its
-fields don't cover (as [`NonSequentialTimeSeriesKey`](@ref) does).
+The default methods rely on the field names `owner_id`, `owner_category`,
+`association_id`, `name`, `time_series_type`, `resolution`,
+`initial_timestamp`, `features`, and `length`, and default to a single window
+with no interval; each concrete key defines the methods its fields don't cover
+(as [`NonSequentialTimeSeriesKey`](@ref) does).
 """
 abstract type TimeSeriesKey <: InfrastructureSystemsType end
 
+get_owner_id(key::TimeSeriesKey) = key.owner_id
+get_owner_category(key::TimeSeriesKey) = key.owner_category
+get_association_id(key::TimeSeriesKey) = key.association_id
 get_name(key::TimeSeriesKey) = key.name
 get_resolution(key::TimeSeriesKey) = key.resolution
 get_time_series_type(key::TimeSeriesKey) = key.time_series_type
@@ -39,19 +46,55 @@ get_interval(::TimeSeriesKey) = nothing
 get_count(::TimeSeriesKey) = 1
 Base.length(key::TimeSeriesKey) = get_length(key)
 
-function deserialize_struct(T::Type{<:TimeSeriesKey}, data::Dict)
-    vals = Dict{Symbol, Any}()
-    for (field_name, field_type) in zip(fieldnames(T), fieldtypes(T))
-        val = data[string(field_name)]
-        if field_type <: Type{<:TimeSeriesData}
-            metadata = get_serialization_metadata(val)
-            val = get_type_from_serialization_metadata(metadata)
-        else
-            val = deserialize(field_type, val)
-        end
-        vals[field_name] = val
-    end
-    return T(; vals...)
+# The store a deserialization resolves association ids against. A key travels as its
+# association id alone, so rebuilding one needs the catalog that minted it; the
+# `deserialize` signatures are fixed by callers outside IS, so the store arrives out of
+# band rather than as an argument.
+const DESERIALIZATION_STORE = Base.ScopedValues.ScopedValue{Store}()
+
+"Whether a store is bound for the current deserialization scope."
+has_deserialization_store() =
+    !isnothing(Base.ScopedValues.get(DESERIALIZATION_STORE))
+
+"The store bound by the innermost enclosing [`with_deserialization_store`](@ref)."
+get_deserialization_store() = DESERIALIZATION_STORE[]
+
+"""
+    with_deserialization_store(f, store::Store)
+
+Run `f()` with `store` bound as the catalog that [`TimeSeriesKey`](@ref)
+deserialization resolves association ids against, and return its result.
+
+A serialized key is nothing but its `association_id`, so anything that
+deserializes a key-carrying struct — a component with a time-series-backed cost
+curve, a supplemental attribute — has to run inside this block. `deserialize` of a
+[`SystemData`](@ref) binds the store it just opened around its own work; a parent
+package that deserializes components itself must wrap that pass in this function.
+"""
+function with_deserialization_store(f, store::Store)
+    return Base.ScopedValues.with(f, DESERIALIZATION_STORE => store)
+end
+
+"""
+A key serializes to its `association_id` alone. The id is the store-minted surrogate
+for the whole association, so every other field of the key is a copy of something the
+catalog already holds; writing them out invites the two to disagree.
+"""
+serialize(key::TimeSeriesKey) = get_association_id(key)
+
+"""
+Rebuild a key from the association id it serialized to, against the store bound by
+[`with_deserialization_store`](@ref).
+"""
+function deserialize(::Type{<:TimeSeriesKey}, association_id::Integer)
+    has_deserialization_store() || throw(
+        ArgumentError(
+            "Deserializing a TimeSeriesKey needs the store that minted " *
+            "association_id=$association_id; run the deserialization inside " *
+            "`with_deserialization_store`.",
+        ),
+    )
+    return get_time_series_key(get_deserialization_store(), Int(association_id))
 end
 
 """
@@ -60,6 +103,9 @@ A unique key to identify and retrieve a [`StaticTimeSeries`](@ref)
 See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
 """
 @kwdef struct StaticTimeSeriesKey <: TimeSeriesKey
+    owner_id::Int
+    owner_category::InfraStore.OwnerCategory
+    association_id::Int
     time_series_type::Type{<:StaticTimeSeries}
     name::String
     initial_timestamp::Dates.DateTime
@@ -79,6 +125,9 @@ non-sequential key in the InfraStore backend.
 See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
 """
 @kwdef struct NonSequentialTimeSeriesKey <: TimeSeriesKey
+    owner_id::Int
+    owner_category::InfraStore.OwnerCategory
+    association_id::Int
     time_series_type::Type{<:NonSequentialTimeSeries}
     name::String
     length::Int
@@ -95,6 +144,9 @@ A unique key to identify and retrieve a [`Forecast`](@ref)
 See: [`get_time_series_keys`](@ref) and [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
 """
 @kwdef struct ForecastKey <: TimeSeriesKey
+    owner_id::Int
+    owner_category::InfraStore.OwnerCategory
+    association_id::Int
     time_series_type::Type{<:Forecast}
     name::String
     initial_timestamp::Dates.DateTime
@@ -132,6 +184,32 @@ end
 # abstract `TimeSeriesKey`.
 const ConcreteTimeSeriesKey =
     Union{StaticTimeSeriesKey, NonSequentialTimeSeriesKey, ForecastKey}
+
+"""
+Everything a [`TimeSeriesKey`](@ref) needs except its `association_id`, held for the
+span between staging an addition onto a batch and the store writing it.
+
+The catalog mints the id on insert, so a staged addition does not have one yet — and
+a key is a value, immutable, never patched after the fact. Staging therefore produces
+this instead, and [`build_key`](@ref) turns it into the real key once the write hands
+back the id it was filed under. `K` is the concrete key type the fields belong to, so
+the built key's type is known from the staged one alone.
+"""
+struct StagedKey{K <: TimeSeriesKey, NT <: NamedTuple}
+    fields::NT
+end
+
+StagedKey{K}(fields::NT) where {K <: TimeSeriesKey, NT <: NamedTuple} =
+    StagedKey{K, NT}(fields)
+
+"""
+    build_key(staged::StagedKey, association_id) -> ConcreteTimeSeriesKey
+
+The key `staged` describes, filed under `association_id` — the id the store minted for
+its row.
+"""
+build_key(staged::StagedKey{K}, association_id::Integer) where {K} =
+    K(; staged.fields..., association_id = Int(association_id))
 
 """
 Provides counts of time series including attachments to components and supplemental

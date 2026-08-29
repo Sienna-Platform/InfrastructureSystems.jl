@@ -139,6 +139,11 @@ A batch that grows past `auto_flush_threshold` staged additions or
 mid-block, so an arbitrarily large block holds a bounded amount of data in memory.
 Flushed work stays inside the transaction and rolls back with it.
 
+`add_time_series!` through the yielded context returns `nothing`: an addition has no
+key until the store writes it and mints its association id. Pass `collect_keys = true`
+to keep one key per written addition, and read them with [`added_keys`](@ref) after
+the block — or call `flush!(txn)` first to see the ones staged so far.
+
 ```julia
 time_series_transaction(data) do txn
     for (component, profile) in profiles
@@ -195,6 +200,8 @@ Add the same time series data to multiple components.
 
 This is significantly more efficent than calling `add_time_series!` for each component
 individually with the same data because in this case, only one time series array is stored.
+Each component gets its own association, so this returns a `Vector` of keys, one per
+component, in the order of `components`.
 
 Throws ArgumentError if a component is not stored in the system.
 """
@@ -206,8 +213,13 @@ function add_time_series!(
 )
     # A block opened for just this call, so the components land as one batch,
     # atomically. The transaction's dispatch stores the array once and validates
-    # each component against `data`.
-    return time_series_transaction(data) do txn
+    # each component against `data`. The keys come from the context rather than the
+    # block's return value: they exist only once the block has committed, which is
+    # after the block itself has run.
+    return _transaction_added_keys(
+        data.time_series_manager,
+        owner -> _validate(data, owner),
+    ) do txn
         add_time_series!(txn, components, time_series; features = features)
     end
 end
@@ -811,15 +823,20 @@ function deserialize(
         )
     end
     next_id = Int(raw["next_id"])
-    supplemental_attribute_manager = deserialize(
-        SupplementalAttributeManager,
-        get(
-            raw,
-            "supplemental_attribute_manager",
-            Dict("attributes" => [], "associations" => []),
-        ),
-        time_series_manager,
-    )
+    # An attribute may carry a `TimeSeriesKey`, which arrives as a bare association id
+    # and is resolved against the store opened above.
+    supplemental_attribute_manager =
+        with_deserialization_store(get_data_store(time_series_manager)) do
+            deserialize(
+                SupplementalAttributeManager,
+                get(
+                    raw,
+                    "supplemental_attribute_manager",
+                    Dict("attributes" => [], "associations" => []),
+                ),
+                time_series_manager,
+            )
+        end
     internal = deserialize(InfrastructureSystemsInternal, raw["internal"])
     validation_descriptors = if isnothing(validation_descriptor_file)
         []
@@ -859,7 +876,9 @@ function deserialize(
     end
 
     # Note: components need to be deserialized by the parent so that they can go through
-    # the proper checks.
+    # the proper checks. A component may carry a `TimeSeriesKey`, which is on the wire as
+    # a bare association id, so the parent must run that pass inside
+    # `with_deserialization_store(get_data_store(sys.time_series_manager))`.
     return sys
 end
 

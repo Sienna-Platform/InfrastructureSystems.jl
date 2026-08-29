@@ -40,7 +40,7 @@ PowerCoreOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPI
 PowerTimeSeriesOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "PowerTimeSeriesOpenAPIModels.jl"}
 
 [compat]
-InfraStore = "0.9"
+InfraStore = "0.10"
 DataFrames = "^1.7"
 DataStructures = "^0.18, ^0.19"
 Dates = "1"

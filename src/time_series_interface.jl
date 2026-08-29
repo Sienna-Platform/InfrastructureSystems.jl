@@ -1080,7 +1080,6 @@ function _copy_time_series_same_kind!(
         )
     end
     dst_id, dst_type, _ = _infrastore_owner_args(dst)
-    src_id, category = _infrastore_owner_id_category(src)
 
     # The copy happens entirely inside the store: it clones the association row
     # against the same content-addressed array. Nothing is read into Julia, so no
@@ -1106,8 +1105,8 @@ function _copy_time_series_same_kind!(
             InfraStore.copy_time_series!(
                 _infrastore_type(get_time_series_type(ts_key)),
                 store.inner,
-                src_id,
-                category,
+                get_owner_id(ts_key),
+                get_owner_category(ts_key),
                 name,
                 dst_id,
                 dst_type;

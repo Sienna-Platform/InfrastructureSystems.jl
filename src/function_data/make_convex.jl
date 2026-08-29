@@ -465,6 +465,7 @@ function increasing_curve_convex_approximation(
         value_curve = convex_vc,
         power_units = get_power_units(cost),
         fuel_cost = cost.fuel_cost,
+        fuel_cost_time_series = cost.fuel_cost_time_series,
         startup_fuel_offtake = cost.startup_fuel_offtake,
         vom_cost = get_vom_cost(cost),
     )

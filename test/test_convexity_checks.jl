@@ -260,6 +260,9 @@ end
 
 @testset "is_valid_data rejects time-series-backed data" begin
     forecast_key = IS.ForecastKey(;
+        owner_id = 1,
+        owner_category = IS.InfraStore.Component,
+        association_id = 1,
         time_series_type = IS.Deterministic,
         name = "test_forecast",
         initial_timestamp = Dates.DateTime("2020-01-01"),

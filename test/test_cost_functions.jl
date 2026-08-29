@@ -281,20 +281,17 @@ end
     # FuelCurve whose fuel_cost is a TimeSeriesKey must round-trip to the
     # concrete key subtype (regression: previously dispatched on the abstract
     # `TimeSeriesKey` and crashed in `fieldnames`).
+    sys, (fuel_key,) = create_forecast_key_fixture("fuel_price")
     fc_ts = IS.FuelCurve(
         IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3)),
-        IS.ForecastKey(;
-            time_series_type = IS.Deterministic,
-            name = "fuel_price",
-            initial_timestamp = Dates.DateTime("2020-01-01"),
-            resolution = Dates.Hour(1),
-            horizon = Dates.Hour(24),
-            interval = Dates.Hour(24),
-            count = 1,
-            features = Dict{String, Any}(),
-        ),
+        fuel_key,
     )
-    @test IS.compare_values(IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts)), fc_ts)
+    @test IS.serialize(fc_ts)["fuel_cost_time_series"] ==
+          IS.get_association_id(fuel_key)
+    fc_ts_rt = IS.with_deserialization_store(key_store(sys)) do
+        IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts))
+    end
+    @test IS.compare_values(fc_ts_rt, fc_ts)
 
     @test zero(cc) == IS.CostCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)))
     @test zero(IS.CostCurve) ==
@@ -319,11 +316,11 @@ end
           "CostCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  vom_cost: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  power_units: NU"
     @test sprint(show, "text/plain", fc) ==
           sprint(show, "text/plain", fc; context = :compact => false) ==
-          "FuelCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  fuel_cost: 4.0\n  startup_fuel_offtake: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  vom_cost: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  power_units: NU"
+          "FuelCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  fuel_cost: 4.0\n  fuel_cost_time_series: nothing\n  startup_fuel_offtake: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  vom_cost: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  power_units: NU"
     @test sprint(show, "text/plain", cc; context = :compact => true) ==
           "CostCurve with power_units NU, vom_cost LinearCurve(0.0, 0.0), and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
     @test sprint(show, "text/plain", fc; context = :compact => true) ==
-          "FuelCurve with power_units NU, fuel_cost 4.0, startup_fuel_offtake LinearCurve(0.0, 0.0), vom_cost LinearCurve(0.0, 0.0), and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
+          "FuelCurve with power_units NU, fuel_cost 4.0, fuel_cost_time_series nothing, startup_fuel_offtake LinearCurve(0.0, 0.0), vom_cost LinearCurve(0.0, 0.0), and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
 
     @test IS.get_power_units(cc) == IS.NaturalUnit()
     @test IS.get_power_units(fc) == IS.NaturalUnit()
@@ -362,6 +359,9 @@ end
 
 @testset "is_time_series_backed for CostCurve and FuelCurve" begin
     forecast_key = IS.ForecastKey(;
+        owner_id = 1,
+        owner_category = IS.InfraStore.Component,
+        association_id = 1,
         time_series_type = IS.Deterministic,
         name = "fuel_price",
         initial_timestamp = Dates.DateTime("2020-01-01"),
@@ -411,6 +411,43 @@ end
     @test_throws ArgumentError IS.get_time_series_key(
         IS.FuelCurve(IS.LinearCurve(5.0), 4.0),
     )
+end
+
+@testset "FuelCurve fuel_cost / fuel_cost_time_series are mutually exclusive" begin
+    vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1.0, 2.0, 3.0))
+    sys, (key,) = create_forecast_key_fixture("fuel_price")
+
+    # Float form
+    fc_float = IS.FuelCurve(vc, 3.0)
+    @test IS.get_fuel_cost(fc_float) == 3.0
+    @test IS.get_fuel_cost_time_series(fc_float) === nothing
+    @test IS.is_time_series_backed(fc_float) == false
+
+    # Time-series form
+    fc_ts = IS.FuelCurve(vc, key)
+    @test IS.get_fuel_cost(fc_ts) === nothing
+    @test IS.get_fuel_cost_time_series(fc_ts) == key
+    @test IS.is_time_series_backed(fc_ts) == true
+
+    # Both set: rejected by the inner constructor
+    @test_throws ArgumentError IS.FuelCurve(;
+        value_curve = vc,
+        fuel_cost = 3.0,
+        fuel_cost_time_series = key,
+    )
+
+    # Neither set: rejected by the inner constructor
+    @test_throws ArgumentError IS.FuelCurve(; value_curve = vc)
+
+    # Serialization round-trip of the float form
+    @test IS.deserialize(IS.FuelCurve, IS.serialize(fc_float)) == fc_float
+
+    # The key-form round trip resolves the serialized association id against the store
+    # that minted it.
+    fc_ts_rt = IS.with_deserialization_store(key_store(sys)) do
+        IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts))
+    end
+    @test IS.compare_values(fc_ts_rt, fc_ts)
 end
 
 @testset "Test prohibited FunctionData types" begin

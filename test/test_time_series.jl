@@ -2320,6 +2320,99 @@ end
     )
 end
 
+@testset "Test add_time_series key carries owner and association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    data = TimeSeries.TimeArray(
+        range(initial_time; length = 24, step = resolution),
+        ones(24),
+    )
+    ts = IS.SingleTimeSeries(; data = data, name = "val")
+    key = IS.add_time_series!(sys, component, ts)
+
+    @test IS.get_owner_id(key) == IS.get_id(component)
+    @test IS.get_owner_category(key) == IS.get_owner_category(component)
+    read_back_key = only(IS.get_time_series_keys(component))
+    @test IS.get_association_id(key) == IS.get_association_id(read_back_key)
+end
+
+@testset "Test add_time_series (Deterministic) key carries owner and association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    other_time = initial_time + resolution
+    horizon_count = 24
+    data = Dict(initial_time => rand(horizon_count), other_time => rand(horizon_count))
+    forecast = IS.Deterministic("fx", data, resolution)
+
+    # A staged addition has no key until the store writes it and mints the id, so the
+    # block flushes and reads the keys back off the transaction.
+    key = IS.time_series_transaction(sys; collect_keys = true) do txn
+        IS.add_time_series!(txn, component, forecast)
+        IS.flush!(txn)
+        return only(IS.added_keys(txn))
+    end
+
+    @test IS.get_owner_id(key) == IS.get_id(component)
+    @test IS.get_owner_category(key) == IS.get_owner_category(component)
+    read_back_key = only(IS.get_time_series_keys(component))
+    @test IS.get_association_id(key) == IS.get_association_id(read_back_key)
+end
+
+@testset "Test add_time_series (NonSequentialTimeSeries) key carries owner and association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    timestamps = [
+        Dates.DateTime("2020-01-01T00:00:00"),
+        Dates.DateTime("2020-01-01T04:00:00"),
+        Dates.DateTime("2020-01-03T00:00:00"),
+        Dates.DateTime("2020-01-10T00:00:00"),
+    ]
+    values = [10.0, 20.0, 30.0, 40.0]
+    ts = IS.NonSequentialTimeSeries("events", timestamps, values)
+    key = IS.add_time_series!(sys, component, ts)
+
+    @test IS.get_owner_id(key) == IS.get_id(component)
+    @test IS.get_owner_category(key) == IS.get_owner_category(component)
+    read_back_key = only(IS.get_time_series_keys(component))
+    @test IS.get_association_id(key) == IS.get_association_id(read_back_key)
+end
+
+@testset "Test get_time_series_key resolves by association_id" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    dates = create_dates("2020-01-01T00:00:00", Dates.Hour(1), "2020-01-01T23:00:00")
+    data = collect(1:24)
+    ta = TimeSeries.TimeArray(dates, data, [IS.get_name(component)])
+    ts = IS.SingleTimeSeries(; name = "val", data = ta)
+    key = IS.add_time_series!(sys, component, ts)
+
+    store = IS.get_data_store(sys)
+    resolved_key = IS.get_time_series_key(store, IS.get_association_id(key))
+    @test resolved_key == key
+
+    bogus_id = IS.get_association_id(key) + 1
+    e = try
+        IS.get_time_series_key(store, bogus_id)
+        nothing
+    catch err
+        err
+    end
+    @test e isa ArgumentError
+    @test occursin(string(bogus_id), e.msg)
+end
+
 @testset "Test add_time_series" begin
     sys = IS.SystemData()
     name = "Component1"
@@ -2368,7 +2461,13 @@ end
         name = name,
         data = ta,
     )
-    IS.add_time_series!(sys, components, ts)
+    keys = IS.add_time_series!(sys, components, ts)
+    @test keys isa Vector
+    @test length(keys) == len
+    @test length(unique(IS.get_association_id.(keys))) == len
+    for (i, key) in enumerate(keys)
+        @test IS.get_owner_id(key) == IS.get_id(components[i])
+    end
 
     hash_ta_main = nothing
     for i in 1:len
@@ -3939,23 +4038,113 @@ end
 end
 
 @testset "Test serialization of time series keys" begin
-    key = IS.StaticTimeSeriesKey(
-        IS.SingleTimeSeries,
-        "test",
-        Dates.now(),
-        Dates.Hour(1),
-        12,
-        Dict("scenario" => "high"),
+    sys = IS.SystemData(; time_series_in_memory = true)
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    ta = TimeSeries.TimeArray(
+        range(Dates.DateTime("2020-09-01"); length = 12, step = Dates.Hour(1)),
+        collect(1.0:12.0),
     )
-    key2 = IS.deserialize(IS.StaticTimeSeriesKey, IS.serialize(key))
+    key = IS.add_time_series!(
+        sys,
+        component,
+        IS.SingleTimeSeries("test", ta);
+        features = Dict("scenario" => "high"),
+    )
+
+    # The whole key goes on the wire as its association id.
+    serialized = IS.serialize(key)
+    @test serialized == IS.get_association_id(key)
+
+    key2 = IS.with_deserialization_store(key_store(sys)) do
+        IS.deserialize(IS.StaticTimeSeriesKey, serialized)
+    end
     @test key2 !== key
     for field in fieldnames(IS.StaticTimeSeriesKey)
-        if field == :features
-            @test key2.features["scenario"] == key.features["scenario"]
-        else
-            @test getproperty(key2, field) == getproperty(key, field)
-        end
+        @test getproperty(key2, field) == getproperty(key, field)
     end
+
+    # Without a bound store the id names nothing.
+    @test_throws ArgumentError IS.deserialize(IS.StaticTimeSeriesKey, serialized)
+end
+
+@testset "Test time series key survives system serialization as its association id" begin
+    sys = IS.SystemData()
+    owner = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, owner)
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    ta = TimeSeries.TimeArray(
+        range(initial_time; length = 24, step = resolution),
+        collect(1.0:24.0),
+    )
+    key = IS.add_time_series!(
+        sys,
+        owner,
+        IS.SingleTimeSeries("closing_the_circle", ta),
+    )
+    original_values = IS.get_time_series_values(owner, key)
+
+    # The key only reaches the JSON because a component holds it.
+    holder = IS.TimeSeriesKeyTestComponent("KeyHolder", key)
+    IS.add_component!(sys, holder)
+
+    directory = mktempdir()
+    filename = joinpath(directory, "key_round_trip.json")
+    IS.prepare_for_serialization_to_file!(sys, filename; force = true)
+    raw = IS.serialize(sys)
+    open(filename, "w") do io
+        JSON.json(io, raw)
+    end
+
+    holder_json = only(filter(c -> c["name"] == "KeyHolder", raw["components"]))
+    @test holder_json["time_series_key"] == IS.get_association_id(key)
+
+    # The field-by-field spelling is gone: nothing but the id crosses the wire, so none
+    # of the key's other fields appear anywhere in the document.
+    json_text = read(filename, String)
+    @test !occursin("owner_category", json_text)
+    @test !occursin("association_id", json_text)
+    @test !occursin("closing_the_circle", json_text)
+
+    # Move the JSON and both store halves to a fresh directory, the way a shipped
+    # system travels.
+    test_dir = mktempdir(directory)
+    path = mv(filename, joinpath(test_dir, basename(filename)))
+    ts_base = raw["time_series_storage_file"]
+    for f in (ts_base, ts_base * ".sqlite")
+        src = joinpath(directory, f)
+        isfile(src) && mv(src, joinpath(test_dir, basename(f)))
+    end
+    parsed = open(path) do io
+        return JSON.parse(io; dicttype = Dict{String, Any})
+    end
+
+    orig = pwd()
+    sys2 = try
+        cd(dirname(path))
+        restored = IS.deserialize(IS.SystemData, parsed)
+        IS.with_deserialization_store(key_store(restored)) do
+            for component in parsed["components"]
+                type = IS.get_type_from_serialization_data(component)
+                comp = IS.deserialize(type, component)
+                IS.add_component!(restored, comp; allow_existing_time_series = true)
+            end
+        end
+        restored
+    finally
+        cd(orig)
+    end
+
+    holder2 = IS.get_component(IS.TimeSeriesKeyTestComponent, sys2, "KeyHolder")
+    restored_key = holder2.time_series_key
+    @test restored_key == key
+    for field in fieldnames(IS.StaticTimeSeriesKey)
+        @test getproperty(restored_key, field) == getproperty(key, field)
+    end
+
+    owner2 = IS.get_component(IS.TestComponent, sys2, "Component1")
+    @test IS.get_time_series_values(owner2, restored_key) == original_values
 end
 
 @testset "Test get_time_series_timestamps with TimeSeriesKey" begin
@@ -6206,6 +6395,86 @@ end
     end
     names = Set(IS.get_name(k) for k in IS.get_time_series_keys(component))
     @test names == union(Set("ts_$i" for i in 1:7), Set("bytes_$i" for i in 1:7))
+end
+
+@testset "Test staged additions take their ids from the store" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    make_ts(name) = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(initial_time; length = 8, step = resolution), collect(1.0:8.0),
+        ),
+        name = name,
+    )
+
+    # A staged addition has no id until the store writes it, so there is no key to
+    # hand back at stage time.
+    IS.time_series_transaction(sys) do txn
+        @test isnothing(IS.add_time_series!(txn, component, make_ts("staged")))
+    end
+
+    # Without `collect_keys` the context keeps none, so a bulk ingest does not retain
+    # a key per series.
+    IS.time_series_transaction(sys) do txn
+        IS.add_time_series!(txn, component, make_ts("uncollected"))
+        IS.flush!(txn)
+        @test isempty(IS.added_keys(txn))
+    end
+
+    # With it, the keys appear as the block flushes -- including the auto-flushes -- and
+    # carry the ids the catalog actually filed the rows under.
+    keys = IS.time_series_transaction(
+        sys;
+        collect_keys = true,
+        auto_flush_threshold = 2,
+    ) do txn
+        for i in 1:5
+            IS.add_time_series!(txn, component, make_ts("collected_$i"))
+        end
+        # Auto-flushes at 2 and 4 have resolved four of the five.
+        @test length(IS.added_keys(txn)) == 4
+        IS.flush!(txn)
+        return copy(IS.added_keys(txn))
+    end
+    @test length(keys) == 5
+    @test IS.get_name.(keys) == ["collected_$i" for i in 1:5]
+
+    stored = Dict(
+        IS.get_association_id(k) => k for k in IS.get_time_series_keys(component)
+    )
+    for key in keys
+        @test stored[IS.get_association_id(key)] == key
+    end
+end
+
+@testset "Test a rolled-back block leaves no keys behind" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    ts = IS.SingleTimeSeries(;
+        data = TimeSeries.TimeArray(
+            range(Dates.DateTime("2020-09-01"); length = 8, step = Dates.Hour(1)),
+            collect(1.0:8.0),
+        ),
+        name = "rolled",
+    )
+
+    context = nothing
+    @test_throws ErrorException IS.time_series_transaction(
+        sys; collect_keys = true, auto_flush_threshold = 1,
+    ) do txn
+        context = txn
+        IS.add_time_series!(txn, component, ts)
+        # The auto-flush has already minted an id and built its key.
+        @test length(IS.added_keys(txn)) == 1
+        error("boom")
+    end
+    # The rollback unwrote the row, so the key naming it is dropped with it.
+    @test isempty(IS.added_keys(context))
+    @test isempty(IS.get_time_series_keys(component))
 end
 
 @testset "Test time series context nesting and reuse" begin
