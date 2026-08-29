@@ -1942,12 +1942,17 @@ _decode_element(element, ::ScalarEncoding) = element
 _decode_element(element, encoding::RowEncoding) =
     _decode_static_values(reshape(element, 1, :), encoding, 1)[1]
 
-"""Route `has_time_series(owner, T, name; ...)` to the InfraStore store. Honors partial
-(subset) feature / resolution queries: matches if any stored series of type `T`
-contains at least the requested features. `name = nothing` probes across all
-names (the name-less kwargs form with resolution/interval/feature filters)."""
+"""Route a narrowed `has_time_series` query to the InfraStore store — the general
+catalog filter, serving every query the owner-scoped probe in `infrastore_has_any`
+cannot. Honors partial (subset) feature / resolution queries: matches if any stored
+series of type `T` carries at least the requested features. Each of `name`,
+`resolution`, `interval`, and `features` is optional; `name = nothing` probes across
+all names. `mgr` is the caller's already-resolved manager: the public entry point
+null-checks one before reaching here, so re-resolving it would be a second lookup per
+probe."""
 function infrastore_has_time_series(
     ::Type{T},
+    mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     name::Union{Nothing, AbstractString};
     resolution::Union{Nothing, Dates.Period} = nothing,
@@ -1955,9 +1960,8 @@ function infrastore_has_time_series(
     features::Union{Nothing, Dict} = nothing,
 ) where {T <: TimeSeriesData}
     _check_interval_supported(T, interval)
-    mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
-    owner_id, _, category = _infrastore_owner_args(owner)
+    store = mgr.data_store::Store
+    owner_id, category = _infrastore_owner_id_category(owner)
     feats = _infrastore_features(features)
     # Pure existence probe — a covering-index `SELECT 1 ... LIMIT 1` in the store; nothing
     # is listed, hydrated, or marshaled, so this is safe in hot per-component loops. A
@@ -2002,6 +2006,16 @@ end
 struct AllStoredTypes end
 struct NoStoredTypes end
 
+# `SingleTimeSeries{Float64, 1}` -> `SingleTimeSeries`; a UnionAll is returned as is. A
+# `Union` is normalized member-wise, so a parameterized concrete inside one is narrowed
+# like a bare one — `Union{SingleTimeSeries{Float64, 1}, Probabilistic}` must not quietly
+# match nothing. A `Union` type's own type is `Union`, which is what separates the two
+# methods.
+_unparameterized_type(u::Union) =
+    Union{map(_unparameterized_type, Base.uniontypes(u))...}
+
+_unparameterized_type(::Type{T}) where {T} = Base.typename(T).wrapper
+
 # All InfraStore types whose IS type is a subtype of `T` (strict `<:` semantics —
 # distinct from `_infrastore_type_matches`, which treats a `Deterministic` query
 # as also matching a `DeterministicSingleTimeSeries`). Used by the store-wide
@@ -2013,16 +2027,57 @@ _infrastore_subtype_types(::Type{T}) where {T <: TimeSeriesData} =
         Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if k <: _unparameterized_type(T)),
     )
 
+# The query type as the store answers it. Both normalizations are pure widenings, and
+# both are constants per query type:
+#
+#   - a parameterized concrete (`SingleTimeSeries{Float64, 1}`, i.e. `typeof(ts)`) matches
+#     the same rows as its UnionAll, because the catalog does not key on the element type
+#     — the parameters can only restate what the stored array is, never select between
+#     arrays;
+#   - a `Deterministic` query also matches a `DeterministicSingleTimeSeries`, which reads
+#     back as a `Deterministic`. DST is `Deterministic`'s sibling under
+#     `AbstractDeterministic` rather than its subtype, so widening to their common parent
+#     is how that rule is stated in the type domain rather than as a special case in the
+#     comparison below.
+#
+# A `DeterministicSingleTimeSeries` query is not widened, and so still matches DST alone.
+_infrastore_query_bound(::Type{T}) where {T} = _unparameterized_type(T)
+
+_infrastore_query_bound(u::Union) = _unparameterized_type(u)
+
+_infrastore_query_bound(::Type{<:Deterministic}) = AbstractDeterministic
+
+# Subtyping, with dispatch rather than a `<:` expression deciding it: a row type that is
+# a subtype of the (normalized) query type selects the first method. Both answers are
+# constants, so a query type known at compile time folds the match away entirely.
+_infrastore_matches_bound(::Type{<:B}, ::Type{B}) where {B} = true
+
+_infrastore_matches_bound(::Type, ::Type) = false
+
+# Whether a stored row of concrete type `R` satisfies a query for type `Q`. Defined here
+# rather than beside the other row helpers because `_infrastore_query_types` generates
+# against it, and a generated function may only call methods that already exist when it
+# is defined.
+_infrastore_type_matches(::Type{R}, ::Type{Q}) where {R <: TimeSeriesData, Q} =
+    _infrastore_matches_bound(R, _infrastore_query_bound(Q))
+
 # The stored InfraStore types a query for `T` should match, under the same
 # `Deterministic`-matches-DST semantics as `_infrastore_type_matches`. `AllStoredTypes()`
 # / `NoStoredTypes()` for the two degenerate answers; otherwise a non-empty tuple.
 _infrastore_query_types(::Nothing) = AllStoredTypes()
 
-function _infrastore_query_types(::Type{T}) where {T <: TimeSeriesData}
+# The answer is a pure function of the query type, so compute it once per `T` at compile
+# time and splice in the literal. `@generated` rather than a table of baked methods
+# because the answer must be constant for *every* spelling a caller can pass — including
+# parameterized concretes (`SingleTimeSeries{Float64, 1}`) and `Union`s, neither of which
+# is enumerable up front and both of which a method table would leave on a ~2 µs runtime
+# match loop, real money on the `has_time_series` per-component hot path.
+@generated function _infrastore_query_types(::Type{T}) where {T <: TimeSeriesData}
     types = Tuple(c for (c, k) in _INFRASTORE_TYPE_PAIRS if _infrastore_type_matches(k, T))
-    length(types) == length(_INFRASTORE_TYPE_PAIRS) && return AllStoredTypes()
-    isempty(types) && return NoStoredTypes()
-    return _infrastore_collapse_family(types)
+    length(types) == length(_INFRASTORE_TYPE_PAIRS) && return :(AllStoredTypes())
+    isempty(types) && return :(NoStoredTypes())
+    collapsed = _infrastore_collapse_family(types)
+    return :($collapsed)
 end
 
 # The single InfraStore type to push into the core `list_keys` filter for a query
@@ -2054,10 +2109,9 @@ _infrastore_probe_types(probe, types::Tuple) = any(probe, types)
 # widens the passed `Type{T}` constant to abstract `Type`, which defeats constant
 # propagation through `_infrastore_query_types` and boxes this function's return as
 # `Any` instead of `Bool` — real cost on the `has_time_series` hot path.
-function infrastore_has_any(owner; time_series_type = nothing)
-    mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
-    owner_id, _, category = _infrastore_owner_args(owner)
+function infrastore_has_any(mgr::TimeSeriesManager, owner; time_series_type = nothing)
+    store = mgr.data_store::Store
+    owner_id, category = _infrastore_owner_id_category(owner)
     probe =
         t -> InfraStore.has_for_owner(
             store.inner, owner_id, category; time_series_type = t,
@@ -2075,46 +2129,6 @@ _infrastore_is_type(s::Symbol) =
     get(_INFRASTORE_IS_TYPES, s) do
         error("InfraStore backend does not support time series type $s")
     end
-
-# Whether a stored row of concrete type `row_type` satisfies a query for the query type.
-# Mirrors InfraStore's semantics: a `Deterministic` (or `AbstractDeterministic`) query
-# also matches a `DeterministicSingleTimeSeries` (which reads as a `Deterministic`),
-# while a `DeterministicSingleTimeSeries` query matches DST only.
-_infrastore_type_matches(
-    row_type::Type, ::Type{<:DeterministicSingleTimeSeries},
-) = row_type <: DeterministicSingleTimeSeries
-
-_infrastore_type_matches(row_type::Type, ::Type{<:AbstractDeterministic}) =
-    row_type <: AbstractDeterministic
-
-# A parameterized concrete query (`SingleTimeSeries{Float64, 1}`, i.e. `typeof(ts)`)
-# matches the same rows as its UnionAll: the catalog does not key on the element
-# type, so the parameters can only restate what the stored array is, never select
-# between arrays.
-_infrastore_type_matches(row_type::Type, ::Type{T}) where {T <: TimeSeriesData} =
-    row_type <: _unparameterized_type(T)
-
-# `SingleTimeSeries{Float64, 1}` -> `SingleTimeSeries`; a UnionAll or a `Union` of
-# time series types is returned as is.
-_unparameterized_type(::Type{T}) where {T} =
-    T isa Union ? T : Base.typename(T).wrapper
-
-# `_infrastore_query_types`' answer is static per query type, and its generic
-# method's runtime match loop costs ~2 µs — real money on the
-# `has_time_series` per-component hot path. Bake a constant-returning method
-# for each type callers actually pass (the UnionAlls; parameterized concretes
-# still take the generic method).
-for T in (
-    (k for (_, k) in _INFRASTORE_TYPE_PAIRS)...,
-    AbstractDeterministic,
-    Forecast,
-    StaticTimeSeries,
-    TimeSeriesData,
-)
-    let types = _infrastore_query_types(T)
-        @eval _infrastore_query_types(::Type{$T}) = $types
-    end
-end
 
 # Build the matching IS `TimeSeriesKey` from a catalog row — a
 # `list_time_series` metadata row (the only row kind that carries the store's
@@ -2171,7 +2185,7 @@ store's catalog. The id is minted by the store that holds the association, so it
 is meaningful only against that store — resolve it against the same artifact the
 document was exported from.
 """
-function get_time_series_key(store::Store, association_id::Int)
+function get_time_series_key(store::Store, association_id::Integer)
     # `nothing`, not a raised error: the store treats a stale reference as an answer
     # to "does this still resolve?". Resolving one is past that question, so the miss
     # becomes an error here.
