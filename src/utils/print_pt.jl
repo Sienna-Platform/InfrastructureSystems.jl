@@ -227,23 +227,31 @@ end
 
 function show_time_series(io::IO, owner::TimeSeriesOwners)
     data_by_type = Dict{Any, Vector{OrderedDict{String, Any}}}()
-    for key in get_time_series_keys(owner)
-        ts_type = get_time_series_type(key)
+    for md in list_metadata(owner)
+        ts_type = get_time_series_type(md)
         if !haskey(data_by_type, ts_type)
             data_by_type[ts_type] = Vector{OrderedDict{String, Any}}()
         end
         data = OrderedDict{String, Any}()
-        for (fname, ftype) in zip(fieldnames(typeof(key)), fieldtypes(typeof(key)))
-            if ftype <: Type{<:TimeSeriesData}
-                data[string(fname)] = string(nameof(Base.getproperty(key, fname)))
+        # The row's own columns, minus the key: the id is shown separately, and a
+        # key renders as a type plus that id, which reads as noise in a table.
+        for fname in fieldnames(typeof(md))
+            fname === :key && continue
+            value = Base.getproperty(md, fname)
+            if value isa Type
+                data[string(fname)] = string(nameof(value))
             else
-                data[string(fname)] = Base.getproperty(key, fname)
+                data[string(fname)] = value
             end
         end
         push!(data_by_type[ts_type], data)
     end
-    for rows in values(data_by_type)
-        PrettyTables.pretty_table(io, DataFrame(rows))
+    # The type titles each table: it is the row's type parameter now, not a
+    # column, so without this it would not appear in the output at all.
+    for (ts_type, rows) in data_by_type
+        PrettyTables.pretty_table(
+            io, DataFrame(rows); title = string(nameof(ts_type)),
+        )
     end
 end
 

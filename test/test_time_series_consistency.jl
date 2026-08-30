@@ -38,8 +38,8 @@ end
     @test_throws ArgumentError IS.copy_time_series!(b, a)
     @test_throws ArgumentError IS.copy_time_series!(a, b)
     # Nothing changed on either side.
-    @test [IS.get_name(k) for k in IS.get_time_series_keys(a)] == ["s"]
-    @test [IS.get_name(k) for k in IS.get_time_series_keys(b)] == ["other"]
+    @test [IS.get_name(k) for k in IS.list_metadata(a)] == ["s"]
+    @test [IS.get_name(k) for k in IS.list_metadata(b)] == ["other"]
     @test IS.get_time_series_values(IS.SingleTimeSeries, b, "other") == fill(100.0, 24)
 
     # An owner that is not attached anywhere is rejected too.
@@ -59,8 +59,8 @@ end
     @test_throws ArgumentError IS.copy_time_series!(attr, component)
     # Nothing changed, and no orphan rows: the system-wide iterators still resolve
     # every owner.
-    @test [IS.get_name(k) for k in IS.get_time_series_keys(component)] == ["comp_series"]
-    @test [IS.get_name(k) for k in IS.get_time_series_keys(attr)] == ["attr_series"]
+    @test [IS.get_name(k) for k in IS.list_metadata(component)] == ["comp_series"]
+    @test [IS.get_name(k) for k in IS.list_metadata(attr)] == ["attr_series"]
     @test length(collect(IS.iterate_components_with_time_series(sys))) == 1
     @test length(collect(IS.iterate_supplemental_attributes_with_time_series(sys))) == 1
 end
@@ -92,11 +92,11 @@ end
         IS.add_time_series!(txn, component, _hourly_sts("v"))
         @test IS.has_staged_data(txn)
         @test !IS.has_time_series(component, IS.SingleTimeSeries, "v")
-        @test isempty(IS.get_time_series_keys(component))
+        @test isempty(IS.list_metadata(component))
         IS.flush!(txn)
         @test !IS.has_staged_data(txn)
         @test IS.has_time_series(component, IS.SingleTimeSeries, "v")
-        @test length(IS.get_time_series_keys(component)) == 1
+        @test length(IS.list_metadata(component)) == 1
         @test IS.get_time_series_values(IS.SingleTimeSeries, component, "v") ==
               collect(1.0:24)
         # Adds keep working after an explicit flush, and the block stays one transaction.
@@ -254,7 +254,7 @@ end
         Dates.Hour(24),
         Dates.Hour(24),
     )
-    key = only(IS.get_time_series_keys(component; time_series_type = IS.Deterministic))
+    key = only(IS.list_metadata(component; time_series_type = IS.Deterministic))
     @test IS.get_interval(key) == Dates.Millisecond(0)
     @test IS.get_count(
         IS.get_time_series(IS.Deterministic, component, "s"; start_time = _T0),
@@ -328,17 +328,17 @@ end
         interval = Dates.Hour(1),
     )
     key = IS.add_time_series!(sys, component, prob)
-    @test IS.get_time_series_type(key) === IS.Probabilistic
-    @test IS.get_time_series_type(key) ===
-          IS.get_time_series_type(only(IS.get_time_series_keys(component)))
+    @test IS.get_time_series_type(key) <: IS.Probabilistic
+    @test IS.get_time_series_type(key) <:
+          IS.get_time_series_type(only(IS.list_metadata(component)))
     @test IS.get_time_series_hash(component, key) ==
-          IS.get_time_series_hash(component, only(IS.get_time_series_keys(component)))
+          IS.get_time_series_hash(component, only(IS.list_metadata(component)))
 
     sts = _hourly_sts("s")
     IS.add_time_series!(sys, component, sts)
     @test IS.has_time_series(component, typeof(sts), "s")
     @test IS.has_time_series(component, typeof(prob), "p")
-    @test length(IS.get_time_series_keys(component; time_series_type = typeof(sts))) == 1
+    @test length(IS.list_metadata(component; time_series_type = typeof(sts))) == 1
     @test IS.get_time_series(typeof(sts), component, "s") isa IS.SingleTimeSeries
     IS.remove_time_series!(sys, typeof(sts), component, "s")
     @test !IS.has_time_series(component, IS.SingleTimeSeries, "s")
@@ -554,16 +554,26 @@ end
 @testset "Test TimeSeriesKey equality and hashing" begin
     sys, component = _sys_with_component()
     key_added = IS.add_time_series!(sys, component, _hourly_sts("s"))
-    key_listed = only(IS.get_time_series_keys(component))
-    @test IS.get_resolution(key_added) == Dates.Hour(1)
-    @test IS.get_resolution(key_listed) == Dates.Millisecond(3_600_000)
+    row = only(IS.list_metadata(component))
+    key_listed = IS.get_time_series_key(row)
+
+    # A write and a listing produce the same key, down to the type parameter.
+    # This used to be a real hazard rather than a tautology: a key carried its
+    # own `resolution`, and the two paths spelled it differently — `Hour(1)` from
+    # the constructor, `Millisecond(3600000)` back from the catalog. With the key
+    # reduced to its id there is nothing left to disagree about, and the period
+    # spelling is a property of the row instead.
+    @test IS.get_resolution(row) == Dates.Millisecond(3_600_000)
+    @test IS.get_resolution(row) == Dates.Hour(1)
     @test key_added == key_listed
+    @test typeof(key_added) === typeof(key_listed)
     @test hash(key_added) == hash(key_listed)
     @test length(Set([key_added, key_listed])) == 1
 
     fkey_added = IS.add_time_series!(sys, component, _hourly_det("d"))
-    fkey_listed =
-        only(IS.get_time_series_keys(component; time_series_type = IS.Deterministic))
+    fkey_listed = IS.get_time_series_key(
+        only(IS.list_metadata(component; time_series_type = IS.Deterministic)),
+    )
     @test fkey_added == fkey_listed
     @test hash(fkey_added) == hash(fkey_listed)
     @test fkey_added != key_added

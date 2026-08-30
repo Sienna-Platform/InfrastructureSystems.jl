@@ -286,11 +286,8 @@ end
         IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3)),
         fuel_key,
     )
-    @test IS.serialize(fc_ts)["fuel_cost_time_series"] ==
-          IS.get_association_id(fuel_key)
-    fc_ts_rt = IS.with_deserialization_store(key_store(sys)) do
-        IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts))
-    end
+    @test IS.serialize(fc_ts)["fuel_cost_time_series"] == IS.serialize(fuel_key)
+    fc_ts_rt = IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts))
     @test IS.compare_values(fc_ts_rt, fc_ts)
 
     @test zero(cc) == IS.CostCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)))
@@ -358,26 +355,18 @@ end
 end
 
 @testset "is_time_series_backed for CostCurve and FuelCurve" begin
-    forecast_key = IS.ForecastKey(;
-        owner_id = 1,
-        owner_category = IS.InfraStore.Component,
-        association_id = 1,
-        time_series_type = IS.Deterministic,
-        name = "fuel_price",
-        initial_timestamp = Dates.DateTime("2020-01-01"),
-        resolution = Dates.Hour(1),
-        horizon = Dates.Hour(24),
-        interval = Dates.Hour(24),
-        count = 1,
-        features = Dict{String, Any}(),
-    )
+    # A key names one stored series, so its element type is fixed: a
+    # `TimeSeriesFunctionData{T}` can only wrap a key of `T` values.
+    quad_key = IS.TimeSeriesKey{IS.Deterministic{IS.QuadraticFunctionData}}(1)
+    # A fuel cost varies as a plain scalar over time, not as function data.
+    forecast_key = IS.TimeSeriesKey{IS.Deterministic{Float64}}(1)
 
     # Scalar dispatches
     @test IS.is_time_series_backed(forecast_key) == true
     @test IS.is_time_series_backed(nothing) == false
 
     static_vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3))
-    ts_vc = IS.TimeSeriesInputOutputCurve(IS.TimeSeriesQuadraticFunctionData(forecast_key))
+    ts_vc = IS.TimeSeriesInputOutputCurve(IS.TimeSeriesQuadraticFunctionData(quad_key))
 
     # CostCurve: only time-series-backed when its value curve is
     @test IS.is_time_series_backed(IS.CostCurve(static_vc)) == false
@@ -444,9 +433,7 @@ end
 
     # The key-form round trip resolves the serialized association id against the store
     # that minted it.
-    fc_ts_rt = IS.with_deserialization_store(key_store(sys)) do
-        IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts))
-    end
+    fc_ts_rt = IS.deserialize(IS.FuelCurve, IS.serialize(fc_ts))
     @test IS.compare_values(fc_ts_rt, fc_ts)
 end
 

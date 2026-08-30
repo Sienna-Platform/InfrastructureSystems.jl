@@ -144,7 +144,7 @@ end
     @test occursin("duplicate attributes", sprint(showerror, err))
 
     # The label appears on no key, so it cannot be filtered or addressed by.
-    key = only(IS.get_time_series_keys(component))
+    key = only(IS.list_metadata(component))
     @test !(:units in fieldnames(typeof(key)))
 end
 

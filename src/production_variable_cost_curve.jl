@@ -166,7 +166,7 @@ struct FuelCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
     "A fixed value for fuel cost; mutually exclusive with `fuel_cost_time_series`"
     fuel_cost::Union{Nothing, Float64}
     "The [`TimeSeriesKey`](@ref) to a fuel cost time series; mutually exclusive with `fuel_cost`"
-    fuel_cost_time_series::Union{Nothing, ConcreteTimeSeriesKey}
+    fuel_cost_time_series::Union{Nothing, TimeSeriesKey}
     "(default of 0) Fuel consumption at the unit startup proceedure. Additional cost to the startup costs and related only to the initial fuel required to start the unit.
     represented as a [`LinearCurve`](@ref)"
     startup_fuel_offtake::LinearCurve
@@ -177,7 +177,7 @@ struct FuelCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
     function FuelCurve{T, U}(
         value_curve::T,
         fuel_cost::Union{Nothing, Float64},
-        fuel_cost_time_series::Union{Nothing, ConcreteTimeSeriesKey},
+        fuel_cost_time_series::Union{Nothing, TimeSeriesKey},
         startup_fuel_offtake::LinearCurve,
         vom_cost::LinearCurve,
     ) where {T, U}
@@ -198,7 +198,7 @@ end
 FuelCurve{T, U}(;
     value_curve::T,
     fuel_cost::Union{Nothing, Float64} = nothing,
-    fuel_cost_time_series::Union{Nothing, ConcreteTimeSeriesKey} = nothing,
+    fuel_cost_time_series::Union{Nothing, TimeSeriesKey} = nothing,
     startup_fuel_offtake::LinearCurve = LinearCurve(0.0),
     vom_cost::LinearCurve = LinearCurve(0.0),
 ) where {T, U} =
@@ -355,14 +355,14 @@ _deserialize_fuel_cost(raw) =
     )
 
 _deserialize_fuel_cost_time_series(::Nothing) = nothing
-# A key is on the wire as its association id alone; the store bound for the
-# deserialization turns it back into a key.
-_deserialize_fuel_cost_time_series(association_id::Integer) =
-    deserialize(TimeSeriesKey, association_id)
+# A key is on the wire as its association id and its stored time series type, so
+# it rebuilds itself without the catalog that minted it.
+_deserialize_fuel_cost_time_series(raw::AbstractDict) = deserialize(TimeSeriesKey, raw)
 _deserialize_fuel_cost_time_series(raw) =
     throw(
         ArgumentError(
-            "FuelCurve fuel_cost_time_series must be a time series association id or nothing, got $(typeof(raw))",
+            "FuelCurve fuel_cost_time_series must be a serialized time series key or " *
+            "nothing, got $(typeof(raw))",
         ),
     )
 

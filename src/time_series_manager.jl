@@ -335,7 +335,7 @@ get_time_series_key(
     features = features,
 )
 
-list_time_series_keys(
+list_metadata(
     mgr::TimeSeriesManager,
     component::TimeSeriesOwners;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
@@ -343,7 +343,7 @@ list_time_series_keys(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Union{Nothing, Dict} = nothing,
-) = infrastore_owner_list_keys(
+) = infrastore_owner_list_metadata(
     component;
     time_series_type = time_series_type,
     name = name,

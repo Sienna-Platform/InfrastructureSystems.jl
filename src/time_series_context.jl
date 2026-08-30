@@ -53,7 +53,7 @@ mutable struct TimeSeriesContext{M <: AbstractTimeSeriesManager, V}
     the store minted for them. Only collected when `collect_keys` is set; a bulk
     ingest that never asks for its keys should not pay to retain one per series.
     """
-    added::Vector{ConcreteTimeSeriesKey}
+    added::Vector{TimeSeriesKey}
     "Whether to retain a key per written addition in `added`."
     collect_keys::Bool
     "Forecast window parameters per `(resolution, interval)` group."
@@ -96,7 +96,7 @@ function TimeSeriesContext(
         mgr,
         nothing,
         StagedKey[],
-        ConcreteTimeSeriesKey[],
+        TimeSeriesKey[],
         collect_keys,
         Dict{Tuple{Dates.Period, Dates.Period}, Union{Nothing, ForecastParameters}}(),
         false,
@@ -177,7 +177,7 @@ function flush!(context::TimeSeriesContext)
     added = _infrastore_commit_batch!(context.mgr, batch)
     context.collect_keys && append!(
         context.added,
-        (build_key(entry, item.id) for (entry, item) in zip(staged, added)),
+        (build_key(entry, id) for (entry, id) in zip(staged, added)),
     )
     return
 end

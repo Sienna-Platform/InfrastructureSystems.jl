@@ -59,7 +59,7 @@ function Base.summary(x::Forecast)
     return "$(label) resolution=$(resolution) interval=$(interval)"
 end
 
-function Base.summary(x::ForecastKey)
+function Base.summary(x::TimeSeriesKey{<:Forecast})
     label = make_label(typeof(x), get_name(x))
     resolution = Dates.canonicalize(get_resolution(x))
     interval = Dates.canonicalize(get_interval(x))

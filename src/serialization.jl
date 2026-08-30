@@ -134,11 +134,15 @@ function add_serialization_metadata!(data::Dict, ::Type{T}) where {T}
     return
 end
 
-# TimeSeriesFunctionData{T} is parametric — ensure the type parameter is reconstructed
+# TimeSeriesFunctionData is parametric — ensure the type parameter is reconstructed
 # during deserialization by setting CONSTRUCT_WITH_PARAMETERS_KEY.
+#
+# Only `T` is written. `U` follows from the key the value carries, which
+# serializes with its own time series type, so recording it here as well would be
+# a second copy of one fact — and the outer constructor rebuilds it.
 function add_serialization_metadata!(
     data::Dict,
-    ::Type{TimeSeriesFunctionData{T}},
+    ::Type{<:TimeSeriesFunctionData{T}},
 ) where {T <: StaticFunctionData}
     data[METADATA_KEY] = Dict{String, Any}(
         TYPE_KEY => string(nameof(TimeSeriesFunctionData)),
@@ -257,18 +261,15 @@ function deserialize(T::Union, data::Dict)
     # better than the also undocumented T.a and T.b, see
     # https://github.com/JuliaLang/julia/issues/53193
     types_within = Base.uniontypes(T)
+    # A `TimeSeriesKey` serializes to a small dict, so an optional key field
+    # (`Union{Nothing, TimeSeriesKey}`) arrives as one. `Nothing` is not something
+    # the count below can rule out, and a key is unambiguous wherever it appears:
+    # nothing else in these unions deserializes from a dict.
+    any(x -> x <: TimeSeriesKey, types_within) &&
+        return deserialize(TimeSeriesKey, data)
     maybe_from_dict = filter(x -> !(x <: _NOT_FROM_DICT), types_within)
     (length(maybe_from_dict) == 1) && (return deserialize(first(maybe_from_dict), data))
     throw(ArgumentError("Cannot pick which of union type $T to deserialize to"))
-end
-
-# Mirror of the `Dict` and `AbstractString` union dispatchers above for an integer
-# payload: a `TimeSeriesKey` serializes to its bare `association_id`, so an optional
-# key field (`Union{Nothing, ConcreteTimeSeriesKey}`) arrives as an integer. A union
-# with no key in it keeps the generic scalar behavior.
-function deserialize(T::Union, data::Integer)
-    any(x -> x <: TimeSeriesKey, Base.uniontypes(T)) || return deepcopy(data)
-    return deserialize(TimeSeriesKey, data)
 end
 
 function deserialize(::Type{T}, data::Array) where {T <: Vector{<:Tuple}}

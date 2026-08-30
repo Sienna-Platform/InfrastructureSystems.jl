@@ -18,7 +18,9 @@ function set_value end
 export get_value, set_value
 
 # Time-series accessor exports. These getters/setters are defined on the time
-# series data types and on the `TimeSeriesKey` hierarchy.
+# series data types and on `TimeSeriesMetadata`, the catalog row. A
+# `TimeSeriesKey` answers only `get_association_id` and `get_time_series_type`:
+# everything else is a column the store owns, read from a row.
 export get_count
 export get_features
 export get_horizon

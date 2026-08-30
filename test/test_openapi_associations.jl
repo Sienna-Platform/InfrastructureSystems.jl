@@ -26,7 +26,7 @@ function _openapi_row(data, name; kwargs...)
     ).value
 end
 
-@testset "list_time_series_metadata reads every series in one query" begin
+@testset "list_metadata reads every series in one query" begin
     data, component = _openapi_ts_fixture()
     initial = Dates.DateTime(2024, 1, 1)
     resolution = Dates.Hour(1)
@@ -50,21 +50,21 @@ end
         ),
     )
 
-    metadata = IS.list_time_series_metadata(data)
+    metadata = IS.list_metadata(data)
     @test length(metadata) == 2
     @test Set(m.name for m in metadata) == Set(["static", "forecast"])
     # The store handle is reachable directly too, for a writer staging into a scratch store
     # before any SystemData exists.
-    @test length(IS.list_time_series_metadata(data.time_series_manager.data_store)) == 2
+    @test length(IS.list_metadata(data.time_series_manager.data_store)) == 2
     # Filter pushdown to InfraStore.list_time_series.
-    @test length(IS.list_time_series_metadata(data; name = "static")) == 1
-    @test only(IS.list_time_series_metadata(data; name = "static")).name == "static"
-    @test isempty(IS.list_time_series_metadata(data; name = "nonexistent"))
+    @test length(IS.list_metadata(data; name = "static")) == 1
+    @test only(IS.list_metadata(data; name = "static")).name == "static"
+    @test isempty(IS.list_metadata(data; name = "nonexistent"))
     @test length(
-        IS.list_time_series_metadata(data; time_series_type = IS.InfraStore.Deterministic),
+        IS.list_metadata(data; time_series_type = IS.InfraStore.Deterministic),
     ) == 1
     @test length(
-        IS.list_time_series_metadata(data; owner_category = IS.InfraStore.Component),
+        IS.list_metadata(data; owner_category = IS.InfraStore.Component),
     ) == 2
 end
 
@@ -393,7 +393,7 @@ end
         resolution,
     )
     @test_throws DimensionMismatch IS.add_time_series!(data, component, mismatched)
-    @test isempty(IS.list_time_series_metadata(data))
+    @test isempty(IS.list_metadata(data))
 end
 
 @testset "attach_supplemental_attribute!: attaches in memory without writing an association row" begin

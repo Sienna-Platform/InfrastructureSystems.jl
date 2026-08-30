@@ -300,6 +300,18 @@ const _ELEMENT_ENCODINGS = Dict{String, ElementEncoding}(
 
 const _TUPLE_ELEMENT_TYPE = r"^tuple\((\d+),f64\)$"
 
+# The IS value element type an `element_type` tag decodes to — the `T` of a
+# `TimeSeriesData{T}`, and so of the `TimeSeriesKey{<:TimeSeriesData{T}}` that
+# names the series. A tag this binding does not map decodes to raw numbers, whose
+# element type is the array's own dtype; `Float64` is the only dtype the store
+# ever pairs with a mapped tag, and the fallback covers the rest.
+_element_value_type(::ScalarEncoding, dtype::Type) = dtype
+_element_value_type(::LinearFunctionEncoding, ::Type) = LinearFunctionData
+_element_value_type(::QuadraticFunctionEncoding, ::Type) = QuadraticFunctionData
+_element_value_type(::PiecewiseLinearEncoding, ::Type) = PiecewiseLinearData
+_element_value_type(::PiecewiseStepEncoding, ::Type) = PiecewiseStepData
+_element_value_type(::TupleEncoding{N}, ::Type) where {N} = NTuple{N, Float64}
+
 # The string -> type barrier. Deliberately the only type-unstable step: every
 # decode reached from here is dispatched and inferrable.
 _element_encoding(::Nothing) = ScalarEncoding()
@@ -627,9 +639,9 @@ function infrastore_remove_time_series!(
     owner::TimeSeriesOwners,
     key::TimeSeriesKey,
 )
-    # `owner` is an argument in its own right, so it is confirmed against the key
-    # before anything is deleted; the id itself is taken as valid.
-    _check_association_owner(owner, key)
+    # `owner` is an argument in its own right, so it is confirmed against the
+    # catalog row before anything is deleted.
+    _check_association_owner(owner, store, key)
     try
         InfraStore.remove_by_ids!(store.inner, [Int64(get_association_id(key))])
     catch e
@@ -640,16 +652,16 @@ function infrastore_remove_time_series!(
         if e isa InfraStore.InvalidParameterError
             throw(
                 ArgumentError(
-                    "Cannot remove SingleTimeSeries '$(get_name(key))' because it is " *
+                    "Cannot remove the SingleTimeSeries named by " *
+                    "association_id=$(get_association_id(key)) because it is " *
                     "attached to a DeterministicSingleTimeSeries."),
             )
         elseif e isa InfraStore.NotFoundError
             throw(
                 ArgumentError(
                     "TimeSeriesKey names association_id=$(get_association_id(key)), which " *
-                    "is no longer in this store: $(summary(key)) with " *
-                    "name='$(get_name(key))' on $(summary(owner)) may already have been " *
-                    "removed."),
+                    "is no longer in this store: $(summary(key)) on " *
+                    "$(summary(owner)) may already have been removed."),
             )
         end
         rethrow()
@@ -704,7 +716,7 @@ function infrastore_add_time_series!(
     end
     # The row is written by the time we get here, so the key is built around the id
     # the catalog actually filed it under.
-    return build_key(staged, only(added).id)
+    return build_key(staged, only(added))
 end
 
 # The store's duplicate-association rejection, which the add paths rely on
@@ -872,35 +884,40 @@ function _resolve_association(store::Store, key::TimeSeriesKey)
     isnothing(row) && throw(
         ArgumentError(
             "TimeSeriesKey names association_id=$id, which is no longer in this " *
-            "store: '$(get_name(key))' was removed after the key was obtained.",
+            "store: it was removed after the key was obtained.",
         ),
     )
     return row
 end
 
-# Confirm the association `key` names is attached to `owner`. The key carries the
-# owner it was minted for, so this is two field comparisons — the category matters
-# too, since a component and a supplemental attribute can share an integer id.
-function _check_association_owner(owner::TimeSeriesOwners, key::TimeSeriesKey)
+# Confirm the association `key` names is attached to `owner`, against the catalog
+# row rather than a copy on the key. The category matters as well as the id, since
+# a component and a supplemental attribute can share an integer id.
+#
+# The row is the authority: an owner cached on the key would be one more field to
+# go stale when a series is reassigned, which is the whole reason a key carries
+# only its id.
+_check_association_owner(owner::TimeSeriesOwners, store::Store, key::TimeSeriesKey) =
+    _check_association_owner(owner, key, _resolve_association(store, key))
+
+function _check_association_owner(owner::TimeSeriesOwners, key::TimeSeriesKey, row)
     owner_id, category = _infrastore_owner_id_category(owner)
-    (get_owner_id(key) == owner_id && get_owner_category(key) == category) && return
+    (row.owner_id == owner_id && row.owner_category == category) && return row
     throw(
         ArgumentError(
-            "TimeSeriesKey '$(get_name(key))' (association_id=$(get_association_id(key))) " *
-            "belongs to owner id=$(get_owner_id(key)), not to $(summary(owner)); " *
-            "pass the owner it belongs to, or look up a key on this one with " *
-            "get_time_series_key.",
+            "TimeSeriesKey (association_id=$(get_association_id(key))) names " *
+            "'$(row.name)', which belongs to owner id=$(row.owner_id), not to " *
+            "$(summary(owner)); pass the owner it belongs to, or look one up on this " *
+            "owner with list_metadata.",
         ),
     )
 end
 
 # The store an owner's manager holds, and the row `key`'s id resolves to in it —
 # for the catalog-row accessors, which want the row itself rather than the data.
-# The owner is confirmed first, so a mismatched call costs no store access.
 function _store_and_association(owner::TimeSeriesOwners, key::TimeSeriesKey)
     store = _get_time_series_manager_or_throw(owner).data_store
-    _check_association_owner(owner, key)
-    return (store, _resolve_association(store, key))
+    return (store, _check_association_owner(owner, key, _resolve_association(store, key)))
 end
 
 # The association `key` names, or the window of it the accessor's arguments name,
@@ -915,8 +932,8 @@ function _read_association_by_id(
     len = nothing,
     count = nothing,
 )
-    _check_association_owner(owner, key)
     store = _get_time_series_manager_or_throw(owner).data_store
+    _check_association_owner(owner, store, key)
     try
         return InfraStore.read_by_id(
             store.inner, Int64(get_association_id(key));
@@ -950,7 +967,7 @@ _single_from_store(sts, name::AbstractString) = SingleTimeSeries(
 # decoded.
 function _infrastore_read_single(
     owner::TimeSeriesOwners,
-    key::StaticTimeSeriesKey;
+    key::TimeSeriesKey{<:SingleTimeSeries};
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
@@ -991,7 +1008,7 @@ end
 # only the requested points cross.
 function _infrastore_read_non_sequential(
     owner::TimeSeriesOwners,
-    key::NonSequentialTimeSeriesKey;
+    key::TimeSeriesKey{<:NonSequentialTimeSeries};
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
@@ -1008,16 +1025,16 @@ end
 
 """
 Commit a staged `AddBatch` to the store as one all-or-nothing bulk add, returning
-the store's `InfraStore.AddedTimeSeries` per request, in the order they were staged.
+the catalog `id` the store filed each request under, in the order they were staged.
 
 The backend packs the arrays into batch-sized datasets written whole-chunk, so
 this is materially cheaper than the same adds issued one at a time — which is why
 the client-side buffer exists even though the store now has transactions.
 
-Each returned entry carries the `association_id` the catalog minted for that row.
-That id is the reason the write, not the staging, is where a `TimeSeriesKey` can
-first be built: the store owns the id stream, so nothing before this call knows
-what a staged association will be filed under.
+Each returned id is the `association_id` the catalog minted for that row. That id
+is the reason the write, not the staging, is where a `TimeSeriesKey` can first be
+built: the store owns the id stream, so nothing before this call knows what a
+staged association will be filed under.
 """
 function _infrastore_commit_batch!(mgr::AbstractTimeSeriesManager, batch)
     added = try
@@ -1061,6 +1078,13 @@ function _infrastore_stage!(
     )
 end
 
+# The type parameter a key gets for `ts`: its kind carrying the value element
+# type, rank left free — the rank belongs to the stored array, not to a reference
+# to it. This is what `_key_from_row` derives from a catalog row too, so a key
+# handed back by a write and a key listed from the catalog for the same series are
+# the same type as well as equal.
+_key_type(ts::TimeSeriesData) = Base.typename(typeof(ts)).wrapper{eltype(ts)}
+
 function _infrastore_stage_data!(
     batch::InfraStore.AddBatch,
     mgr::TimeSeriesManager,
@@ -1074,16 +1098,7 @@ function _infrastore_stage_data!(
     feats = _infrastore_features(features)
     nbytes = serialize_single!(batch, owner_id, owner_type, category, name,
         time_series; features = feats)
-    staged = StagedKey{StaticTimeSeriesKey}((
-        owner_id = owner_id,
-        owner_category = category,
-        time_series_type = SingleTimeSeries,
-        name = name,
-        initial_timestamp = get_initial_timestamp(time_series),
-        resolution = get_resolution(time_series),
-        length = length(time_series),
-        features = _key_features(feats),
-    ))
+    staged = StagedKey{_key_type(time_series)}()
     return staged, nbytes
 end
 
@@ -1100,14 +1115,7 @@ function _infrastore_stage_data!(
     feats = _infrastore_features(features)
     nbytes = serialize_non_sequential!(batch, owner_id, owner_type, category, name,
         time_series; features = feats)
-    staged = StagedKey{NonSequentialTimeSeriesKey}((
-        owner_id = owner_id,
-        owner_category = category,
-        time_series_type = NonSequentialTimeSeries,
-        name = name,
-        length = length(time_series),
-        features = _key_features(feats),
-    ))
+    staged = StagedKey{_key_type(time_series)}()
     return staged, nbytes
 end
 
@@ -1136,7 +1144,7 @@ end
 
 # The three dense-forecast stagers differ only in how they build the InfraStore
 # forecast object; the validation, owner marshalling, add, and returned
-# `(ForecastKey, staged_nbytes)` pair around it are shared. `build(initial,
+# `(StagedKey, staged_nbytes)` pair around it are shared. `build(initial,
 # resolution, horizon, interval, name)` returns that object together
 # with its window count, which is the one field the callers disagree on.
 function _infrastore_stage_forecast!(
@@ -1159,15 +1167,7 @@ function _infrastore_stage_forecast!(
     obj, count = build(initial, resolution, horizon, interval, name)
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
         features = feats)
-    # The key names the stored type as its UnionAll (`Probabilistic`, not
-    # `Probabilistic{Float64, 2}`), exactly as a key listed back from the catalog does,
-    # so the two compare and query alike.
-    staged = StagedKey{ForecastKey}((
-        owner_id = owner_id, owner_category = category,
-        time_series_type = _unparameterized_type(typeof(ts)), name = name,
-        initial_timestamp = initial, resolution = resolution,
-        horizon = horizon, interval = interval, count = count,
-        features = _key_features(feats)))
+    staged = StagedKey{_key_type(ts)}()
     # `obj.data` is the encoded dense array the batch buffers; its byte size drives
     # auto-flush.
     return staged, sizeof(obj.data)
@@ -1279,14 +1279,14 @@ returned, so nothing here computes a time range or fetches a grid to compute one
 from, and the `name` argument goes unused. Without a key the forecast is resolved
 by name first, and that resolution is the extra call."""
 function _infrastore_get_forecast(
-    owner, name;
+    owner, name = nothing;
     time_series_type::Type{<:Forecast} = Forecast,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    key::Union{Nothing, ForecastKey} = nothing,
+    key::Union{Nothing, TimeSeriesKey{<:Forecast}} = nothing,
     features::Union{Nothing, Dict} = nothing,
 )
     if !isnothing(key)
@@ -1478,7 +1478,7 @@ forecast array (and read plan) report the same `slot`.
 """
 struct ForecastReaderEntry
     owner::TimeSeriesOwners
-    key::ForecastKey
+    key::TimeSeriesKey{<:Forecast}
     slot::Int
 end
 
@@ -1506,43 +1506,13 @@ mutable struct ForecastReader{T <: Forecast}
     has_read::Bool
 end
 
-# The association identity a reader entry / metadata row is matched on:
-# everything a build filter cannot disambiguate further (`key_info` carries no
-# interval, but two same-identity forecasts differing only by interval cannot
-# share one reader timeline, so the reader build has already rejected that
-# case). Both arguments come off the same core catalog, so the periods and
-# feature values compare exactly.
-_infrastore_row_match_identity(x) = (
-    Int(x.owner_id),
-    x.owner_category,
-    x.time_series_type,
-    String(x.name),
-    x.resolution,
-    Tuple(sort!([string(k) => v for (k, v) in x.features])),
-)
-
-# Metadata rows for every association matching a reader build filter, indexed
-# by association identity — ONE core catalog query for the whole reader,
-# instead of a `get_metadata` round-trip per entry.
-function _infrastore_metadata_by_identity(store::Store, resolution, name, features)
-    metas = Dict{Any, InfraStore.TimeSeriesMetadata}()
-    for m in InfraStore.list_time_series(store.inner;
-        resolution = resolution, name = name, features = _infrastore_features(features))
-        # Identities are unique per (resolution, interval, features); rows that
-        # collide here differ only by interval and are unreachable behind a
-        # reader build (they cannot share a window timeline).
-        metas[_infrastore_row_match_identity(m)] = m
-    end
-    return metas
-end
-
-# The metadata row backing one reader entry (`info = key_info(entry.key)`).
-function _infrastore_entry_metadata(metas::AbstractDict, info)
-    meta = get(metas, _infrastore_row_match_identity(info), nothing)
-    isnothing(meta) &&
-        error("unreachable: reader entry $(info.name) has no matching metadata row")
-    return meta
-end
+# The metadata row behind each of a reader's entries, in entry order — ONE core
+# catalog query for the whole reader, addressed by the association ids its
+# entries carry. `list_metadata_by_ids` answers one row per id asked for, in the
+# order asked, and throws if any id has gone stale (none can here: the reader
+# holds the store's own rows).
+_infrastore_reader_metadata(store::Store, ids::Vector{Int64}) =
+    InfraStore.list_metadata_by_ids(store.inner, ids)
 
 # Build a reader from the store. `id_to_owner(owner_id::Int, category::String)`
 # resolves each entry's owner object (the system holds the owner maps). Per-entry
@@ -1558,14 +1528,12 @@ function infrastore_build_forecast_reader(
     inner = InfraStore.build_forecast_reader(store.inner, _tss_forecast_type(T);
         resolution = resolution, name = name, features = features)
     tss_entries = InfraStore.forecast_entries(inner)
-    metas = _infrastore_metadata_by_identity(store, resolution, name, features)
+    metas = _infrastore_reader_metadata(store, Int64[e.id for e in tss_entries])
     n = length(tss_entries)
     entries = Vector{ForecastReaderEntry}(undef, n)
     element_encodings = Vector{ElementEncoding}(undef, n)
-    for (i, e) in enumerate(tss_entries)
-        info = InfraStore.key_info(e.key)
-        owner = id_to_owner(Int(info.owner_id), info.owner_category)
-        fmeta = _infrastore_entry_metadata(metas, info)
+    for (i, (e, fmeta)) in enumerate(zip(tss_entries, metas))
+        owner = id_to_owner(Int(fmeta.owner_id), fmeta.owner_category)
         element_encodings[i] = _element_encoding(fmeta.element_type)
         # `e.slot` is 0-based in the InfraStore store; carry it 1-based for Julia.
         entries[i] = ForecastReaderEntry(owner, _key_from_row(fmeta), e.slot + 1)
@@ -1643,7 +1611,7 @@ One series in a [`StaticTimeSeriesReader`], bound to its owner. `group` and
 """
 struct StaticTimeSeriesReaderEntry
     owner::TimeSeriesOwners
-    key::StaticTimeSeriesKey
+    key::TimeSeriesKey{<:SingleTimeSeries}
     group::Int
     column::Int
 end
@@ -1685,15 +1653,19 @@ function infrastore_build_static_time_series_reader(
 )
     inner = InfraStore.build_static_reader(store.inner;
         resolution = resolution, name = name, features = features)
-    metas = _infrastore_metadata_by_identity(store, resolution, name, features)
     entries = StaticTimeSeriesReaderEntry[]
     element_encodings = ElementEncoding[]
     groups = InfraStore.static_groups(inner)
+    metas = _infrastore_reader_metadata(
+        store,
+        Int64[id for group in groups for id in group.ids],
+    )
+    i = 0
     for (gi, group) in enumerate(groups)
-        for (col, k) in enumerate(group.keys)
-            info = InfraStore.key_info(k)
-            owner = id_to_owner(Int(info.owner_id), info.owner_category)
-            smeta = _infrastore_entry_metadata(metas, info)
+        for col in eachindex(group.ids)
+            i += 1
+            smeta = metas[i]
+            owner = id_to_owner(Int(smeta.owner_id), smeta.owner_category)
             push!(
                 entries,
                 StaticTimeSeriesReaderEntry(owner, _key_from_row(smeta), gi, col),
@@ -1931,7 +1903,7 @@ _infrastore_query_types(::Nothing) = AllStoredTypes()
     return :($collapsed)
 end
 
-# The single InfraStore type to push into the core `list_keys` filter for a query
+# The single InfraStore type to push into the core `list_metadata` filter for a query
 # type — a stored type, where `InfraStore.Deterministic` covers a
 # `Deterministic`-family query because the core matches both storage forms under
 # it. `nothing` when the type spans more than that (a broader abstract family
@@ -1981,54 +1953,58 @@ _infrastore_is_type(s::Symbol) =
         error("InfraStore backend does not support time series type $s")
     end
 
-# Build the matching IS `TimeSeriesKey` from a catalog row — a
-# `list_time_series` metadata row (the only row kind that carries the store's
-# `id`; a bare `list_keys`/`list_array_groups` row does not, so every caller
-# lists through `list_time_series` instead). The key is the single descriptor
-# for a stored association; forecast-only fields (percentiles, scenario_count)
-# are not carried — they come from the data on read.
-_key_from_row(row) = _key_from_row(_infrastore_is_type(row.time_series_type), row)
+# The IS time series type named by a catalog row's `time_series_type` string,
+# for deserializing a key that travels as (id, type).
+_time_series_type_from_name(name::AbstractString) = _infrastore_is_type(Symbol(name))
+
+# The dtype a row's values are physically stored in, for the tags this binding
+# does not map to a domain type.
+function _row_value_dtype(row)
+    et = row.element_type
+    isnothing(et) && return Float64
+    dtype = InfraStore._physical_dtype_of(et)
+    return isnothing(dtype) ? Float64 : dtype
+end
+
+# Build the matching IS `TimeSeriesKey` from a catalog row — a `list_metadata`
+# row, which is the store's one listing shape and carries the `id` a key is
+# addressed by. A key is the id plus the stored type; every other column of the
+# row stays on the row, where a caller reads it without risk of the two drifting.
+#
+# The type parameter carries the *value* element type as well as the kind, so a
+# key names what a read of it hands back: a `piecewise_linear` row becomes a
+# `TimeSeriesKey{SingleTimeSeries{PiecewiseLinearData}}`. The array rank is left
+# free — it is a property of the stored array, not of the reference.
+function _key_from_row(row)
+    kind = _infrastore_is_type(row.time_series_type)
+    value_type =
+        _element_value_type(_element_encoding(row.element_type), _row_value_dtype(row))
+    return TimeSeriesKey{kind{value_type}}(row.id)
+end
 
 _row_features(row) = Dict{String, Any}(string(k) => v for (k, v) in row.features)
 
-_key_from_row(::Type{T}, row) where {T <: NonSequentialTimeSeries} =
-    NonSequentialTimeSeriesKey(;
-        owner_id = row.owner_id,
-        owner_category = row.owner_category,
-        association_id = row.id,
-        time_series_type = T,
-        name = row.name,
-        length = row.length,
-        features = _row_features(row),
+# The IS `TimeSeriesMetadata` for a store catalog row: the key, plus the
+# descriptive columns translated into IS's vocabulary. The translation is the
+# point — a raw store row names *InfraStore's* `SingleTimeSeries`, and IS exports
+# its own, so handing one back unconverted would give callers a type that fails
+# every `<: SingleTimeSeries` test they write.
+function _metadata_from_row(row)
+    key = _key_from_row(row)
+    return TimeSeriesMetadata(
+        key,
+        Int(row.owner_id),
+        row.owner_category,
+        String(row.name),
+        row.initial_timestamp,
+        row.resolution,
+        row.horizon,
+        row.interval,
+        isnothing(row.count) ? nothing : Int(row.count),
+        isnothing(row.length) ? nothing : Int(row.length),
+        _row_features(row),
     )
-
-_key_from_row(::Type{T}, row) where {T <: StaticTimeSeries} =
-    StaticTimeSeriesKey(;
-        owner_id = row.owner_id,
-        owner_category = row.owner_category,
-        association_id = row.id,
-        time_series_type = T,
-        name = row.name,
-        initial_timestamp = row.initial_timestamp,
-        resolution = row.resolution,
-        length = row.length,
-        features = _row_features(row),
-    )
-
-_key_from_row(::Type{T}, row) where {T <: Forecast} =
-    ForecastKey(;
-        owner_id = row.owner_id,
-        owner_category = row.owner_category,
-        association_id = row.id,
-        time_series_type = T,
-        name = row.name,
-        initial_timestamp = row.initial_timestamp,
-        resolution = row.resolution,
-        horizon = row.horizon,
-        interval = row.interval,
-        count = row.count,
-        features = _row_features(row),
-    )
+end
 
 """
 Resolve a wire `association_id` to the full `TimeSeriesKey` it names, from the
@@ -2050,12 +2026,12 @@ function get_time_series_key(store::Store, association_id::Integer)
 end
 
 # All matching associations for one owner, as `TimeSeriesKey` objects. The core
-# `list_time_series` query filters owner / name / resolution / interval / features
+# `list_metadata` query filters owner / name / resolution / interval / features
 # (periods are canonicalized to ISO-8601 on both write and query, so a regular
 # `Hour(1)` matches a stored `Minute(60)`); an abstract `time_series_type` (or
 # `Deterministic`, which also matches a DST) is not a catalog filter column, so
 # it is applied as a residual on the already-narrowed rows.
-function _infrastore_list_keys(
+function _infrastore_list_metadata(
     store::Store,
     owner_id::Integer,
     owner_category::InfraStore.OwnerCategory;
@@ -2068,11 +2044,11 @@ function _infrastore_list_keys(
     type_filter = _infrastore_pushable_type(time_series_type)
     feats = _infrastore_features(features)
     rows =
-        InfraStore.list_time_series(store.inner; owner_id = owner_id,
+        InfraStore.list_metadata(store.inner; owner_id = owner_id,
             owner_category = owner_category, time_series_type = type_filter,
             name = name, resolution = resolution, interval = interval,
             features = feats)
-    out = ConcreteTimeSeriesKey[]
+    out = TimeSeriesMetadata[]
     for row in rows
         if !isnothing(time_series_type)
             _infrastore_type_matches(
@@ -2081,13 +2057,13 @@ function _infrastore_list_keys(
             ) ||
                 continue
         end
-        push!(out, _key_from_row(row))
+        push!(out, _metadata_from_row(row))
     end
     return out
 end
 
 # Owner-level `list_metadata` entry point.
-function infrastore_owner_list_keys(
+function infrastore_owner_list_metadata(
     owner::TimeSeriesOwners;
     time_series_type = nothing,
     name = nothing,
@@ -2100,7 +2076,7 @@ function infrastore_owner_list_keys(
     mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
-    return _infrastore_list_keys(store, owner_id, category;
+    return _infrastore_list_metadata(store, owner_id, category;
         time_series_type = time_series_type, name = name, resolution = resolution,
         interval = interval, features = _infrastore_features(features))
 end
@@ -2114,7 +2090,7 @@ function infrastore_get_time_series_key(
     interval = nothing,
     features::Union{Nothing, Dict} = nothing,
 ) where {T <: TimeSeriesData}
-    items = infrastore_owner_list_keys(owner; time_series_type = T, name = name,
+    items = infrastore_owner_list_metadata(owner; time_series_type = T, name = name,
         resolution = resolution, interval = interval, features = features)
     if isempty(items)
         throw(ArgumentError("No matching metadata is stored."))
@@ -2127,7 +2103,7 @@ function infrastore_get_time_series_key(
             ),
         )
     end
-    return items[1]
+    return get_time_series_key(items[1])
 end
 
 # Content hash (64-char lowercase hex, the documented public form of the
@@ -2141,9 +2117,10 @@ function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSerie
 end
 
 # Content hashes for a homogeneous collection of owners, resolved by ONE catalog
-# query (`list_array_groups` filtered on category/type/name/resolution/interval)
-# instead of one per owner. Returns `get_id(owner) => 64-char hex hash` for every
-# owner in `owners` with a stored series matching the filters; owners with no
+# query (`list_metadata` filtered on category/type/name/resolution/interval,
+# whose every row carries the array's `data_hash`) instead of one per owner.
+# Returns `get_id(owner) => 64-char hex hash` for every owner in `owners` with a
+# stored series matching the filters; owners with no
 # match are simply absent. Two matches with the same hash are fine (they resolve
 # to the same array); two matches with different hashes mean the filters
 # underdetermine the series for that owner, so that is an error.
@@ -2176,7 +2153,7 @@ function infrastore_get_time_series_hashes(
         )
         push!(ids, get_id(o))
     end
-    rows = InfraStore.list_array_groups(store.inner;
+    rows = InfraStore.list_metadata(store.inner;
         owner_category = category,
         time_series_type = _infrastore_pushable_type(T),
         name = name,
@@ -2218,7 +2195,7 @@ function infrastore_group_by_hash(
 )
     # Keyed by the 64-char hex form of the content hash (the public contract).
     groups = Dict{String, Vector{Tuple{TimeSeriesOwners, TimeSeriesKey}}}()
-    for row in InfraStore.list_time_series(store.inner)
+    for row in InfraStore.list_metadata(store.inner)
         _infrastore_is_type(row.time_series_type) <: DeterministicSingleTimeSeries &&
             continue
         owner = id_to_owner(Int(row.owner_id), row.owner_category)
@@ -2240,24 +2217,27 @@ function infrastore_get_time_series_multiple(
     resolution = nothing,
     interval = nothing,
 )
-    metas = infrastore_owner_list_keys(owner; time_series_type = type, name = name,
+    metas = infrastore_owner_list_metadata(owner; time_series_type = type, name = name,
         resolution = resolution, interval = interval)
     Channel() do channel
         for m in metas
-            ts = _infrastore_read_key(owner, m)
+            ts = _infrastore_read_key(owner, get_time_series_key(m))
             (isnothing(filter_func) || filter_func(ts)) && put!(channel, ts)
         end
     end
 end
 
 # Read one series by its already-resolved key — no catalog re-resolution.
-_infrastore_read_key(owner::TimeSeriesOwners, key::ForecastKey) =
-    _infrastore_get_forecast(owner, get_name(key); key = key)
+_infrastore_read_key(owner::TimeSeriesOwners, key::TimeSeriesKey{<:Forecast}) =
+    _infrastore_get_forecast(owner; key = key)
 
-_infrastore_read_key(owner::TimeSeriesOwners, key::NonSequentialTimeSeriesKey) =
+_infrastore_read_key(
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey{<:NonSequentialTimeSeries},
+) =
     _infrastore_read_non_sequential(owner, key)
 
-_infrastore_read_key(owner::TimeSeriesOwners, key::StaticTimeSeriesKey) =
+_infrastore_read_key(owner::TimeSeriesOwners, key::TimeSeriesKey{<:SingleTimeSeries}) =
     _infrastore_read_single(owner, key)
 
 # ---- Store-wide aggregates -------------------------------------------------
@@ -2377,7 +2357,7 @@ function infrastore_list_owner_ids(
     # the presence of a `resolution` filter.
     ids = Set{Int}()
     for row in
-        InfraStore.list_keys(store.inner; owner_category = category,
+        InfraStore.list_metadata(store.inner; owner_category = category,
         time_series_type = _infrastore_pushable_type(time_series_type),
         resolution = resolution)
         if !isnothing(time_series_type)
@@ -2404,7 +2384,7 @@ function infrastore_list_keys_with_owner(
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
     category = get_owner_category(owner_type)
-    rows = InfraStore.list_time_series(store.inner; owner_category = category,
+    rows = InfraStore.list_metadata(store.inner; owner_category = category,
         time_series_type = _infrastore_pushable_type(time_series_type),
         resolution = resolution)
     out = NamedTuple[]
