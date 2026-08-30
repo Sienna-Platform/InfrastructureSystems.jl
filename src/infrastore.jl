@@ -140,289 +140,82 @@ get_owner_category(
     ::Union{SupplementalAttribute, Type{<:SupplementalAttribute}},
 ) = InfraStore.SupplementalAttribute
 
-# ---- Element encoding ------------------------------------------------------
-# Scalars store as a 1-D array; structured elements as a `(length, k)` Float64 array.
-# Every encoder returns the store's canonical `element_type` tag, a first-class catalog
-# column, so reads reconstruct from it rather than from the opaque `ext` payload.
+# ---- Element values ---------------------------------------------------------
+#
+# The store owns the `element_type` encodings and InfraStore.jl implements them
+# (`docs/src/reference/element-types.md`, pinned by
+# `conformance/element_type_vectors.json`). IS supplies only the two ends: how to
+# write one of *its* `FunctionData` values into a row, and which of its types to
+# build when reading one back.
+#
+# Encoding is open dispatch — three methods per type — so an IS value goes into a
+# store constructor directly and is packed at the ABI boundary. Decoding is a
+# lookup, because it starts from a tag string, so it is a table.
 
-# Julia scalar element type -> canonical dtype spelling. Only the widths the
-# store supports; anything else is an unsupported element type, not a silent
-# widening.
-const _INFRASTORE_DTYPE_NAMES = Dict{Type, String}(
-    Float64 => "f64",
-    Float32 => "f32",
-    Int64 => "i64",
-    Int32 => "i32",
-    Int16 => "i16",
-    Int8 => "i8",
-    UInt64 => "u64",
-    UInt32 => "u32",
-    UInt16 => "u16",
-    UInt8 => "u8",
-    Bool => "bool",
+InfraStore.element_type_tag(::AbstractVector{<:LinearFunctionData}) = "linear_function"
+InfraStore.element_row_width(::AbstractVector{<:LinearFunctionData}) = 2
+function InfraStore.write_element_row!(row, fd::LinearFunctionData)
+    row[1] = get_proportional_term(fd)
+    row[2] = get_constant_term(fd)
+    return
+end
+
+InfraStore.element_type_tag(::AbstractVector{<:QuadraticFunctionData}) =
+    "quadratic_function"
+InfraStore.element_row_width(::AbstractVector{<:QuadraticFunctionData}) = 3
+function InfraStore.write_element_row!(row, fd::QuadraticFunctionData)
+    row[1] = get_quadratic_term(fd)
+    row[2] = get_proportional_term(fd)
+    row[3] = get_constant_term(fd)
+    return
+end
+
+InfraStore.element_type_tag(::AbstractVector{<:PiecewiseLinearData}) = "piecewise_linear"
+InfraStore.element_row_width(values::AbstractVector{<:PiecewiseLinearData}) =
+    1 + 2 * maximum(fd -> length(get_points(fd)), values; init = 0)
+function InfraStore.write_element_row!(row, fd::PiecewiseLinearData)
+    pts = get_points(fd)
+    row[1] = length(pts)
+    for (k, p) in enumerate(pts)
+        row[2k] = p.x
+        row[2k + 1] = p.y
+    end
+    return
+end
+
+InfraStore.element_type_tag(::AbstractVector{<:PiecewiseStepData}) = "piecewise_step"
+function InfraStore.element_row_width(values::AbstractVector{<:PiecewiseStepData})
+    widest = maximum(fd -> length(get_x_coords(fd)), values; init = 0)
+    return max(2 * widest, 1)
+end
+function InfraStore.write_element_row!(row, fd::PiecewiseStepData)
+    xs = get_x_coords(fd)
+    ys = get_y_coords(fd)
+    n = length(xs)
+    row[1] = n
+    row[2:(1 + n)] .= xs
+    row[(2 + n):(1 + n + length(ys))] .= ys
+    return
+end
+
+"""
+The IS types a store read decodes composite element values into.
+
+Their constructor signatures are the ones InfraStore.jl's codec calls, so a read
+lands directly in IS's own `FunctionData` with no conversion between.
+"""
+const _IS_ELEMENT_TYPES = (
+    linear_function = LinearFunctionData,
+    quadratic_function = QuadraticFunctionData,
+    piecewise_linear = PiecewiseLinearData,
+    piecewise_step = PiecewiseStepData,
 )
-
-function _element_type_name(::Type{T}) where {T}
-    name = get(_INFRASTORE_DTYPE_NAMES, T, nothing)
-    isnothing(name) &&
-        error("InfraStore backend does not support time series element type $T yet")
-    return name
-end
-
-_storage_array(v::AbstractVector{<:Real}) =
-    (collect(v), _element_type_name(eltype(v)))
-
-# N-D per-step scalars (`SingleTimeSeries{T, N}` / `NonSequentialTimeSeries{T, N}` with
-# `N > 1`): the store takes the array whole, with dim 1 as the time axis, and the read
-# side (`_decode_stored_values`) hands it back unchanged.
-_storage_array(v::AbstractArray{<:Real}) =
-    (collect(v), _element_type_name(eltype(v)))
-
-# Encoded width `k` of a vector of structured elements, without encoding it. The forecast
-# encoder needs the widest window's `k` before it allocates, so this is the single source
-# of truth every `_storage_array` below allocates from.
-_storage_width(::AbstractVector{LinearFunctionData}) = 2
-
-_storage_width(::AbstractVector{QuadraticFunctionData}) = 3
-
-_storage_width(v::AbstractVector{PiecewiseLinearData}) =
-    1 + 2 * maximum(length(get_points(fd)) for fd in v; init = 0)
-
-function _storage_width(v::AbstractVector{PiecewiseStepData})
-    max_n = maximum(length(get_x_coords(fd)) for fd in v; init = 0)
-    iszero(max_n) && return 1
-    return 2 * max_n
-end
-
-_storage_width(::AbstractVector{NTuple{N, Float64}}) where {N} = N
-
-_storage_width(v::AbstractVector) =
-    error("InfraStore backend does not support time series element type $(eltype(v)) yet")
-
-function _storage_array(v::AbstractVector{LinearFunctionData})
-    mat = Matrix{Float64}(undef, length(v), _storage_width(v))
-    for (i, fd) in enumerate(v)
-        mat[i, 1] = get_proportional_term(fd)
-        mat[i, 2] = get_constant_term(fd)
-    end
-    return (mat, "linear_function")
-end
-
-function _storage_array(v::AbstractVector{QuadraticFunctionData})
-    mat = Matrix{Float64}(undef, length(v), _storage_width(v))
-    for (i, fd) in enumerate(v)
-        mat[i, 1] = get_quadratic_term(fd)
-        mat[i, 2] = get_proportional_term(fd)
-        mat[i, 3] = get_constant_term(fd)
-    end
-    return (mat, "quadratic_function")
-end
-
-# Ragged: each step has a variable number of (x, y) points. Store as a
-# `(len, 1 + 2*max_points)` matrix padded with zeros; column 1 of each row is the
-# point count, so `shape[0]` stays the timestep count.
-function _storage_array(v::AbstractVector{PiecewiseLinearData})
-    mat = zeros(Float64, length(v), _storage_width(v))
-    for (i, fd) in enumerate(v)
-        pts = get_points(fd)
-        mat[i, 1] = length(pts)
-        for (j, p) in enumerate(pts)
-            mat[i, 2j] = p.x
-            mat[i, 2j + 1] = p.y
-        end
-    end
-    return (mat, "piecewise_linear")
-end
-
-# Ragged like PiecewiseLinearData, but the x- and y-coordinates have different
-# lengths (`n` x-coords, `n - 1` y-coords/slopes). Store as a `(len, 2*max_n)`
-# matrix: column 1 of each row is the x-coord count `n`, then the `n` x-coords,
-# then the `n - 1` y-coords. Each row is self-describing, so decode needs no
-# global width.
-function _storage_array(v::AbstractVector{PiecewiseStepData})
-    mat = zeros(Float64, length(v), _storage_width(v))
-    for (i, fd) in enumerate(v)
-        xs = get_x_coords(fd)
-        ys = get_y_coords(fd)
-        n = length(xs)
-        mat[i, 1] = n
-        for (j, x) in enumerate(xs)
-            mat[i, 1 + j] = x
-        end
-        for (j, y) in enumerate(ys)
-            mat[i, 1 + n + j] = y
-        end
-    end
-    return (mat, "piecewise_step")
-end
-
-# Fixed-arity `NTuple{N, Float64}` values. Dense, so unlike the ragged piecewise
-# encodings every row is full width; the arity travels in the element type so decode
-# rebuilds the tuple without inferring it from the array shape.
-function _storage_array(v::AbstractVector{NTuple{N, Float64}}) where {N}
-    mat = Matrix{Float64}(undef, length(v), N)
-    for (i, tup) in enumerate(v)
-        for j in 1:N
-            mat[i, j] = tup[j]
-        end
-    end
-    return (mat, "tuple($N,f64)")
-end
-
-_storage_array(v::AbstractVector) =
-    error("InfraStore backend does not support time series element type $(eltype(v)) yet")
-
-# ---- Element encodings ------------------------------------------------------
-# One singleton per stored `element_type` tag, so decoding dispatches instead of
-# comparing the tag string per value. `ScalarEncoding` is also the fallback for any tag
-# this binding does not map; `RowEncoding` marks one-element-per-matrix-row layouts,
-# which is the distinction the forecast and reader paths branch on.
-abstract type ElementEncoding end
-abstract type RowEncoding <: ElementEncoding end
-
-struct ScalarEncoding <: ElementEncoding end
-struct LinearFunctionEncoding <: RowEncoding end
-struct QuadraticFunctionEncoding <: RowEncoding end
-struct PiecewiseLinearEncoding <: RowEncoding end
-struct PiecewiseStepEncoding <: RowEncoding end
-
-# Fixed-arity f64 tuples: the arity is part of the encoding, so `_decode_ntuples` gets it
-# as a type parameter instead of re-parsing the tag. The store's grammar allows other
-# dtypes, which this binding does not map (they fall through to `ScalarEncoding`).
-struct TupleEncoding{N} <: RowEncoding end
-
-const _ELEMENT_ENCODINGS = Dict{String, ElementEncoding}(
-    "linear_function" => LinearFunctionEncoding(),
-    "quadratic_function" => QuadraticFunctionEncoding(),
-    "piecewise_linear" => PiecewiseLinearEncoding(),
-    "piecewise_step" => PiecewiseStepEncoding(),
-)
-
-const _TUPLE_ELEMENT_TYPE = r"^tuple\((\d+),f64\)$"
-
-# The IS value element type an `element_type` tag decodes to — the `T` of a
-# `TimeSeriesData{T}`, and so of the `TimeSeriesKey{<:TimeSeriesData{T}}` that
-# names the series. A tag this binding does not map decodes to raw numbers, whose
-# element type is the array's own dtype; `Float64` is the only dtype the store
-# ever pairs with a mapped tag, and the fallback covers the rest.
-_element_value_type(::ScalarEncoding, dtype::Type) = dtype
-_element_value_type(::LinearFunctionEncoding, ::Type) = LinearFunctionData
-_element_value_type(::QuadraticFunctionEncoding, ::Type) = QuadraticFunctionData
-_element_value_type(::PiecewiseLinearEncoding, ::Type) = PiecewiseLinearData
-_element_value_type(::PiecewiseStepEncoding, ::Type) = PiecewiseStepData
-_element_value_type(::TupleEncoding{N}, ::Type) where {N} = NTuple{N, Float64}
-
-# The string -> type barrier. Deliberately the only type-unstable step: every
-# decode reached from here is dispatched and inferrable.
-_element_encoding(::Nothing) = ScalarEncoding()
-
-function _element_encoding(element_type::AbstractString)
-    haskey(_ELEMENT_ENCODINGS, element_type) && return _ELEMENT_ENCODINGS[element_type]
-    m = match(_TUPLE_ELEMENT_TYPE, element_type)
-    isnothing(m) && return ScalarEncoding()
-    return TupleEncoding{parse(Int, m.captures[1])}()
-end
-
-# Rebuild the `NTuple{N, Float64}` vector from rows of a stored/materialized `(len, N)`
-# matrix. Shared by every decode path.
-function _decode_ntuples(mat, len::Integer, n::Integer)
-    out = Vector{NTuple{n, Float64}}(undef, len)
-    for i in 1:len
-        out[i] = ntuple(j -> mat[i, j], n)
-    end
-    return out
-end
-
-# Reconstruct a single `PiecewiseStepData` from row `i` of a stored/materialized
-# `(len, k)` matrix (see `_storage_array`). Shared by every decode path.
-function _decode_pwl_step_row(mat, i::Integer)
-    n = Int(round(mat[i, 1]))
-    xs = [mat[i, 1 + j] for j in 1:n]
-    ys = [mat[i, 1 + n + j] for j in 1:(n - 1)]
-    return PiecewiseStepData(xs, ys)
-end
-
-# Decode an already-materialized static value array (the inverse of `_storage_array`),
-# one method per [`ElementEncoding`]. `len` is the timestep count (`size(arr, 1)`);
-# each encoded element occupies one row of the `(len, k)` matrix.
-_decode_static_values(arr, ::ScalarEncoding, ::Integer) = arr
-
-_decode_static_values(arr, ::LinearFunctionEncoding, len::Integer) =
-    [LinearFunctionData(arr[i, 1], arr[i, 2]) for i in 1:len]
-
-_decode_static_values(arr, ::QuadraticFunctionEncoding, len::Integer) =
-    [QuadraticFunctionData(arr[i, 1], arr[i, 2], arr[i, 3]) for i in 1:len]
-
-function _decode_static_values(arr, ::PiecewiseLinearEncoding, len::Integer)
-    out = Vector{PiecewiseLinearData}(undef, len)
-    for i in 1:len
-        n = Int(round(arr[i, 1]))
-        out[i] = PiecewiseLinearData([(arr[i, 2j], arr[i, 2j + 1]) for j in 1:n])
-    end
-    return out
-end
-
-_decode_static_values(arr, ::PiecewiseStepEncoding, len::Integer) =
-    [_decode_pwl_step_row(arr, i) for i in 1:len]
-
-_decode_static_values(arr, ::TupleEncoding{N}, len::Integer) where {N} =
-    _decode_ntuples(arr, len, N)
-
-# Decode a whole stored static array, whatever its rank. A 1-D array is scalar
-# data (one value per timestep) and is already the answer; a higher-rank array
-# is either encoded elements or N-D per-step scalars, which the encoding
-# distinguishes. Used by the `SingleTimeSeries` and `NonSequentialTimeSeries`
-# read paths, where the backend materializes the array in memory rather than
-# handing back a content hash.
-_decode_stored_values(data::AbstractVector, ::ElementEncoding) = data
-
-_decode_stored_values(data::AbstractArray, encoding::ElementEncoding) =
-    _decode_static_values(data, encoding, size(data, 1))
-
-# ---- Forecast element encoding ---------------------------------------------
-# Forecast windows of scalars store as a `(horizon, count)` array in the window's own
-# element type, tagged with it — matching the static path, so a `Deterministic{Int64}`
-# round-trips as one instead of coming back widened to Float64.
-# FunctionData windows store as `(horizon, count, k)` tagged with the element
-# type; each window column is encoded with the same scheme as a SingleTimeSeries
-# via `_storage_array`.
-
-function _storage_forecast_array(windows::Vector{<:AbstractVector{<:Real}})
-    count = length(windows)
-    horizon = length(first(windows))
-    T = eltype(first(windows))
-    arr = Matrix{T}(undef, horizon, count)
-    for (c, w) in enumerate(windows)
-        copyto!(view(arr, :, c), w)
-    end
-    return (arr, _element_type_name(T))
-end
-
-# FunctionData windows encode row-wise like a SingleTimeSeries (ragged PWL is
-# padded to the widest row); NTuple windows are the same dense per-row layout at
-# constant width. Both carry the element type that drives window reconstruction.
-function _storage_forecast_array(
-    windows::Vector{<:AbstractVector{<:Union{FunctionData, NTuple}}},
-)
-    count = length(windows)
-    horizon = length(first(windows))
-    k = maximum(_storage_width, windows)
-    arr = zeros(Float64, horizon, count, k)
-    element_type = ""
-    for c in 1:count
-        # Encoded one window at a time: holding all `count` matrices before the copy
-        # would double the forecast's peak footprint.
-        mat, element_type = _storage_array(windows[c])
-        @views arr[:, c, 1:size(mat, 2)] .= mat
-    end
-    return (arr, element_type)
-end
 
 # Densify a Probabilistic/Scenarios forecast — a SortedDict of
 # `(horizon_count, dim1)` window matrices — into the `(dim1, horizon_count,
-# count)` array the store's forecast constructors take, in the windows' own element
-# type and tagged with it, so a `Probabilistic{Int64}` round-trips as one (matching
-# the Deterministic and static paths) instead of coming back widened to Float64.
+# count)` array the store's forecast constructors take, in the windows' own
+# element type, so a `Probabilistic{Int64}` round-trips as one instead of coming
+# back widened to Float64.
 function _dense_forecast_array(forecast::Forecast{T}, dim1::Integer) where {T}
     arr = Array{T, 3}(
         undef, dim1, get_horizon_count(forecast), get_count(forecast),
@@ -430,24 +223,8 @@ function _dense_forecast_array(forecast::Forecast{T}, dim1::Integer) where {T}
     for (ix, window) in enumerate(values(get_data(forecast)))
         arr[:, :, ix] = transpose(window)
     end
-    return (arr, _element_type_name(T))
+    return arr
 end
-
-# Decode window `c` (1-based) of a `(horizon, count, k)` forecast array into a Vector of
-# the corresponding FunctionData or NTuple; the per-window `(horizon, k)` slice decodes
-# with the same row-wise scheme as a static array.
-#
-# Only a `RowEncoding` has a `k` axis, so a scalar tag on a 3-D array is a storage
-# inconsistency, not a pass-through: `_forecast_window` routes 2-D (scalar) arrays
-# elsewhere, and a scalar-tagged window would decode wrong. The tag string travels
-# alongside the encoding purely to name it in that error.
-_decode_forecast_window(
-    ::AbstractArray{<:Real, 3}, ::ScalarEncoding, element_type, ::Integer,
-) = error("InfraStore backend cannot decode forecast element_type $element_type")
-
-_decode_forecast_window(
-    arr::AbstractArray{<:Real, 3}, encoding::RowEncoding, _element_type, c::Integer,
-) = _decode_static_values(@view(arr[:, c, :]), encoding, size(arr, 1))
 
 # ---- Operations (thin delegations to InfraStore) ----------------------
 
@@ -497,21 +274,23 @@ function serialize_single!(
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(sts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(sts),
 )
-    # `get_array` returns the raw `Array{T, N}` (no TimeArray allocation).
-    arr, element_type = _storage_array(get_array(sts))
+    # `get_array` returns the raw `Array{T, N}` (no TimeArray allocation). The
+    # store names the element type from the values and packs them itself.
+    values = get_array(sts)
     tss_ts = InfraStore.SingleTimeSeries(
         get_initial_timestamp(sts),
         get_resolution(sts),
-        arr,
-        name;
-        element_type = element_type,
+        values,
+        name,
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features, units = units,
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system))
-    # The encoded array is what the batch buffers; its byte size drives auto-flush.
-    return sizeof(arr)
+    # Drives auto-flush. A composite element type is packed wider than the values
+    # measure here, which under-counts the buffer — the threshold is a heuristic,
+    # and one that errs toward flushing late rather than toward a wrong answer.
+    return sizeof(values)
 end
 
 """
@@ -539,26 +318,20 @@ function serialize_non_sequential!(
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(nts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(nts),
 )
-    arr, element_type = _storage_array(get_array(nts))
-    tss_ts = InfraStore.NonSequentialTimeSeries(
-        get_timestamps(nts),
-        arr,
-        name;
-        element_type = element_type,
-    )
+    values = get_array(nts)
+    tss_ts = InfraStore.NonSequentialTimeSeries(get_timestamps(nts), values, name)
     InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features, units = units,
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system))
     # The staged bytes are the encoded array plus the timestamps the association carries.
-    return sizeof(arr) + sizeof(get_timestamps(nts))
+    return sizeof(values) + sizeof(get_timestamps(nts))
 end
 
 # Rebuild the IS `NonSequentialTimeSeries` from whatever the store handed back,
 # however the read was addressed.
 _non_sequential_from_store(nts, name::AbstractString) = NonSequentialTimeSeries(
-    String(name), nts.timestamps,
-    _decode_stored_values(nts.data, _element_encoding(nts.element_type));
+    String(name), nts.timestamps, nts.data;
     units = nts.units, quantity_kind = nts.quantity_kind,
     unit_system = _from_store_unit_system(nts.unit_system),
 )
@@ -938,6 +711,7 @@ function _read_association_by_id(
         return InfraStore.read_by_id(
             store.inner, Int64(get_association_id(key));
             start_time = start_time, len = len, count = count,
+            types = _IS_ELEMENT_TYPES,
         )
     catch e
         # `catch`-block exception inspection: the window checks moved into the
@@ -954,8 +728,7 @@ end
 # Rebuild the IS `SingleTimeSeries` from whatever the store handed back, however
 # the read was addressed.
 _single_from_store(sts, name::AbstractString) = SingleTimeSeries(
-    String(name), sts.initial_timestamp, sts.resolution,
-    _decode_stored_values(sts.data, _element_encoding(sts.element_type));
+    String(name), sts.initial_timestamp, sts.resolution, sts.data;
     units = sts.units, quantity_kind = sts.quantity_kind,
     unit_system = _from_store_unit_system(sts.unit_system),
 )
@@ -1184,10 +957,10 @@ function _infrastore_stage_data!(
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
     ) do initial, resolution, horizon, interval, name
-        arr, element_type = _dense_forecast_array(ts, length(get_percentiles(ts)))
         prob = InfraStore.Probabilistic(initial, resolution, horizon, interval,
-            get_count(ts), Float64.(get_percentiles(ts)), arr, name;
-            element_type = element_type, units = get_units(ts),
+            get_count(ts), Float64.(get_percentiles(ts)),
+            _dense_forecast_array(ts, length(get_percentiles(ts))), name;
+            units = get_units(ts),
             quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (prob, get_count(ts))
@@ -1207,11 +980,12 @@ function _infrastore_stage_data!(
     ) do initial, resolution, horizon, interval, name
         # (horizon_count, count) for scalars; (horizon_count, count, k) tagged
         # with the element type for FunctionData and NTuple windows.
+        # `(horizon_count, count)` of whatever the windows hold; a composite
+        # element type is packed across a further axis by the store.
         windows = collect(values(get_data(ts)))
-        arr, element_type = _storage_forecast_array(windows)
         det = InfraStore.Deterministic(initial, resolution, horizon, interval,
-            length(windows), arr, name;
-            element_type = element_type, units = get_units(ts),
+            length(windows), reduce(hcat, windows), name;
+            units = get_units(ts),
             quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (det, length(windows))
@@ -1229,9 +1003,8 @@ function _infrastore_stage_data!(
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
     ) do initial, resolution, horizon, interval, name
-        arr, element_type = _dense_forecast_array(ts, get_scenario_count(ts))
         scen = InfraStore.Scenarios(initial, resolution, horizon, interval,
-            get_count(ts), arr, name; element_type = element_type,
+            get_count(ts), _dense_forecast_array(ts, get_scenario_count(ts)), name;
             units = get_units(ts), quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (scen, get_count(ts))
@@ -1321,17 +1094,6 @@ _truncate_window(w, ::Nothing) = w
 _truncate_window(w::AbstractVector, len::Int) = w[1:len]
 _truncate_window(w::AbstractMatrix, len::Int) = w[1:len, :]
 
-# Extract window `i` from a stored deterministic-forecast array. Scalar windows
-# are columns of a 2D `(horizon_count, count)` array; encoded FunctionData
-# windows carry trailing coefficient dims (3D). The stored `element_type` names
-# a scalar dtype in the 2-D case (and a DST inherits the metadata of the
-# SingleTimeSeries it shares), so key the decode on the array rank instead.
-_forecast_window(data::AbstractMatrix, ::ElementEncoding, _element_type, i) = data[:, i]
-
-_forecast_window(
-    data::AbstractArray{<:Any, 3}, encoding::ElementEncoding, element_type, i,
-) = _decode_forecast_window(data, encoding, element_type, i)
-
 # A Probabilistic/Scenarios window is stored `(member, horizon)` and transposed to the
 # `(horizon, member)` matrix IS hands users.
 _member_window(data::AbstractArray{<:Any, 3}, i) = permutedims(@view data[:, :, i])
@@ -1340,15 +1102,16 @@ _member_window(data::AbstractArray{<:Any, 3}, i) = permutedims(@view data[:, :, 
 # handed back in its own element type (any scalar dtype), but an encoded element type
 # (FunctionData / NTuple rows, written by another InfraStore client) has no IS member
 # window shape, so name it rather than let the reconstruction mis-slice it.
-_check_member_window_type(::ScalarEncoding, _type, _name, _element_type) = nothing
-
-_check_member_window_type(::ElementEncoding, forecast_type, name, element_type) = throw(
-    ArgumentError(
-        "$forecast_type '$name' is stored with element type $element_type; IS reads " *
-        "$forecast_type windows as per-member scalar matrices only. It was likely " *
-        "written by another InfraStore client.",
-    ),
-)
+function _check_member_window_type(forecast_type, name, element_type)
+    InfraStore.is_composite_element_type(element_type) || return nothing
+    throw(
+        ArgumentError(
+            "$forecast_type '$name' is stored with element type $element_type; IS reads " *
+            "$forecast_type windows as per-member scalar matrices only. It was likely " *
+            "written by another InfraStore client.",
+        ),
+    )
+end
 
 # Reconstruct a forecast read from the store as its user-facing type. Every
 # InfraStore read below is already sliced to the requested window range.
@@ -1393,9 +1156,11 @@ end
 function _forecast_from_store(d::InfraStore.Deterministic, name::String, len)
     _check_forecast_len(d, len)
     # Resolved once per read: the tag is the same for every window.
-    encoding = _element_encoding(d.element_type)
-    window(i) =
-        _truncate_window(_forecast_window(d.data, encoding, d.element_type, i), len)
+    # `d.data` is `(horizon_count, count)` of values, decoded by the read, so a
+    # window is a column of it. Materialized, not a view: the window becomes the
+    # `Vector` a `Deterministic`'s SortedDict holds, and a `SubArray` there would
+    # keep the whole forecast array alive behind every window.
+    window(i) = _truncate_window(d.data[:, i], len)
     data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
     return Deterministic(; name = name, data = data,
         resolution = d.resolution, interval = d.interval, units = d.units,
@@ -1406,9 +1171,7 @@ end
 # `.data` is the canonical (percentile_count, horizon_count, count) array.
 function _forecast_from_store(p::InfraStore.Probabilistic, name::String, len)
     _check_forecast_len(p, len)
-    _check_member_window_type(
-        _element_encoding(p.element_type), Probabilistic, name, p.element_type,
-    )
+    _check_member_window_type(Probabilistic, name, p.element_type)
     window(i) = _truncate_window(_member_window(p.data, i), len)
     data = _assemble_forecast_windows(p.initial_timestamp, p.interval, p.count, window)
     # The positional constructor infers `{T, N}` from the windows; the keyword form pins
@@ -1423,9 +1186,7 @@ end
 # `.data` is the canonical (scenario_count, horizon_count, count) array.
 function _forecast_from_store(s_ts::InfraStore.Scenarios, name::String, len)
     _check_forecast_len(s_ts, len)
-    _check_member_window_type(
-        _element_encoding(s_ts.element_type), Scenarios, name, s_ts.element_type,
-    )
+    _check_member_window_type(Scenarios, name, s_ts.element_type)
     window(i) = _truncate_window(_member_window(s_ts.data, i), len)
     data = _assemble_forecast_windows(
         s_ts.initial_timestamp, s_ts.interval, s_ts.count, window,
@@ -1458,17 +1219,21 @@ _tss_forecast_type(::Type{<:Scenarios}) = InfraStore.Scenarios
 # Orient + decode one raw window into IS's canonical per-window value, matching a single
 # `get_time_series(...).data[timestamp]`. Dispatched on the forecast type, mirroring
 # `_tss_forecast_type` above.
-_decode_forecast_reader_window(::Type{<:Probabilistic}, raw, ::ElementEncoding) =
+#
+# A reader hands back the stored packing — it is the per-timestamp path, where a
+# decode per group would be a cost in the loop it exists to make cheap — so this
+# is where the element type is resolved for a reader window.
+_decode_forecast_reader_window(::Type{<:Probabilistic}, raw, _element_type) =
     permutedims(raw)
 
-_decode_forecast_reader_window(::Type{<:Scenarios}, raw, ::ElementEncoding) =
-    permutedims(raw)
+_decode_forecast_reader_window(::Type{<:Scenarios}, raw, _element_type) = permutedims(raw)
 
-_decode_forecast_reader_window(
-    ::Type{<:AbstractDeterministic}, raw, encoding::ElementEncoding,
-) = _decode_stored_values(raw, encoding)
+_decode_forecast_reader_window(::Type{<:AbstractDeterministic}, raw, element_type) =
+    InfraStore.decode_element_values(
+        raw, something(element_type, "f64"); types = _IS_ELEMENT_TYPES,
+    )
 
-_decode_forecast_reader_window(::Type{T}, raw, ::ElementEncoding) where {T <: Forecast} =
+_decode_forecast_reader_window(::Type{T}, raw, _element_type) where {T <: Forecast} =
     throw(ArgumentError("InfraStore backend cannot decode a window of forecast type $T"))
 
 """
@@ -1500,7 +1265,7 @@ mutable struct ForecastReader{T <: Forecast}
     `element_type` once at build, so a per-timestamp read dispatches instead of
     re-interpreting the tag string.
     """
-    element_encodings::Vector{ElementEncoding}
+    element_types::Vector{Union{Nothing, String}}
     "Per-slot materialized window cache; reset on each read."
     windows::Vector{Any}
     has_read::Bool
@@ -1531,15 +1296,15 @@ function infrastore_build_forecast_reader(
     metas = _infrastore_reader_metadata(store, Int64[e.id for e in tss_entries])
     n = length(tss_entries)
     entries = Vector{ForecastReaderEntry}(undef, n)
-    element_encodings = Vector{ElementEncoding}(undef, n)
+    element_types = Vector{Union{Nothing, String}}(undef, n)
     for (i, (e, fmeta)) in enumerate(zip(tss_entries, metas))
         owner = id_to_owner(Int(fmeta.owner_id), fmeta.owner_category)
-        element_encodings[i] = _element_encoding(fmeta.element_type)
+        element_types[i] = fmeta.element_type
         # `e.slot` is 0-based in the InfraStore store; carry it 1-based for Julia.
         entries[i] = ForecastReaderEntry(owner, _key_from_row(fmeta), e.slot + 1)
     end
     windows = Vector{Any}(nothing, InfraStore.forecast_num_slots(inner))
-    return ForecastReader{T}(inner, store, entries, element_encodings, windows, false)
+    return ForecastReader{T}(inner, store, entries, element_types, windows, false)
 end
 
 """
@@ -1594,7 +1359,7 @@ function get_forecast_window(reader::ForecastReader{T}, entry_index::Integer) wh
     isnothing(cached) || return cached
     raw = InfraStore.forecast_values(reader.inner, entry_index)
     window =
-        _decode_forecast_reader_window(T, raw, reader.element_encodings[entry_index])
+        _decode_forecast_reader_window(T, raw, reader.element_types[entry_index])
     reader.windows[entry.slot] = window
     return window
 end
@@ -1635,7 +1400,7 @@ mutable struct StaticTimeSeriesReader
     Resolved from the stored `element_type` once at build, so a per-timestamp
     read dispatches instead of re-interpreting the tag string.
     """
-    element_encodings::Vector{ElementEncoding}
+    element_types::Vector{Union{Nothing, String}}
     "Per-group materialized values cache; reset on each read."
     values::Vector{Any}
     has_read::Bool
@@ -1654,7 +1419,7 @@ function infrastore_build_static_time_series_reader(
     inner = InfraStore.build_static_reader(store.inner;
         resolution = resolution, name = name, features = features)
     entries = StaticTimeSeriesReaderEntry[]
-    element_encodings = ElementEncoding[]
+    element_types = Union{Nothing, String}[]
     groups = InfraStore.static_groups(inner)
     metas = _infrastore_reader_metadata(
         store,
@@ -1670,12 +1435,12 @@ function infrastore_build_static_time_series_reader(
                 entries,
                 StaticTimeSeriesReaderEntry(owner, _key_from_row(smeta), gi, col),
             )
-            push!(element_encodings, _element_encoding(smeta.element_type))
+            push!(element_types, smeta.element_type)
         end
     end
     values = Vector{Any}(nothing, length(groups))
     return StaticTimeSeriesReader(
-        inner, store, entries, element_encodings, values, false,
+        inner, store, entries, element_types, values, false,
     )
 end
 
@@ -1742,7 +1507,7 @@ function get_static_time_series_value(
         reader.values[entry.group] = vals
     end
     return _static_group_element(
-        vals, entry.column, reader.element_encodings[entry_index],
+        vals, entry.column, reader.element_types[entry_index],
     )
 end
 
@@ -1750,20 +1515,18 @@ end
 # scalar data (one value per column); a higher-rank group carries one element row
 # per column, decoded through the entry's encoding (same scheme as
 # `_decode_static_values`, at `len == 1`).
-_static_group_element(vals::AbstractVector, column::Integer, ::ElementEncoding) =
+_static_group_element(vals::AbstractVector, column::Integer, _element_type) =
     vals[column]
 
-function _static_group_element(
-    vals::AbstractArray, column::Integer, encoding::ElementEncoding,
-)
+function _static_group_element(vals::AbstractArray, column::Integer, element_type)
     colons = ntuple(_ -> Colon(), ndims(vals) - 1)
-    return _decode_element(vals[column, colons...], encoding)
+    row = reshape(vals[column, colons...], 1, :)
+    return only(
+        InfraStore.decode_element_values(
+            row, something(element_type, "f64"); types = _IS_ELEMENT_TYPES,
+        ),
+    )
 end
-
-_decode_element(element, ::ScalarEncoding) = element
-
-_decode_element(element, encoding::RowEncoding) =
-    _decode_static_values(reshape(element, 1, :), encoding, 1)[1]
 
 """Route a narrowed `has_time_series` query to the InfraStore store — the general
 catalog filter, serving every query the owner-scoped probe in `infrastore_has_any`
@@ -1957,12 +1720,20 @@ _infrastore_is_type(s::Symbol) =
 # for deserializing a key that travels as (id, type).
 _time_series_type_from_name(name::AbstractString) = _infrastore_is_type(Symbol(name))
 
-# The dtype a row's values are physically stored in, for the tags this binding
-# does not map to a domain type.
-function _row_value_dtype(row)
-    et = row.element_type
-    isnothing(et) && return Float64
-    dtype = InfraStore._physical_dtype_of(et)
+# The IS value element type a row's `element_type` decodes to — the `T` of a
+# `TimeSeriesData{T}`, and so of the `TimeSeriesKey{<:TimeSeriesData{T}}` naming
+# the series. A composite tag names one of IS's `FunctionData`; anything else
+# decodes to raw numbers, whose element type is the dtype the store holds them in.
+function _element_value_type(element_type)
+    isnothing(element_type) && return Float64
+    kind = InfraStore._element_kind(element_type)
+    if kind === :tuple
+        m = match(InfraStore._TUPLE_TAG, element_type)
+        m === nothing || return NTuple{parse(Int, m.captures[1]), Float64}
+    elseif kind !== nothing && haskey(_IS_ELEMENT_TYPES, kind)
+        return _IS_ELEMENT_TYPES[kind]
+    end
+    dtype = InfraStore._physical_dtype_of(element_type)
     return isnothing(dtype) ? Float64 : dtype
 end
 
@@ -1977,8 +1748,7 @@ end
 # free — it is a property of the stored array, not of the reference.
 function _key_from_row(row)
     kind = _infrastore_is_type(row.time_series_type)
-    value_type =
-        _element_value_type(_element_encoding(row.element_type), _row_value_dtype(row))
+    value_type = _element_value_type(row.element_type)
     return TimeSeriesKey{kind{value_type}}(row.id)
 end
 
