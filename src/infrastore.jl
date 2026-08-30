@@ -542,29 +542,6 @@ function serialize_non_sequential!(
     return sizeof(arr) + sizeof(get_timestamps(nts))
 end
 
-"""
-    get_non_sequential(store, owner_id, owner_category, name; features=nothing, time_range=nothing) -> NonSequentialTimeSeries
-
-Reconstruct a `NonSequentialTimeSeries` (timestamps + decoded array) from the InfraStore
-store. A non-sequential series is addressed by name + features (it has no resolution).
-`time_range`, if given, is a half-open `[start, stop)` window on the (irregular) timestamp
-axis, sliced server-side — the same pushdown `_infrastore_read_single` uses for a
-`SingleTimeSeries` grid window.
-"""
-function get_non_sequential(
-    store::Store,
-    owner_id::Integer,
-    owner_category::InfraStore.OwnerCategory,
-    name::AbstractString;
-    features::Union{Nothing, Dict} = nothing,
-    time_range::Union{Nothing, Tuple{Dates.DateTime, Dates.DateTime}} = nothing,
-)
-    nts = InfraStore.get_time_series(InfraStore.NonSequentialTimeSeries, store.inner,
-        owner_id,
-        owner_category, name; features = features, time_range = time_range)
-    return _non_sequential_from_store(nts, name)
-end
-
 # Rebuild the IS `NonSequentialTimeSeries` from whatever the store handed back,
 # however the read was addressed.
 _non_sequential_from_store(nts, name::AbstractString) = NonSequentialTimeSeries(
@@ -856,20 +833,6 @@ function infrastore_get_time_series(
     return _infrastore_read_single(owner, key; start_time = start_time, len = len)
 end
 
-_window_length(::Nothing, index::Integer, total::Integer) = total - index + 1
-_window_length(len::Integer, ::Integer, ::Integer) = len
-
-# Step count of the requested `[index, index + n)` window on a series of `total` steps.
-# Errors rather than clamping: the store clamps an out-of-grid range silently, so the
-# window is validated here against the key before the sliced read is issued.
-function _validate_window(index::Integer, len, total::Integer)
-    n = _window_length(len, index, total)
-    if index < 1 || n < 1 || index + n - 1 > total
-        throw(ArgumentError("requested index=$index len=$n exceeds range $total"))
-    end
-    return n
-end
-
 # ---- Key addressing --------------------------------------------------------
 # `association_id` is the identity of a stored association: the store mints it,
 # never reissues it, and every other field a `TimeSeriesKey` carries is a
@@ -886,14 +849,20 @@ end
 # this is a comparison against the key, ahead of any store access: no probe, no
 # round trip, and the same check on every path.
 #
-# How far that reaches is bounded by the core's id-addressed surface:
-# `read_by_ids` (whole series, no slicing), `remove_by_ids!`, and
-# `get_metadata_by_id`. A whole-series read and a removal are therefore each one
-# id-addressed call. A *sliced* read has no id-addressed entry point — the store
-# needs a time range, and `read_by_ids` takes none — so there the id resolves the
-# row and the row's own attributes drive the read. The id stays the only thing
-# the caller supplies, but it costs a second round trip until `read_by_ids`
-# grows a time range.
+# Every keyed accessor is therefore **one** store call. `read_by_id` takes the
+# slice as well as the id: it resolves `start_time` / `len` / `count` against the
+# row its own primary-key lookup returned, so IS neither computes a time range
+# nor fetches a grid to compute one from. `remove_by_ids!` is the same for
+# removal, and `get_metadata_by_id` remains for the catalog-row accessors (the
+# content hash) that want the row rather than the data.
+#
+# The window arithmetic and its bounds checks live in the core, which is what
+# makes the single call possible: the store resolves `start_time` / `len` /
+# `count` against the row it just looked up, and refuses a window that does not
+# fit rather than clamping to one that does. IS's own copy of that arithmetic is
+# gone: the by-name reads resolve a key first and then take the same one-call
+# keyed path, so there is exactly one read path and one place the window is
+# resolved.
 
 # The catalog row `id` names. `nothing` from the core means the row is gone, which
 # is an error here: the caller is already committed to acting on it.
@@ -925,21 +894,45 @@ function _check_association_owner(owner::TimeSeriesOwners, key::TimeSeriesKey)
     )
 end
 
-# The store an owner's manager holds, and the row `key`'s id resolves to in it,
-# for the paths the core cannot serve by id alone. The owner is confirmed first,
-# so a mismatched call costs no store access.
+# The store an owner's manager holds, and the row `key`'s id resolves to in it —
+# for the catalog-row accessors, which want the row itself rather than the data.
+# The owner is confirmed first, so a mismatched call costs no store access.
 function _store_and_association(owner::TimeSeriesOwners, key::TimeSeriesKey)
     store = _get_time_series_manager_or_throw(owner).data_store
     _check_association_owner(owner, key)
     return (store, _resolve_association(store, key))
 end
 
-# The one association `id` names, read whole in a single id-addressed call — no
-# catalog round trip, and no attribute off the key. `read_by_ids` takes no time
-# range, so this is the unsliced path only; it throws the core's `NotFoundError`
-# when the id dangles, which the public accessors map to an `ArgumentError`.
-_read_association_by_id(store::Store, key::TimeSeriesKey) =
-    only(InfraStore.read_by_ids(store.inner, [Int64(get_association_id(key))]))
+# The association `key` names, or the window of it the accessor's arguments name,
+# in ONE id-addressed call: no catalog round trip, and no attribute off the key.
+# The core resolves the window against the row its primary-key lookup returned
+# and rejects one that does not fit; it throws `NotFoundError` for a dangling id,
+# which the public accessors map to an `ArgumentError`.
+function _read_association_by_id(
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey;
+    start_time = nothing,
+    len = nothing,
+    count = nothing,
+)
+    _check_association_owner(owner, key)
+    store = _get_time_series_manager_or_throw(owner).data_store
+    try
+        return InfraStore.read_by_id(
+            store.inner, Int64(get_association_id(key));
+            start_time = start_time, len = len, count = count,
+        )
+    catch e
+        # `catch`-block exception inspection: the window checks moved into the
+        # core with the read, so the caller's out-of-range `start_time` / `len` /
+        # `count` now arrives as the store's own error. Its message is the
+        # specific one — which grid, which index, how many are stored — so it is
+        # carried through; only the type is remapped, to keep the accessors'
+        # public `ArgumentError` contract.
+        e isa InfraStore.InvalidParameterError && throw(ArgumentError(e.msg))
+        rethrow()
+    end
+end
 
 # Rebuild the IS `SingleTimeSeries` from whatever the store handed back, however
 # the read was addressed.
@@ -950,36 +943,21 @@ _single_from_store(sts, name::AbstractString) = SingleTimeSeries(
     unit_system = _from_store_unit_system(sts.unit_system),
 )
 
-# Key-addressed SingleTimeSeries read. Unsliced, the id is the whole request. A
-# window needs the `(initial_timestamp, resolution, length)` grid to validate
-# against and a time range to push down, neither of which `read_by_ids` takes,
-# so it resolves the row and reads the half-open
-# `[start, start + n·resolution)` window server-side — only the requested steps
-# are read and decoded.
+# Key-addressed SingleTimeSeries read: one call, whether or not it slices. The
+# store resolves `(start_time, len)` against the grid on the row its own
+# primary-key lookup returned, refuses a window that does not fit, and reads the
+# half-open `[start, start + n·resolution)` steps — only those are read and
+# decoded.
 function _infrastore_read_single(
     owner::TimeSeriesOwners,
     key::StaticTimeSeriesKey;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    store = _get_time_series_manager_or_throw(owner).data_store
-    _check_association_owner(owner, key)
-    if isnothing(start_time) && isnothing(len)
-        sts = _read_association_by_id(store, key)::InfraStore.SingleTimeSeries
-        return _single_from_store(sts, sts.name)
-    end
-    row = _resolve_association(store, key)
-    initial_timestamp = row.initial_timestamp
-    resolution = row.resolution
-    start = isnothing(start_time) ? initial_timestamp : start_time
-    index = compute_time_array_index(initial_timestamp, start, resolution)
-    n = _validate_window(index, len, row.length)
-    sts =
-        InfraStore.get_time_series(InfraStore.SingleTimeSeries, store.inner, row.owner_id,
-            row.owner_category, row.name;
-            resolution = resolution, features = _row_features(row),
-            time_range = (start, start + resolution * n))
-    return _single_from_store(sts, row.name)
+    sts = _read_association_by_id(
+        owner, key; start_time = start_time, len = len,
+    )::InfraStore.SingleTimeSeries
+    return _single_from_store(sts, sts.name)
 end
 
 """
@@ -1005,59 +983,22 @@ function infrastore_get_time_series(
     return _infrastore_read_non_sequential(owner, key; start_time = start_time, len = len)
 end
 
-# Key-addressed NonSequentialTimeSeries read. Only `start_time` pushes down: `len` is a
-# POINT COUNT, and turning it into an end timestamp needs to know which irregular
-# timestamps exist — which is what the read is for. The store has no sentinel for "no upper
-# bound" (`typemax(DateTime)` overflows the FFI's millisecond range check), so the suffix
-# read stands one in and `len` slices the result client-side.
-const _FAR_FUTURE_DATETIME = Dates.DateTime(9999, 12, 31, 23, 59, 59)
+# Key-addressed NonSequentialTimeSeries read: one call, whether or not it slices.
+# `len` is a POINT COUNT, and turning it into an end timestamp needs to know which
+# irregular timestamps exist — which is exactly what the store's own row carries,
+# so it does that itself. IS used to read the whole suffix (behind a far-future
+# sentinel, since the store has no "no upper bound") and slice client-side; now
+# only the requested points cross.
 function _infrastore_read_non_sequential(
     owner::TimeSeriesOwners,
     key::NonSequentialTimeSeriesKey;
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    store = _get_time_series_manager_or_throw(owner).data_store
-    _check_association_owner(owner, key)
-    if isnothing(start_time) && isnothing(len)
-        raw = _read_association_by_id(store, key)::InfraStore.NonSequentialTimeSeries
-        return _non_sequential_from_store(raw, raw.name)
-    end
-    row = _resolve_association(store, key)
-    name = row.name
-    time_range = if isnothing(start_time)
-        nothing
-    else
-        (start_time, _FAR_FUTURE_DATETIME)
-    end
-    nts = get_non_sequential(
-        store, row.owner_id, row.owner_category, name;
-        features = _row_features(row), time_range = time_range,
-    )
-
-    # Slice the values directly (not via a TimeArray) so FunctionData / N-D series slice
-    # too. With `start_time` given, `nts` is already the store-side suffix, so this narrows
-    # what the store returned; the exact-match check below still rejects a `start_time`
-    # that is not one of the series' timestamps.
-    timestamps = get_timestamps(nts)
-    full = get_array(nts)
-    total = size(full, 1)
-    start = if isnothing(start_time)
-        timestamps[1]
-    else
-        start_time
-    end
-    index = searchsortedfirst(timestamps, start)
-    (index <= total && timestamps[index] == start) ||
-        throw(ArgumentError("start_time=$start is not a timestamp in the series"))
-    n = _validate_window(index, len, total)
-    colons = ntuple(_ -> Colon(), ndims(full) - 1)
-    vals = full[index:(index + n - 1), colons...]
-    # A slice is the same values over a shorter window, so it keeps the label.
-    return NonSequentialTimeSeries(
-        String(name), timestamps[index:(index + n - 1)], vals;
-        units = get_units(nts), quantity_kind = get_quantity_kind(nts),
-        unit_system = get_unit_system(nts))
+    nts = _read_association_by_id(
+        owner, key; start_time = start_time, len = len,
+    )::InfraStore.NonSequentialTimeSeries
+    return _non_sequential_from_store(nts, nts.name)
 end
 
 # ---- Bulk staging ----------------------------------------------------------
@@ -1311,80 +1252,6 @@ _infrastore_stage_data!(
     "transform_single_time_series!.",
 )
 
-# 1-based index of the forecast window that starts at `start_time`, on the grid
-# `initial_timestamp + k·interval`. `compute_time_array_index` does the period
-# arithmetic, so calendar intervals (`Month`, `Year`) work like fixed ones. A
-# single-window forecast carries a zero interval: its only window starts at
-# `initial_timestamp`, which is then the only valid `start_time` — the zero-interval
-# case must not skip the alignment check, or a misaligned request would silently
-# read the window at `initial_timestamp`.
-function _forecast_window_index(initial_timestamp, interval, start_time)
-    start_time == initial_timestamp && return 1
-    (start_time < initial_timestamp || iszero(Dates.value(interval))) &&
-        _throw_misaligned(initial_timestamp, interval, start_time)
-    return try
-        compute_time_array_index(initial_timestamp, start_time, interval)
-    catch e
-        # `catch`-block exception inspection: the period arithmetic reports an
-        # off-grid timestamp as an ArgumentError; name the window contract instead.
-        if e isa ArgumentError
-            _throw_misaligned(initial_timestamp, interval, start_time)
-        else
-            rethrow()
-        end
-    end
-end
-
-# Kept out of line so the aligned path — every forecast read after the first window —
-# never pays for formatting the message.
-@noinline function _throw_misaligned(initial_timestamp, interval, start_time)
-    throw(
-        ArgumentError(
-            "start_time=$start_time is not a forecast window timestamp " *
-            "(initial_timestamp=$initial_timestamp, interval=$(Dates.canonicalize(interval)))",
-        ),
-    )
-end
-
-# Translate IS's `start_time` / `count` window selection into the core's
-# half-open `[start, end)` `time_range`, validated against the forecast's stored
-# window grid (`initial_timestamp + k·interval`, `total_count` windows). Returns
-# `nothing` when no slice is requested (read every window). Throws ArgumentError
-# on a misaligned `start_time` or an out-of-range / oversized request — the store
-# would otherwise silently truncate an over-request rather than error. The
-# computed range is pushed into `get_time_series`, so the store slices the
-# windows server-side instead of returning all of them for us to discard.
-function _forecast_time_range(initial_timestamp, interval, total_count, start_time, count)
-    isnothing(start_time) && isnothing(count) && return nothing
-
-    start_idx = if isnothing(start_time)
-        1
-    else
-        _forecast_window_index(initial_timestamp, interval, start_time)
-    end
-    if start_idx < 1 || start_idx > total_count
-        throw(ArgumentError(
-            "start_time=$start_time is out of range (count=$total_count)"))
-    end
-    n = _window_length(count, start_idx, total_count)
-    if n < 1 || start_idx + n - 1 > total_count
-        throw(
-            ArgumentError(
-                "requested count=$n from start_time=$start_time exceeds the " *
-                "$total_count stored forecast windows"),
-        )
-    end
-
-    # A single-window forecast carries a zero interval, so the arithmetic below would
-    # collapse to a zero-width `[initial, initial)` range that selects nothing. The
-    # request is already validated, so read the whole (single-window) series.
-    iszero(Dates.value(interval)) && return nothing
-
-    start_ts = initial_timestamp + interval * (start_idx - 1)
-    end_ts = initial_timestamp + interval * (start_idx - 1 + n)  # exclusive
-    return (start_ts, end_ts)
-end
-
 # Assemble forecast windows into a `SortedDict` with a concrete value type. Building it
 # from a generator yields `SortedDict{Any, Any}`, which `Deterministic`'s `convert_data`
 # then coerces to `Vector{Float64}` — corrupting FunctionData windows. Materializing
@@ -1404,10 +1271,13 @@ function _assemble_forecast_windows(initial_timestamp, interval, count, window)
 end
 
 """Reconstruct a forecast from the InfraStore store (matches the STORED type),
-honoring `start_time` / `count` slicing on the window axis. Pass `key` to address
-the forecast by its `association_id` instead of resolving one by name; the `name`
-argument is then only a label for error messages, and every lookup attribute
-comes off the row the id resolves to."""
+honoring `start_time` / `count` slicing on the window axis.
+
+Pass `key` to address the forecast by its `association_id`, which is one store
+call: `read_by_id` resolves the window on the row its own primary-key lookup
+returned, so nothing here computes a time range or fetches a grid to compute one
+from, and the `name` argument goes unused. Without a key the forecast is resolved
+by name first, and that resolution is the extra call."""
 function _infrastore_get_forecast(
     owner, name;
     time_series_type::Type{<:Forecast} = Forecast,
@@ -1419,68 +1289,30 @@ function _infrastore_get_forecast(
     key::Union{Nothing, ForecastKey} = nothing,
     features::Union{Nothing, Dict} = nothing,
 )
+    if !isnothing(key)
+        raw = _read_association_by_id(
+            owner, key; start_time = start_time, count = count,
+        )
+        return _forecast_from_store(raw, String(raw.name), len)
+    end
     # Resolve the unique forecast of the requested type matching a possibly-partial
-    # (subset) feature / resolution / interval query, then read it by its exact stored
-    # attributes. `interval` matters when one series name carries several forecasts
-    # that differ only by interval (`transform_single_time_series!` with
-    # `delete_existing = false`); without it the lookup is ambiguous. The type is part
-    # of the lookup too: one name can carry a Deterministic and a Probabilistic.
-    #
-    # A caller-supplied key skips that query: its `association_id` names the row
-    # directly, and the key rebuilt from that row — not the caller's snapshot of it —
-    # is what every lookup below is driven from.
-    store, matched = if isnothing(key)
-        mgr = _get_time_series_manager_or_throw(owner)
-        (
-            mgr.data_store,
-            infrastore_get_time_series_key(
-                owner, time_series_type, name;
-                resolution = resolution, interval = interval, features = features,
-            ),
-        )
-    else
-        s, row = _store_and_association(owner, key)
-        (s, _key_from_row(row))
-    end
-    owner_id = get_owner_id(matched)
-    category = get_owner_category(matched)
-    name = get_name(matched)
-    feats = get_features(matched)
-    resolution = get_resolution(matched)
-    # `len` truncates each window to its first `len` steps; validate it against the
-    # horizon here rather than letting the slice fail with a BoundsError (or silently
-    # return empty windows for `len = 0`), matching the static read path.
-    if !isnothing(len)
-        horizon_count = get_horizon_count(matched)
-        (len < 1 || len > horizon_count) && throw(
-            ArgumentError(
-                "requested len=$len is outside the forecast horizon of " *
-                "$horizon_count steps",
-            ),
-        )
-    end
-    # Pin every store lookup below to the resolved forecast's exact interval.
-    # One name can carry several forecasts differing only by interval, and the
-    # typed lookups match on attributes, so without this they would match more
-    # than one. (A single-window forecast carries a zero interval, stored as-is.)
-    tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
-        get_count(matched), start_time, count)
-    # The resolved key names the stored concrete type; it selects the
-    # reconstruction method (function barrier — the key's type is not known
-    # statically).
-    forecast = _reconstruct_forecast(
-        get_time_series_type(matched),
-        store,
-        owner_id,
-        category,
-        String(name),
-        resolution,
-        get_interval(matched),
-        feats,
-        tr,
-        len,
+    # (subset) feature / resolution / interval query, then read the key that names.
+    # `interval` matters when one series name carries several forecasts that differ
+    # only by interval (`transform_single_time_series!` with `delete_existing =
+    # false`); without it the lookup is ambiguous. The type is part of the lookup
+    # too: one name can carry a Deterministic and a Probabilistic. Resolving to a
+    # key and reading that is one query plus the keyed read, and it keeps a single
+    # read path — an attribute-addressed forecast read would need the interval
+    # pinned to avoid matching more than one of those siblings, which the id
+    # cannot match at all.
+    matched = infrastore_get_time_series_key(
+        owner, time_series_type, name;
+        resolution = resolution, interval = interval, features = features,
     )
-    return forecast
+    return _infrastore_get_forecast(
+        owner, name;
+        key = matched, start_time = start_time, len = len, count = count,
+    )
 end
 
 # `len`, when given, truncates a window to its first `len` horizon steps (the
@@ -1520,23 +1352,60 @@ _check_member_window_type(::ElementEncoding, forecast_type, name, element_type) 
 
 # Reconstruct a forecast read from the store as its user-facing type. Every
 # InfraStore read below is already sliced to the requested window range.
-function _reconstruct_forecast(
-    ::Type{<:Probabilistic},
-    store::Store,
-    owner_id,
-    category,
-    name::String,
-    resolution,
-    interval,
-    feats,
-    time_range,
-    len,
-)
-    # `.data` is the canonical (percentile_count, horizon_count, count) array.
-    p = InfraStore.get_time_series(InfraStore.Probabilistic, store.inner, owner_id,
-        category, name;
-        resolution = resolution, interval = interval, features = feats,
-        time_range = time_range)
+# ---- Forecast decoding -----------------------------------------------------
+# Decoding is split from fetching so both addressings share it: the keyed read
+# hands over what one `read_by_id` returned, the by-name read what an
+# attribute-addressed `get_time_series` returned, and the same methods below
+# turn either into the IS forecast. Dispatch is on the `InfraStore` struct the
+# store built, which already names the stored type.
+
+# Per-window horizon step count of a decoded forecast, for validating `len`
+# against the shape actually returned rather than against a catalog row.
+_store_horizon_count(d::InfraStore.Deterministic) = size(d.data, 1)
+_store_horizon_count(p::InfraStore.Probabilistic) = size(p.data, 2)
+_store_horizon_count(s::InfraStore.Scenarios) = size(s.data, 2)
+
+# `len` truncates each window to its first `len` steps; validated against the
+# horizon here rather than letting the slice fail with a BoundsError (or
+# silently return empty windows for `len = 0`), matching the static read path.
+_check_forecast_len(_raw, ::Nothing) = nothing
+
+function _check_forecast_len(raw, len::Int)
+    horizon_count = _store_horizon_count(raw)
+    (len < 1 || len > horizon_count) && throw(
+        ArgumentError(
+            "requested len=$len is outside the forecast horizon of $horizon_count steps",
+        ),
+    )
+    return nothing
+end
+
+# A DeterministicSingleTimeSeries is an internal storage optimization: it shares
+# the underlying SingleTimeSeries array instead of materializing the overlapping
+# windows. On read it is always returned as a regular `Deterministic` — the
+# InfraStore store expands the shared array into the canonical
+# (horizon_count, count) window matrix (honoring the requested window) — so there
+# is no DST method here, and none is reachable.
+#
+# This does NOT cost the storage optimization on a copy: `copy_time_series!`
+# clones the association row inside the store, so the stored type survives
+# without ever round-tripping through these Julia objects.
+function _forecast_from_store(d::InfraStore.Deterministic, name::String, len)
+    _check_forecast_len(d, len)
+    # Resolved once per read: the tag is the same for every window.
+    encoding = _element_encoding(d.element_type)
+    window(i) =
+        _truncate_window(_forecast_window(d.data, encoding, d.element_type, i), len)
+    data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
+    return Deterministic(; name = name, data = data,
+        resolution = d.resolution, interval = d.interval, units = d.units,
+        quantity_kind = d.quantity_kind,
+        unit_system = _from_store_unit_system(d.unit_system))
+end
+
+# `.data` is the canonical (percentile_count, horizon_count, count) array.
+function _forecast_from_store(p::InfraStore.Probabilistic, name::String, len)
+    _check_forecast_len(p, len)
     _check_member_window_type(
         _element_encoding(p.element_type), Probabilistic, name, p.element_type,
     )
@@ -1551,68 +1420,9 @@ function _reconstruct_forecast(
     )
 end
 
-_reconstruct_forecast(::Type{<:Deterministic}, args...) =
-    _reconstruct_deterministic(InfraStore.Deterministic, args...)
-
-# A DeterministicSingleTimeSeries is an internal storage optimization: it shares
-# the underlying SingleTimeSeries array instead of materializing the overlapping
-# windows. On read it is always returned as a regular `Deterministic` — the
-# InfraStore store expands the shared array into the canonical
-# (horizon_count, count) window matrix (honoring `time_range`), so the
-# reconstruction is identical to the `Deterministic` method.
-#
-# This does NOT cost the storage optimization on a copy: `copy_time_series!`
-# clones the association row inside the store, so the stored type survives
-# without ever round-tripping through these Julia objects.
-_reconstruct_forecast(::Type{<:DeterministicSingleTimeSeries}, args...) =
-    _reconstruct_deterministic(InfraStore.DeterministicSingleTimeSeries, args...)
-
-_reconstruct_forecast(::Type{T}, args...) where {T} =
-    error("unreachable: unexpected stored forecast type $T")
-
-function _reconstruct_deterministic(
-    store_type,
-    store::Store,
-    owner_id,
-    category,
-    name::String,
-    resolution,
-    interval,
-    feats,
-    time_range,
-    len,
-)
-    d = InfraStore.get_time_series(store_type, store.inner, owner_id, category, name;
-        resolution = resolution, interval = interval, features = feats,
-        time_range = time_range)
-    # Resolved once per read: the tag is the same for every window.
-    encoding = _element_encoding(d.element_type)
-    window(i) =
-        _truncate_window(_forecast_window(d.data, encoding, d.element_type, i), len)
-    data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
-    return Deterministic(; name = name, data = data,
-        resolution = d.resolution, interval = d.interval, units = d.units,
-        quantity_kind = d.quantity_kind,
-        unit_system = _from_store_unit_system(d.unit_system))
-end
-
-function _reconstruct_forecast(
-    ::Type{<:Scenarios},
-    store::Store,
-    owner_id,
-    category,
-    name::String,
-    resolution,
-    interval,
-    feats,
-    time_range,
-    len,
-)
-    # `.data` is the canonical (scenario_count, horizon_count, count) array.
-    s_ts = InfraStore.get_time_series(InfraStore.Scenarios, store.inner, owner_id,
-        category, name;
-        resolution = resolution, interval = interval, features = feats,
-        time_range = time_range)
+# `.data` is the canonical (scenario_count, horizon_count, count) array.
+function _forecast_from_store(s_ts::InfraStore.Scenarios, name::String, len)
+    _check_forecast_len(s_ts, len)
     _check_member_window_type(
         _element_encoding(s_ts.element_type), Scenarios, name, s_ts.element_type,
     )
@@ -1626,6 +1436,9 @@ function _reconstruct_forecast(
         unit_system = _from_store_unit_system(s_ts.unit_system),
     )
 end
+
+_forecast_from_store(raw, name::String, _len) =
+    error("unreachable: $name resolved to unexpected stored data $(typeof(raw))")
 
 # ---- ForecastReader --------------------------------------------------------
 # A timestamp-oriented reader over the forecasts matching a filter. It carries the
