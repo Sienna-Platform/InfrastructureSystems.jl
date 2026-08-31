@@ -72,6 +72,7 @@ const OP_ORDER = [
     "get_full",
     "get_sliced",
     "get_window",
+    "get_metadata",
     "build_static_reader",
     "read_by_timestamp",
     "timestamp_storage_read",

@@ -307,6 +307,32 @@ function get_time_series_metadata(
 end
 
 """
+$(TYPEDSIGNATURES)
+Return the [`TimeSeriesMetadata`](@ref) row that `key` names under `owner` — the
+series' name, resolution, `initial_timestamp`, features, and, for a forecast, its
+horizon, interval, and count.
+
+This is how a caller holding a key reads the attributes a key deliberately does
+not carry: a key is its `association_id` and the stored type, and everything else
+lives in the catalog. Take the row when you want those attributes; keep the key
+when you only need to address the series.
+
+Throws an `ArgumentError` if the id no longer resolves (the series was removed
+after the key was obtained) or if it names a series belonging to another owner.
+
+See also: [`get_time_series_metadata` by name](@ref get_time_series_metadata(
+    ::Type{T},
+    owner::TimeSeriesOwners,
+    name::AbstractString;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features::Union{Nothing, Dict} = nothing,
+) where {T <: TimeSeriesData}), [`list_metadata`](@ref).
+"""
+get_time_series_metadata(owner::TimeSeriesOwners, key::TimeSeriesKey) =
+    infrastore_get_time_series_metadata(owner, key)
+
+"""
 Return a `TimeSeries.TimeArray` from storage for the given time series parameters.
 
 This will load all forecast windows into memory by default. Be
@@ -1341,6 +1367,7 @@ for f in (
     :get_time_series_timestamps,
     :get_time_series_values,
     :get_time_series_hash,
+    :get_time_series_metadata,
 )
     @eval $f(owner::TimeSeriesOwners, md::TimeSeriesMetadata; kwargs...) =
         $f(owner, get_time_series_key(md); kwargs...)

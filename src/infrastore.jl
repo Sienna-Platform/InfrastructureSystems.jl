@@ -2059,6 +2059,18 @@ function infrastore_get_time_series_key(
     return get_time_series_key(items[1])
 end
 
+# The catalog row `key` resolves to under `owner`, translated into IS's
+# `TimeSeriesMetadata`. One primary-key fetch: the row that answers the call is
+# the same row the owner is checked against, so there is no second lookup for the
+# two to disagree about.
+function infrastore_get_time_series_metadata(
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey,
+)
+    _, row = _store_and_association(owner, key)
+    return _metadata_from_row(row)
+end
+
 # Content hash (64-char lowercase hex, the documented public form of the
 # wrapper's 32-byte hash) of the array `key` resolves to under `owner`. The
 # catalog row the `association_id` names carries the hash, so this is one

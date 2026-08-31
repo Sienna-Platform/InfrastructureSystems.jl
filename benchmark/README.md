@@ -33,7 +33,7 @@ every section precedes measurement. A combo the store rejects is recorded as an
 | `ingest` | `bulk_add` of every time series type × element type: `SingleTimeSeries`, `NonSequentialTimeSeries`, `Deterministic` × {float64, ntuple2, linear, quadratic, pwl}, plus `Probabilistic` and `Scenarios` (float64) | `BENCH_N` |
 | `sweep` | the simulation inner loop — every component read at one timestamp (`StaticTimeSeriesReader`) or one window (`ForecastReader`). float64 at full scale; pwl exercises the structured-payload decode that PSY's time-varying cost curves read through | `BENCH_SWEEP_N` (pwl at `BENCH_N`) |
 | `has` | `has_time_series` with the full identity (type, name, resolution, two features), hits and misses. `n` counts **associations**: `BENCH_SWEEP_N ÷ 10` components × 10 associations each (2 names × 5 scenario values, plus a `model_year` feature) | `BENCH_SWEEP_N` |
-| `reads` | per-series read canary: `get_full`, `get_sliced`, `get_window`, float64 only | `BENCH_N` |
+| `reads` | per-series read canary: `get_full`, `get_sliced`, `get_window`, and `get_metadata` — the keyed catalog fetch, one primary-key row lookup with no array read, against `get_full`'s filtered resolve plus read. float64 only | `BENCH_N` |
 | `dst` | `transform_single_time_series!` to `DeterministicSingleTimeSeries` plus the window sweep over the result — the PowerSimulations feed path | `BENCH_N` |
 | `serialize` | `to_json` / `from_json` round-trip including the store artifacts, verified with one read from the reloaded system | `BENCH_N` |
 | `remove` | `remove_time_series!` of every series, one call per component | `BENCH_N` |

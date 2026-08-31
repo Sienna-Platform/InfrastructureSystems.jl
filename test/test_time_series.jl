@@ -2630,6 +2630,7 @@ end
     @test_throws ArgumentError IS.get_time_series_values(component2, key1; len = 3)
     @test_throws ArgumentError IS.get_time_series_array(component2, key1)
     @test_throws ArgumentError IS.get_time_series_hash(component2, key1)
+    @test_throws ArgumentError IS.get_time_series_metadata(component2, key1)
     @test_throws ArgumentError IS.remove_time_series!(sys, component2, key1)
 
     # Both series survive the rejected calls, and each reads from its own owner.
@@ -2655,7 +2656,56 @@ end
     @test_throws ArgumentError IS.get_time_series(component, key)
     @test_throws ArgumentError IS.get_time_series_values(component, key; len = 3)
     @test_throws ArgumentError IS.get_time_series_hash(component, key)
+    @test_throws ArgumentError IS.get_time_series_metadata(component, key)
     @test_throws ArgumentError IS.remove_time_series!(sys, component, key)
+end
+
+# The attributes a key deliberately does not carry are read back off the catalog row the
+# id resolves to, so the row a caller holding only a key gets is the row `list_metadata`
+# would have handed them — and it is current, not a snapshot taken when the key was made.
+@testset "Test get_time_series_metadata by key" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+
+    resolution = Dates.Hour(1)
+    dates = create_dates("2020-01-01T00:00:00", resolution, "2020-01-01T23:00:00")
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), [IS.get_name(component)])
+    features = Dict("scenario" => "high")
+    key = IS.add_time_series!(
+        sys, component, IS.SingleTimeSeries(; name = "val", data = ta);
+        features = features,
+    )
+
+    md = IS.get_time_series_metadata(component, key)
+    @test IS.get_time_series_key(md) == key
+    @test IS.get_time_series_type(md) === IS.SingleTimeSeries{Float64}
+    @test IS.get_name(md) == "val"
+    @test IS.get_resolution(md) == resolution
+    @test IS.get_initial_timestamp(md) == first(dates)
+    @test IS.get_features(md) == features
+    @test IS.get_owner_id(md) == IS.get_id(component)
+    @test IS.get_data_hash(md) == IS.get_time_series_hash(component, key)
+
+    # The same row `list_metadata` reports, reached by id instead of by filter.
+    listed = only(IS.list_metadata(component))
+    @test IS.get_name(md) == IS.get_name(listed)
+    @test IS.get_association_id(md) == IS.get_association_id(listed)
+
+    # A forecast row carries the window columns a static one leaves empty.
+    initial_time = Dates.DateTime("2020-09-01")
+    interval = Dates.Hour(1)
+    fx_data = Dict(
+        initial_time => collect(1.0:24.0),
+        initial_time + interval => collect(25.0:48.0),
+    )
+    fx_key =
+        IS.add_time_series!(sys, component, IS.Deterministic("fx", fx_data, resolution))
+    fx_md = IS.get_time_series_metadata(component, fx_key)
+    @test IS.get_time_series_type(fx_md) === IS.Deterministic{Float64}
+    @test IS.get_horizon(fx_md) == resolution * 24
+    @test IS.get_interval(fx_md) == interval
+    @test IS.get_count(fx_md) == 2
 end
 
 # An id names exactly one catalog row. The attribute-addressed removal it replaced was

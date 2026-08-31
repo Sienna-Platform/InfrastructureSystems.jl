@@ -133,6 +133,18 @@ function irregular_timestamps(rng, len)
     return stamps
 end
 
+# One key per component, in `comps` order. Resolved out of band on purpose: the
+# keyed accessors measure what a caller *holding* a key pays, and how the key was
+# obtained is not part of that. One store-wide listing rather than n owner-scoped
+# ones, so the setup costs less than the op it feeds.
+function keys_for(sys, comps)
+    by_owner = Dict(
+        IS.get_owner_id(md) => IS.get_time_series_key(md)
+        for md in IS.list_metadata(sys)
+    )
+    return [by_owner[IS.get_id(c)] for c in comps]
+end
+
 # `shared` adds one instance to every component (deduplicated storage).
 # `main_ops = false` skips the add/read rows (the add still runs, un-timed) so a
 # sweep-only section does not duplicate the ingest matrix; `sweep = true`
@@ -196,6 +208,20 @@ function run_static_kind(kind, eltype, n;
                 end,
             )
         end
+
+        # The catalog row by key: one primary-key lookup, no array read. Its
+        # counterpart is `get_full`, which resolves by filter and then reads the
+        # data — this row is what a caller pays to ask what a series *is*.
+        tskeys = keys_for(sys, comps)
+        timed_op(
+            kind,
+            eltype,
+            "get_metadata",
+            n,
+            () -> for i in 1:n
+                IS.get_time_series_metadata(comps[i], tskeys[i])
+            end,
+        )
     end
 
     if sweep
@@ -325,6 +351,19 @@ function run_forecast_kind(kind, eltype, n;
             n,
             () -> for i in 1:n
                 IS.get_time_series(ttype, comps[i], "fc"; start_time = st, count = 1)
+            end,
+        )
+
+        # As above, on a forecast row: the same one-row fetch, with the window
+        # columns (horizon, interval, count) to translate as well.
+        tskeys = keys_for(sys, comps)
+        timed_op(
+            kind,
+            eltype,
+            "get_metadata",
+            n,
+            () -> for i in 1:n
+                IS.get_time_series_metadata(comps[i], tskeys[i])
             end,
         )
     end
