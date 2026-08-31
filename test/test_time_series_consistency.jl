@@ -585,6 +585,21 @@ end
     )
 end
 
+@testset "Test TimeSeriesKey display" begin
+    sys, component = _sys_with_component()
+    key = IS.add_time_series!(sys, component, _hourly_sts("s"))
+    id = IS.get_association_id(key)
+
+    # A key is not an `InfrastructureSystemsType` and carries no name or
+    # resolution, so `summary` renders what the key does hold rather than
+    # reaching for accessors the catalog owns.
+    @test sprint(show, key) == "TimeSeriesKey{SingleTimeSeries{Float64}}($id)"
+    @test summary(key) == sprint(show, key)
+
+    fkey = IS.add_time_series!(sys, component, _hourly_det("d"))
+    @test summary(fkey) == sprint(show, fkey)
+end
+
 @testset "Test fast_deepcopy_system rewires every owner" begin
     sys, component = _sys_with_component()
     masked = IS.TestComponent("masked", 5)

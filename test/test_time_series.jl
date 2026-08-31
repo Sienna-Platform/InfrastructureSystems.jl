@@ -7197,6 +7197,30 @@ end
     end
 end
 
+@testset "Test StaticTimeSeriesReader with multidimensional scalar series" begin
+    sys, comps = _create_reader_system(1)
+    c = only(comps)
+    t0, res = READER_T0, READER_RES
+    len = 4
+    # A rank-2 scalar series holds a vector per step; a rank-3 one holds a matrix.
+    # Neither is a composite element type, so the slice is the value — there is
+    # nothing to decode, and nothing to collapse to a single element.
+    mat = reshape(collect(1.0:(len * 3)), len, 3)
+    cube = reshape(collect(1.0:(len * 3 * 2)), len, 3, 2)
+    mat_key = IS.add_time_series!(sys, c, IS.SingleTimeSeries("matrix", t0, res, mat))
+    cube_key = IS.add_time_series!(sys, c, IS.SingleTimeSeries("cube", t0, res, cube))
+
+    reader = IS.build_static_time_series_reader(sys; resolution = res)
+    entries = IS.get_static_time_series_reader_entries(reader)
+    by_key = Dict(e.key => i for (i, e) in enumerate(entries))
+    by_name = Dict("matrix" => by_key[mat_key], "cube" => by_key[cube_key])
+    for k in 1:len
+        IS.read_static_time_series_values!(reader, t0 + res * (k - 1))
+        @test IS.get_static_time_series_value(reader, by_name["matrix"]) == mat[k, :]
+        @test IS.get_static_time_series_value(reader, by_name["cube"]) == cube[k, :, :]
+    end
+end
+
 @testset "Test time series context rollback" begin
     sys = IS.SystemData()
     component = IS.TestComponent("Component1", 5)
@@ -7316,6 +7340,21 @@ end
     end
     names = Set(IS.get_name(k) for k in IS.list_metadata(component))
     @test names == union(Set("ts_$i" for i in 1:7), Set("bytes_$i" for i in 1:7))
+
+    # A composite element type stages as a `length x element_row_width` matrix of
+    # Float64 while Julia holds one pointer per value, so `sizeof` under-counts it
+    # by the row width — unbounded for ragged piecewise data.
+    scalars = collect(1.0:8.0)
+    @test IS._staged_nbytes(scalars) == sizeof(scalars)
+    pw = [
+        IS.PiecewiseLinearData([(x = 1.0, y = j), (x = 2.0, y = 2j), (x = 3.0, y = 3j)])
+        for j in 1.0:4.0
+    ]
+    # 3 points => 1 count slot + 2 slots per point.
+    @test IS._staged_nbytes(pw) == length(pw) * 7 * sizeof(Float64)
+    @test IS._staged_nbytes(pw) > sizeof(pw)
+    # A forecast stages an `(horizon, count)` matrix; the width applies just the same.
+    @test IS._staged_nbytes(reduce(hcat, [pw, pw])) == 2 * length(pw) * 7 * sizeof(Float64)
 end
 
 @testset "Test staged additions take their ids from the store" begin

@@ -238,6 +238,22 @@ serialized system) never touch the InfraStore module themselves.
 """
 make_add_batch() = InfraStore.AddBatch()
 
+# The bytes one staged array holds in the batch's buffer, which is what drives
+# auto-flush. `sizeof` is the answer only for a plain numeric array: a composite
+# element type is stored as one pointer per value but staged as a
+# `length x element_row_width` matrix of `Float64`, so `sizeof` under-counts it by
+# the row width — a factor that is unbounded for ragged piecewise data, and would
+# let a block hold gigabytes past the byte threshold before flushing.
+_staged_nbytes(values::AbstractArray) = sizeof(values)
+_staged_nbytes(values::AbstractArray{<:StaticFunctionData}) = _encoded_nbytes(values)
+_staged_nbytes(values::AbstractArray{<:Tuple{Vararg{Float64}}}) = _encoded_nbytes(values)
+
+# `element_row_width` is defined on the flat vector of values the store packs, so
+# a forecast's `(horizon, count)` matrix is measured through `vec` (a reshape, not
+# a copy).
+_encoded_nbytes(values::AbstractArray) =
+    length(values) * InfraStore.element_row_width(vec(values)) * sizeof(Float64)
+
 """
     commit_batch!(store::Store, batch)
 
@@ -287,10 +303,8 @@ function serialize_single!(
         owner_category, tss_ts; features = features, units = units,
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system))
-    # Drives auto-flush. A composite element type is packed wider than the values
-    # measure here, which under-counts the buffer — the threshold is a heuristic,
-    # and one that errs toward flushing late rather than toward a wrong answer.
-    return sizeof(values)
+    # Drives auto-flush; measured as the store packs it, not as Julia holds it.
+    return _staged_nbytes(values)
 end
 
 """
@@ -325,7 +339,7 @@ function serialize_non_sequential!(
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system))
     # The staged bytes are the encoded array plus the timestamps the association carries.
-    return sizeof(values) + sizeof(get_timestamps(nts))
+    return _staged_nbytes(values) + sizeof(get_timestamps(nts))
 end
 
 # Rebuild the IS `NonSequentialTimeSeries` from whatever the store handed back,
@@ -941,9 +955,9 @@ function _infrastore_stage_forecast!(
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
         features = feats)
     staged = StagedKey{_key_type(ts)}()
-    # `obj.data` is the encoded dense array the batch buffers; its byte size drives
-    # auto-flush.
-    return staged, sizeof(obj.data)
+    # `obj.data` is the dense window array the batch buffers; its encoded byte size
+    # drives auto-flush.
+    return staged, _staged_nbytes(obj.data)
 end
 
 function _infrastore_stage_data!(
@@ -1512,18 +1526,24 @@ function get_static_time_series_value(
 end
 
 # One entry's value out of its group's materialized array. A vector group is
-# scalar data (one value per column); a higher-rank group carries one element row
-# per column, decoded through the entry's encoding (same scheme as
-# `_decode_static_values`, at `len == 1`).
+# scalar data (one value per column); a higher-rank group is one of two things,
+# told apart by the tag rather than by the rank:
+#   - a composite element type — one element row per column, decoded through the
+#     entry's encoding (same scheme as `_decode_static_values`, at `len == 1`);
+#   - a multidimensional scalar series — a `SingleTimeSeries{Float64, N}` holds an
+#     `N-1`-dimensional slice per step, and there is nothing to decode, so the
+#     slice *is* the value. Decoding one would hand back the slice unchanged and
+#     then `only` it, which throws for every width above 1.
 _static_group_element(vals::AbstractVector, column::Integer, _element_type) =
     vals[column]
 
 function _static_group_element(vals::AbstractArray, column::Integer, element_type)
     colons = ntuple(_ -> Colon(), ndims(vals) - 1)
-    row = reshape(vals[column, colons...], 1, :)
+    slice = vals[column, colons...]
+    InfraStore.is_composite_element_type(element_type) || return slice
     return only(
         InfraStore.decode_element_values(
-            row, something(element_type, "f64"); types = _IS_ELEMENT_TYPES,
+            reshape(slice, 1, :), element_type; types = _IS_ELEMENT_TYPES,
         ),
     )
 end
