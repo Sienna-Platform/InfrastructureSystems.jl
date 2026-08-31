@@ -1424,6 +1424,13 @@ component's value": drive it with [`read_static_time_series_values!`](@ref) and
 read each entry with [`get_static_time_series_value`](@ref). Series with the
 same element type are packed into one columnar group and served by a single
 storage read per timestamp.
+
+To sweep every entry — which is what this reader is for — take the groups
+instead, with [`get_static_time_series_group_values`](@ref) and
+[`get_static_time_series_group_entries`](@ref). The per-entry accessor returns
+one value at a time out of a container the reader cannot type, so it dispatches
+dynamically and boxes each value; the group path costs neither and stays flat as
+the reader grows.
 """
 function build_static_time_series_reader(
     data::SystemData;

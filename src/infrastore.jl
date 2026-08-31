@@ -1527,8 +1527,10 @@ end
 """
 A timestamp-oriented reader over every `SingleTimeSeries` matching a build
 filter. Drive it with [`read_static_time_series_values!`](@ref), then pull each
-entry's value with [`get_static_time_series_value`](@ref). Build one with
-`build_static_time_series_reader(data; ...)`.
+entry's value with [`get_static_time_series_value`](@ref) — or, to sweep every
+entry, take whole groups with [`get_static_time_series_group_values`](@ref) and
+[`get_static_time_series_group_entries`](@ref), which is markedly cheaper at
+scale. Build one with `build_static_time_series_reader(data; ...)`.
 
 The matched series are packed into columnar groups; one physical `.h5` read per
 group serves every entry in it at a timestamp — see
@@ -1668,8 +1670,9 @@ Base.length(reader::StaticTimeSeriesReader) = length(reader.entries)
 """
 $(TYPEDSIGNATURES)
 Read the value of every entry at `timestamp`, performing one `.h5` read per
-columnar group. Follow with [`get_static_time_series_value`](@ref). Throws if
-`timestamp` is off the reader's grid.
+columnar group. Follow with [`get_static_time_series_value`](@ref) per entry, or
+[`get_static_time_series_group_values`](@ref) per group to sweep them all.
+Throws if `timestamp` is off the reader's grid.
 """
 function read_static_time_series_values!(
     reader::StaticTimeSeriesReader,
@@ -1686,6 +1689,12 @@ $(TYPEDSIGNATURES)
 The decoded value for entry `entry_index` (1-based) from the most recent
 [`read_static_time_series_values!`](@ref): a scalar for scalar series, or the
 reconstructed element (e.g. a `FunctionData`) for structured series.
+
+This is the one-entry accessor. Reading *every* entry through it costs a dynamic
+dispatch and a boxed value per call — a cost that also grows with the entry
+count — so a sweep should go through
+[`get_static_time_series_group_values`](@ref) instead, which serves the same
+values from one concrete array per group.
 """
 function get_static_time_series_value(
     reader::StaticTimeSeriesReader,
