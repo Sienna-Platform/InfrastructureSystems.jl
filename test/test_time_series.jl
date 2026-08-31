@@ -4419,6 +4419,13 @@ end
     @test key2 == key
     @test IS.get_association_id(key2) == IS.get_association_id(key)
     @test IS.get_time_series_type(key2) <: IS.SingleTimeSeries
+
+    # An element type this version cannot name fails here, where the name is in
+    # hand, rather than as a bare key that fails the field it is assigned to.
+    @test_throws ArgumentError IS.deserialize(
+        IS.TimeSeriesKey, merge(serialized, Dict("element_type" => "no_such_type")))
+    @test_throws ArgumentError IS.deserialize(
+        IS.TimeSeriesKey, Dict(k => v for (k, v) in serialized if k != "element_type"))
 end
 
 @testset "Test time series key survives system serialization as its association id" begin
@@ -5179,6 +5186,48 @@ end
         )
     end
     @test length(IS.make_time_array(ts, timestamps[1]; len = 2)) == 2
+end
+
+@testset "Test store-backed accessors reject len/count < 1" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    initial_time = Dates.DateTime("2020-09-01")
+    resolution = Dates.Hour(1)
+    ta = TimeSeries.TimeArray(
+        range(initial_time; length = 12, step = resolution),
+        collect(1.0:12.0),
+    )
+    static_key = IS.add_time_series!(sys, component, IS.SingleTimeSeries("static", ta))
+    interval = Dates.Hour(6)
+    data = SortedDict(
+        initial_time + (i - 1) * interval => collect(1.0:24.0) for i in 1:3
+    )
+    forecast_key = IS.add_time_series!(
+        sys,
+        component,
+        IS.Deterministic(;
+            name = "forecast",
+            data = data,
+            resolution = resolution,
+            interval = interval,
+        ),
+    )
+
+    # `len` and `count` are counts, and the store takes them as unsigned: a
+    # negative one has to raise the accessors' own ArgumentError here rather than
+    # an InexactError out of the ccall marshalling.
+    for bad in (0, -1)
+        @test_throws ArgumentError IS.get_time_series(
+            IS.SingleTimeSeries, component, "static"; len = bad)
+        @test_throws ArgumentError IS.get_time_series(component, static_key; len = bad)
+        @test_throws ArgumentError IS.get_time_series(
+            IS.Deterministic, component, "forecast"; count = bad)
+        @test_throws ArgumentError IS.get_time_series(
+            IS.Deterministic, component, "forecast"; len = bad)
+        @test_throws ArgumentError IS.get_time_series(
+            component, forecast_key; count = bad)
+    end
 end
 
 @testset "Test get_window by index is 1-based" begin

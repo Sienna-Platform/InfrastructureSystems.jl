@@ -753,6 +753,18 @@ function _store_and_association(owner::TimeSeriesOwners, key::TimeSeriesKey)
     return (store, _check_association_owner(owner, key, _resolve_association(store, key)))
 end
 
+# `len` and `count` are step and window COUNTS, and the store takes them as
+# `UInt64`: a negative one fails in the ccall marshalling with an `InexactError`
+# that names neither the argument nor the accessor, so the sign is checked here.
+# Only the sign — whether a window of a legal size fits the row is the core's
+# answer, and it gives the specific one.
+_check_window_count(::Symbol, ::Nothing) = nothing
+
+function _check_window_count(name::Symbol, n::Integer)
+    n < 1 && throw(ArgumentError("`$name` must be >= 1; got $n"))
+    return
+end
+
 # The association `key` names, or the window of it the accessor's arguments name,
 # in ONE id-addressed call: no catalog round trip, and no attribute off the key.
 # The core resolves the window against the row its primary-key lookup returned
@@ -796,6 +808,8 @@ function _read_association_by_id(
     len = nothing,
     count = nothing,
 )
+    _check_window_count(:len, len)
+    _check_window_count(:count, count)
     try
         return InfraStore.read_by_id(
             store.inner, Int64(get_association_id(key));
@@ -811,7 +825,11 @@ function _read_association_by_id(
         # carried through; only the type is remapped, to keep the accessors'
         # public `ArgumentError` contract.
         e isa InfraStore.InvalidParameterError && throw(ArgumentError(e.msg))
-        e isa InfraStore.OwnerMismatchError &&
+        # Only reachable on the owner-addressed path: a `nothing` owner sends no
+        # owner into the read, so the core has nothing to mismatch it against.
+        # Guarded anyway, so that if it ever does arrive here the handler reports
+        # the store's error rather than raising a `MethodError` over it.
+        e isa InfraStore.OwnerMismatchError && !isnothing(owner) &&
             throw(_not_this_owners_key(owner, key, e.msg))
         rethrow()
     end
@@ -1150,6 +1168,9 @@ function _infrastore_read_forecast(
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,
 )
+    # `count` is checked by the read below; `len` never reaches the store on this
+    # path — it truncates the windows here — so it is checked here.
+    _check_window_count(:len, len)
     raw = _read_association_by_id(
         target, key; start_time = start_time, count = count,
     )
@@ -1930,6 +1951,9 @@ function _metadata_from_row(row)
         row.quantity_kind,
         _from_store_unit_system(row.unit_system),
         row.component_field,
+        Dims(row.element_shape),
+        row.time_reference,
+        row.application_data,
     )
 end
 
@@ -2264,36 +2288,21 @@ function infrastore_list_owner_ids(
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
     category = get_owner_category(owner_type)
-    # Without a resolution filter, enumerate owner ids in the core (optionally
-    # per concrete subtype). With one, the resolution is pushed into the core
-    # key listing and the strict subtype match applied on the rows.
-    if isnothing(resolution)
-        isnothing(time_series_type) &&
-            return InfraStore.list_owner_ids(store.inner, category)
-        ids = Set{Int}()
-        for t in _infrastore_subtype_types(time_series_type)
-            union!(
-                ids,
-                InfraStore.list_owner_ids(store.inner, category; time_series_type = t),
-            )
-        end
-        return collect(ids)
-    end
-    # Same `Deterministic`-family semantics as the branch above (the core widens a
-    # pushed `Deterministic` filter to DST rows), so the answer does not change with
-    # the presence of a `resolution` filter.
+    # Answered in the core, which takes both filters: one DISTINCT query, or one
+    # per concrete subtype when the strict `<:` match spans several. Listing the
+    # matching rows to collect their owner ids would decode a full catalog row —
+    # feature dict, hash bytes, every period column — per association, to read one
+    # integer off each.
+    isnothing(time_series_type) &&
+        return InfraStore.list_owner_ids(store.inner, category; resolution = resolution)
     ids = Set{Int}()
-    for row in
-        InfraStore.list_metadata(store.inner; owner_category = category,
-        time_series_type = _infrastore_pushable_type(time_series_type),
-        resolution = resolution)
-        if !isnothing(time_series_type)
-            _infrastore_type_matches(
-                _infrastore_is_type(row.time_series_type),
-                time_series_type,
-            ) || continue
-        end
-        push!(ids, Int(row.owner_id))
+    for t in _infrastore_subtype_types(time_series_type)
+        union!(
+            ids,
+            InfraStore.list_owner_ids(
+                store.inner, category; time_series_type = t, resolution = resolution,
+            ),
+        )
     end
     return collect(ids)
 end

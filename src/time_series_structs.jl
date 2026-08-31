@@ -100,15 +100,35 @@ _key_element_name(T::Type{<:Tuple}) = "NTuple{$(length(T.parameters)),Float64}"
 """
 Rebuild a key from what it serialized to.
 
-An `element_type` this version does not know leaves the kind unparameterized
-rather than guessing: a key whose element type cannot be named still addresses
-its series, and a read resolves the values from the catalog either way.
+An `element_type` this version cannot name — one off a payload written by a newer
+version, or a payload carrying none at all — is an error here rather than a key
+left unparameterized. Every field a key is ever stored in is bound by its element
+type (a [`ScalarTimeSeriesKey`](@ref) field, a `TimeSeriesFunctionData`), so an
+unparameterized key would survive only as far as the field it is assigned to and
+then fail there, with a message about the key's shape instead of about the
+element type nothing here could name.
 """
 function deserialize(::Type{<:TimeSeriesKey}, data::AbstractDict)
     kind = _time_series_type_from_name(data["time_series_type"])
-    element = _key_element_type_from_name(get(data, "element_type", nothing))
-    T = isnothing(element) ? kind : kind{element}
-    return TimeSeriesKey{T}(data["association_id"])
+    name = get(data, "element_type", nothing)
+    element = _key_element_type_from_name(name)
+    if isnothing(element)
+        why = if isnothing(name)
+            "carries no element_type"
+        else
+            "names element_type '$name', which this version of " *
+            "InfrastructureSystems cannot resolve"
+        end
+        throw(
+            ArgumentError(
+                "serialized TimeSeriesKey (association_id=$(data["association_id"]), " *
+                "time_series_type=$(data["time_series_type"])) $why; a key cannot be " *
+                "rebuilt without its element type. The document was most likely " *
+                "written by a newer version.",
+            ),
+        )
+    end
+    return TimeSeriesKey{kind{element}}(data["association_id"])
 end
 
 # The value element types a key's parameter can name: the physical dtypes the
@@ -194,10 +214,13 @@ and stored with the data), `horizon` / `interval` / `count` on a static series,
 A row carries **every** column the catalog records bar the values themselves —
 the descriptive labels (`units`, `quantity_kind`, `unit_system`,
 `component_field`) as well as the identity ones, the store's own `element_type`
-spelling, and the array's content hash. That completeness is the contract: a
-writer restaging these series into another store, or emitting them into a
-document, works from this row alone and never has to drop to the store's own
-listing for a column IS declined to carry.
+and `element_shape`, the array's content hash, the row's `time_reference`, and
+the opaque `application_data` another client may have attached. That completeness
+is the contract: a writer restaging these series into another store, or emitting
+them into a document, works from this row alone and never has to drop to the
+store's own listing for a column IS declined to carry. The last three are columns
+IS itself neither writes nor interprets; they are carried so that restaging a row
+written by another client does not silently drop them.
 """
 struct TimeSeriesMetadata{T <: TimeSeriesData}
     key::TimeSeriesKey{T}
@@ -231,6 +254,25 @@ struct TimeSeriesMetadata{T <: TimeSeriesData}
     quantity_kind::Union{Nothing, String}
     unit_system::Union{Nothing, AbstractUnitSystem}
     component_field::Union{Nothing, String}
+    """
+    The stored array's shape after its leading axis, as the store records it —
+    `()` for one number per timestep, `(3,)` for a three-wide row. A restaging
+    writer hands it back verbatim; the IS value type the row decodes to is
+    `eltype(md)`.
+    """
+    element_shape::Dims
+    """
+    The time reference the row's timestamps are stated against — a zone, a fixed
+    offset, UTC, or none. IS reads and writes wall-clock `DateTime`s, so its own
+    rows are `ZonelessReference`; it does not interpret the column, and carries it
+    so that a zoned row written by another client does not re-land as a wall clock.
+    """
+    time_reference::Union{Nothing, InfraStore.TimeReference}
+    """
+    The opaque per-association blob a client may attach to a row. IS attaches
+    none and never looks inside one.
+    """
+    application_data::Union{Nothing, String}
 end
 
 "The [`TimeSeriesKey`](@ref) that addresses the association this row describes."
@@ -253,6 +295,9 @@ get_quantity_kind(md::TimeSeriesMetadata) = md.quantity_kind
 get_unit_system(md::TimeSeriesMetadata) = md.unit_system
 get_component_field(md::TimeSeriesMetadata) = md.component_field
 get_element_type(md::TimeSeriesMetadata) = md.element_type
+get_element_shape(md::TimeSeriesMetadata) = md.element_shape
+get_time_reference(md::TimeSeriesMetadata) = md.time_reference
+get_application_data(md::TimeSeriesMetadata) = md.application_data
 
 """
 The 64-char lowercase hex content hash of the stored array this row's series

@@ -141,3 +141,54 @@ end
     end
     @test checked >= 5
 end
+
+@testset "element_type names are the store's neutral vocabulary" begin
+    # A regression guard on the names themselves: they are a storage contract
+    # shared with every other binding, not Julia type names. The composite tags
+    # are the ones IS's own values carry, so they are asserted off the encoder.
+    encode(values) = IS.InfraStore.encode_element_values(values)[2]
+    @test encode([IS.LinearFunctionData(1.0, 2.0)]) == "linear_function"
+    @test encode([IS.QuadraticFunctionData(1.0, 2.0, 3.0)]) == "quadratic_function"
+    @test encode([IS.PiecewiseLinearData([(0.0, 1.0), (1.0, 3.0)])]) == "piecewise_linear"
+    @test encode([IS.PiecewiseStepData([0.0, 1.0], [2.0])]) == "piecewise_step"
+    @test encode([(1.0, 2.0, 3.0)]) == "tuple(3,f64)"
+
+    # A value type nothing encodes is a loud error, not a silent scalar.
+    @test_throws IS.InfraStore.InvalidParameterError encode([1.0 + 2.0im])
+
+    # A scalar dtype is named by the store on the way in — IS never tags one — so
+    # those spellings are pinned off the catalog rows of a round trip instead.
+    sys = IS.SystemData()
+    component = IS.TestComponent("conformance", 1)
+    IS.add_component!(sys, component)
+    initial_time = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+    for (name, values, tag) in (
+        ("floats", [1.0, 2.0, 3.0], "f64"),
+        ("ints", Int64[1, 2, 3], "i64"),
+        ("bools", Bool[true, false, true], "bool"),
+    )
+        IS.add_time_series!(
+            sys,
+            component,
+            IS.SingleTimeSeries(name, initial_time, resolution, values),
+        )
+        @test IS.get_element_type(only(IS.list_metadata(sys; name = name))) == tag
+    end
+end
+
+@testset "the vendored corpus matches the live one when both are present" begin
+    live = _live_element_type_vectors_path()
+    if isempty(live) || live == VENDORED_ELEMENT_TYPE_VECTORS
+        @test isfile(VENDORED_ELEMENT_TYPE_VECTORS)
+    elseif read(live) != read(VENDORED_ELEMENT_TYPE_VECTORS)
+        # Not a failure: the live checkout may be mid-edit. The testsets above ran
+        # against `live`, so the contract is still asserted — only the pinned copy
+        # is stale, and refreshing it is a deliberate step (see the README).
+        @warn "Vendored conformance corpus differs from the live one; refresh it" live vendored =
+            VENDORED_ELEMENT_TYPE_VECTORS
+        @test_skip false
+    else
+        @test true
+    end
+end

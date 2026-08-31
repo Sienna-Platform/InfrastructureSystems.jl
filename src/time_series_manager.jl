@@ -92,9 +92,6 @@ function _infrastore_features(features::Dict)
     return out
 end
 
-_key_features(::Nothing) = Dict{String, Any}()
-_key_features(features::Dict) = Dict{String, Any}(features)
-
 function _check_interval_supported(::Type{T}, interval) where {T <: TimeSeriesData}
     if T <: StaticTimeSeries && !isnothing(interval)
         throw(

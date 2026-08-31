@@ -80,6 +80,12 @@ end
     @test IS.get_units(static) === nothing
     @test IS.get_percentiles(static) === nothing
     @test eltype(static) === Float64
+    # Including the three IS itself neither writes nor interprets: a row that
+    # dropped them would re-land another client's series stripped of them.
+    @test IS.get_element_shape(static) == ()
+    # IS writes wall clocks, which the store records as a zoneless reference.
+    @test IS.get_time_reference(static) == IS.InfraStore.ZonelessReference()
+    @test IS.get_application_data(static) === nothing
 end
 
 @testset "openapi_time_series_association_rows: SingleTimeSeries carries the grid and the element typing" begin
