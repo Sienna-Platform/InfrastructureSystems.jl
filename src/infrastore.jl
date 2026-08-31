@@ -140,277 +140,82 @@ get_owner_category(
     ::Union{SupplementalAttribute, Type{<:SupplementalAttribute}},
 ) = InfraStore.SupplementalAttribute
 
-# ---- Element encoding ------------------------------------------------------
-# Scalars store as a 1-D array; structured elements as a `(length, k)` Float64 array.
-# Every encoder returns the store's canonical `element_type` tag, a first-class catalog
-# column, so reads reconstruct from it rather than from the opaque `ext` payload.
+# ---- Element values ---------------------------------------------------------
+#
+# The store owns the `element_type` encodings and InfraStore.jl implements them
+# (`docs/src/reference/element-types.md`, pinned by
+# `conformance/element_type_vectors.json`). IS supplies only the two ends: how to
+# write one of *its* `FunctionData` values into a row, and which of its types to
+# build when reading one back.
+#
+# Encoding is open dispatch — three methods per type — so an IS value goes into a
+# store constructor directly and is packed at the ABI boundary. Decoding is a
+# lookup, because it starts from a tag string, so it is a table.
 
-# Julia scalar element type -> canonical dtype spelling. Only the widths the
-# store supports; anything else is an unsupported element type, not a silent
-# widening.
-const _INFRASTORE_DTYPE_NAMES = Dict{Type, String}(
-    Float64 => "f64",
-    Float32 => "f32",
-    Int64 => "i64",
-    Int32 => "i32",
-    Int16 => "i16",
-    Int8 => "i8",
-    UInt64 => "u64",
-    UInt32 => "u32",
-    UInt16 => "u16",
-    UInt8 => "u8",
-    Bool => "bool",
+InfraStore.element_type_tag(::AbstractVector{<:LinearFunctionData}) = "linear_function"
+InfraStore.element_row_width(::AbstractVector{<:LinearFunctionData}) = 2
+function InfraStore.write_element_row!(row, fd::LinearFunctionData)
+    row[1] = get_proportional_term(fd)
+    row[2] = get_constant_term(fd)
+    return
+end
+
+InfraStore.element_type_tag(::AbstractVector{<:QuadraticFunctionData}) =
+    "quadratic_function"
+InfraStore.element_row_width(::AbstractVector{<:QuadraticFunctionData}) = 3
+function InfraStore.write_element_row!(row, fd::QuadraticFunctionData)
+    row[1] = get_quadratic_term(fd)
+    row[2] = get_proportional_term(fd)
+    row[3] = get_constant_term(fd)
+    return
+end
+
+InfraStore.element_type_tag(::AbstractVector{<:PiecewiseLinearData}) = "piecewise_linear"
+InfraStore.element_row_width(values::AbstractVector{<:PiecewiseLinearData}) =
+    1 + 2 * maximum(fd -> length(get_points(fd)), values; init = 0)
+function InfraStore.write_element_row!(row, fd::PiecewiseLinearData)
+    pts = get_points(fd)
+    row[1] = length(pts)
+    for (k, p) in enumerate(pts)
+        row[2k] = p.x
+        row[2k + 1] = p.y
+    end
+    return
+end
+
+InfraStore.element_type_tag(::AbstractVector{<:PiecewiseStepData}) = "piecewise_step"
+function InfraStore.element_row_width(values::AbstractVector{<:PiecewiseStepData})
+    widest = maximum(fd -> length(get_x_coords(fd)), values; init = 0)
+    return max(2 * widest, 1)
+end
+function InfraStore.write_element_row!(row, fd::PiecewiseStepData)
+    xs = get_x_coords(fd)
+    ys = get_y_coords(fd)
+    n = length(xs)
+    row[1] = n
+    row[2:(1 + n)] .= xs
+    row[(2 + n):(1 + n + length(ys))] .= ys
+    return
+end
+
+"""
+The IS types a store read decodes composite element values into.
+
+Their constructor signatures are the ones InfraStore.jl's codec calls, so a read
+lands directly in IS's own `FunctionData` with no conversion between.
+"""
+const _IS_ELEMENT_TYPES = (
+    linear_function = LinearFunctionData,
+    quadratic_function = QuadraticFunctionData,
+    piecewise_linear = PiecewiseLinearData,
+    piecewise_step = PiecewiseStepData,
 )
-
-function _element_type_name(::Type{T}) where {T}
-    name = get(_INFRASTORE_DTYPE_NAMES, T, nothing)
-    isnothing(name) &&
-        error("InfraStore backend does not support time series element type $T yet")
-    return name
-end
-
-_storage_array(v::AbstractVector{<:Real}) =
-    (collect(v), _element_type_name(eltype(v)))
-
-# N-D per-step scalars (`SingleTimeSeries{T, N}` / `NonSequentialTimeSeries{T, N}` with
-# `N > 1`): the store takes the array whole, with dim 1 as the time axis, and the read
-# side (`_decode_stored_values`) hands it back unchanged.
-_storage_array(v::AbstractArray{<:Real}) =
-    (collect(v), _element_type_name(eltype(v)))
-
-# Encoded width `k` of a vector of structured elements, without encoding it. The forecast
-# encoder needs the widest window's `k` before it allocates, so this is the single source
-# of truth every `_storage_array` below allocates from.
-_storage_width(::AbstractVector{LinearFunctionData}) = 2
-
-_storage_width(::AbstractVector{QuadraticFunctionData}) = 3
-
-_storage_width(v::AbstractVector{PiecewiseLinearData}) =
-    1 + 2 * maximum(length(get_points(fd)) for fd in v; init = 0)
-
-function _storage_width(v::AbstractVector{PiecewiseStepData})
-    max_n = maximum(length(get_x_coords(fd)) for fd in v; init = 0)
-    iszero(max_n) && return 1
-    return 2 * max_n
-end
-
-_storage_width(::AbstractVector{NTuple{N, Float64}}) where {N} = N
-
-_storage_width(v::AbstractVector) =
-    error("InfraStore backend does not support time series element type $(eltype(v)) yet")
-
-function _storage_array(v::AbstractVector{LinearFunctionData})
-    mat = Matrix{Float64}(undef, length(v), _storage_width(v))
-    for (i, fd) in enumerate(v)
-        mat[i, 1] = get_proportional_term(fd)
-        mat[i, 2] = get_constant_term(fd)
-    end
-    return (mat, "linear_function")
-end
-
-function _storage_array(v::AbstractVector{QuadraticFunctionData})
-    mat = Matrix{Float64}(undef, length(v), _storage_width(v))
-    for (i, fd) in enumerate(v)
-        mat[i, 1] = get_quadratic_term(fd)
-        mat[i, 2] = get_proportional_term(fd)
-        mat[i, 3] = get_constant_term(fd)
-    end
-    return (mat, "quadratic_function")
-end
-
-# Ragged: each step has a variable number of (x, y) points. Store as a
-# `(len, 1 + 2*max_points)` matrix padded with zeros; column 1 of each row is the
-# point count, so `shape[0]` stays the timestep count.
-function _storage_array(v::AbstractVector{PiecewiseLinearData})
-    mat = zeros(Float64, length(v), _storage_width(v))
-    for (i, fd) in enumerate(v)
-        pts = get_points(fd)
-        mat[i, 1] = length(pts)
-        for (j, p) in enumerate(pts)
-            mat[i, 2j] = p.x
-            mat[i, 2j + 1] = p.y
-        end
-    end
-    return (mat, "piecewise_linear")
-end
-
-# Ragged like PiecewiseLinearData, but the x- and y-coordinates have different
-# lengths (`n` x-coords, `n - 1` y-coords/slopes). Store as a `(len, 2*max_n)`
-# matrix: column 1 of each row is the x-coord count `n`, then the `n` x-coords,
-# then the `n - 1` y-coords. Each row is self-describing, so decode needs no
-# global width.
-function _storage_array(v::AbstractVector{PiecewiseStepData})
-    mat = zeros(Float64, length(v), _storage_width(v))
-    for (i, fd) in enumerate(v)
-        xs = get_x_coords(fd)
-        ys = get_y_coords(fd)
-        n = length(xs)
-        mat[i, 1] = n
-        for (j, x) in enumerate(xs)
-            mat[i, 1 + j] = x
-        end
-        for (j, y) in enumerate(ys)
-            mat[i, 1 + n + j] = y
-        end
-    end
-    return (mat, "piecewise_step")
-end
-
-# Fixed-arity `NTuple{N, Float64}` values. Dense, so unlike the ragged piecewise
-# encodings every row is full width; the arity travels in the element type so decode
-# rebuilds the tuple without inferring it from the array shape.
-function _storage_array(v::AbstractVector{NTuple{N, Float64}}) where {N}
-    mat = Matrix{Float64}(undef, length(v), N)
-    for (i, tup) in enumerate(v)
-        for j in 1:N
-            mat[i, j] = tup[j]
-        end
-    end
-    return (mat, "tuple($N,f64)")
-end
-
-_storage_array(v::AbstractVector) =
-    error("InfraStore backend does not support time series element type $(eltype(v)) yet")
-
-# ---- Element encodings ------------------------------------------------------
-# One singleton per stored `element_type` tag, so decoding dispatches instead of
-# comparing the tag string per value. `ScalarEncoding` is also the fallback for any tag
-# this binding does not map; `RowEncoding` marks one-element-per-matrix-row layouts,
-# which is the distinction the forecast and reader paths branch on.
-abstract type ElementEncoding end
-abstract type RowEncoding <: ElementEncoding end
-
-struct ScalarEncoding <: ElementEncoding end
-struct LinearFunctionEncoding <: RowEncoding end
-struct QuadraticFunctionEncoding <: RowEncoding end
-struct PiecewiseLinearEncoding <: RowEncoding end
-struct PiecewiseStepEncoding <: RowEncoding end
-
-# Fixed-arity f64 tuples: the arity is part of the encoding, so `_decode_ntuples` gets it
-# as a type parameter instead of re-parsing the tag. The store's grammar allows other
-# dtypes, which this binding does not map (they fall through to `ScalarEncoding`).
-struct TupleEncoding{N} <: RowEncoding end
-
-const _ELEMENT_ENCODINGS = Dict{String, ElementEncoding}(
-    "linear_function" => LinearFunctionEncoding(),
-    "quadratic_function" => QuadraticFunctionEncoding(),
-    "piecewise_linear" => PiecewiseLinearEncoding(),
-    "piecewise_step" => PiecewiseStepEncoding(),
-)
-
-const _TUPLE_ELEMENT_TYPE = r"^tuple\((\d+),f64\)$"
-
-# The string -> type barrier. Deliberately the only type-unstable step: every
-# decode reached from here is dispatched and inferrable.
-_element_encoding(::Nothing) = ScalarEncoding()
-
-function _element_encoding(element_type::AbstractString)
-    haskey(_ELEMENT_ENCODINGS, element_type) && return _ELEMENT_ENCODINGS[element_type]
-    m = match(_TUPLE_ELEMENT_TYPE, element_type)
-    isnothing(m) && return ScalarEncoding()
-    return TupleEncoding{parse(Int, m.captures[1])}()
-end
-
-# Rebuild the `NTuple{N, Float64}` vector from rows of a stored/materialized `(len, N)`
-# matrix. Shared by every decode path.
-function _decode_ntuples(mat, len::Integer, n::Integer)
-    out = Vector{NTuple{n, Float64}}(undef, len)
-    for i in 1:len
-        out[i] = ntuple(j -> mat[i, j], n)
-    end
-    return out
-end
-
-# Reconstruct a single `PiecewiseStepData` from row `i` of a stored/materialized
-# `(len, k)` matrix (see `_storage_array`). Shared by every decode path.
-function _decode_pwl_step_row(mat, i::Integer)
-    n = Int(round(mat[i, 1]))
-    xs = [mat[i, 1 + j] for j in 1:n]
-    ys = [mat[i, 1 + n + j] for j in 1:(n - 1)]
-    return PiecewiseStepData(xs, ys)
-end
-
-# Decode an already-materialized static value array (the inverse of `_storage_array`),
-# one method per [`ElementEncoding`]. `len` is the timestep count (`size(arr, 1)`);
-# each encoded element occupies one row of the `(len, k)` matrix.
-_decode_static_values(arr, ::ScalarEncoding, ::Integer) = arr
-
-_decode_static_values(arr, ::LinearFunctionEncoding, len::Integer) =
-    [LinearFunctionData(arr[i, 1], arr[i, 2]) for i in 1:len]
-
-_decode_static_values(arr, ::QuadraticFunctionEncoding, len::Integer) =
-    [QuadraticFunctionData(arr[i, 1], arr[i, 2], arr[i, 3]) for i in 1:len]
-
-function _decode_static_values(arr, ::PiecewiseLinearEncoding, len::Integer)
-    out = Vector{PiecewiseLinearData}(undef, len)
-    for i in 1:len
-        n = Int(round(arr[i, 1]))
-        out[i] = PiecewiseLinearData([(arr[i, 2j], arr[i, 2j + 1]) for j in 1:n])
-    end
-    return out
-end
-
-_decode_static_values(arr, ::PiecewiseStepEncoding, len::Integer) =
-    [_decode_pwl_step_row(arr, i) for i in 1:len]
-
-_decode_static_values(arr, ::TupleEncoding{N}, len::Integer) where {N} =
-    _decode_ntuples(arr, len, N)
-
-# Decode a whole stored static array, whatever its rank. A 1-D array is scalar
-# data (one value per timestep) and is already the answer; a higher-rank array
-# is either encoded elements or N-D per-step scalars, which the encoding
-# distinguishes. Used by the `SingleTimeSeries` and `NonSequentialTimeSeries`
-# read paths, where the backend materializes the array in memory rather than
-# handing back a content hash.
-_decode_stored_values(data::AbstractVector, ::ElementEncoding) = data
-
-_decode_stored_values(data::AbstractArray, encoding::ElementEncoding) =
-    _decode_static_values(data, encoding, size(data, 1))
-
-# ---- Forecast element encoding ---------------------------------------------
-# Forecast windows of scalars store as a `(horizon, count)` array in the window's own
-# element type, tagged with it — matching the static path, so a `Deterministic{Int64}`
-# round-trips as one instead of coming back widened to Float64.
-# FunctionData windows store as `(horizon, count, k)` tagged with the element
-# type; each window column is encoded with the same scheme as a SingleTimeSeries
-# via `_storage_array`.
-
-function _storage_forecast_array(windows::Vector{<:AbstractVector{<:Real}})
-    count = length(windows)
-    horizon = length(first(windows))
-    T = eltype(first(windows))
-    arr = Matrix{T}(undef, horizon, count)
-    for (c, w) in enumerate(windows)
-        copyto!(view(arr, :, c), w)
-    end
-    return (arr, _element_type_name(T))
-end
-
-# FunctionData windows encode row-wise like a SingleTimeSeries (ragged PWL is
-# padded to the widest row); NTuple windows are the same dense per-row layout at
-# constant width. Both carry the element type that drives window reconstruction.
-function _storage_forecast_array(
-    windows::Vector{<:AbstractVector{<:Union{FunctionData, NTuple}}},
-)
-    count = length(windows)
-    horizon = length(first(windows))
-    k = maximum(_storage_width, windows)
-    arr = zeros(Float64, horizon, count, k)
-    element_type = ""
-    for c in 1:count
-        # Encoded one window at a time: holding all `count` matrices before the copy
-        # would double the forecast's peak footprint.
-        mat, element_type = _storage_array(windows[c])
-        @views arr[:, c, 1:size(mat, 2)] .= mat
-    end
-    return (arr, element_type)
-end
 
 # Densify a Probabilistic/Scenarios forecast — a SortedDict of
 # `(horizon_count, dim1)` window matrices — into the `(dim1, horizon_count,
-# count)` array the store's forecast constructors take, in the windows' own element
-# type and tagged with it, so a `Probabilistic{Int64}` round-trips as one (matching
-# the Deterministic and static paths) instead of coming back widened to Float64.
+# count)` array the store's forecast constructors take, in the windows' own
+# element type, so a `Probabilistic{Int64}` round-trips as one instead of coming
+# back widened to Float64.
 function _dense_forecast_array(forecast::Forecast{T}, dim1::Integer) where {T}
     arr = Array{T, 3}(
         undef, dim1, get_horizon_count(forecast), get_count(forecast),
@@ -418,24 +223,8 @@ function _dense_forecast_array(forecast::Forecast{T}, dim1::Integer) where {T}
     for (ix, window) in enumerate(values(get_data(forecast)))
         arr[:, :, ix] = transpose(window)
     end
-    return (arr, _element_type_name(T))
+    return arr
 end
-
-# Decode window `c` (1-based) of a `(horizon, count, k)` forecast array into a Vector of
-# the corresponding FunctionData or NTuple; the per-window `(horizon, k)` slice decodes
-# with the same row-wise scheme as a static array.
-#
-# Only a `RowEncoding` has a `k` axis, so a scalar tag on a 3-D array is a storage
-# inconsistency, not a pass-through: `_forecast_window` routes 2-D (scalar) arrays
-# elsewhere, and a scalar-tagged window would decode wrong. The tag string travels
-# alongside the encoding purely to name it in that error.
-_decode_forecast_window(
-    ::AbstractArray{<:Real, 3}, ::ScalarEncoding, element_type, ::Integer,
-) = error("InfraStore backend cannot decode forecast element_type $element_type")
-
-_decode_forecast_window(
-    arr::AbstractArray{<:Real, 3}, encoding::RowEncoding, _element_type, c::Integer,
-) = _decode_static_values(@view(arr[:, c, :]), encoding, size(arr, 1))
 
 # ---- Operations (thin delegations to InfraStore) ----------------------
 
@@ -448,6 +237,22 @@ Exists so packages that write stores directly (e.g. a parser emitting a
 serialized system) never touch the InfraStore module themselves.
 """
 make_add_batch() = InfraStore.AddBatch()
+
+# The bytes one staged array holds in the batch's buffer, which is what drives
+# auto-flush. `sizeof` is the answer only for a plain numeric array: a composite
+# element type is stored as one pointer per value but staged as a
+# `length x element_row_width` matrix of `Float64`, so `sizeof` under-counts it by
+# the row width — a factor that is unbounded for ragged piecewise data, and would
+# let a block hold gigabytes past the byte threshold before flushing.
+_staged_nbytes(values::AbstractArray) = sizeof(values)
+_staged_nbytes(values::AbstractArray{<:StaticFunctionData}) = _encoded_nbytes(values)
+_staged_nbytes(values::AbstractArray{<:Tuple{Vararg{Float64}}}) = _encoded_nbytes(values)
+
+# `element_row_width` is defined on the flat vector of values the store packs, so
+# a forecast's `(horizon, count)` matrix is measured through `vec` (a reshape, not
+# a copy).
+_encoded_nbytes(values::AbstractArray) =
+    length(values) * InfraStore.element_row_width(vec(values)) * sizeof(Float64)
 
 """
     commit_batch!(store::Store, batch)
@@ -485,21 +290,21 @@ function serialize_single!(
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(sts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(sts),
 )
-    # `get_array` returns the raw `Array{T, N}` (no TimeArray allocation).
-    arr, element_type = _storage_array(get_array(sts))
+    # `get_array` returns the raw `Array{T, N}` (no TimeArray allocation). The
+    # store names the element type from the values and packs them itself.
+    values = get_array(sts)
     tss_ts = InfraStore.SingleTimeSeries(
         get_initial_timestamp(sts),
         get_resolution(sts),
-        arr,
-        name;
-        element_type = element_type,
+        values,
+        name,
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features, units = units,
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system))
-    # The encoded array is what the batch buffers; its byte size drives auto-flush.
-    return sizeof(arr)
+    # Drives auto-flush; measured as the store packs it, not as Julia holds it.
+    return _staged_nbytes(values)
 end
 
 """
@@ -527,48 +332,23 @@ function serialize_non_sequential!(
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(nts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(nts),
 )
-    arr, element_type = _storage_array(get_array(nts))
-    tss_ts = InfraStore.NonSequentialTimeSeries(
-        get_timestamps(nts),
-        arr,
-        name;
-        element_type = element_type,
-    )
+    values = get_array(nts)
+    tss_ts = InfraStore.NonSequentialTimeSeries(get_timestamps(nts), values, name)
     InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features, units = units,
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system))
     # The staged bytes are the encoded array plus the timestamps the association carries.
-    return sizeof(arr) + sizeof(get_timestamps(nts))
+    return _staged_nbytes(values) + sizeof(get_timestamps(nts))
 end
 
-"""
-    get_non_sequential(store, owner_id, owner_category, name; features=nothing, time_range=nothing) -> NonSequentialTimeSeries
-
-Reconstruct a `NonSequentialTimeSeries` (timestamps + decoded array) from the InfraStore
-store. A non-sequential series is addressed by name + features (it has no resolution).
-`time_range`, if given, is a half-open `[start, stop)` window on the (irregular) timestamp
-axis, sliced server-side — the same pushdown `_infrastore_read_single` uses for a
-`SingleTimeSeries` grid window.
-"""
-function get_non_sequential(
-    store::Store,
-    owner_id::Integer,
-    owner_category::InfraStore.OwnerCategory,
-    name::AbstractString;
-    features::Union{Nothing, Dict} = nothing,
-    time_range::Union{Nothing, Tuple{Dates.DateTime, Dates.DateTime}} = nothing,
+# Rebuild the IS `NonSequentialTimeSeries` from whatever the store handed back,
+# however the read was addressed.
+_non_sequential_from_store(nts, name::AbstractString) = NonSequentialTimeSeries(
+    String(name), nts.timestamps, nts.data;
+    units = nts.units, quantity_kind = nts.quantity_kind,
+    unit_system = _from_store_unit_system(nts.unit_system),
 )
-    nts = InfraStore.get_time_series(InfraStore.NonSequentialTimeSeries, store.inner,
-        owner_id,
-        owner_category, name; features = features, time_range = time_range)
-    values = _decode_stored_values(nts.data, _element_encoding(nts.element_type))
-    return NonSequentialTimeSeries(
-        String(name), nts.timestamps, values; units = nts.units,
-        quantity_kind = nts.quantity_kind,
-        unit_system = _from_store_unit_system(nts.unit_system),
-    )
-end
 
 function get_num_time_series(store::Store)
     c = InfraStore.get_counts(store.inner)
@@ -632,53 +412,57 @@ much smaller the file got. An in-memory store has no file to rewrite.
 compact_time_series!(store::Store) = InfraStore.compact!(store.inner)
 
 """
-Remove exactly the association that a fully-resolved `TimeSeriesKey` names.
+Remove exactly the association that a `TimeSeriesKey` names, and nothing else.
 
-The key carries the complete stored identity — type, name, resolution, interval,
-and the *whole* feature set — so this routes to the store's exact-key removal
-(the core matches the features by set hash) instead of the subset feature filter
-that the by-name removals use. A sibling series whose feature set is a strict
-superset of the key's therefore survives, which the subset filter would have
-deleted along with the keyed series.
+The key's `association_id` names one catalog row, so this is the store's
+`remove_by_ids!` — a single id-addressed call that deletes that row and no
+other. The attribute-addressed removal it replaces was blunter than the
+docstring implied: an identity with no interval matches *any* interval, so a
+keyed removal could sweep a whole forecast family, and a `nothing` resolution
+likewise. Neither is reachable through an id.
 """
 function infrastore_remove_time_series!(
     store::Store,
     owner::TimeSeriesOwners,
     key::TimeSeriesKey,
 )
-    owner_id = get_owner_id(key)
-    category = get_owner_category(key)
-    name = get_name(key)
+    # `owner` is an argument in its own right, so the removal is scoped to it:
+    # the store confirms the row belongs to `owner` and deletes it in one
+    # transaction. Checking here first would be a race — an id survives a
+    # reassignment, so a row confirmed by one call can move before the next one
+    # deletes it, and the removal would retire the new owner's series.
     try
-        InfraStore.remove_time_series!(
-            _infrastore_type(get_time_series_type(key)),
-            store.inner,
-            owner_id,
-            category,
-            name;
-            resolution = get_resolution(key),
-            interval = get_interval(key),
-            features = get_features(key),
+        InfraStore.remove_by_ids!(
+            store.inner, [Int64(get_association_id(key))];
+            owner = _infrastore_owner_id_category(owner),
         )
     catch e
         # `catch`-block exception inspection: the core reports both conditions
         # through its own error types, which IS maps to the errors callers
-        # dispatch on. The DST-orphan guard can only fire for a SingleTimeSeries
-        # key; an InvalidParameterError for any other key type is something else
-        # and propagates as itself.
-        if e isa InfraStore.InvalidParameterError &&
-           get_time_series_type(key) <: SingleTimeSeries
-            throw(
+        # dispatch on. The core's orphaned-DST guard is an
+        # `InvalidParameterError`, but it is not the only one a removal can
+        # raise — an id the core rejects outright is another — and only the guard
+        # fires for a `SingleTimeSeries`. So the specific message is claimed only
+        # for that case; every other `InvalidParameterError` keeps the core's own
+        # message, which names what actually went wrong, under the `ArgumentError`
+        # type the accessors contract for.
+        if e isa InfraStore.InvalidParameterError
+            get_time_series_type(key) <: SingleTimeSeries && throw(
                 ArgumentError(
-                    "Cannot remove SingleTimeSeries '$name' because it is attached to a " *
-                    "DeterministicSingleTimeSeries."),
+                    "Cannot remove the SingleTimeSeries named by " *
+                    "association_id=$(get_association_id(key)) because it is " *
+                    "attached to a DeterministicSingleTimeSeries."),
             )
+            throw(ArgumentError(e.msg))
         elseif e isa InfraStore.NotFoundError
             throw(
                 ArgumentError(
-                    "No time series matches the key $(summary(key)) with name='$name' " *
-                    "on $(summary(owner)); it may already have been removed."),
+                    "TimeSeriesKey names association_id=$(get_association_id(key)), which " *
+                    "is no longer in this store: $(summary(key)) on " *
+                    "$(summary(owner)) may already have been removed."),
             )
+        elseif e isa InfraStore.OwnerMismatchError
+            throw(_not_this_owners_key(owner, key, e))
         end
         rethrow()
     end
@@ -732,7 +516,7 @@ function infrastore_add_time_series!(
     end
     # The row is written by the time we get here, so the key is built around the id
     # the catalog actually filed it under.
-    return build_key(staged, only(added).id)
+    return build_key(staged, only(added))
 end
 
 # The store's duplicate-association rejection, which the add paths rely on
@@ -792,7 +576,13 @@ function _infrastore_get_time_series_via_key(
         interval = interval,
         features = features,
     )
-    return get_time_series(owner, key; start_time = start_time, len = len, count = count)
+    # The key came out of this owner's own listing, so the read is addressed by
+    # the store: re-checking the owner would be a round trip that could only
+    # confirm what the resolution already established.
+    return _get_time_series_by_key(
+        _owner_store(owner), key;
+        start_time = start_time, len = len, count = count,
+    )
 end
 
 # `StaticTimeSeries` (and any static subtype without its own route): resolve through the
@@ -858,85 +648,216 @@ function infrastore_get_time_series(
         resolution = resolution,
         features = features,
     )
-    return _infrastore_read_single(owner, key; start_time = start_time, len = len)
+    # Store-addressed: `infrastore_get_time_series_key` resolved the key out of
+    # this owner's own listing, so its ownership is settled.
+    return _infrastore_read_single(
+        _owner_store(owner), key; start_time = start_time, len = len,
+    )
 end
 
-_window_length(::Nothing, index::Integer, total::Integer) = total - index + 1
-_window_length(len::Integer, ::Integer, ::Integer) = len
+# ---- Key addressing --------------------------------------------------------
+# `association_id` is the identity of a stored association: the store mints it,
+# never reissues it, and it is the whole of a `TimeSeriesKey`. So a key is
+# addressed by its id alone — a name, resolution, interval or feature set is a
+# column of the catalog row, never a lookup argument. A key handed to an accessor
+# is otherwise taken as valid: nothing probes it for staleness first, and a
+# dangling id surfaces as an error from the call that was already committed to
+# acting on it.
+#
+# The exception is the owner. `owner` is an argument in its own right, so an
+# accessor that takes both holds the key to it — without that,
+# `remove_time_series!(sys, wrong_component, key)` would quietly delete a series
+# off some other component. A key carries no owner (an owner cached on one would
+# be a field to go stale when a series is reassigned, which is the whole reason a
+# key is only its id), so the owner is passed INTO the store call rather than
+# checked beside it: `read_by_id(...; owner)` and `remove_by_ids!(...; owner)`
+# confirm and act as one operation, raising `OwnerMismatchError`, which the
+# accessors map to their public `ArgumentError`.
+#
+# Checking first in a call of IS's own would be both slower and wrong. Slower
+# because a `get_metadata_by_id` is a second round trip on every keyed accessor.
+# Wrong because an id survives a reassignment: between the call that confirmed the
+# owner and the call that acts, the row can move to another owner, and the removal
+# then retires *that* owner's series — exactly what checking the owner was for.
+# Every keyed accessor is therefore back to **one** store call, and the race is
+# closed rather than narrowed.
+#
+# The by-name reads resolve their key out of a `list_time_series_metadata` scoped to one
+# owner, which is where ownership is established; they take the `Store`-addressed
+# read below, which sets no guard. Re-guarding would only re-confirm what the
+# listing already said.
+#
+# `read_by_id` takes the slice as well as the id: it resolves `start_time` / `len`
+# / `count` against the row its own primary-key lookup returned, so IS neither
+# computes a time range nor fetches a grid to compute one from. `remove_by_ids!`
+# is the same for removal, and `get_metadata_by_id` remains the catalog-row
+# accessor (the content hash) for callers that want the row rather than the data —
+# there the row IS the answer, so checking its owner is not a second call.
+#
+# The window arithmetic and its bounds checks live in the core: the store resolves
+# `start_time` / `len` / `count` against the row it just looked up, and refuses a
+# window that does not fit rather than clamping to one that does. IS's own copy of
+# that arithmetic is gone, so there is exactly one read path and one place the
+# window is resolved.
 
-# Step count of the requested `[index, index + n)` window on a series of `total` steps.
-# Errors rather than clamping: the store clamps an out-of-grid range silently, so the
-# window is validated here against the key before the sliced read is issued.
-function _validate_window(index::Integer, len, total::Integer)
-    n = _window_length(len, index, total)
-    if index < 1 || n < 1 || index + n - 1 > total
-        throw(ArgumentError("requested index=$index len=$n exceeds range $total"))
-    end
-    return n
-end
-
-# Key-addressed SingleTimeSeries read: the key carries the exact stored attributes
-# plus the `(initial_timestamp, resolution, length)` needed to validate the
-# requested window, so no catalog query is issued. The store slices the half-open
-# `[start, start + n·resolution)` window server-side; only the requested steps are
-# read and decoded.
-
-# A key is a snapshot of one stored association, and every key carries the id the store
-# minted for it. Ids are never reissued, so "does this id still resolve?" is the exact
-# staleness test: if the series was removed (and possibly re-added under the same name and
-# features), the id is gone. This is a primary-key probe that fetches no row. Checking it
-# up front means every later mismatch is the caller's — an out-of-range `start_time`,
-# `len`, or `count` — and is reported as such rather than blamed on a stale key.
-function _throw_if_key_stale(store::Store, key::TimeSeriesKey)
+# The catalog row `id` names. `nothing` from the core means the row is gone, which
+# is an error here: the caller is already committed to acting on it.
+function _resolve_association(store::Store, key::TimeSeriesKey)
     id = get_association_id(key)
-    InfraStore.association_exists(store.inner, id) && return
-    throw(
+    row = InfraStore.get_metadata_by_id(store.inner, Int64(id))
+    isnothing(row) && throw(
         ArgumentError(
-            "TimeSeriesKey is stale: the $(nameof(get_time_series_type(key))) " *
-            "'$(get_name(key))' it names (association_id=$id) is no longer in the " *
-            "store; it was removed after the key was obtained. Re-fetch the key with " *
-            "get_time_series_key.",
+            "TimeSeriesKey names association_id=$id, which is no longer in this " *
+            "store: it was removed after the key was obtained.",
+        ),
+    )
+    return row
+end
+
+# The `ArgumentError` a key that does not belong to `owner` raises, whether the
+# store said so (the guarded read and removal) or the row did (the catalog-row
+# accessors, which hold the row already). `detail` is what said it.
+_not_this_owners_key(owner::TimeSeriesOwners, key::TimeSeriesKey, detail) = ArgumentError(
+    "TimeSeriesKey (association_id=$(get_association_id(key))) does not name a " *
+    "time series of $(summary(owner)): $(detail). Pass the owner it belongs to, " *
+    "or look one up on this owner with list_time_series_metadata.",
+)
+
+# Confirm the association `key` names is attached to `owner`, against a catalog
+# row the caller has already fetched. The category matters as well as the id,
+# since a component and a supplemental attribute can share an integer id.
+#
+# Only for the accessors that want the row itself. Anything that *acts* on the
+# association passes `owner` into the store call instead — see
+# `_read_association_by_id` — because a check and an act in two calls have a
+# window between them that a reassignment fits through.
+function _check_association_owner(owner::TimeSeriesOwners, key::TimeSeriesKey, row)
+    owner_id, category = _infrastore_owner_id_category(owner)
+    (row.owner_id == owner_id && row.owner_category == category) && return row
+    throw(
+        _not_this_owners_key(
+            owner, key,
+            "it names '$(row.name)', which belongs to owner id=$(row.owner_id)",
         ),
     )
 end
 
-function _infrastore_read_single(
+"The store the owner's time series manager holds."
+_owner_store(owner::TimeSeriesOwners) =
+    _get_time_series_manager_or_throw(owner).data_store
+
+# The store an owner's manager holds, and the row `key`'s id resolves to in it —
+# for the catalog-row accessors, which want the row itself rather than the data.
+function _store_and_association(owner::TimeSeriesOwners, key::TimeSeriesKey)
+    store = _owner_store(owner)
+    return (store, _check_association_owner(owner, key, _resolve_association(store, key)))
+end
+
+# `len` and `count` are step and window COUNTS, and the store takes them as
+# `UInt64`: a negative one fails in the ccall marshalling with an `InexactError`
+# that names neither the argument nor the accessor, so the sign is checked here.
+# Only the sign — whether a window of a legal size fits the row is the core's
+# answer, and it gives the specific one.
+_check_window_count(::Symbol, ::Nothing) = nothing
+
+function _check_window_count(name::Symbol, n::Integer)
+    n < 1 && throw(ArgumentError("`$name` must be >= 1; got $n"))
+    return
+end
+
+# The association `key` names, or the window of it the accessor's arguments name,
+# in ONE id-addressed call: no catalog round trip, and no attribute off the key.
+# The core resolves the window against the row its primary-key lookup returned
+# and rejects one that does not fit; it throws `NotFoundError` for a dangling id,
+# which the public accessors map to an `ArgumentError`.
+#
+# Addressed by `Store`, so nothing is held to an owner — this is the read for a
+# key whose owner is already established (one resolved from that owner's own
+# listing). The `TimeSeriesOwners` method below is the guarded one.
+_read_association_by_id(
+    store::Store,
+    key::TimeSeriesKey;
+    start_time = nothing,
+    len = nothing,
+    count = nothing,
+) = _read_association_by_id(
+    store, key, nothing; start_time = start_time, len = len, count = count,
+)
+
+# The owner-guarded read. `owner` goes INTO the store call: the core takes the
+# row's owner off the very row it materializes the values from, so the guard is
+# free and cannot disagree with what is read. A `get_metadata_by_id` here instead
+# would be both a second round trip and a weaker answer — it describes the row as
+# it was, and an id survives a reassignment.
+_read_association_by_id(
     owner::TimeSeriesOwners,
-    key::StaticTimeSeriesKey;
+    key::TimeSeriesKey;
+    start_time = nothing,
+    len = nothing,
+    count = nothing,
+) = _read_association_by_id(
+    _owner_store(owner), key, owner;
+    start_time = start_time, len = len, count = count,
+)
+
+function _read_association_by_id(
+    store::Store,
+    key::TimeSeriesKey,
+    owner::Union{Nothing, TimeSeriesOwners};
+    start_time = nothing,
+    len = nothing,
+    count = nothing,
+)
+    _check_window_count(:len, len)
+    _check_window_count(:count, count)
+    try
+        return InfraStore.read_by_id(
+            store.inner, Int64(get_association_id(key));
+            start_time = start_time, len = len, count = count,
+            owner = isnothing(owner) ? nothing : _infrastore_owner_id_category(owner),
+            types = _IS_ELEMENT_TYPES,
+        )
+    catch e
+        # `catch`-block exception inspection: the window checks moved into the
+        # core with the read, so the caller's out-of-range `start_time` / `len` /
+        # `count` now arrives as the store's own error. Its message is the
+        # specific one — which grid, which index, how many are stored — so it is
+        # carried through; only the type is remapped, to keep the accessors'
+        # public `ArgumentError` contract.
+        e isa InfraStore.InvalidParameterError && throw(ArgumentError(e.msg))
+        # Only reachable on the owner-addressed path: a `nothing` owner sends no
+        # owner into the read, so the core has nothing to mismatch it against.
+        # Guarded anyway, so that if it ever does arrive here the handler reports
+        # the store's error rather than raising a `MethodError` over it.
+        e isa InfraStore.OwnerMismatchError && !isnothing(owner) &&
+            throw(_not_this_owners_key(owner, key, e.msg))
+        rethrow()
+    end
+end
+
+# Rebuild the IS `SingleTimeSeries` from whatever the store handed back, however
+# the read was addressed.
+_single_from_store(sts, name::AbstractString) = SingleTimeSeries(
+    String(name), sts.initial_timestamp, sts.resolution, sts.data;
+    units = sts.units, quantity_kind = sts.quantity_kind,
+    unit_system = _from_store_unit_system(sts.unit_system),
+)
+
+# Key-addressed SingleTimeSeries read: one store call, whether or not it slices
+# (plus the owner check, when addressed by owner). The store resolves
+# `(start_time, len)` against the grid on the row its own primary-key lookup
+# returned, refuses a window that does not fit, and reads the half-open
+# `[start, start + n·resolution)` steps — only those are read and decoded.
+function _infrastore_read_single(
+    target::KeyedReadTarget,
+    key::TimeSeriesKey{<:SingleTimeSeries};
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
-    _throw_if_key_stale(store, key)
-    owner_id, _, category = _infrastore_owner_args(owner)
-    name = get_name(key)
-    initial_timestamp = get_initial_timestamp(key)
-    resolution = get_resolution(key)
-    total = get_length(key)
-    feats = get_features(key)
-
-    start = if isnothing(start_time)
-        initial_timestamp
-    else
-        start_time
-    end
-    index = compute_time_array_index(initial_timestamp, start, resolution)
-    n = _validate_window(index, len, total)
-    time_range = if (isnothing(start_time) && isnothing(len))
-        nothing
-    else
-        (start, start + resolution * n)
-    end
-    sts = InfraStore.get_time_series(InfraStore.SingleTimeSeries, store.inner, owner_id,
-        category, name;
-        resolution = resolution, features = feats, time_range = time_range)
-    values = _decode_stored_values(sts.data, _element_encoding(sts.element_type))
-    return SingleTimeSeries(
-        String(name), sts.initial_timestamp, sts.resolution, values; units = sts.units,
-        quantity_kind = sts.quantity_kind,
-        unit_system = _from_store_unit_system(sts.unit_system),
-    )
+    sts = _read_association_by_id(
+        target, key; start_time = start_time, len = len,
+    )::InfraStore.SingleTimeSeries
+    return _single_from_store(sts, sts.name)
 end
 
 """
@@ -959,60 +880,27 @@ function infrastore_get_time_series(
     # then read it by its exact stored attributes.
     key = infrastore_get_time_series_key(
         owner, NonSequentialTimeSeries, name; features = features)
-    return _infrastore_read_non_sequential(owner, key; start_time = start_time, len = len)
+    return _infrastore_read_non_sequential(
+        _owner_store(owner), key; start_time = start_time, len = len,
+    )
 end
 
-# Key-addressed NonSequentialTimeSeries read (no catalog re-resolution). Only `start_time`
-# pushes down: `len` is a POINT COUNT, and turning it into an end timestamp needs to know
-# which irregular timestamps exist — which is what the read is for. The store has no
-# sentinel for "no upper bound" (`typemax(DateTime)` overflows the FFI's millisecond range
-# check), so the suffix read stands one in and `len` slices the result client-side.
-const _FAR_FUTURE_DATETIME = Dates.DateTime(9999, 12, 31, 23, 59, 59)
+# Key-addressed NonSequentialTimeSeries read: one call, whether or not it slices.
+# `len` is a POINT COUNT, and turning it into an end timestamp needs to know which
+# irregular timestamps exist — which is exactly what the store's own row carries,
+# so it does that itself. IS used to read the whole suffix (behind a far-future
+# sentinel, since the store has no "no upper bound") and slice client-side; now
+# only the requested points cross.
 function _infrastore_read_non_sequential(
-    owner::TimeSeriesOwners,
-    key::NonSequentialTimeSeriesKey;
+    target::KeyedReadTarget,
+    key::TimeSeriesKey{<:NonSequentialTimeSeries};
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
 )
-    mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
-    _throw_if_key_stale(store, key)
-    owner_id, _, category = _infrastore_owner_args(owner)
-    feats = get_features(key)
-    time_range = if isnothing(start_time)
-        nothing
-    else
-        (start_time, _FAR_FUTURE_DATETIME)
-    end
-    nts = get_non_sequential(
-        store, owner_id, category, get_name(key);
-        features = feats, time_range = time_range,
-    )
-    (isnothing(start_time) && isnothing(len)) && return nts
-
-    # Slice the values directly (not via a TimeArray) so FunctionData / N-D series slice
-    # too. With `start_time` given, `nts` is already the store-side suffix, so this narrows
-    # what the store returned; the exact-match check below still rejects a `start_time`
-    # that is not one of the series' timestamps.
-    timestamps = get_timestamps(nts)
-    full = get_array(nts)
-    total = size(full, 1)
-    start = if isnothing(start_time)
-        timestamps[1]
-    else
-        start_time
-    end
-    index = searchsortedfirst(timestamps, start)
-    (index <= total && timestamps[index] == start) ||
-        throw(ArgumentError("start_time=$start is not a timestamp in the series"))
-    n = _validate_window(index, len, total)
-    colons = ntuple(_ -> Colon(), ndims(full) - 1)
-    vals = full[index:(index + n - 1), colons...]
-    # A slice is the same values over a shorter window, so it keeps the label.
-    return NonSequentialTimeSeries(
-        String(get_name(key)), timestamps[index:(index + n - 1)], vals;
-        units = get_units(nts), quantity_kind = get_quantity_kind(nts),
-        unit_system = get_unit_system(nts))
+    nts = _read_association_by_id(
+        target, key; start_time = start_time, len = len,
+    )::InfraStore.NonSequentialTimeSeries
+    return _non_sequential_from_store(nts, nts.name)
 end
 
 # ---- Bulk staging ----------------------------------------------------------
@@ -1022,16 +910,16 @@ end
 
 """
 Commit a staged `AddBatch` to the store as one all-or-nothing bulk add, returning
-the store's `InfraStore.AddedTimeSeries` per request, in the order they were staged.
+the catalog `id` the store filed each request under, in the order they were staged.
 
 The backend packs the arrays into batch-sized datasets written whole-chunk, so
 this is materially cheaper than the same adds issued one at a time — which is why
 the client-side buffer exists even though the store now has transactions.
 
-Each returned entry carries the `association_id` the catalog minted for that row.
-That id is the reason the write, not the staging, is where a `TimeSeriesKey` can
-first be built: the store owns the id stream, so nothing before this call knows
-what a staged association will be filed under.
+Each returned id is the `association_id` the catalog minted for that row. That id
+is the reason the write, not the staging, is where a `TimeSeriesKey` can first be
+built: the store owns the id stream, so nothing before this call knows what a
+staged association will be filed under.
 """
 function _infrastore_commit_batch!(mgr::AbstractTimeSeriesManager, batch)
     added = try
@@ -1075,6 +963,13 @@ function _infrastore_stage!(
     )
 end
 
+# The type parameter a key gets for `ts`: its kind carrying the value element
+# type, rank left free — the rank belongs to the stored array, not to a reference
+# to it. This is what `_key_from_row` derives from a catalog row too, so a key
+# handed back by a write and a key listed from the catalog for the same series are
+# the same type as well as equal.
+_key_type(ts::TimeSeriesData) = Base.typename(typeof(ts)).wrapper{eltype(ts)}
+
 function _infrastore_stage_data!(
     batch::InfraStore.AddBatch,
     mgr::TimeSeriesManager,
@@ -1088,16 +983,7 @@ function _infrastore_stage_data!(
     feats = _infrastore_features(features)
     nbytes = serialize_single!(batch, owner_id, owner_type, category, name,
         time_series; features = feats)
-    staged = StagedKey{StaticTimeSeriesKey}((
-        owner_id = owner_id,
-        owner_category = category,
-        time_series_type = SingleTimeSeries,
-        name = name,
-        initial_timestamp = get_initial_timestamp(time_series),
-        resolution = get_resolution(time_series),
-        length = length(time_series),
-        features = _key_features(feats),
-    ))
+    staged = StagedKey{_key_type(time_series)}()
     return staged, nbytes
 end
 
@@ -1114,14 +1000,7 @@ function _infrastore_stage_data!(
     feats = _infrastore_features(features)
     nbytes = serialize_non_sequential!(batch, owner_id, owner_type, category, name,
         time_series; features = feats)
-    staged = StagedKey{NonSequentialTimeSeriesKey}((
-        owner_id = owner_id,
-        owner_category = category,
-        time_series_type = NonSequentialTimeSeries,
-        name = name,
-        length = length(time_series),
-        features = _key_features(feats),
-    ))
+    staged = StagedKey{_key_type(time_series)}()
     return staged, nbytes
 end
 
@@ -1150,7 +1029,7 @@ end
 
 # The three dense-forecast stagers differ only in how they build the InfraStore
 # forecast object; the validation, owner marshalling, add, and returned
-# `(ForecastKey, staged_nbytes)` pair around it are shared. `build(initial,
+# `(StagedKey, staged_nbytes)` pair around it are shared. `build(initial,
 # resolution, horizon, interval, name)` returns that object together
 # with its window count, which is the one field the callers disagree on.
 function _infrastore_stage_forecast!(
@@ -1173,18 +1052,10 @@ function _infrastore_stage_forecast!(
     obj, count = build(initial, resolution, horizon, interval, name)
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
         features = feats)
-    # The key names the stored type as its UnionAll (`Probabilistic`, not
-    # `Probabilistic{Float64, 2}`), exactly as a key listed back from the catalog does,
-    # so the two compare and query alike.
-    staged = StagedKey{ForecastKey}((
-        owner_id = owner_id, owner_category = category,
-        time_series_type = _unparameterized_type(typeof(ts)), name = name,
-        initial_timestamp = initial, resolution = resolution,
-        horizon = horizon, interval = interval, count = count,
-        features = _key_features(feats)))
-    # `obj.data` is the encoded dense array the batch buffers; its byte size drives
-    # auto-flush.
-    return staged, sizeof(obj.data)
+    staged = StagedKey{_key_type(ts)}()
+    # `obj.data` is the dense window array the batch buffers; its encoded byte size
+    # drives auto-flush.
+    return staged, _staged_nbytes(obj.data)
 end
 
 function _infrastore_stage_data!(
@@ -1198,10 +1069,10 @@ function _infrastore_stage_data!(
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
     ) do initial, resolution, horizon, interval, name
-        arr, element_type = _dense_forecast_array(ts, length(get_percentiles(ts)))
         prob = InfraStore.Probabilistic(initial, resolution, horizon, interval,
-            get_count(ts), Float64.(get_percentiles(ts)), arr, name;
-            element_type = element_type, units = get_units(ts),
+            get_count(ts), Float64.(get_percentiles(ts)),
+            _dense_forecast_array(ts, length(get_percentiles(ts))), name;
+            units = get_units(ts),
             quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (prob, get_count(ts))
@@ -1221,11 +1092,12 @@ function _infrastore_stage_data!(
     ) do initial, resolution, horizon, interval, name
         # (horizon_count, count) for scalars; (horizon_count, count, k) tagged
         # with the element type for FunctionData and NTuple windows.
+        # `(horizon_count, count)` of whatever the windows hold; a composite
+        # element type is packed across a further axis by the store.
         windows = collect(values(get_data(ts)))
-        arr, element_type = _storage_forecast_array(windows)
         det = InfraStore.Deterministic(initial, resolution, horizon, interval,
-            length(windows), arr, name;
-            element_type = element_type, units = get_units(ts),
+            length(windows), reduce(hcat, windows), name;
+            units = get_units(ts),
             quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (det, length(windows))
@@ -1243,9 +1115,8 @@ function _infrastore_stage_data!(
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
     ) do initial, resolution, horizon, interval, name
-        arr, element_type = _dense_forecast_array(ts, get_scenario_count(ts))
         scen = InfraStore.Scenarios(initial, resolution, horizon, interval,
-            get_count(ts), arr, name; element_type = element_type,
+            get_count(ts), _dense_forecast_array(ts, get_scenario_count(ts)), name;
             units = get_units(ts), quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
         return (scen, get_count(ts))
@@ -1266,80 +1137,6 @@ _infrastore_stage_data!(
     "transform_single_time_series!.",
 )
 
-# 1-based index of the forecast window that starts at `start_time`, on the grid
-# `initial_timestamp + k·interval`. `compute_time_array_index` does the period
-# arithmetic, so calendar intervals (`Month`, `Year`) work like fixed ones. A
-# single-window forecast carries a zero interval: its only window starts at
-# `initial_timestamp`, which is then the only valid `start_time` — the zero-interval
-# case must not skip the alignment check, or a misaligned request would silently
-# read the window at `initial_timestamp`.
-function _forecast_window_index(initial_timestamp, interval, start_time)
-    start_time == initial_timestamp && return 1
-    (start_time < initial_timestamp || iszero(Dates.value(interval))) &&
-        _throw_misaligned(initial_timestamp, interval, start_time)
-    return try
-        compute_time_array_index(initial_timestamp, start_time, interval)
-    catch e
-        # `catch`-block exception inspection: the period arithmetic reports an
-        # off-grid timestamp as an ArgumentError; name the window contract instead.
-        if e isa ArgumentError
-            _throw_misaligned(initial_timestamp, interval, start_time)
-        else
-            rethrow()
-        end
-    end
-end
-
-# Kept out of line so the aligned path — every forecast read after the first window —
-# never pays for formatting the message.
-@noinline function _throw_misaligned(initial_timestamp, interval, start_time)
-    throw(
-        ArgumentError(
-            "start_time=$start_time is not a forecast window timestamp " *
-            "(initial_timestamp=$initial_timestamp, interval=$(Dates.canonicalize(interval)))",
-        ),
-    )
-end
-
-# Translate IS's `start_time` / `count` window selection into the core's
-# half-open `[start, end)` `time_range`, validated against the forecast's stored
-# window grid (`initial_timestamp + k·interval`, `total_count` windows). Returns
-# `nothing` when no slice is requested (read every window). Throws ArgumentError
-# on a misaligned `start_time` or an out-of-range / oversized request — the store
-# would otherwise silently truncate an over-request rather than error. The
-# computed range is pushed into `get_time_series`, so the store slices the
-# windows server-side instead of returning all of them for us to discard.
-function _forecast_time_range(initial_timestamp, interval, total_count, start_time, count)
-    isnothing(start_time) && isnothing(count) && return nothing
-
-    start_idx = if isnothing(start_time)
-        1
-    else
-        _forecast_window_index(initial_timestamp, interval, start_time)
-    end
-    if start_idx < 1 || start_idx > total_count
-        throw(ArgumentError(
-            "start_time=$start_time is out of range (count=$total_count)"))
-    end
-    n = _window_length(count, start_idx, total_count)
-    if n < 1 || start_idx + n - 1 > total_count
-        throw(
-            ArgumentError(
-                "requested count=$n from start_time=$start_time exceeds the " *
-                "$total_count stored forecast windows"),
-        )
-    end
-
-    # A single-window forecast carries a zero interval, so the arithmetic below would
-    # collapse to a zero-width `[initial, initial)` range that selects nothing. The
-    # request is already validated, so read the whole (single-window) series.
-    iszero(Dates.value(interval)) && return nothing
-
-    start_ts = initial_timestamp + interval * (start_idx - 1)
-    end_ts = initial_timestamp + interval * (start_idx - 1 + n)  # exclusive
-    return (start_ts, end_ts)
-end
-
 # Assemble forecast windows into a `SortedDict` with a concrete value type. Building it
 # from a generator yields `SortedDict{Any, Any}`, which `Deterministic`'s `convert_data`
 # then coerces to `Vector{Float64}` — corrupting FunctionData windows. Materializing
@@ -1358,75 +1155,61 @@ function _assemble_forecast_windows(initial_timestamp, interval, count, window)
     return data
 end
 
+# Key-addressed forecast read: the forecast `key` names, reconstructed as its
+# STORED type, honoring `start_time` / `count` on the window axis and `len` on
+# the horizon. `read_by_id` resolves the window on the row its own primary-key
+# lookup returned, so nothing here computes a time range or fetches a grid to
+# compute one from. Addressed by owner (checked) or by store (already-owned key),
+# like the static readers.
+function _infrastore_read_forecast(
+    target::KeyedReadTarget,
+    key::TimeSeriesKey{<:Forecast};
+    start_time::Union{Nothing, Dates.DateTime} = nothing,
+    len::Union{Nothing, Int} = nothing,
+    count::Union{Nothing, Int} = nothing,
+)
+    # `count` is checked by the read below; `len` never reaches the store on this
+    # path — it truncates the windows here — so it is checked here.
+    _check_window_count(:len, len)
+    raw = _read_association_by_id(
+        target, key; start_time = start_time, count = count,
+    )
+    return _forecast_from_store(raw, String(raw.name), len)
+end
+
 """Reconstruct a forecast from the InfraStore store (matches the STORED type),
-honoring `start_time` / `count` slicing on the window axis. Pass `key` (a
-previously resolved `ForecastKey`) to skip the catalog resolution query."""
+honoring `start_time` / `count` slicing on the window axis.
+
+The forecast is resolved by name against `owner`'s own listing and then read by
+the key that resolution returns — two store calls, and the second does not
+re-check an ownership the listing established."""
 function _infrastore_get_forecast(
-    owner, name;
+    owner, name = nothing;
     time_series_type::Type{<:Forecast} = Forecast,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     len::Union{Nothing, Int} = nothing,
     count::Union{Nothing, Int} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
-    key::Union{Nothing, ForecastKey} = nothing,
     features::Union{Nothing, Dict} = nothing,
 )
-    mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
-    owner_id, _, category = _infrastore_owner_args(owner)
     # Resolve the unique forecast of the requested type matching a possibly-partial
-    # (subset) feature / resolution / interval query, then read it by its exact stored
-    # attributes. `interval` matters when one series name carries several forecasts
-    # that differ only by interval (`transform_single_time_series!` with
-    # `delete_existing = false`); without it the lookup is ambiguous. The type is part
-    # of the lookup too: one name can carry a Deterministic and a Probabilistic.
-    matched = if isnothing(key)
-        infrastore_get_time_series_key(
-            owner, time_series_type, name;
-            resolution = resolution, interval = interval, features = features,
-        )
-    else
-        # A caller-supplied key may predate a removal; a freshly resolved one cannot.
-        _throw_if_key_stale(store, key)
-        key
-    end
-    feats = get_features(matched)
-    resolution = get_resolution(matched)
-    # `len` truncates each window to its first `len` steps; validate it against the
-    # horizon here rather than letting the slice fail with a BoundsError (or silently
-    # return empty windows for `len = 0`), matching the static read path.
-    if !isnothing(len)
-        horizon_count = get_horizon_count(matched)
-        (len < 1 || len > horizon_count) && throw(
-            ArgumentError(
-                "requested len=$len is outside the forecast horizon of " *
-                "$horizon_count steps",
-            ),
-        )
-    end
-    # Pin every store lookup below to the resolved forecast's exact interval.
-    # One name can carry several forecasts differing only by interval, and the
-    # typed lookups match on attributes, so without this they would match more
-    # than one. (A single-window forecast carries a zero interval, stored as-is.)
-    tr = _forecast_time_range(get_initial_timestamp(matched), get_interval(matched),
-        get_count(matched), start_time, count)
-    # The resolved key names the stored concrete type; it selects the
-    # reconstruction method (function barrier — the key's type is not known
-    # statically).
-    forecast = _reconstruct_forecast(
-        get_time_series_type(matched),
-        store,
-        owner_id,
-        category,
-        String(name),
-        resolution,
-        get_interval(matched),
-        feats,
-        tr,
-        len,
+    # (subset) feature / resolution / interval query, then read the key that names.
+    # `interval` matters when one series name carries several forecasts that differ
+    # only by interval (`transform_single_time_series!` with `delete_existing =
+    # false`); without it the lookup is ambiguous. The type is part of the lookup
+    # too: one name can carry a Deterministic and a Probabilistic. Resolving to a
+    # key and reading that keeps a single read path — an attribute-addressed
+    # forecast read would need the interval pinned to avoid matching more than one
+    # of those siblings, which the id cannot match at all.
+    matched = infrastore_get_time_series_key(
+        owner, time_series_type, name;
+        resolution = resolution, interval = interval, features = features,
     )
-    return forecast
+    return _infrastore_read_forecast(
+        _owner_store(owner), matched;
+        start_time = start_time, len = len, count = count,
+    )
 end
 
 # `len`, when given, truncates a window to its first `len` horizon steps (the
@@ -1434,17 +1217,6 @@ end
 _truncate_window(w, ::Nothing) = w
 _truncate_window(w::AbstractVector, len::Int) = w[1:len]
 _truncate_window(w::AbstractMatrix, len::Int) = w[1:len, :]
-
-# Extract window `i` from a stored deterministic-forecast array. Scalar windows
-# are columns of a 2D `(horizon_count, count)` array; encoded FunctionData
-# windows carry trailing coefficient dims (3D). The stored `element_type` names
-# a scalar dtype in the 2-D case (and a DST inherits the metadata of the
-# SingleTimeSeries it shares), so key the decode on the array rank instead.
-_forecast_window(data::AbstractMatrix, ::ElementEncoding, _element_type, i) = data[:, i]
-
-_forecast_window(
-    data::AbstractArray{<:Any, 3}, encoding::ElementEncoding, element_type, i,
-) = _decode_forecast_window(data, encoding, element_type, i)
 
 # A Probabilistic/Scenarios window is stored `(member, horizon)` and transposed to the
 # `(horizon, member)` matrix IS hands users.
@@ -1454,38 +1226,95 @@ _member_window(data::AbstractArray{<:Any, 3}, i) = permutedims(@view data[:, :, 
 # handed back in its own element type (any scalar dtype), but an encoded element type
 # (FunctionData / NTuple rows, written by another InfraStore client) has no IS member
 # window shape, so name it rather than let the reconstruction mis-slice it.
-_check_member_window_type(::ScalarEncoding, _type, _name, _element_type) = nothing
-
-_check_member_window_type(::ElementEncoding, forecast_type, name, element_type) = throw(
-    ArgumentError(
-        "$forecast_type '$name' is stored with element type $element_type; IS reads " *
-        "$forecast_type windows as per-member scalar matrices only. It was likely " *
-        "written by another InfraStore client.",
-    ),
-)
+function _check_member_window_type(forecast_type, name, element_type)
+    InfraStore.is_composite_element_type(element_type) || return nothing
+    throw(
+        ArgumentError(
+            "$forecast_type '$name' is stored with element type $element_type; IS reads " *
+            "$forecast_type windows as per-member scalar matrices only. It was likely " *
+            "written by another InfraStore client.",
+        ),
+    )
+end
 
 # Reconstruct a forecast read from the store as its user-facing type. Every
 # InfraStore read below is already sliced to the requested window range.
-function _reconstruct_forecast(
-    ::Type{<:Probabilistic},
-    store::Store,
-    owner_id,
-    category,
-    name::String,
-    resolution,
-    interval,
-    feats,
-    time_range,
-    len,
-)
-    # `.data` is the canonical (percentile_count, horizon_count, count) array.
-    p = InfraStore.get_time_series(InfraStore.Probabilistic, store.inner, owner_id,
-        category, name;
-        resolution = resolution, interval = interval, features = feats,
-        time_range = time_range)
-    _check_member_window_type(
-        _element_encoding(p.element_type), Probabilistic, name, p.element_type,
+# ---- Forecast decoding -----------------------------------------------------
+# Decoding is split from fetching so both addressings share it: the keyed read
+# hands over what one `read_by_id` returned, the by-name read what an
+# attribute-addressed `get_time_series` returned, and the same methods below
+# turn either into the IS forecast. Dispatch is on the `InfraStore` struct the
+# store built, which already names the stored type.
+
+# Per-window horizon step count of a decoded forecast, for validating `len`
+# against the shape actually returned rather than against a catalog row.
+_store_horizon_count(d::InfraStore.Deterministic) = size(d.data, 1)
+_store_horizon_count(p::InfraStore.Probabilistic) = size(p.data, 2)
+_store_horizon_count(s::InfraStore.Scenarios) = size(s.data, 2)
+
+# `len` truncates each window to its first `len` steps; validated against the
+# horizon here rather than letting the slice fail with a BoundsError (or
+# silently return empty windows for `len = 0`), matching the static read path.
+_check_forecast_len(_raw, ::Nothing) = nothing
+
+function _check_forecast_len(raw, len::Int)
+    horizon_count = _store_horizon_count(raw)
+    (len < 1 || len > horizon_count) && throw(
+        ArgumentError(
+            "requested len=$len is outside the forecast horizon of $horizon_count steps",
+        ),
     )
+    return nothing
+end
+
+# A `Deterministic`'s decoded values are the `(horizon_count, count)` matrix whose
+# columns are its windows. A read hands back a higher-rank array when the row's
+# `element_type` did not decode to the values it was packed from — the packing
+# axis is still there, and slicing a column off it would either fail or, worse,
+# hand back the wrong numbers. That is a storage inconsistency, so it is named
+# here rather than left to surface as a bare `BoundsError` from the slice.
+_check_deterministic_window_shape(::AbstractMatrix, ::String, _element_type) = nothing
+
+_check_deterministic_window_shape(data::AbstractArray, name::String, element_type) =
+    throw(
+        ArgumentError(
+            "Deterministic '$name' read back as a $(ndims(data))-dimensional array " *
+            "with element type $(something(element_type, "f64")); a Deterministic's " *
+            "windows are the columns of a (horizon_count, count) matrix. Its stored " *
+            "element type does not describe the values it holds.",
+        ),
+    )
+
+# A DeterministicSingleTimeSeries is an internal storage optimization: it shares
+# the underlying SingleTimeSeries array instead of materializing the overlapping
+# windows. On read it is always returned as a regular `Deterministic` — the
+# InfraStore store expands the shared array into the canonical
+# (horizon_count, count) window matrix (honoring the requested window) — so there
+# is no DST method here, and none is reachable.
+#
+# This does NOT cost the storage optimization on a copy: `copy_time_series!`
+# clones the association row inside the store, so the stored type survives
+# without ever round-tripping through these Julia objects.
+function _forecast_from_store(d::InfraStore.Deterministic, name::String, len)
+    _check_forecast_len(d, len)
+    _check_deterministic_window_shape(d.data, name, d.element_type)
+    # Resolved once per read: the tag is the same for every window.
+    # `d.data` is `(horizon_count, count)` of values, decoded by the read, so a
+    # window is a column of it. Materialized, not a view: the window becomes the
+    # `Vector` a `Deterministic`'s SortedDict holds, and a `SubArray` there would
+    # keep the whole forecast array alive behind every window.
+    window(i) = _truncate_window(d.data[:, i], len)
+    data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
+    return Deterministic(; name = name, data = data,
+        resolution = d.resolution, interval = d.interval, units = d.units,
+        quantity_kind = d.quantity_kind,
+        unit_system = _from_store_unit_system(d.unit_system))
+end
+
+# `.data` is the canonical (percentile_count, horizon_count, count) array.
+function _forecast_from_store(p::InfraStore.Probabilistic, name::String, len)
+    _check_forecast_len(p, len)
+    _check_member_window_type(Probabilistic, name, p.element_type)
     window(i) = _truncate_window(_member_window(p.data, i), len)
     data = _assemble_forecast_windows(p.initial_timestamp, p.interval, p.count, window)
     # The positional constructor infers `{T, N}` from the windows; the keyword form pins
@@ -1497,71 +1326,10 @@ function _reconstruct_forecast(
     )
 end
 
-_reconstruct_forecast(::Type{<:Deterministic}, args...) =
-    _reconstruct_deterministic(InfraStore.Deterministic, args...)
-
-# A DeterministicSingleTimeSeries is an internal storage optimization: it shares
-# the underlying SingleTimeSeries array instead of materializing the overlapping
-# windows. On read it is always returned as a regular `Deterministic` — the
-# InfraStore store expands the shared array into the canonical
-# (horizon_count, count) window matrix (honoring `time_range`), so the
-# reconstruction is identical to the `Deterministic` method.
-#
-# This does NOT cost the storage optimization on a copy: `copy_time_series!`
-# clones the association row inside the store, so the stored type survives
-# without ever round-tripping through these Julia objects.
-_reconstruct_forecast(::Type{<:DeterministicSingleTimeSeries}, args...) =
-    _reconstruct_deterministic(InfraStore.DeterministicSingleTimeSeries, args...)
-
-_reconstruct_forecast(::Type{T}, args...) where {T} =
-    error("unreachable: unexpected stored forecast type $T")
-
-function _reconstruct_deterministic(
-    store_type,
-    store::Store,
-    owner_id,
-    category,
-    name::String,
-    resolution,
-    interval,
-    feats,
-    time_range,
-    len,
-)
-    d = InfraStore.get_time_series(store_type, store.inner, owner_id, category, name;
-        resolution = resolution, interval = interval, features = feats,
-        time_range = time_range)
-    # Resolved once per read: the tag is the same for every window.
-    encoding = _element_encoding(d.element_type)
-    window(i) =
-        _truncate_window(_forecast_window(d.data, encoding, d.element_type, i), len)
-    data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
-    return Deterministic(; name = name, data = data,
-        resolution = d.resolution, interval = d.interval, units = d.units,
-        quantity_kind = d.quantity_kind,
-        unit_system = _from_store_unit_system(d.unit_system))
-end
-
-function _reconstruct_forecast(
-    ::Type{<:Scenarios},
-    store::Store,
-    owner_id,
-    category,
-    name::String,
-    resolution,
-    interval,
-    feats,
-    time_range,
-    len,
-)
-    # `.data` is the canonical (scenario_count, horizon_count, count) array.
-    s_ts = InfraStore.get_time_series(InfraStore.Scenarios, store.inner, owner_id,
-        category, name;
-        resolution = resolution, interval = interval, features = feats,
-        time_range = time_range)
-    _check_member_window_type(
-        _element_encoding(s_ts.element_type), Scenarios, name, s_ts.element_type,
-    )
+# `.data` is the canonical (scenario_count, horizon_count, count) array.
+function _forecast_from_store(s_ts::InfraStore.Scenarios, name::String, len)
+    _check_forecast_len(s_ts, len)
+    _check_member_window_type(Scenarios, name, s_ts.element_type)
     window(i) = _truncate_window(_member_window(s_ts.data, i), len)
     data = _assemble_forecast_windows(
         s_ts.initial_timestamp, s_ts.interval, s_ts.count, window,
@@ -1572,6 +1340,9 @@ function _reconstruct_forecast(
         unit_system = _from_store_unit_system(s_ts.unit_system),
     )
 end
+
+_forecast_from_store(raw, name::String, _len) =
+    error("unreachable: $name resolved to unexpected stored data $(typeof(raw))")
 
 # ---- ForecastReader --------------------------------------------------------
 # A timestamp-oriented reader over the forecasts matching a filter. It carries the
@@ -1591,17 +1362,21 @@ _tss_forecast_type(::Type{<:Scenarios}) = InfraStore.Scenarios
 # Orient + decode one raw window into IS's canonical per-window value, matching a single
 # `get_time_series(...).data[timestamp]`. Dispatched on the forecast type, mirroring
 # `_tss_forecast_type` above.
-_decode_forecast_reader_window(::Type{<:Probabilistic}, raw, ::ElementEncoding) =
+#
+# A reader hands back the stored packing — it is the per-timestamp path, where a
+# decode per group would be a cost in the loop it exists to make cheap — so this
+# is where the element type is resolved for a reader window.
+_decode_forecast_reader_window(::Type{<:Probabilistic}, raw, _element_type) =
     permutedims(raw)
 
-_decode_forecast_reader_window(::Type{<:Scenarios}, raw, ::ElementEncoding) =
-    permutedims(raw)
+_decode_forecast_reader_window(::Type{<:Scenarios}, raw, _element_type) = permutedims(raw)
 
-_decode_forecast_reader_window(
-    ::Type{<:AbstractDeterministic}, raw, encoding::ElementEncoding,
-) = _decode_stored_values(raw, encoding)
+_decode_forecast_reader_window(::Type{<:AbstractDeterministic}, raw, element_type) =
+    InfraStore.decode_element_values(
+        raw, something(element_type, "f64"); types = _IS_ELEMENT_TYPES,
+    )
 
-_decode_forecast_reader_window(::Type{T}, raw, ::ElementEncoding) where {T <: Forecast} =
+_decode_forecast_reader_window(::Type{T}, raw, _element_type) where {T <: Forecast} =
     throw(ArgumentError("InfraStore backend cannot decode a window of forecast type $T"))
 
 """
@@ -1611,7 +1386,7 @@ forecast array (and read plan) report the same `slot`.
 """
 struct ForecastReaderEntry
     owner::TimeSeriesOwners
-    key::ForecastKey
+    key::TimeSeriesKey{<:Forecast}
     slot::Int
 end
 
@@ -1633,49 +1408,19 @@ mutable struct ForecastReader{T <: Forecast}
     `element_type` once at build, so a per-timestamp read dispatches instead of
     re-interpreting the tag string.
     """
-    element_encodings::Vector{ElementEncoding}
+    element_types::Vector{Union{Nothing, String}}
     "Per-slot materialized window cache; reset on each read."
     windows::Vector{Any}
     has_read::Bool
 end
 
-# The association identity a reader entry / metadata row is matched on:
-# everything a build filter cannot disambiguate further (`key_info` carries no
-# interval, but two same-identity forecasts differing only by interval cannot
-# share one reader timeline, so the reader build has already rejected that
-# case). Both arguments come off the same core catalog, so the periods and
-# feature values compare exactly.
-_infrastore_row_match_identity(x) = (
-    Int(x.owner_id),
-    x.owner_category,
-    x.time_series_type,
-    String(x.name),
-    x.resolution,
-    Tuple(sort!([string(k) => v for (k, v) in x.features])),
-)
-
-# Metadata rows for every association matching a reader build filter, indexed
-# by association identity — ONE core catalog query for the whole reader,
-# instead of a `get_metadata` round-trip per entry.
-function _infrastore_metadata_by_identity(store::Store, resolution, name, features)
-    metas = Dict{Any, InfraStore.TimeSeriesMetadata}()
-    for m in InfraStore.list_time_series(store.inner;
-        resolution = resolution, name = name, features = _infrastore_features(features))
-        # Identities are unique per (resolution, interval, features); rows that
-        # collide here differ only by interval and are unreachable behind a
-        # reader build (they cannot share a window timeline).
-        metas[_infrastore_row_match_identity(m)] = m
-    end
-    return metas
-end
-
-# The metadata row backing one reader entry (`info = key_info(entry.key)`).
-function _infrastore_entry_metadata(metas::AbstractDict, info)
-    meta = get(metas, _infrastore_row_match_identity(info), nothing)
-    isnothing(meta) &&
-        error("unreachable: reader entry $(info.name) has no matching metadata row")
-    return meta
-end
+# The metadata row behind each of a reader's entries, in entry order — ONE core
+# catalog query for the whole reader, addressed by the association ids its
+# entries carry. `list_metadata_by_ids` answers one row per id asked for, in the
+# order asked, and throws if any id has gone stale (none can here: the reader
+# holds the store's own rows).
+_infrastore_reader_metadata(store::Store, ids::Vector{Int64}) =
+    InfraStore.list_metadata_by_ids(store.inner, ids)
 
 # Build a reader from the store. `id_to_owner(owner_id::Int, category::String)`
 # resolves each entry's owner object (the system holds the owner maps). Per-entry
@@ -1691,20 +1436,18 @@ function infrastore_build_forecast_reader(
     inner = InfraStore.build_forecast_reader(store.inner, _tss_forecast_type(T);
         resolution = resolution, name = name, features = features)
     tss_entries = InfraStore.forecast_entries(inner)
-    metas = _infrastore_metadata_by_identity(store, resolution, name, features)
+    metas = _infrastore_reader_metadata(store, Int64[e.id for e in tss_entries])
     n = length(tss_entries)
     entries = Vector{ForecastReaderEntry}(undef, n)
-    element_encodings = Vector{ElementEncoding}(undef, n)
-    for (i, e) in enumerate(tss_entries)
-        info = InfraStore.key_info(e.key)
-        owner = id_to_owner(Int(info.owner_id), info.owner_category)
-        fmeta = _infrastore_entry_metadata(metas, info)
-        element_encodings[i] = _element_encoding(fmeta.element_type)
+    element_types = Vector{Union{Nothing, String}}(undef, n)
+    for (i, (e, fmeta)) in enumerate(zip(tss_entries, metas))
+        owner = id_to_owner(Int(fmeta.owner_id), fmeta.owner_category)
+        element_types[i] = fmeta.element_type
         # `e.slot` is 0-based in the InfraStore store; carry it 1-based for Julia.
         entries[i] = ForecastReaderEntry(owner, _key_from_row(fmeta), e.slot + 1)
     end
     windows = Vector{Any}(nothing, InfraStore.forecast_num_slots(inner))
-    return ForecastReader{T}(inner, store, entries, element_encodings, windows, false)
+    return ForecastReader{T}(inner, store, entries, element_types, windows, false)
 end
 
 """
@@ -1759,7 +1502,7 @@ function get_forecast_window(reader::ForecastReader{T}, entry_index::Integer) wh
     isnothing(cached) || return cached
     raw = InfraStore.forecast_values(reader.inner, entry_index)
     window =
-        _decode_forecast_reader_window(T, raw, reader.element_encodings[entry_index])
+        _decode_forecast_reader_window(T, raw, reader.element_types[entry_index])
     reader.windows[entry.slot] = window
     return window
 end
@@ -1776,7 +1519,7 @@ One series in a [`StaticTimeSeriesReader`], bound to its owner. `group` and
 """
 struct StaticTimeSeriesReaderEntry
     owner::TimeSeriesOwners
-    key::StaticTimeSeriesKey
+    key::TimeSeriesKey{<:SingleTimeSeries}
     group::Int
     column::Int
 end
@@ -1784,8 +1527,10 @@ end
 """
 A timestamp-oriented reader over every `SingleTimeSeries` matching a build
 filter. Drive it with [`read_static_time_series_values!`](@ref), then pull each
-entry's value with [`get_static_time_series_value`](@ref). Build one with
-`build_static_time_series_reader(data; ...)`.
+entry's value with [`get_static_time_series_value`](@ref) — or, to sweep every
+entry, take whole groups with [`get_static_time_series_group_values`](@ref) and
+[`get_static_time_series_group_entries`](@ref), which is markedly cheaper at
+scale. Build one with `build_static_time_series_reader(data; ...)`.
 
 The matched series are packed into columnar groups; one physical `.h5` read per
 group serves every entry in it at a timestamp — see
@@ -1796,12 +1541,27 @@ mutable struct StaticTimeSeriesReader
     store::Store
     entries::Vector{StaticTimeSeriesReaderEntry}
     """
-    Decode plan for each entry (parallel to `entries`); drives the row decode.
-    Resolved from the stored `element_type` once at build, so a per-timestamp
-    read dispatches instead of re-interpreting the tag string.
+    Each entry's stored `element_type` (parallel to `entries`). Decodes that one
+    column, and is reached only for a group whose columns disagree — see
+    `group_element_types`.
     """
-    element_encodings::Vector{ElementEncoding}
-    "Per-group materialized values cache; reset on each read."
+    element_types::Vector{Union{Nothing, String}}
+    """
+    Per-group decode plan: the composite `element_type` that every column of the
+    group shares, or `nothing` when the group holds scalars or its columns
+    disagree. Resolved once at build, so a read interprets a tag once per group
+    rather than once per value.
+    """
+    group_element_types::Vector{Union{Nothing, String}}
+    """
+    The stretch of `entries` belonging to each group. Entries are built
+    group-major and in column order, so a group's entries are contiguous and
+    `entries[group_ranges[g]][c]` is column `c` of group `g` — which is what lets
+    [`get_static_time_series_group_entries`](@ref) hand back a view that lines up
+    positionally with the group's values.
+    """
+    group_ranges::Vector{UnitRange{Int}}
+    "Per-group values cache, decoded where `group_element_types` says so; reset on each read."
     values::Vector{Any}
     has_read::Bool
 end
@@ -1818,27 +1578,67 @@ function infrastore_build_static_time_series_reader(
 )
     inner = InfraStore.build_static_reader(store.inner;
         resolution = resolution, name = name, features = features)
-    metas = _infrastore_metadata_by_identity(store, resolution, name, features)
     entries = StaticTimeSeriesReaderEntry[]
-    element_encodings = ElementEncoding[]
+    element_types = Union{Nothing, String}[]
     groups = InfraStore.static_groups(inner)
+    group_element_types = Vector{Union{Nothing, String}}(undef, length(groups))
+    group_ranges = Vector{UnitRange{Int}}(undef, length(groups))
+    metas = _infrastore_reader_metadata(
+        store,
+        Int64[id for group in groups for id in group.ids],
+    )
+    i = 0
     for (gi, group) in enumerate(groups)
-        for (col, k) in enumerate(group.keys)
-            info = InfraStore.key_info(k)
-            owner = id_to_owner(Int(info.owner_id), info.owner_category)
-            smeta = _infrastore_entry_metadata(metas, info)
+        shared = nothing
+        uniform = true
+        first_entry = i + 1
+        for col in eachindex(group.ids)
+            i += 1
+            smeta = metas[i]
+            owner = id_to_owner(Int(smeta.owner_id), smeta.owner_category)
             push!(
                 entries,
                 StaticTimeSeriesReaderEntry(owner, _key_from_row(smeta), gi, col),
             )
-            push!(element_encodings, _element_encoding(smeta.element_type))
+            push!(element_types, smeta.element_type)
+            if col == 1
+                shared = smeta.element_type
+            elseif smeta.element_type != shared
+                uniform = false
+            end
         end
+        group_element_types[gi] = _shared_group_element_type(group, shared, uniform)
+        group_ranges[gi] = first_entry:i
     end
     values = Vector{Any}(nothing, length(groups))
     return StaticTimeSeriesReader(
-        inner, store, entries, element_encodings, values, false,
+        inner, store, entries, element_types, group_element_types, group_ranges,
+        values, false,
     )
 end
+
+# The tag a whole group can be decoded by, or `nothing` to leave it raw and
+# decode per entry.
+#
+# The core groups columns by `(element_type, element_shape)`, so a group is
+# uniform in its element type by construction — but `InfraStore.StaticGroup`
+# surfaces only the derived `dtype`, so IS cannot read that guarantee off the
+# group and establishes it from the columns instead. Decoding a whole group under
+# one column's tag while another column disagreed would hand back wrong values
+# silently, which is why the disagreement is checked rather than assumed; the
+# per-entry path it falls back to is correct, only slower.
+#
+# The empty-shape guard keeps a scalar group out: a composite always occupies one
+# trailing axis, so a group with no element axis has nothing to decode.
+_shared_group_element_type(group, shared, uniform) =
+    if (
+        uniform && !isempty(group.element_shape) &&
+        InfraStore.is_composite_element_type(shared)
+    )
+        shared
+    else
+        nothing
+    end
 
 """
 $(TYPEDSIGNATURES)
@@ -1870,8 +1670,9 @@ Base.length(reader::StaticTimeSeriesReader) = length(reader.entries)
 """
 $(TYPEDSIGNATURES)
 Read the value of every entry at `timestamp`, performing one `.h5` read per
-columnar group. Follow with [`get_static_time_series_value`](@ref). Throws if
-`timestamp` is off the reader's grid.
+columnar group. Follow with [`get_static_time_series_value`](@ref) per entry, or
+[`get_static_time_series_group_values`](@ref) per group to sweep them all.
+Throws if `timestamp` is off the reader's grid.
 """
 function read_static_time_series_values!(
     reader::StaticTimeSeriesReader,
@@ -1888,43 +1689,132 @@ $(TYPEDSIGNATURES)
 The decoded value for entry `entry_index` (1-based) from the most recent
 [`read_static_time_series_values!`](@ref): a scalar for scalar series, or the
 reconstructed element (e.g. a `FunctionData`) for structured series.
+
+This is the one-entry accessor. Reading *every* entry through it costs a dynamic
+dispatch and a boxed value per call — a cost that also grows with the entry
+count — so a sweep should go through
+[`get_static_time_series_group_values`](@ref) instead, which serves the same
+values from one concrete array per group.
 """
 function get_static_time_series_value(
     reader::StaticTimeSeriesReader,
     entry_index::Integer,
 )
-    reader.has_read || throw(
-        ArgumentError(
-            "call read_static_time_series_values! before reading values"))
     entry = reader.entries[entry_index]
-    vals = reader.values[entry.group]
-    if isnothing(vals)
-        vals = InfraStore.static_values(reader.inner, entry.group)
-        reader.values[entry.group] = vals
-    end
     return _static_group_element(
-        vals, entry.column, reader.element_encodings[entry_index],
+        get_static_time_series_group_values(reader, entry.group),
+        entry.column,
+        reader.element_types[entry_index],
     )
 end
 
-# One entry's value out of its group's materialized array. A vector group is
-# scalar data (one value per column); a higher-rank group carries one element row
-# per column, decoded through the entry's encoding (same scheme as
-# `_decode_static_values`, at `len == 1`).
-_static_group_element(vals::AbstractVector, column::Integer, ::ElementEncoding) =
-    vals[column]
+"""
+$(TYPEDSIGNATURES)
+Columnar group `group_index`'s values from the most recent
+[`read_static_time_series_values!`](@ref): one value per column, lining up
+positionally with [`get_static_time_series_group_entries`](@ref). The exception
+is a multidimensional scalar series, which keeps the stored
+`(num_columns, element_shape...)` shape, where column `c`'s value is the slice
+`vals[c, ..]`.
 
-function _static_group_element(
-    vals::AbstractArray, column::Integer, encoding::ElementEncoding,
+This is the allocation-free way to sweep.
+[`get_static_time_series_value`](@ref) hands back one entry at a time out of a
+cache the reader cannot give a concrete type, so every pull costs a dynamic
+dispatch and boxes its result — at 100k entries ~0.09 µs and 32 bytes per value,
+and it worsens as the reader grows, because the box traffic outgrows the cache.
+A group is one concrete array, so a loop that takes it through a function
+barrier pays neither, and stays flat with size:
+
+```julia
+for g in 1:get_num_static_time_series_groups(reader)
+    consume!(out, get_static_time_series_group_values(reader, g),
+        get_static_time_series_group_entries(reader, g))
+end
+```
+
+The barrier is the whole point: `consume!(out, vals::Vector{Float64}, entries)`
+specializes on the group's element type, so `vals[i]` is a plain load. Written
+inline against the `Any` this returns, the loop would be no faster than the
+per-value accessor.
+
+Materializes (and decodes) the group on first touch after a read, into the same
+cache [`get_static_time_series_value`](@ref) uses, so the two may be mixed and
+the group is still built at most once per read.
+"""
+function get_static_time_series_group_values(
+    reader::StaticTimeSeriesReader,
+    group_index::Integer,
 )
-    colons = ntuple(_ -> Colon(), ndims(vals) - 1)
-    return _decode_element(vals[column, colons...], encoding)
+    reader.has_read || throw(
+        ArgumentError(
+            "call read_static_time_series_values! before reading values"))
+    vals = reader.values[group_index]
+    if isnothing(vals)
+        vals = _materialize_static_group(reader, group_index)
+        reader.values[group_index] = vals
+    end
+    return vals
 end
 
-_decode_element(element, ::ScalarEncoding) = element
+"""
+$(TYPEDSIGNATURES)
+The entries of columnar group `group_index` (1-based), as a view in column
+order — so entry `i` of this view owns value `i` of
+[`get_static_time_series_group_values`](@ref). Needs no read; the grouping is
+fixed when the reader is built.
+"""
+get_static_time_series_group_entries(
+    reader::StaticTimeSeriesReader,
+    group_index::Integer,
+) = view(reader.entries, reader.group_ranges[group_index])
 
-_decode_element(element, encoding::RowEncoding) =
-    _decode_static_values(reshape(element, 1, :), encoding, 1)[1]
+# One group's values for the current timestamp, decoded to one value per column
+# when every column shares a composite element type.
+#
+# The decode is whole-group because the read is: the reader performs one `.h5`
+# read per group per timestamp, and this makes it one decode per group per
+# timestamp to match. Decoding per entry instead re-derived the same answer from
+# the same tag string once per (entry, timestamp) — a fresh `String`, a regex
+# probe for the tuple spelling, and a one-row array to unwrap, once per component
+# per timestep in a sweep. All of it is amortized over the group here, and a
+# decoded group needs no decode branch on the per-value path at all.
+#
+# The whole-group decode is paid on the group's first touch after a read, so a
+# caller pulling one entry decodes columns it will not look at. That is the same
+# bargain the values cache already makes — the `.h5` read above it is whole-group
+# too — and it is the access pattern the reader exists for.
+function _materialize_static_group(reader::StaticTimeSeriesReader, group::Integer)
+    vals = InfraStore.static_values(reader.inner, group)
+    tag = reader.group_element_types[group]
+    isnothing(tag) && return vals
+    return InfraStore.decode_element_values(vals, tag; types = _IS_ELEMENT_TYPES)
+end
+
+# One entry's value out of its group's materialized values. A vector group is one
+# value per column — scalar data, or a group already decoded by
+# `_materialize_static_group`; a higher-rank group is one of two things, told
+# apart by the tag rather than by the rank:
+#   - a composite element type this column carries alone, because the group's
+#     columns disagree — decoded one row at a time. See
+#     `_shared_group_element_type` for why that case is guarded against rather
+#     than assumed away;
+#   - a multidimensional scalar series — a `SingleTimeSeries{Float64, N}` holds an
+#     `N-1`-dimensional slice per step, and there is nothing to decode, so the
+#     slice *is* the value. Decoding one would hand back the slice unchanged and
+#     then `only` it, which throws for every width above 1.
+_static_group_element(vals::AbstractVector, column::Integer, _element_type) =
+    vals[column]
+
+function _static_group_element(vals::AbstractArray, column::Integer, element_type)
+    colons = ntuple(_ -> Colon(), ndims(vals) - 1)
+    slice = vals[column, colons...]
+    InfraStore.is_composite_element_type(element_type) || return slice
+    return only(
+        InfraStore.decode_element_values(
+            reshape(slice, 1, :), element_type; types = _IS_ELEMENT_TYPES,
+        ),
+    )
+end
 
 """Route a narrowed `has_time_series` query to the InfraStore store — the general
 catalog filter, serving every query the owner-scoped probe in `infrastore_has_any`
@@ -2064,8 +1954,8 @@ _infrastore_query_types(::Nothing) = AllStoredTypes()
     return :($collapsed)
 end
 
-# The single InfraStore type to push into the core `list_keys` filter for a query
-# type — a stored type, where `InfraStore.Deterministic` covers a
+# The single InfraStore type to push into the core `list_time_series_metadata`
+# filter for a query type — a stored type, where `InfraStore.Deterministic` covers a
 # `Deterministic`-family query because the core matches both storage forms under
 # it. `nothing` when the type spans more than that (a broader abstract family
 # like `Forecast`); the caller then applies the residual
@@ -2114,54 +2004,97 @@ _infrastore_is_type(s::Symbol) =
         error("InfraStore backend does not support time series type $s")
     end
 
-# Build the matching IS `TimeSeriesKey` from a catalog row — a
-# `list_time_series` metadata row (the only row kind that carries the store's
-# `id`; a bare `list_keys`/`list_array_groups` row does not, so every caller
-# lists through `list_time_series` instead). The key is the single descriptor
-# for a stored association; forecast-only fields (percentiles, scenario_count)
-# are not carried — they come from the data on read.
-_key_from_row(row) = _key_from_row(_infrastore_is_type(row.time_series_type), row)
+# The IS time series type named by a catalog row's `time_series_type` string,
+# for deserializing a key that travels as (id, type).
+_time_series_type_from_name(name::AbstractString) = _infrastore_is_type(Symbol(name))
+
+# The IS counterpart of a store value type. The four composite ones are the
+# types `InfraStore.DEFAULT_ELEMENT_TYPES` decodes into and IS substitutes its
+# own `FunctionData` for; everything else — the scalar dtypes, and the `NTuple`s
+# a `tuple(N,f64)` row decodes to — is already the type IS uses.
+_is_element_type(::Type{InfraStore.LinearFunction}) = LinearFunctionData
+_is_element_type(::Type{InfraStore.QuadraticFunction}) = QuadraticFunctionData
+_is_element_type(::Type{InfraStore.PiecewiseLinear}) = PiecewiseLinearData
+_is_element_type(::Type{InfraStore.PiecewiseStep}) = PiecewiseStepData
+_is_element_type(::Type{T}) where {T} = T
+
+# The IS value element type a catalog row's values decode to — the `T` of a
+# `TimeSeriesData{T}`, and so of the `TimeSeriesKey{<:TimeSeriesData{T}}` naming
+# the series.
+#
+# Read off the row's own `time_series_type`, which the store has already resolved
+# its `element_type` string into (`InfraStore.SingleTimeSeries{PiecewiseLinear,
+# 1}` for a `piecewise_linear` row). That leaves only store type -> IS type to
+# translate, over types InfraStore exports, and keeps the `element_type`
+# vocabulary — which spellings are composite, which dtype each names — inside the
+# store, where it is owned: IS never parses the tag, so a spelling added or
+# respelled there needs no matching edit here.
+#
+# A row whose type the store left unparameterized is one whose `element_type`
+# this version of the store does not recognize; its values come back as the raw
+# numbers they are stored as, which is `Float64` unless something says otherwise.
+_element_value_type(::Type{<:InfraStore.SingleTimeSeries{T}}) where {T} =
+    _is_element_type(T)
+_element_value_type(::Type{<:InfraStore.NonSequentialTimeSeries{T}}) where {T} =
+    _is_element_type(T)
+_element_value_type(::Type{<:InfraStore.Deterministic{T}}) where {T} =
+    _is_element_type(T)
+_element_value_type(::Type{<:InfraStore.DeterministicSingleTimeSeries{T}}) where {T} =
+    _is_element_type(T)
+_element_value_type(::Type{<:InfraStore.Probabilistic{T}}) where {T} =
+    _is_element_type(T)
+_element_value_type(::Type{<:InfraStore.Scenarios{T}}) where {T} = _is_element_type(T)
+_element_value_type(::Type) = Float64
+
+# Build the matching IS `TimeSeriesKey` from a catalog row — a `list_time_series_metadata`
+# row, which is the store's one listing shape and carries the `id` a key is
+# addressed by. A key is the id plus the stored type; every other column of the
+# row stays on the row, where a caller reads it without risk of the two drifting.
+#
+# The type parameter carries the *value* element type as well as the kind, so a
+# key names what a read of it hands back: a `piecewise_linear` row becomes a
+# `TimeSeriesKey{SingleTimeSeries{PiecewiseLinearData}}`. The array rank is left
+# free — it is a property of the stored array, not of the reference.
+function _key_from_row(row)
+    kind = _infrastore_is_type(row.time_series_type)
+    value_type = _element_value_type(row.time_series_type)
+    return TimeSeriesKey{kind{value_type}}(row.id)
+end
 
 _row_features(row) = Dict{String, Any}(string(k) => v for (k, v) in row.features)
 
-_key_from_row(::Type{T}, row) where {T <: NonSequentialTimeSeries} =
-    NonSequentialTimeSeriesKey(;
-        owner_id = row.owner_id,
-        owner_category = row.owner_category,
-        association_id = row.id,
-        time_series_type = T,
-        name = row.name,
-        length = row.length,
-        features = _row_features(row),
+# The IS `TimeSeriesMetadata` for a store catalog row: the key, plus the
+# descriptive columns translated into IS's vocabulary. The translation is the
+# point — a raw store row names *InfraStore's* `SingleTimeSeries`, and IS exports
+# its own, so handing one back unconverted would give callers a type that fails
+# every `<: SingleTimeSeries` test they write.
+function _metadata_from_row(row)
+    key = _key_from_row(row)
+    return TimeSeriesMetadata(
+        key,
+        Int(row.owner_id),
+        String(row.owner_type),
+        row.owner_category,
+        String(row.name),
+        row.initial_timestamp,
+        row.resolution,
+        row.horizon,
+        row.interval,
+        isnothing(row.count) ? nothing : Int(row.count),
+        isnothing(row.length) ? nothing : Int(row.length),
+        row.percentiles,
+        _row_features(row),
+        String(row.element_type),
+        row.data_hash,
+        row.units,
+        row.quantity_kind,
+        _from_store_unit_system(row.unit_system),
+        row.component_field,
+        Dims(row.element_shape),
+        row.time_reference,
+        row.application_data,
     )
-
-_key_from_row(::Type{T}, row) where {T <: StaticTimeSeries} =
-    StaticTimeSeriesKey(;
-        owner_id = row.owner_id,
-        owner_category = row.owner_category,
-        association_id = row.id,
-        time_series_type = T,
-        name = row.name,
-        initial_timestamp = row.initial_timestamp,
-        resolution = row.resolution,
-        length = row.length,
-        features = _row_features(row),
-    )
-
-_key_from_row(::Type{T}, row) where {T <: Forecast} =
-    ForecastKey(;
-        owner_id = row.owner_id,
-        owner_category = row.owner_category,
-        association_id = row.id,
-        time_series_type = T,
-        name = row.name,
-        initial_timestamp = row.initial_timestamp,
-        resolution = row.resolution,
-        horizon = row.horizon,
-        interval = row.interval,
-        count = row.count,
-        features = _row_features(row),
-    )
+end
 
 """
 Resolve a wire `association_id` to the full `TimeSeriesKey` it names, from the
@@ -2182,30 +2115,31 @@ function get_time_series_key(store::Store, association_id::Integer)
     return _key_from_row(row)
 end
 
-# All matching associations for one owner, as `TimeSeriesKey` objects. The core
-# `list_time_series` query filters owner / name / resolution / interval / features
+# Every matching catalog row, as IS `TimeSeriesMetadata`. The core
+# `list_time_series_metadata` query filters owner / name / resolution / interval / features
 # (periods are canonicalized to ISO-8601 on both write and query, so a regular
 # `Hour(1)` matches a stored `Minute(60)`); an abstract `time_series_type` (or
 # `Deterministic`, which also matches a DST) is not a catalog filter column, so
 # it is applied as a residual on the already-narrowed rows.
-function _infrastore_list_keys(
-    store::Store,
-    owner_id::Integer,
-    owner_category::InfraStore.OwnerCategory;
+#
+# This is the ONE place a `time_series_type` filter is translated, which is why
+# both the owner-scoped and the store-wide entry points route through it: the
+# store's filter column takes the store's own types, and every IS caller — public
+# or internal — names IS's. Any remaining keyword (`owner_id`, `owner_category`,
+# `name`, `resolution`, `interval`, `name_glob`, `component_field`, `zoneless`)
+# is a filter the store takes as-is and is forwarded untouched.
+function _infrastore_list_metadata(
+    store::Store;
     time_series_type = nothing,
-    name = nothing,
-    resolution = nothing,
-    interval = nothing,
     features::Union{Nothing, Dict} = nothing,
+    kwargs...,
 )
     type_filter = _infrastore_pushable_type(time_series_type)
     feats = _infrastore_features(features)
     rows =
-        InfraStore.list_time_series(store.inner; owner_id = owner_id,
-            owner_category = owner_category, time_series_type = type_filter,
-            name = name, resolution = resolution, interval = interval,
-            features = feats)
-    out = ConcreteTimeSeriesKey[]
+        InfraStore.list_metadata(store.inner; time_series_type = type_filter,
+            features = feats, kwargs...)
+    out = TimeSeriesMetadata[]
     for row in rows
         if !isnothing(time_series_type)
             _infrastore_type_matches(
@@ -2214,13 +2148,13 @@ function _infrastore_list_keys(
             ) ||
                 continue
         end
-        push!(out, _key_from_row(row))
+        push!(out, _metadata_from_row(row))
     end
     return out
 end
 
-# Owner-level `list_metadata` entry point.
-function infrastore_owner_list_keys(
+# Owner-level `list_time_series_metadata` entry point.
+function infrastore_owner_list_metadata(
     owner::TimeSeriesOwners;
     time_series_type = nothing,
     name = nothing,
@@ -2233,9 +2167,10 @@ function infrastore_owner_list_keys(
     mgr = _get_time_series_manager_or_throw(owner)
     store = mgr.data_store
     owner_id, _, category = _infrastore_owner_args(owner)
-    return _infrastore_list_keys(store, owner_id, category;
+    return _infrastore_list_metadata(store;
+        owner_id = owner_id, owner_category = category,
         time_series_type = time_series_type, name = name, resolution = resolution,
-        interval = interval, features = _infrastore_features(features))
+        interval = interval, features = features)
 end
 
 # Single matching time series key; throws when zero or more than one match.
@@ -2247,7 +2182,7 @@ function infrastore_get_time_series_key(
     interval = nothing,
     features::Union{Nothing, Dict} = nothing,
 ) where {T <: TimeSeriesData}
-    items = infrastore_owner_list_keys(owner; time_series_type = T, name = name,
+    items = infrastore_owner_list_metadata(owner; time_series_type = T, name = name,
         resolution = resolution, interval = interval, features = features)
     if isempty(items)
         throw(ArgumentError("No matching metadata is stored."))
@@ -2260,44 +2195,36 @@ function infrastore_get_time_series_key(
             ),
         )
     end
-    return items[1]
+    return get_time_series_key(items[1])
+end
+
+# The catalog row `key` resolves to under `owner`, translated into IS's
+# `TimeSeriesMetadata`. One primary-key fetch: the row that answers the call is
+# the same row the owner is checked against, so there is no second lookup for the
+# two to disagree about.
+function infrastore_get_time_series_metadata(
+    owner::TimeSeriesOwners,
+    key::TimeSeriesKey,
+)
+    _, row = _store_and_association(owner, key)
+    return _metadata_from_row(row)
 end
 
 # Content hash (64-char lowercase hex, the documented public form of the
-# wrapper's 32-byte hash) of the array `key` resolves to under `owner`. Pushes
-# the key's type/name/resolution/interval into one catalog query (a `nothing`
-# resolution or interval — a key type that has none — constrains nothing), so
-# the store applies its canonical comparisons; only the type residual and the
-# whole-feature-set match stay in-memory.
+# wrapper's 32-byte hash) of the array `key` resolves to under `owner`. The
+# catalog row the `association_id` names carries the hash, so this is one
+# primary-key fetch — no filtered listing, and no in-memory type residual or
+# whole-feature-set match to sift its results with.
 function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSeriesKey)
-    mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
-    owner_id, _, category = _infrastore_owner_args(owner)
-    T = get_time_series_type(key)
-    rows = InfraStore.list_array_groups(store.inner; owner_id = owner_id,
-        owner_category = category,
-        time_series_type = _infrastore_pushable_type(T), name = get_name(key),
-        resolution = get_resolution(key), interval = get_interval(key))
-    target_feats = get_features(key)
-    for row in rows
-        _infrastore_type_matches(_infrastore_is_type(row.time_series_type), T) || continue
-        row.features == target_feats || continue
-        return bytes2hex(row.data_hash)
-    end
-    throw(
-        ArgumentError(
-            "No time series matched the key for $(summary(owner)): " *
-            "type=$T name=$(get_name(key)) resolution=$(get_resolution(key)) " *
-            "interval=$(get_interval(key)) features=$(target_feats). The series may " *
-            "have been removed; re-fetch the key with get_time_series_key.",
-        ),
-    )
+    _, row = _store_and_association(owner, key)
+    return bytes2hex(row.data_hash)
 end
 
 # Content hashes for a homogeneous collection of owners, resolved by ONE catalog
-# query (`list_array_groups` filtered on category/type/name/resolution/interval)
-# instead of one per owner. Returns `get_id(owner) => 64-char hex hash` for every
-# owner in `owners` with a stored series matching the filters; owners with no
+# query (`list_time_series_metadata` filtered on category/type/name/resolution/interval,
+# whose every row carries the array's `data_hash`) instead of one per owner.
+# Returns `get_id(owner) => 64-char hex hash` for every owner in `owners` with a
+# stored series matching the filters; owners with no
 # match are simply absent. Two matches with the same hash are fine (they resolve
 # to the same array); two matches with different hashes mean the filters
 # underdetermine the series for that owner, so that is an error.
@@ -2330,7 +2257,7 @@ function infrastore_get_time_series_hashes(
         )
         push!(ids, get_id(o))
     end
-    rows = InfraStore.list_array_groups(store.inner;
+    rows = InfraStore.list_metadata(store.inner;
         owner_category = category,
         time_series_type = _infrastore_pushable_type(T),
         name = name,
@@ -2372,14 +2299,13 @@ function infrastore_group_by_hash(
 )
     # Keyed by the 64-char hex form of the content hash (the public contract).
     groups = Dict{String, Vector{Tuple{TimeSeriesOwners, TimeSeriesKey}}}()
-    for row in InfraStore.list_time_series(store.inner)
-        _infrastore_is_type(row.time_series_type) <: DeterministicSingleTimeSeries &&
-            continue
-        owner = id_to_owner(Int(row.owner_id), row.owner_category)
+    for md in list_time_series_metadata(store)
+        get_time_series_type(md) <: DeterministicSingleTimeSeries && continue
+        owner = id_to_owner(get_owner_id(md), get_owner_category(md))
         pairs = get!(
             () -> Tuple{TimeSeriesOwners, TimeSeriesKey}[], groups,
-            bytes2hex(row.data_hash))
-        push!(pairs, (owner, _key_from_row(row)))
+            get_data_hash(md))
+        push!(pairs, (owner, get_time_series_key(md)))
     end
     only_shared && filter!(x -> length(x.second) > 1, groups)
     return groups
@@ -2394,25 +2320,27 @@ function infrastore_get_time_series_multiple(
     resolution = nothing,
     interval = nothing,
 )
-    metas = infrastore_owner_list_keys(owner; time_series_type = type, name = name,
+    metas = infrastore_owner_list_metadata(owner; time_series_type = type, name = name,
         resolution = resolution, interval = interval)
+    store = _owner_store(owner)
     Channel() do channel
         for m in metas
-            ts = _infrastore_read_key(owner, m)
+            ts = _infrastore_read_key(store, get_time_series_key(m))
             (isnothing(filter_func) || filter_func(ts)) && put!(channel, ts)
         end
     end
 end
 
-# Read one series by its already-resolved key — no catalog re-resolution.
-_infrastore_read_key(owner::TimeSeriesOwners, key::ForecastKey) =
-    _infrastore_get_forecast(owner, get_name(key); key = key)
+# Read one series by its already-resolved key — no catalog re-resolution, and
+# store-addressed, since every key here came from the owner's own listing.
+_infrastore_read_key(store::Store, key::TimeSeriesKey{<:Forecast}) =
+    _infrastore_read_forecast(store, key)
 
-_infrastore_read_key(owner::TimeSeriesOwners, key::NonSequentialTimeSeriesKey) =
-    _infrastore_read_non_sequential(owner, key)
+_infrastore_read_key(store::Store, key::TimeSeriesKey{<:NonSequentialTimeSeries}) =
+    _infrastore_read_non_sequential(store, key)
 
-_infrastore_read_key(owner::TimeSeriesOwners, key::StaticTimeSeriesKey) =
-    _infrastore_read_single(owner, key)
+_infrastore_read_key(store::Store, key::TimeSeriesKey{<:SingleTimeSeries}) =
+    _infrastore_read_single(store, key)
 
 # ---- Store-wide aggregates -------------------------------------------------
 
@@ -2511,36 +2439,21 @@ function infrastore_list_owner_ids(
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
     category = get_owner_category(owner_type)
-    # Without a resolution filter, enumerate owner ids in the core (optionally
-    # per concrete subtype). With one, the resolution is pushed into the core
-    # key listing and the strict subtype match applied on the rows.
-    if isnothing(resolution)
-        isnothing(time_series_type) &&
-            return InfraStore.list_owner_ids(store.inner, category)
-        ids = Set{Int}()
-        for t in _infrastore_subtype_types(time_series_type)
-            union!(
-                ids,
-                InfraStore.list_owner_ids(store.inner, category; time_series_type = t),
-            )
-        end
-        return collect(ids)
-    end
-    # Same `Deterministic`-family semantics as the branch above (the core widens a
-    # pushed `Deterministic` filter to DST rows), so the answer does not change with
-    # the presence of a `resolution` filter.
+    # Answered in the core, which takes both filters: one DISTINCT query, or one
+    # per concrete subtype when the strict `<:` match spans several. Listing the
+    # matching rows to collect their owner ids would decode a full catalog row —
+    # feature dict, hash bytes, every period column — per association, to read one
+    # integer off each.
+    isnothing(time_series_type) &&
+        return InfraStore.list_owner_ids(store.inner, category; resolution = resolution)
     ids = Set{Int}()
-    for row in
-        InfraStore.list_keys(store.inner; owner_category = category,
-        time_series_type = _infrastore_pushable_type(time_series_type),
-        resolution = resolution)
-        if !isnothing(time_series_type)
-            _infrastore_type_matches(
-                _infrastore_is_type(row.time_series_type),
-                time_series_type,
-            ) || continue
-        end
-        push!(ids, Int(row.owner_id))
+    for t in _infrastore_subtype_types(time_series_type)
+        union!(
+            ids,
+            InfraStore.list_owner_ids(
+                store.inner, category; time_series_type = t, resolution = resolution,
+            ),
+        )
     end
     return collect(ids)
 end
@@ -2558,7 +2471,7 @@ function infrastore_list_keys_with_owner(
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
     category = get_owner_category(owner_type)
-    rows = InfraStore.list_time_series(store.inner; owner_category = category,
+    rows = InfraStore.list_metadata(store.inner; owner_category = category,
         time_series_type = _infrastore_pushable_type(time_series_type),
         resolution = resolution)
     out = NamedTuple[]

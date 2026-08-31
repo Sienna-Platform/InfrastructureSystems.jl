@@ -50,7 +50,7 @@ only the store that minted it can resolve back into a key.
 """
 mutable struct TimeSeriesKeyTestComponent <: InfrastructureSystemsComponent
     name::String
-    time_series_key::ConcreteTimeSeriesKey
+    time_series_key::TimeSeriesKey
     internal::InfrastructureSystemsInternal
 end
 

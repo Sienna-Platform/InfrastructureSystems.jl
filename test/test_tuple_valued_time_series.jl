@@ -18,7 +18,7 @@
         comp3 = IS.get_component(IS.TestComponent, sys3, "Component1")
         IS.add_time_series!(sys3, comp3, sts3)
 
-        key3 = only(IS.get_time_series_keys(comp3))
+        key3 = only(IS.list_time_series_metadata(comp3))
         s0 = StartUpStages(
             only(
                 IS.get_time_series_values(
@@ -46,7 +46,7 @@
         comp2 = IS.get_component(IS.TestComponent, sys2, "Component1")
         IS.add_time_series!(sys2, comp2, sts2)
 
-        key2 = only(IS.get_time_series_keys(comp2))
+        key2 = only(IS.list_time_series_metadata(comp2))
         mm = MinMax(
             only(
                 IS.get_time_series_values(
@@ -89,7 +89,7 @@
                     sts = IS.SingleTimeSeries(; name = "tuple_ts", data = ta)
                     IS.add_time_series!(sys, comp, sts)
 
-                    key = only(IS.get_time_series_keys(comp))
+                    key = only(IS.list_time_series_metadata(comp))
                     resolve(t) = T(
                         only(
                             IS.get_time_series_values(

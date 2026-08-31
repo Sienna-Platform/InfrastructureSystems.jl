@@ -33,7 +33,7 @@ every section precedes measurement. A combo the store rejects is recorded as an
 | `ingest` | `bulk_add` of every time series type × element type: `SingleTimeSeries`, `NonSequentialTimeSeries`, `Deterministic` × {float64, ntuple2, linear, quadratic, pwl}, plus `Probabilistic` and `Scenarios` (float64) | `BENCH_N` |
 | `sweep` | the simulation inner loop — every component read at one timestamp (`StaticTimeSeriesReader`) or one window (`ForecastReader`). float64 at full scale; pwl exercises the structured-payload decode that PSY's time-varying cost curves read through | `BENCH_SWEEP_N` (pwl at `BENCH_N`) |
 | `has` | `has_time_series` with the full identity (type, name, resolution, two features), hits and misses. `n` counts **associations**: `BENCH_SWEEP_N ÷ 10` components × 10 associations each (2 names × 5 scenario values, plus a `model_year` feature) | `BENCH_SWEEP_N` |
-| `reads` | per-series read canary: `get_full`, `get_sliced`, `get_window`, float64 only | `BENCH_N` |
+| `reads` | per-series read canary: `get_full`, `get_sliced`, `get_window`, and `get_metadata` — the keyed catalog fetch, one primary-key row lookup with no array read, against `get_full`'s filtered resolve plus read. float64 only | `BENCH_N` |
 | `dst` | `transform_single_time_series!` to `DeterministicSingleTimeSeries` plus the window sweep over the result — the PowerSimulations feed path | `BENCH_N` |
 | `serialize` | `to_json` / `from_json` round-trip including the store artifacts, verified with one read from the reloaded system | `BENCH_N` |
 | `remove` | `remove_time_series!` of every series, one call per component | `BENCH_N` |
@@ -64,6 +64,24 @@ each). At 100k components:
 So a `read_by_window` of 1.16 µs/op is 1.39 s ÷ 1,200,000, of which 1.04 s is
 twelve real reads of 9.2 MB each. The I/O is present and dominant; it is spread
 over 100,000 components per read.
+
+`read_by_timestamp_grouped` sweeps the same values through the group accessors —
+`get_static_time_series_group_values` / `..._group_entries`, one concrete array
+per group per timestamp taken through a function barrier — instead of
+`get_static_time_series_value`, which returns one entry at a time out of a
+container the reader cannot type and so dispatches dynamically and boxes every
+value.
+
+**Do not read the two rows against each other as an A/B.** The grouped sweep
+re-reads timestamps the per-value sweep just touched, so its storage reads are
+warm and its total is flattered; the asymmetry is fixed run to run, so each row
+still gates its own regression fine. To compare the access paths, subtract each
+row's own `*_storage_read` and compare what is left. At 100k entries that is
+**0.083 µs/value against 0.0008** — the per-value accessor's dispatch and boxing,
+which is also 91 MB of allocation per sweep against 19 MB, and which grows with
+the entry count as the box traffic outgrows the cache (0.023 µs/value at 5k,
+0.086 at 100k; the grouped path is flat at 0.0004 µs at every size). Consumers
+sweeping at scale should use the group accessors.
 
 These are **first-touch** reads — each timestep is read once, never re-read,
 which is how a simulation walks forward through time. Re-sweeping the same

@@ -100,22 +100,29 @@ file-format reference.
 
 ## Identifying and retrieving a time series
 
-Address a stored time series by its [`InfrastructureSystems.TimeSeriesKey`](@ref) — a `StaticTimeSeriesKey` or
-`ForecastKey` — which captures `name`, `resolution`, `features`, and the concrete type
-(forecasts additionally capture `horizon`, `interval`, and `count`). Combined with the owner,
-this is the unique identity of an association:
+The surface splits in two. **Identify** with
+[`InfrastructureSystems.list_time_series_metadata`](@ref), which returns a
+[`InfrastructureSystems.TimeSeriesMetadata`](@ref) row per matching association — `name`,
+`resolution`, `features`, `initial_timestamp`, and for a forecast `horizon`, `interval` and
+`count`. **Act** with the row's
+[`InfrastructureSystems.TimeSeriesKey`](@ref), which is the association's store-minted
+`association_id` and nothing else:
 
 ```julia
-keys = get_time_series_keys(owner)      # enumerate the owner's associations
-ts = get_time_series(owner, keys[1])    # retrieve one by its key
+rows = list_time_series_metadata(owner)  # enumerate; each row carries its attributes
+get_name(rows[1])                        # a column of the row, read from the catalog
+ts = get_time_series(owner, rows[1])     # a row is accepted anywhere a key is
+key = get_time_series_key(rows[1])       # store this in your own model
 ```
 
-A key serializes to nothing but its `association_id`, the store-minted surrogate for the
-whole association; every other field is a copy of something the catalog already holds.
-Rebuilding one therefore needs that catalog, so any deserialization that may meet a key runs
-inside `with_deserialization_store(store) do ... end`. `deserialize(::Type{SystemData}, ...)`
-binds the store it just opened around its own work, but components are deserialized by the
-parent package, which must wrap that pass the same way.
+A key carries only the id because everything else is a copy of something the catalog already
+holds, and a copy can only disagree with it: `rename_time_series!` and a reassignment both
+change catalog columns while preserving the id. Take the attributes from a row, whose age you
+know, rather than from a handle you may have held for a while.
+
+A key serializes to its `association_id`, its time series kind, and its value element type —
+all three facts the store never rewrites — so it rebuilds itself without the catalog that
+minted it. Nothing has to be scoped around a deserialization that may meet one.
 
 The store mints that id as it inserts the row, which is why a key exists only once the
 addition has been written. A direct `add_time_series!(sys, owner, ts)` writes on the spot and

@@ -50,16 +50,11 @@ make_label(type::Type{<:InfrastructureSystemsType}, name) = "$(nameof(type)): $n
 Base.summary(x::InfrastructureSystemsComponent) = make_label(typeof(x), get_name(x))
 Base.summary(x::SupplementalAttribute) = make_label(typeof(x), get_id(x))
 Base.summary(x::TimeSeriesData) = make_label(typeof(x), get_name(x))
-Base.summary(x::TimeSeriesKey) = make_label(typeof(x), get_name(x))
+# A key is its id and its type — the name and resolution the old descriptive key
+# printed live in the catalog now, so the summary is the `show` form.
+Base.summary(x::TimeSeriesKey) = sprint(show, x)
 
 function Base.summary(x::Forecast)
-    label = make_label(typeof(x), get_name(x))
-    resolution = Dates.canonicalize(get_resolution(x))
-    interval = Dates.canonicalize(get_interval(x))
-    return "$(label) resolution=$(resolution) interval=$(interval)"
-end
-
-function Base.summary(x::ForecastKey)
     label = make_label(typeof(x), get_name(x))
     resolution = Dates.canonicalize(get_resolution(x))
     interval = Dates.canonicalize(get_interval(x))

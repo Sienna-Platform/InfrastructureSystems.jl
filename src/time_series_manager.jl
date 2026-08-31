@@ -92,9 +92,6 @@ function _infrastore_features(features::Dict)
     return out
 end
 
-_key_features(::Nothing) = Dict{String, Any}()
-_key_features(features::Dict) = Dict{String, Any}(features)
-
 function _check_interval_supported(::Type{T}, interval) where {T <: TimeSeriesData}
     if T <: StaticTimeSeries && !isnothing(interval)
         throw(
@@ -335,7 +332,7 @@ get_time_series_key(
     features = features,
 )
 
-list_time_series_keys(
+list_time_series_metadata(
     mgr::TimeSeriesManager,
     component::TimeSeriesOwners;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
@@ -343,7 +340,7 @@ list_time_series_keys(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Union{Nothing, Dict} = nothing,
-) = infrastore_owner_list_keys(
+) = infrastore_owner_list_metadata(
     component;
     time_series_type = time_series_type,
     name = name,

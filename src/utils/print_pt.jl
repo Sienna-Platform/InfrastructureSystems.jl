@@ -225,25 +225,46 @@ function show_supplemental_attributes(io::IO, component::InfrastructureSystemsCo
     end
 end
 
+# What identifies and shapes a series, which is what a listing of one owner's
+# series is read for. A catalog row carries more — the owner columns (constant
+# across this table, since it IS one owner's), the content hash (32 raw bytes),
+# the remaining descriptive labels — and a table wide enough to hold all of it
+# truncates away the columns above. Reach for `list_time_series_metadata` when you
+# want them.
+const _TIME_SERIES_DISPLAY_COLUMNS = (
+    :name, :element_type, :initial_timestamp, :resolution, :horizon, :interval,
+    :count, :length, :units, :features,
+)
+
 function show_time_series(io::IO, owner::TimeSeriesOwners)
     data_by_type = Dict{Any, Vector{OrderedDict{String, Any}}}()
-    for key in get_time_series_keys(owner)
-        ts_type = get_time_series_type(key)
+    for md in list_time_series_metadata(owner)
+        # Grouped by KIND, not by the row's full type: the type parameter carries
+        # the value element type too, so grouping on it would split one owner's
+        # `SingleTimeSeries{Float64}` and `SingleTimeSeries{PiecewiseStepData}`
+        # rows into separate tables under the same heading. The element type is a
+        # column of its own instead.
+        ts_type = get_time_series_kind(md)
         if !haskey(data_by_type, ts_type)
             data_by_type[ts_type] = Vector{OrderedDict{String, Any}}()
         end
         data = OrderedDict{String, Any}()
-        for (fname, ftype) in zip(fieldnames(typeof(key)), fieldtypes(typeof(key)))
-            if ftype <: Type{<:TimeSeriesData}
-                data[string(fname)] = string(nameof(Base.getproperty(key, fname)))
+        for fname in _TIME_SERIES_DISPLAY_COLUMNS
+            value = Base.getproperty(md, fname)
+            if value isa Type
+                data[string(fname)] = string(nameof(value))
             else
-                data[string(fname)] = Base.getproperty(key, fname)
+                data[string(fname)] = value
             end
         end
         push!(data_by_type[ts_type], data)
     end
-    for rows in values(data_by_type)
-        PrettyTables.pretty_table(io, DataFrame(rows))
+    # The kind titles each table: it is part of the row's type parameter now, not
+    # a column, so without this it would not appear in the output at all.
+    for (ts_type, rows) in data_by_type
+        PrettyTables.pretty_table(
+            io, DataFrame(rows); title = string(nameof(ts_type)),
+        )
     end
 end
 

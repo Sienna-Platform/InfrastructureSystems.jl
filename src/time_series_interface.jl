@@ -15,7 +15,7 @@ Return the [`TimeSeriesManager`](@ref) backing `owner`, or throw if there is non
 An owner that was never added to a system — or one whose type does not support time
 series — has no manager. Reading time series from it is a caller mistake, so it gets an
 actionable `ArgumentError` rather than a `FieldError` on `nothing`. Callers that treat
-"detached" as an ordinary empty answer (`has_time_series`, `get_time_series_keys`,
+"detached" as an ordinary empty answer (`has_time_series`, `list_time_series_metadata`,
 `get_time_series_multiple`, `copy_time_series!`) check for `nothing` themselves instead.
 """
 function _get_time_series_manager_or_throw(owner)
@@ -143,15 +143,16 @@ function get_time_series(
             count = count,
         )
     catch e
-        # `catch`-block exception inspection: a stale key — the series was
-        # removed after the key was obtained — surfaces as the store's
-        # NotFoundError; keep the accessors' public ArgumentError contract.
+        # `catch`-block exception inspection: an id that no longer resolves — the
+        # series was removed after the key was obtained — surfaces as the store's
+        # NotFoundError; keep the accessors' public ArgumentError contract, and
+        # name the id, which is what the read was addressed by.
         if e isa InfraStore.NotFoundError
             throw(
                 ArgumentError(
-                    "No time series matches the key $(summary(key)) with " *
-                    "name='$(get_name(key))' on $(summary(owner)); " *
-                    "it may have been removed.",
+                    "TimeSeriesKey names association_id=$(get_association_id(key)), " *
+                    "which is no longer in this store: $(summary(key)) on " *
+                    "$(summary(owner)) may have been removed.",
                 ),
             )
         end
@@ -159,16 +160,19 @@ function get_time_series(
     end
 end
 
+# Dispatch to the reader for the key's stored kind. `target` is a
+# `KeyedReadTarget`: an owner, whose ownership of the key is checked against the
+# catalog first, or the store, for a key the caller resolved from that owner's own
+# listing and so does not have to confirm again.
 _get_time_series_by_key(
-    owner::TimeSeriesOwners,
-    key::ForecastKey;
+    target::KeyedReadTarget,
+    key::TimeSeriesKey{<:Forecast};
     start_time,
     len,
     count,
-) = _infrastore_get_forecast(
-    owner,
-    get_name(key);
-    key = key,
+) = _infrastore_read_forecast(
+    target,
+    key;
     start_time = start_time,
     len = len,
     count = count,
@@ -177,20 +181,20 @@ _get_time_series_by_key(
 # `count` does not apply to a static series; it is accepted for interface
 # uniformity and ignored.
 _get_time_series_by_key(
-    owner::TimeSeriesOwners,
-    key::NonSequentialTimeSeriesKey;
+    target::KeyedReadTarget,
+    key::TimeSeriesKey{<:NonSequentialTimeSeries};
     start_time,
     len,
     count,
-) = _infrastore_read_non_sequential(owner, key; start_time = start_time, len = len)
+) = _infrastore_read_non_sequential(target, key; start_time = start_time, len = len)
 
 _get_time_series_by_key(
-    owner::TimeSeriesOwners,
-    key::StaticTimeSeriesKey;
+    target::KeyedReadTarget,
+    key::TimeSeriesKey{<:SingleTimeSeries};
     start_time,
     len,
     count,
-) = _infrastore_read_single(owner, key; start_time = start_time, len = len)
+) = _infrastore_read_single(target, key; start_time = start_time, len = len)
 
 """
 Returns an iterator of TimeSeriesData instances attached to the component or attribute.
@@ -241,7 +245,7 @@ end
 Return the [`TimeSeriesKey`](@ref) identifying the single time series of type `T`
 attached to `owner` under `name` (and the given resolution/interval/features).
 
-Pairs with [`get_time_series_keys`](@ref) (enumeration) and
+Pairs with [`list_time_series_metadata`](@ref) (enumeration) and
 [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref) (retrieval).
 """
 function get_time_series_key(
@@ -263,6 +267,70 @@ function get_time_series_key(
         features = features,
     )
 end
+
+"""
+Return the [`TimeSeriesMetadata`](@ref) row for the single time series of type `T`
+attached to `owner` under `name` (and the given resolution/interval/features).
+
+The one-row counterpart of [`list_time_series_metadata`](@ref), and what
+[`get_time_series_key`](@ref) resolves through — take the row when you want the
+series' attributes, the key when you only want to address it.
+"""
+function get_time_series_metadata(
+    ::Type{T},
+    owner::TimeSeriesOwners,
+    name::AbstractString;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features::Union{Nothing, Dict} = nothing,
+) where {T <: TimeSeriesData}
+    rows = list_time_series_metadata(
+        owner;
+        time_series_type = T,
+        name = name,
+        resolution = resolution,
+        interval = interval,
+        features = features,
+    )
+    if isempty(rows)
+        throw(ArgumentError("No matching metadata is stored."))
+    elseif length(rows) > 1
+        throw(
+            ArgumentError(
+                "Found more than one matching metadata: $(length(rows)). Specify " *
+                "additional keyword arguments (resolution, interval, or features) to " *
+                "disambiguate.",
+            ),
+        )
+    end
+    return only(rows)
+end
+
+"""
+$(TYPEDSIGNATURES)
+Return the [`TimeSeriesMetadata`](@ref) row that `key` names under `owner` — the
+series' name, resolution, `initial_timestamp`, features, and, for a forecast, its
+horizon, interval, and count.
+
+This is how a caller holding a key reads the attributes a key deliberately does
+not carry: a key is its `association_id` and the stored type, and everything else
+lives in the catalog. Take the row when you want those attributes; keep the key
+when you only need to address the series.
+
+Throws an `ArgumentError` if the id no longer resolves (the series was removed
+after the key was obtained) or if it names a series belonging to another owner.
+
+See also: [`get_time_series_metadata` by name](@ref get_time_series_metadata(
+    ::Type{T},
+    owner::TimeSeriesOwners,
+    name::AbstractString;
+    resolution::Union{Nothing, Dates.Period} = nothing,
+    interval::Union{Nothing, Dates.Period} = nothing,
+    features::Union{Nothing, Dict} = nothing,
+) where {T <: TimeSeriesData}), [`list_time_series_metadata`](@ref).
+"""
+get_time_series_metadata(owner::TimeSeriesOwners, key::TimeSeriesKey) =
+    infrastore_get_time_series_metadata(owner, key)
 
 """
 Return a `TimeSeries.TimeArray` from storage for the given time series parameters.
@@ -1123,8 +1191,8 @@ function _copy_time_series_same_kind!(
     # `dst` holding a subset of `src`'s series.
     src_label = _copy_source_label(src)
     time_series_transaction(mgr) do _
-        for ts_key in get_time_series_keys(src)
-            name = get_name(ts_key)
+        for md in list_time_series_metadata(src)
+            name = get_name(md)
             new_name = name
             if !isnothing(name_mapping)
                 new_name = get(name_mapping, (src_label, name), nothing)
@@ -1134,18 +1202,14 @@ function _copy_time_series_same_kind!(
                 end
                 @debug "Copy ts_key with" _group = LOG_GROUP_TIME_SERIES new_name
             end
+            # The key already carries the association id, so the copy is addressed
+            # by it: no attribute re-resolution in the store to find the source row.
             InfraStore.copy_time_series!(
-                _infrastore_type(get_time_series_type(ts_key)),
                 store.inner,
-                get_owner_id(ts_key),
-                get_owner_category(ts_key),
-                name,
+                get_association_id(md),
                 dst_id,
                 dst_type;
                 new_name = new_name,
-                resolution = get_resolution(ts_key),
-                interval = get_interval(ts_key),
-                features = Dict{String, Any}(get_features(ts_key)),
             )
         end
     end
@@ -1153,11 +1217,20 @@ function _copy_time_series_same_kind!(
 end
 
 """
-Return the [`TimeSeriesKey`](@ref) for each time series attached to `owner`,
-optionally filtered by type/name/resolution/interval/features. Each key can be
-passed to [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref).
+    list_time_series_metadata(owner; time_series_type, name, resolution, interval, features)
+
+Return a [`TimeSeriesMetadata`](@ref) row for each time series attached to
+`owner`, optionally filtered by type / name / resolution / interval / features.
+
+This is the identify half of the surface: it answers *which* series exist and
+what they look like. Take [`get_time_series_key`](@ref) of a row to act on one —
+read it, remove it, or store the reference in a component. A row is a snapshot;
+the key it carries stays valid as the catalog changes around it.
+
+An owner with no time series manager — one not attached to a system — has no time
+series, so this is empty rather than an error.
 """
-function get_time_series_keys(
+function list_time_series_metadata(
     owner::TimeSeriesOwners;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
     name::Union{String, Nothing} = nothing,
@@ -1166,8 +1239,8 @@ function get_time_series_keys(
     features::Union{Nothing, Dict} = nothing,
 )
     mgr = get_time_series_manager(owner)
-    isnothing(mgr) && return TimeSeriesKey[]
-    return list_time_series_keys(
+    isnothing(mgr) && return TimeSeriesMetadata[]
+    return list_time_series_metadata(
         mgr,
         owner;
         time_series_type = time_series_type,
@@ -1206,7 +1279,7 @@ when processing many owners (e.g. batching model parameters by shared array).
 
 All owners must be of one category (all components or all supplemental
 attributes). `resolution`, `interval`, and `features` narrow the match the same
-way they do in [`get_time_series_keys`](@ref); if the filters leave more than
+way they do in [`list_time_series_metadata`](@ref); if the filters leave more than
 one matching series with distinct arrays for an owner, an error is thrown.
 """
 get_time_series_hashes(
@@ -1282,4 +1355,20 @@ function get_forecast_window_count(
     end
 
     return count
+end
+
+# A metadata row carries the key that addresses its series, so a row is accepted
+# anywhere a key is. A caller that has just listed rows should not have to unwrap
+# every one of them to act on it, and the row is the only thing `list_time_series_metadata`
+# hands back.
+for f in (
+    :get_time_series,
+    :get_time_series_array,
+    :get_time_series_timestamps,
+    :get_time_series_values,
+    :get_time_series_hash,
+    :get_time_series_metadata,
+)
+    @eval $f(owner::TimeSeriesOwners, md::TimeSeriesMetadata; kwargs...) =
+        $f(owner, get_time_series_key(md); kwargs...)
 end

@@ -255,8 +255,8 @@ compare_values(x, y; kwargs...) = compare_values(nothing, x, y; kwargs...)
 _fetch_match_fn(match_fn::Function) = match_fn
 _fetch_match_fn(::Nothing) = isequivalent
 
-# Whether to stop recursing and apply the match_fn. Type-valued fields (e.g.
-# `ForecastKey.time_series_type`) are leaves: compare them directly rather than
+# Whether to stop recursing and apply the match_fn. Type-valued fields are
+# leaves: compare them directly rather than
 # recursing into type internals. A concrete type is a `DataType`; an
 # unparametrized parametric type (e.g. `Deterministic`) is a `UnionAll` whose
 # `fieldnames` (`:var`, `:body`) would otherwise drive a recursion that crashes.

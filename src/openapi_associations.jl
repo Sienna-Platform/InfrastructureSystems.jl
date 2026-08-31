@@ -5,16 +5,27 @@
 """
 $(TYPEDSIGNATURES)
 
-Metadata for every time series in a store matching the (all-optional, independent) filters —
-the same filter keywords as `InfraStore.list_time_series`/`InfraStore.list_keys` — in one
+A [`TimeSeriesMetadata`](@ref) row for every time series in a store matching the
+(all-optional, independent) filters — the same filter keywords as
+`InfraStore.list_metadata`: `owner_id`, `owner_category`, `time_series_type`, `name`,
+`name_glob`, `resolution`, `interval`, `features`, `component_field`, `zoneless` — in one
 catalog query.
 
 Takes the store directly as well as a `SystemData`, because a writer that stages series into
 a scratch store — a parser building a document, say — needs the same rows before any
-`SystemData` exists.
+`SystemData` exists. A row carries every column the catalog holds, `data_hash` and the
+store's own `element_type` spelling included, so such a writer works from it alone.
+
+Both vocabularies are IS's on the way in as well as out. `time_series_type` is an **IS**
+type — the same spelling
+[`list_time_series_metadata`](@ref list_time_series_metadata(::TimeSeriesOwners)) on an
+owner takes, and abstract families (`Forecast`, `StaticTimeSeries`) resolve here exactly as
+they do there. And the rows come back translated: a raw store row names *InfraStore's*
+`SingleTimeSeries`, and IS exports its own, so an untranslated row would fail every
+`<: SingleTimeSeries` test a caller writes.
 """
 list_time_series_metadata(store::Store; kwargs...) =
-    InfraStore.list_time_series(store.inner; kwargs...)
+    _infrastore_list_metadata(store; kwargs...)
 
 list_time_series_metadata(data::SystemData; kwargs...) =
     list_time_series_metadata(get_data_store(data); kwargs...)

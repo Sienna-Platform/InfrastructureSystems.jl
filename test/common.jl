@@ -122,14 +122,33 @@ end
 
 sort_name!(x) = sort!(collect(x); by = IS.get_name)
 
+# One forecast window of `n` values of the given element type. A key names one
+# stored series, so a `TimeSeriesFunctionData{T}` can only wrap a key of `T`
+# values — a fixture that always stored `Float64` could only build combinations
+# the type system now rejects.
+_fixture_window(::Type{Float64}, n) = rand(n)
+_fixture_window(::Type{IS.LinearFunctionData}, n) =
+    [IS.LinearFunctionData(i, 2i) for i in 1.0:n]
+_fixture_window(::Type{IS.QuadraticFunctionData}, n) =
+    [IS.QuadraticFunctionData(i, 2i, 3i) for i in 1.0:n]
+_fixture_window(::Type{IS.PiecewiseLinearData}, n) =
+    [IS.PiecewiseLinearData([(x = 1.0, y = i), (x = 2.0, y = 2i)]) for i in 1.0:n]
+_fixture_window(::Type{IS.PiecewiseStepData}, n) =
+    [IS.PiecewiseStepData([1.0, 2.0, 3.0], [i, 2i]) for i in 1.0:n]
+
 """
 A system holding one `Deterministic` per name in `names`, returned with the real
 `TimeSeriesKey` for each, in order.
 
-A key serializes to its association id alone, so a serialization round trip needs keys the
-system's store can resolve; a fabricated key no longer survives one.
+A key names a store-minted association id, so tests that exercise real keys need
+ones a system actually minted; a fabricated id names nothing the store can read
+back.
 """
-function create_forecast_key_fixture(names...; horizon_count = 24)
+function create_forecast_key_fixture(
+    names...;
+    horizon_count = 24,
+    element_type::Type = Float64,
+)
     sys = IS.SystemData(; time_series_in_memory = true)
     component = IS.TestComponent("Component1", 5)
     IS.add_component!(sys, component)
@@ -137,7 +156,9 @@ function create_forecast_key_fixture(names...; horizon_count = 24)
     resolution = Dates.Hour(1)
     keys = map(names) do name
         forecast = IS.Deterministic(;
-            data = SortedDict(initial_time => rand(horizon_count)),
+            data = SortedDict(
+                initial_time => _fixture_window(element_type, horizon_count),
+            ),
             name = name,
             resolution = resolution,
         )
@@ -145,6 +166,3 @@ function create_forecast_key_fixture(names...; horizon_count = 24)
     end
     return sys, keys
 end
-
-"The store a system's keys resolve against during deserialization."
-key_store(sys::IS.SystemData) = IS.get_data_store(sys.time_series_manager)

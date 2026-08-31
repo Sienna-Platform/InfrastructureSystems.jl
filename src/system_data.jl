@@ -260,6 +260,14 @@ function remove_time_series!(
     return remove_time_series!(data.time_series_manager, owner, ts_key)
 end
 
+# A metadata row carries the key that addresses its series; accept one here too,
+# so a listing can be acted on directly.
+remove_time_series!(
+    data::SystemData,
+    owner::TimeSeriesOwners,
+    md::TimeSeriesMetadata,
+) = remove_time_series!(data, owner, get_time_series_key(md))
+
 """
 Removes all time series of a particular type from a System.
 
@@ -909,20 +917,19 @@ function deserialize(
         )
     end
     next_id = Int(raw["next_id"])
-    # An attribute may carry a `TimeSeriesKey`, which arrives as a bare association id
-    # and is resolved against the store opened above.
+    # An attribute may carry a `TimeSeriesKey`. A key travels as its association id
+    # and its time series type — both facts the store never rewrites — so it
+    # rebuilds itself without the catalog that minted it.
     supplemental_attribute_manager =
-        with_deserialization_store(get_data_store(time_series_manager)) do
-            deserialize(
-                SupplementalAttributeManager,
-                get(
-                    raw,
-                    "supplemental_attribute_manager",
-                    Dict("attributes" => [], "associations" => []),
-                ),
-                time_series_manager,
-            )
-        end
+        deserialize(
+            SupplementalAttributeManager,
+            get(
+                raw,
+                "supplemental_attribute_manager",
+                Dict("attributes" => [], "associations" => []),
+            ),
+            time_series_manager,
+        )
     internal = deserialize(InfrastructureSystemsInternal, raw["internal"])
     validation_descriptors = if isnothing(validation_descriptor_file)
         []
@@ -962,9 +969,8 @@ function deserialize(
     end
 
     # Note: components need to be deserialized by the parent so that they can go through
-    # the proper checks. A component may carry a `TimeSeriesKey`, which is on the wire as
-    # a bare association id, so the parent must run that pass inside
-    # `with_deserialization_store(get_data_store(sys.time_series_manager))`.
+    # the proper checks. A component may carry a `TimeSeriesKey`; it rebuilds itself from
+    # the wire without the store, so the parent's pass needs no extra scoping.
     return sys
 end
 
@@ -1418,6 +1424,13 @@ component's value": drive it with [`read_static_time_series_values!`](@ref) and
 read each entry with [`get_static_time_series_value`](@ref). Series with the
 same element type are packed into one columnar group and served by a single
 storage read per timestamp.
+
+To sweep every entry — which is what this reader is for — take the groups
+instead, with [`get_static_time_series_group_values`](@ref) and
+[`get_static_time_series_group_entries`](@ref). The per-entry accessor returns
+one value at a time out of a container the reader cannot type, so it dispatches
+dynamically and boxes each value; the group path costs neither and stays flat as
+the reader grows.
 """
 function build_static_time_series_reader(
     data::SystemData;

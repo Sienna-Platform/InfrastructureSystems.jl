@@ -15,6 +15,10 @@ Return the value element type of a time series, i.e. the `T` of `TimeSeriesData{
 """
 Base.eltype(::TimeSeriesData{T}) where {T} = T
 
+# The type-level form. A `TimeSeriesKey{T}` carries the time series type rather
+# than an instance of it, so serializing the element type needs this one.
+Base.eltype(::Type{<:TimeSeriesData{T}}) where {T} = T
+
 # Subtypes must implement
 # - Base.length
 # - check_time_series_data

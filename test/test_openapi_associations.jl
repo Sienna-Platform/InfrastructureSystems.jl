@@ -60,12 +60,40 @@ end
     @test length(IS.list_time_series_metadata(data; name = "static")) == 1
     @test only(IS.list_time_series_metadata(data; name = "static")).name == "static"
     @test isempty(IS.list_time_series_metadata(data; name = "nonexistent"))
+    # `time_series_type` is an IS type here, exactly as on the owner-scoped
+    # `list_time_series_metadata`: the two overloads share a name, so they take one
+    # vocabulary.
+    @test length(IS.list_time_series_metadata(data; time_series_type = IS.Deterministic)) ==
+          1
     @test length(
-        IS.list_time_series_metadata(data; time_series_type = IS.InfraStore.Deterministic),
+        IS.list_time_series_metadata(data; time_series_type = IS.SingleTimeSeries),
     ) == 1
+    # An abstract family resolves the same way it does on an owner.
+    @test length(IS.list_time_series_metadata(data; time_series_type = IS.Forecast)) == 1
+    @test length(
+        IS.list_time_series_metadata(data; time_series_type = IS.StaticTimeSeries),
+    ) == 1
+    @test length(
+        IS.list_time_series_metadata(data; time_series_type = IS.TimeSeriesData),
+    ) == 2
     @test length(
         IS.list_time_series_metadata(data; owner_category = IS.InfraStore.Component),
     ) == 2
+    # Every column the catalog holds reaches the caller, so a writer restaging
+    # these rows never has to drop to the store's own listing.
+    static = only(IS.list_time_series_metadata(data; name = "static"))
+    @test IS.get_element_type(static) == "f64"
+    @test length(IS.get_data_hash(static)) == 64
+    @test IS.get_owner_type(static) == string(nameof(typeof(component)))
+    @test IS.get_units(static) === nothing
+    @test IS.get_percentiles(static) === nothing
+    @test eltype(static) === Float64
+    # Including the three IS itself neither writes nor interprets: a row that
+    # dropped them would re-land another client's series stripped of them.
+    @test IS.get_element_shape(static) == ()
+    # IS writes wall clocks, which the store records as a zoneless reference.
+    @test IS.get_time_reference(static) == IS.InfraStore.ZonelessReference()
+    @test IS.get_application_data(static) === nothing
 end
 
 @testset "openapi_time_series_association_rows: SingleTimeSeries carries the grid and the element typing" begin

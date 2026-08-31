@@ -40,12 +40,10 @@ function validate_serialization(sys::IS.SystemData; time_series_read_only = fals
         # There isn't one in IS, so perform the deserialization in the test code. A
         # component's `TimeSeriesKey`s arrive as bare association ids, so the pass runs
         # against the store the system just opened.
-        IS.with_deserialization_store(IS.get_data_store(sys2.time_series_manager)) do
-            for component in data["components"]
-                type = IS.get_type_from_serialization_data(component)
-                comp = IS.deserialize(type, component)
-                IS.add_component!(sys2, comp; allow_existing_time_series = true)
-            end
+        for component in data["components"]
+            type = IS.get_type_from_serialization_data(component)
+            comp = IS.deserialize(type, component)
+            IS.add_component!(sys2, comp; allow_existing_time_series = true)
         end
         return sys2, IS.compare_values(sys, sys2; compare_ids = true)
     finally

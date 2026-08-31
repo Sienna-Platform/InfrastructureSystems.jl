@@ -1,17 +1,7 @@
 @testset "TimeSeriesFunctionData" begin
-    forecast_key = IS.ForecastKey(;
-        owner_id = 1,
-        owner_category = IS.InfraStore.Component,
-        association_id = 1,
-        time_series_type = IS.Deterministic,
-        name = "test_forecast",
-        initial_timestamp = Dates.DateTime("2020-01-01"),
-        resolution = Dates.Hour(1),
-        horizon = Dates.Hour(24),
-        interval = Dates.Hour(24),
-        count = 1,
-        features = Dict{String, Any}(),
-    )
+    # A key names one stored series, so its element type is fixed: a
+    # `TimeSeriesFunctionData{T}` can only wrap a key of `T` values.
+    forecast_key(::Type{T}) where {T} = IS.TimeSeriesKey{IS.Deterministic{T}}(1)
 
     ts_types = [
         IS.TimeSeriesLinearFunctionData,
@@ -29,7 +19,9 @@
 
     @testset "is_time_series_backed" begin
         for T in ts_types
-            @test IS.is_time_series_backed(T(forecast_key)) == true
+            @test IS.is_time_series_backed(
+                T(forecast_key(IS.get_underlying_function_data_type(T))),
+            ) == true
         end
         @test IS.is_time_series_backed(IS.LinearFunctionData(1.0, 2.0)) == false
         @test IS.is_time_series_backed(IS.QuadraticFunctionData(1.0, 2.0, 3.0)) == false
@@ -44,31 +36,37 @@
     @testset "get_underlying_function_data_type" begin
         for (T, U) in zip(ts_types, underlying_types)
             @test IS.get_underlying_function_data_type(T) == U
-            @test IS.get_underlying_function_data_type(T(forecast_key)) == U
+            @test IS.get_underlying_function_data_type(
+                T(forecast_key(IS.get_underlying_function_data_type(T))),
+            ) == U
         end
     end
 
     @testset "Serialization round-trip" begin
-        sys, (stored_key,) = create_forecast_key_fixture("test_forecast")
-        store = key_store(sys)
         for T in ts_types
+            # One fixture per wrapper: a key names one stored series, so its
+            # element type has to be the one `T` is bound by.
+            U = IS.get_underlying_function_data_type(T)
+            sys, (stored_key,) =
+                create_forecast_key_fixture("test_forecast"; element_type = U)
             fd = T(stored_key)
             serialized = IS.serialize(fd)
-            # The key is on the wire as its association id and nothing else.
-            @test serialized["time_series_key"] == IS.get_association_id(stored_key)
-            deserialized = IS.with_deserialization_store(store) do
-                IS.deserialize(T, serialized)
-            end
-            @test typeof(deserialized) == T
+            # The key is on the wire as its id, kind and element type — no store
+            # needed to read it back.
+            @test serialized["time_series_key"] == IS.serialize(stored_key)
+            deserialized = IS.deserialize(T, serialized)
+            @test typeof(deserialized) <: T
             @test IS.get_time_series_key(deserialized) == stored_key
         end
     end
 
     @testset "Show" begin
         for (T, U) in zip(ts_types, underlying_types)
-            fd = T(forecast_key)
+            fd = T(forecast_key(IS.get_underlying_function_data_type(T)))
             str = sprint(show, MIME("text/plain"), fd)
-            @test contains(str, "test_forecast")
+            # A key names an association id; the series' name is a catalog column,
+            # and `show` must not reach for the store to render it.
+            @test contains(str, "association_id=1")
             @test contains(str, string(U))
         end
     end
@@ -120,7 +118,10 @@
                 # Wrap the key in the corresponding TimeSeriesFunctionData
                 ts_fd = TSType(key)
                 @test IS.is_time_series_backed(ts_fd)
-                @test IS.get_name(IS.get_time_series_key(ts_fd)) == name
+                @test IS.get_name(
+                    only(IS.list_time_series_metadata(component; name = name)),
+                ) == name
+                @test IS.get_time_series_key(ts_fd) == key
 
                 # Retrieve the time series via the key extracted from the wrapper,
                 # exercising the key-based retrieval path rather than by-name.
@@ -237,106 +238,83 @@
 end
 
 @testset "TimeSeriesValueCurve" begin
-    forecast_key = IS.ForecastKey(;
-        owner_id = 1,
-        owner_category = IS.InfraStore.Component,
-        association_id = 1,
-        time_series_type = IS.Deterministic,
-        name = "test_forecast",
-        initial_timestamp = Dates.DateTime("2020-01-01"),
-        resolution = Dates.Hour(1),
-        horizon = Dates.Hour(24),
-        interval = Dates.Hour(24),
-        count = 1,
-        features = Dict{String, Any}(),
-    )
+    # A key names one stored series, so its element type is fixed: a
+    # `TimeSeriesFunctionData{T}` can only wrap a key of `T` values.
+    forecast_key(::Type{T}) where {T} = IS.TimeSeriesKey{IS.Deterministic{T}}(1)
 
-    ii_key = IS.ForecastKey(;
-        owner_id = 1,
-        owner_category = IS.InfraStore.Component,
-        association_id = 1,
-        time_series_type = IS.Deterministic,
-        name = "initial_input",
-        initial_timestamp = Dates.DateTime("2020-01-01"),
-        resolution = Dates.Hour(1),
-        horizon = Dates.Hour(24),
-        interval = Dates.Hour(24),
-        count = 1,
-        features = Dict{String, Any}(),
-    )
-
-    iaz_key = IS.ForecastKey(;
-        owner_id = 1,
-        owner_category = IS.InfraStore.Component,
-        association_id = 1,
-        time_series_type = IS.Deterministic,
-        name = "input_at_zero",
-        initial_timestamp = Dates.DateTime("2020-01-01"),
-        resolution = Dates.Hour(1),
-        horizon = Dates.Hour(24),
-        interval = Dates.Hour(24),
-        count = 1,
-        features = Dict{String, Any}(),
-    )
+    # initial_input / input_at_zero are scalars over time, not function data.
+    ii_key = IS.TimeSeriesKey{IS.Deterministic{Float64}}(2)
+    iaz_key = IS.TimeSeriesKey{IS.Deterministic{Float64}}(3)
 
     @testset "Construction and field access" begin
         # InputOutputCurve with non-default input_at_zero
         io_with_iaz = IS.TimeSeriesInputOutputCurve(
-            IS.TimeSeriesLinearFunctionData(forecast_key), 42.0,
+            IS.TimeSeriesLinearFunctionData(forecast_key(IS.LinearFunctionData)), 42.0,
         )
         @test IS.get_input_at_zero(io_with_iaz) == 42.0
-        @test IS.get_time_series_key(io_with_iaz) === forecast_key
+        @test IS.get_time_series_key(io_with_iaz) == forecast_key(IS.LinearFunctionData)
 
         # IncrementalCurve with initial_input and input_at_zero keys
         inc = IS.TimeSeriesIncrementalCurve(
-            IS.TimeSeriesPiecewiseStepData(forecast_key), ii_key, iaz_key,
+            IS.TimeSeriesPiecewiseStepData(forecast_key(IS.PiecewiseStepData)), ii_key,
+            iaz_key,
         )
         @test IS.get_initial_input(inc) === ii_key
         @test IS.get_input_at_zero(inc) === iaz_key
 
         # AverageRateCurve with nothing initial_input
         ar = IS.TimeSeriesAverageRateCurve(
-            IS.TimeSeriesLinearFunctionData(forecast_key), nothing,
+            IS.TimeSeriesLinearFunctionData(forecast_key(IS.LinearFunctionData)),
+            nothing,
         )
         @test IS.get_initial_input(ar) === nothing
     end
 
     @testset "Cost aliases" begin
         aliases = [
-            IS.TimeSeriesLinearCurve(forecast_key),
-            IS.TimeSeriesQuadraticCurve(forecast_key),
-            IS.TimeSeriesPiecewisePointCurve(forecast_key),
+            IS.TimeSeriesLinearCurve(forecast_key(IS.LinearFunctionData)),
+            IS.TimeSeriesQuadraticCurve(forecast_key(IS.QuadraticFunctionData)),
+            IS.TimeSeriesPiecewisePointCurve(forecast_key(IS.PiecewiseLinearData)),
         ]
         for obj in aliases
             @test IS.is_cost_alias(obj) == true
         end
 
         # Incremental/average aliases propagate initial_input and input_at_zero
-        pic = IS.TimeSeriesPiecewiseIncrementalCurve(forecast_key, ii_key, iaz_key)
+        pic = IS.TimeSeriesPiecewiseIncrementalCurve(
+            forecast_key(IS.PiecewiseStepData),
+            ii_key,
+            iaz_key,
+        )
         @test IS.get_initial_input(pic) === ii_key
         @test IS.get_input_at_zero(pic) === iaz_key
         @test IS.is_cost_alias(pic) == true
 
-        pac = IS.TimeSeriesPiecewiseAverageCurve(forecast_key, ii_key, iaz_key)
+        pac = IS.TimeSeriesPiecewiseAverageCurve(
+            forecast_key(IS.PiecewiseStepData),
+            ii_key,
+            iaz_key,
+        )
         @test IS.get_initial_input(pac) === ii_key
         @test IS.get_input_at_zero(pac) === iaz_key
     end
 
     @testset "Invalid type combinations" begin
         @test_throws MethodError IS.TimeSeriesInputOutputCurve(
-            IS.TimeSeriesPiecewiseStepData(forecast_key),
+            IS.TimeSeriesPiecewiseStepData(forecast_key(IS.PiecewiseStepData)),
         )
         @test_throws MethodError IS.TimeSeriesIncrementalCurve(
-            IS.TimeSeriesQuadraticFunctionData(forecast_key), nothing,
+            IS.TimeSeriesQuadraticFunctionData(forecast_key(IS.QuadraticFunctionData)),
+            nothing,
         )
         @test_throws MethodError IS.TimeSeriesAverageRateCurve(
-            IS.TimeSeriesPiecewiseLinearData(forecast_key), nothing,
+            IS.TimeSeriesPiecewiseLinearData(forecast_key(IS.PiecewiseLinearData)), nothing,
         )
     end
 
     @testset "is_time_series_backed and get_time_series_key propagation" begin
         ts_io = IS.TimeSeriesInputOutputCurve(
-            IS.TimeSeriesLinearFunctionData(forecast_key),
+            IS.TimeSeriesLinearFunctionData(forecast_key(IS.LinearFunctionData)),
         )
         @test IS.is_time_series_backed(ts_io) == true
 
@@ -348,69 +326,74 @@ end
         # Propagation through CostCurve and FuelCurve
         cc = IS.CostCurve(ts_io)
         @test IS.is_time_series_backed(cc) == true
-        @test IS.get_time_series_key(cc) === forecast_key
+        @test IS.get_time_series_key(cc) == forecast_key(IS.LinearFunctionData)
 
         fc = IS.FuelCurve(ts_io, 1.0)
         @test IS.is_time_series_backed(fc) == true
         # get_time_series_key is undefined for FuelCurve — resolve through the value
         # curve (or get_fuel_cost) explicitly.
         @test_throws ArgumentError IS.get_time_series_key(fc)
-        @test IS.get_time_series_key(IS.get_value_curve(fc)) === forecast_key
+        @test IS.get_time_series_key(IS.get_value_curve(fc)) ==
+              forecast_key(IS.LinearFunctionData)
     end
 
     @testset "Serialization round-trip" begin
-        # Real keys: a serialized key is only its association id, so the round trip needs
-        # a store that can resolve it.
-        sys, (stored_key, stored_ii_key) =
-            create_forecast_key_fixture("test_forecast", "initial_input")
-        store = key_store(sys)
+        # Real keys. A key names one stored series, so each wrapper needs one of its
+        # own element type; `initial_input` is a scalar over time, not function data.
+        _, (lin_key,) =
+            create_forecast_key_fixture(
+                "test_forecast";
+                element_type = IS.LinearFunctionData,
+            )
+        _, (step_key,) =
+            create_forecast_key_fixture(
+                "test_forecast";
+                element_type = IS.PiecewiseStepData,
+            )
+        _, (stored_ii_key,) = create_forecast_key_fixture("initial_input")
         ts_curves = [
             (
                 IS.TimeSeriesInputOutputCurve(
-                    IS.TimeSeriesLinearFunctionData(stored_key),
+                    IS.TimeSeriesLinearFunctionData(lin_key),
                 ),
                 IS.TimeSeriesInputOutputCurve,
             ),
             (
                 IS.TimeSeriesInputOutputCurve(
-                    IS.TimeSeriesLinearFunctionData(stored_key), 42.0,
+                    IS.TimeSeriesLinearFunctionData(lin_key), 42.0,
                 ),
                 IS.TimeSeriesInputOutputCurve,
             ),
             (
                 IS.TimeSeriesIncrementalCurve(
-                    IS.TimeSeriesPiecewiseStepData(stored_key), stored_ii_key,
+                    IS.TimeSeriesPiecewiseStepData(step_key), stored_ii_key,
                 ),
                 IS.TimeSeriesIncrementalCurve,
             ),
             (
                 IS.TimeSeriesAverageRateCurve(
-                    IS.TimeSeriesPiecewiseStepData(stored_key), stored_ii_key,
+                    IS.TimeSeriesPiecewiseStepData(step_key), stored_ii_key,
                 ),
                 IS.TimeSeriesAverageRateCurve,
             ),
         ]
 
         for (curve, curve_type) in ts_curves
-            deserialized = IS.with_deserialization_store(store) do
-                IS.deserialize(curve_type, IS.serialize(curve))
-            end
+            deserialized = IS.deserialize(curve_type, IS.serialize(curve))
             @test typeof(deserialized) == typeof(curve)
             @test IS.get_time_series_key(deserialized) == IS.get_time_series_key(curve)
         end
 
         # CostCurve wrapping TS ValueCurve round-trips
-        cc = IS.CostCurve(IS.TimeSeriesLinearCurve(stored_key))
-        cc_deser = IS.with_deserialization_store(store) do
-            IS.deserialize(IS.CostCurve, IS.serialize(cc))
-        end
+        cc = IS.CostCurve(IS.TimeSeriesLinearCurve(lin_key))
+        cc_deser = IS.deserialize(IS.CostCurve, IS.serialize(cc))
         @test IS.is_time_series_backed(cc_deser) == true
-        @test IS.get_time_series_key(cc_deser) == stored_key
+        @test IS.get_time_series_key(cc_deser) == lin_key
     end
 
     @testset "CostCurve and FuelCurve wrapping" begin
         ts_io = IS.TimeSeriesInputOutputCurve(
-            IS.TimeSeriesLinearFunctionData(forecast_key),
+            IS.TimeSeriesLinearFunctionData(forecast_key(IS.LinearFunctionData)),
         )
         # CostCurve preserves value_curve and accepts power_units
         cc = IS.CostCurve(ts_io, IS.SystemBaseUnit())

@@ -1,10 +1,14 @@
 """
-    TimeSeriesFunctionData{T <: StaticFunctionData} <: FunctionData
+    TimeSeriesFunctionData{T <: StaticFunctionData, U <: TimeSeriesData{T}} <: FunctionData
 
 A parametric `FunctionData` variant whose numerical data lives in a time series rather than
-inline. The type parameter `T` specifies the static [`FunctionData`](@ref) subtype that the
-time series elements correspond to — same shape, but instead of holding numbers directly, it
-holds a [`TimeSeriesKey`](@ref) that points to a time series of `T` values.
+inline. `T` is the static [`FunctionData`](@ref) subtype the time series elements correspond
+to and `U` is the time series type holding them — same shape as a `T`, but instead of the
+numbers it holds a [`TimeSeriesKey`](@ref) naming where they are.
+
+`U` is bounded by `TimeSeriesData{T}`, so the two parameters cannot disagree: a
+`TimeSeriesFunctionData{PiecewiseLinearData}` can only wrap a key naming a series of
+`PiecewiseLinearData`. Write the one-parameter form — `U` is inferred from the key.
 
 Use these when cost function parameters change at each simulation timestep (e.g.,
 time-varying market offers).
@@ -18,9 +22,24 @@ to retrieve the key.
 - `TimeSeriesPiecewiseLinearData` = `TimeSeriesFunctionData{PiecewiseLinearData}`
 - `TimeSeriesPiecewiseStepData` = `TimeSeriesFunctionData{PiecewiseStepData}`
 """
-@kwdef struct TimeSeriesFunctionData{T <: StaticFunctionData} <: FunctionData
-    time_series_key::ConcreteTimeSeriesKey
+@kwdef struct TimeSeriesFunctionData{T <: StaticFunctionData, U <: TimeSeriesData{T}} <:
+              FunctionData
+    time_series_key::TimeSeriesKey{U}
 end
+
+# `U` follows from the key, so the one-parameter spelling every alias and call
+# site already uses keeps working. The bound `U <: TimeSeriesData{T}` then does
+# the checking: a key naming a series of some other element type cannot be
+# wrapped as this `T`, which a two-field struct could only have discovered on
+# read.
+TimeSeriesFunctionData{T}(key::TimeSeriesKey{U}) where {T, U} =
+    TimeSeriesFunctionData{T, U}(key)
+
+# `@kwdef` generates its keyword constructor for the fully-applied type only, so
+# the one-parameter spelling needs its own — deserialization reaches the struct
+# by keyword.
+TimeSeriesFunctionData{T}(; time_series_key::TimeSeriesKey{U}) where {T, U} =
+    TimeSeriesFunctionData{T, U}(time_series_key)
 
 "Time-series-backed variant of [`LinearFunctionData`](@ref)."
 const TimeSeriesLinearFunctionData = TimeSeriesFunctionData{LinearFunctionData}
@@ -58,11 +77,15 @@ is_time_series_backed(::FunctionData) = false
 is_time_series_backed(::TimeSeriesFunctionData) = true
 
 """
-    get_underlying_function_data_type(::Type{TimeSeriesFunctionData{T}}) -> Type{T}
+    get_underlying_function_data_type(::Type{<:TimeSeriesFunctionData{T}}) -> Type{T}
 
 Return the concrete `FunctionData` type that the time series elements correspond to.
 """
-get_underlying_function_data_type(::Type{TimeSeriesFunctionData{T}}) where {T} = T
+get_underlying_function_data_type(::Type{<:TimeSeriesFunctionData{T}}) where {T} = T
+
+"The time series type holding the values — the `U` of `TimeSeriesFunctionData{T, U}`."
+get_time_series_type(::Type{<:TimeSeriesFunctionData{T, U}}) where {T, U} = U
+get_time_series_type(fd::TimeSeriesFunctionData) = get_time_series_type(typeof(fd))
 
 # Instance convenience
 get_underlying_function_data_type(fd::TimeSeriesFunctionData) =
@@ -74,7 +97,7 @@ function Base.show(io::IO, ::MIME"text/plain", fd::TimeSeriesFunctionData)
     underlying = get_underlying_function_data_type(fd)
     print(
         io,
-        "TimeSeriesFunctionData{$underlying} backed by time series \"$(get_name(ts_key))\" ",
-        "of $underlying",
+        "TimeSeriesFunctionData{$underlying} backed by the time series at ",
+        "association_id=$(get_association_id(ts_key)) of $underlying",
     )
 end

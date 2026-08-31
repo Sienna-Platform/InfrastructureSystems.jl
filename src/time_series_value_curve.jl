@@ -50,9 +50,9 @@ retrieved time series data.
     "The underlying `TimeSeriesFunctionData` representation of this `ValueCurve`"
     function_data::T
     "The initial input value, either a TimeSeriesKey or nothing"
-    initial_input::Union{Nothing, ConcreteTimeSeriesKey}
+    initial_input::Union{Nothing, ScalarTimeSeriesKey}
     "Optional, an explicit representation of the input value at zero output."
-    input_at_zero::Union{Nothing, ConcreteTimeSeriesKey} = nothing
+    input_at_zero::Union{Nothing, ScalarTimeSeriesKey} = nothing
 end
 
 TimeSeriesIncrementalCurve(function_data, initial_input) =
@@ -87,9 +87,9 @@ retrieved time series data.
     "The underlying `TimeSeriesFunctionData` representation of this `ValueCurve`"
     function_data::T
     "The initial input value, either a TimeSeriesKey or nothing"
-    initial_input::Union{Nothing, ConcreteTimeSeriesKey}
+    initial_input::Union{Nothing, ScalarTimeSeriesKey}
     "Optional, an explicit representation of the input value at zero output."
-    input_at_zero::Union{Nothing, ConcreteTimeSeriesKey} = nothing
+    input_at_zero::Union{Nothing, ScalarTimeSeriesKey} = nothing
 end
 
 TimeSeriesAverageRateCurve(function_data, initial_input) =
@@ -181,8 +181,11 @@ static_curve_type(::Type{<:TimeSeriesInputOutputCurve}) = InputOutputCurve
 static_curve_type(::Type{<:TimeSeriesIncrementalCurve}) = IncrementalCurve
 static_curve_type(::Type{<:TimeSeriesAverageRateCurve}) = AverageRateCurve
 
+# `<:` on the inner parameter: `TimeSeriesFunctionData{T}` is a `UnionAll` over
+# the time series type, so a constructed curve's parameter is the concrete
+# two-parameter form and would not match the partial spelling.
 _static_function_data_type(
-    ::ValueCurve{TimeSeriesFunctionData{T}},
+    ::ValueCurve{<:TimeSeriesFunctionData{T}},
 ) where {T <: StaticFunctionData} = T
 
 """

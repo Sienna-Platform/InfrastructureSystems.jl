@@ -259,42 +259,33 @@ end
 end
 
 @testset "is_valid_data rejects time-series-backed data" begin
-    forecast_key = IS.ForecastKey(;
-        owner_id = 1,
-        owner_category = IS.InfraStore.Component,
-        association_id = 1,
-        time_series_type = IS.Deterministic,
-        name = "test_forecast",
-        initial_timestamp = Dates.DateTime("2020-01-01"),
-        resolution = Dates.Hour(1),
-        horizon = Dates.Hour(24),
-        interval = Dates.Hour(24),
-        count = 1,
-        features = Dict{String, Any}(),
-    )
+    # A key names one stored series, so its element type is fixed: a
+    # `TimeSeriesFunctionData{T}` can only wrap a key of `T` values.
+    lin_key = IS.TimeSeriesKey{IS.Deterministic{IS.LinearFunctionData}}(1)
+    step_key = IS.TimeSeriesKey{IS.Deterministic{IS.PiecewiseStepData}}(1)
 
     # Raw TimeSeriesFunctionData — no inline data to validate
-    ts_lin_fd = IS.TimeSeriesLinearFunctionData(forecast_key)
+    ts_lin_fd = IS.TimeSeriesLinearFunctionData(lin_key)
     @test_throws ArgumentError IS.is_valid_data(ts_lin_fd)
 
-    ts_psd_fd = IS.TimeSeriesPiecewiseStepData(forecast_key)
+    ts_psd_fd = IS.TimeSeriesPiecewiseStepData(step_key)
     @test_throws ArgumentError IS.is_valid_data(ts_psd_fd)
 
     # TimeSeriesInputOutputCurve — wraps TimeSeriesFunctionData
     ts_io_curve =
-        IS.TimeSeriesInputOutputCurve(IS.TimeSeriesLinearFunctionData(forecast_key))
+        IS.TimeSeriesInputOutputCurve(IS.TimeSeriesLinearFunctionData(lin_key))
     @test_throws ArgumentError IS.is_valid_data(ts_io_curve)
 
     # TimeSeriesIncrementalCurve — wraps TimeSeriesFunctionData
     ts_inc_curve = IS.TimeSeriesIncrementalCurve(
-        IS.TimeSeriesPiecewiseStepData(forecast_key),
+        IS.TimeSeriesPiecewiseStepData(step_key),
         nothing,
     )
     @test_throws ArgumentError IS.is_valid_data(ts_inc_curve)
 
     # TimeSeriesAverageRateCurve — wraps TimeSeriesFunctionData
     ts_arc_curve = IS.TimeSeriesAverageRateCurve(
-        IS.TimeSeriesPiecewiseStepData(forecast_key),
+        IS.TimeSeriesPiecewiseStepData(step_key),
         nothing,
     )
     @test_throws ArgumentError IS.is_valid_data(ts_arc_curve)
