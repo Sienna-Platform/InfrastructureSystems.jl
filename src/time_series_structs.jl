@@ -22,7 +22,7 @@ resolution, initial timestamp, horizon, interval, count, owner, features — liv
 in the catalog, and a key that also carried a copy could only disagree with it.
 `rename_time_series!` and a reassignment both change catalog columns while
 preserving the id, so a cached copy goes stale where the id cannot. Ask the store
-when you need those: [`list_metadata`](@ref) for a set of rows, or
+when you need those: [`list_time_series_metadata`](@ref) for a set of rows, or
 [`get_time_series_metadata`](@ref) for one.
 
 `T` is the exception, because it is the one fact that *cannot* drift: a stored
@@ -31,7 +31,7 @@ rewritten. Carrying it as a type parameter costs nothing at runtime (a key is an
 8-byte `isbits` value) and lets callers dispatch on it —
 `f(key::TimeSeriesKey{<:Forecast})`.
 
-Keys are produced by IS (`add_time_series!`, `list_metadata`), never constructed
+Keys are produced by IS (`add_time_series!`, `list_time_series_metadata`), never constructed
 by users. Two keys are equal exactly when they name the same association.
 """
 struct TimeSeriesKey{T <: TimeSeriesData}
@@ -198,7 +198,7 @@ Base.convert(::Type{Union{Nothing, ScalarTimeSeriesKey}}, key::TimeSeriesKey) = 
     TimeSeriesMetadata{T <: TimeSeriesData}
 
 One catalog row: everything the store records about a time series association
-except its values. Returned by [`list_metadata`](@ref).
+except its values. Returned by [`list_time_series_metadata`](@ref).
 
 This is where the descriptive attributes live now that a [`TimeSeriesKey`](@ref)
 carries only its id. Reading them from a row rather than a key is the whole point

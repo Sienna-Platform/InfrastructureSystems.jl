@@ -21,7 +21,7 @@ _is_deterministic(::Any) = false
     key = IS.add_time_series!(sys, component, forecast)
     @test key isa IS.TimeSeriesKey{<:IS.Forecast}
     # The descriptive columns live on the catalog row, not on the key.
-    md = only(IS.list_metadata(component; name = name))
+    md = only(IS.list_time_series_metadata(component; name = name))
     @test IS.get_time_series_key(md) == key
     @test IS.get_name(md) == name
     @test IS.get_horizon(md) == horizon_count * resolution
@@ -248,7 +248,7 @@ end
     IS.add_time_series!(sys, component, forecast_1h)
     IS.add_time_series!(sys, component, forecast_2h)
 
-    ts_keys = IS.list_metadata(component)
+    ts_keys = IS.list_time_series_metadata(component)
     @test length(ts_keys) == 2
     key_1h = only(filter(k -> IS.get_interval(k) == Dates.Hour(1), ts_keys))
     key_2h = only(filter(k -> IS.get_interval(k) == Dates.Hour(2), ts_keys))
@@ -283,11 +283,11 @@ end
     component2 = IS.TestComponent("Component2", 6)
     IS.add_component!(sys, component2)
     IS.copy_time_series!(component2, component)
-    @test length(IS.list_metadata(component2)) == 2
+    @test length(IS.list_time_series_metadata(component2)) == 2
 
     # A keyed removal removes only the keyed series.
     IS.remove_time_series!(sys, component, key_1h)
-    remaining = IS.list_metadata(component)
+    remaining = IS.list_time_series_metadata(component)
     @test length(remaining) == 1
     @test IS.get_interval(only(remaining)) == Dates.Hour(2)
 end
@@ -322,7 +322,7 @@ end
         features = Dict("scenario" => "a", "model" => "x"),
     )
     # Features live on the catalog row, not on the key.
-    rows = IS.list_metadata(component)
+    rows = IS.list_time_series_metadata(component)
     by_id = Dict(IS.get_association_id(r) => IS.get_features(r) for r in rows)
     @test by_id[IS.get_association_id(key_subset)] == Dict("scenario" => "a")
     @test by_id[IS.get_association_id(key_superset)] ==
@@ -345,7 +345,7 @@ end
 
     # A keyed removal removes exactly the keyed series.
     IS.remove_time_series!(sys, component, key_subset)
-    remaining = IS.list_metadata(component)
+    remaining = IS.list_time_series_metadata(component)
     @test length(remaining) == 1
     @test IS.get_features(only(remaining)) == Dict("scenario" => "a", "model" => "x")
     @test IS.get_time_series_values(component, only(remaining))[1] == 101.0
@@ -359,7 +359,7 @@ end
         features = Dict("scenario" => "a"),
     )
     IS.remove_time_series!(sys, component, key_superset)
-    left = IS.list_metadata(component)
+    left = IS.list_time_series_metadata(component)
     @test length(left) == 1
     @test IS.get_features(only(left)) == Dict("scenario" => "a")
 
@@ -432,7 +432,7 @@ end
             IS.SingleTimeSeries, component, "static"; interval = resolution),
         () -> IS.get_time_series_key(
             IS.SingleTimeSeries, component, "static"; interval = resolution),
-        () -> IS.list_metadata(
+        () -> IS.list_time_series_metadata(
             component; time_series_type = IS.SingleTimeSeries, interval = resolution),
         () -> IS.has_time_series(
             component, IS.SingleTimeSeries, "static"; interval = resolution),
@@ -630,7 +630,8 @@ end
     key1 = IS.add_time_series!(sys, component, forecast1)
     key2 = IS.add_time_series!(sys, component, forecast2)
     # A key is its id; the horizon is a column of the catalog row.
-    horizon_of(name) = IS.get_horizon(only(IS.list_metadata(component; name = name)))
+    horizon_of(name) =
+        IS.get_horizon(only(IS.list_time_series_metadata(component; name = name)))
     @test horizon_of(name1) == horizon_count * resolution1
     @test horizon_of(name2) == horizon_count2 * resolution2
 
@@ -1148,14 +1149,15 @@ end
         ts_name;
         features = Dict("model_year" => "2060", "scenario" => "low"),
     )
-    @test length(IS.list_metadata(component)) == 4
-    @test IS.get_time_series_type(IS.list_metadata(component)[1]) <: IS.SingleTimeSeries
-    @test length(IS.list_metadata(component)) == 4
-    for key in IS.list_metadata(component)
+    @test length(IS.list_time_series_metadata(component)) == 4
+    @test IS.get_time_series_type(IS.list_time_series_metadata(component)[1]) <:
+          IS.SingleTimeSeries
+    @test length(IS.list_time_series_metadata(component)) == 4
+    for key in IS.list_time_series_metadata(component)
         @test IS.get_data(IS.get_time_series(component, key)) == data
     end
     IS.remove_time_series!(sys, IS.SingleTimeSeries)
-    @test isempty(IS.list_metadata(component))
+    @test isempty(IS.list_time_series_metadata(component))
     @test IS.get_num_time_series(sys) == 0
 end
 
@@ -1355,19 +1357,19 @@ end
         ts_name;
         features = Dict("scenario" => "low", "model_year" => "2035"),
     ) isa IS.Deterministic
-    @test length(IS.list_metadata(component)) == 4
+    @test length(IS.list_time_series_metadata(component)) == 4
     @test length(
-        IS.list_metadata(component; time_series_type = IS.Deterministic),
+        IS.list_time_series_metadata(component; time_series_type = IS.Deterministic),
     ) == 4
     @test length(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.Deterministic,
             name = ts_name,
         ),
     ) == 4
     @test length(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.Deterministic,
             name = ts_name,
@@ -1375,21 +1377,22 @@ end
         ),
     ) == 2
     @test length(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.Deterministic,
             name = ts_name,
             features = Dict("scenario" => "low", "model_year" => "2035"),
         ),
     ) == 1
-    @test IS.list_metadata(
+    @test IS.list_time_series_metadata(
         component;
         time_series_type = IS.Deterministic,
         name = ts_name,
         features = Dict("scenario" => "low", "model_year" => "2035"),
     )[1].features["model_year"] == "2035"
-    @test length(IS.list_metadata(component)) == 4
-    @test IS.get_time_series_type(IS.list_metadata(component)[1]) <: IS.Deterministic
+    @test length(IS.list_time_series_metadata(component)) == 4
+    @test IS.get_time_series_type(IS.list_time_series_metadata(component)[1]) <:
+          IS.Deterministic
 
     IS.remove_time_series!(
         sys,
@@ -1399,14 +1402,14 @@ end
         features = Dict("scenario" => "low"),
     )
     @test length(
-        IS.list_metadata(component; time_series_type = IS.Deterministic),
+        IS.list_time_series_metadata(component; time_series_type = IS.Deterministic),
     ) == 2
     for metadata in
-        IS.list_metadata(component; time_series_type = IS.Deterministic)
+        IS.list_time_series_metadata(component; time_series_type = IS.Deterministic)
         @test metadata.features["scenario"] == "high"
     end
     IS.remove_time_series!(sys, IS.Deterministic, component, ts_name)
-    @test isempty(IS.list_metadata(component))
+    @test isempty(IS.list_time_series_metadata(component))
 end
 
 @testset "Test Deterministic with a wrapped SingleTimeSeries" begin
@@ -1772,7 +1775,7 @@ end
 
     # Both sets should coexist.
     all_metadata = collect(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.DeterministicSingleTimeSeries,
         ),
@@ -1812,7 +1815,7 @@ end
     )
 
     all_metadata = collect(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.DeterministicSingleTimeSeries,
         ),
@@ -1889,7 +1892,7 @@ end
     )
 
     all_metadata = collect(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.DeterministicSingleTimeSeries,
         ),
@@ -1906,7 +1909,7 @@ end
     )
 
     all_metadata = collect(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.DeterministicSingleTimeSeries,
         ),
@@ -2417,7 +2420,7 @@ end
     key = IS.add_time_series!(sys, component, ts)
 
     # The owner is a column of the catalog row; the key is the id that finds it.
-    row = only(IS.list_metadata(component))
+    row = only(IS.list_time_series_metadata(component))
     @test IS.get_owner_id(row) == IS.get_id(component)
     @test IS.get_owner_category(row) == IS.get_owner_category(component)
     @test IS.get_association_id(key) == IS.get_association_id(row)
@@ -2445,7 +2448,7 @@ end
     end
 
     # The owner is a column of the catalog row; the key is the id that finds it.
-    row = only(IS.list_metadata(component))
+    row = only(IS.list_time_series_metadata(component))
     @test IS.get_owner_id(row) == IS.get_id(component)
     @test IS.get_owner_category(row) == IS.get_owner_category(component)
     @test IS.get_association_id(key) == IS.get_association_id(row)
@@ -2468,7 +2471,7 @@ end
     key = IS.add_time_series!(sys, component, ts)
 
     # The owner is a column of the catalog row; the key is the id that finds it.
-    row = only(IS.list_metadata(component))
+    row = only(IS.list_time_series_metadata(component))
     @test IS.get_owner_id(row) == IS.get_id(component)
     @test IS.get_owner_category(row) == IS.get_owner_category(component)
     @test IS.get_association_id(key) == IS.get_association_id(row)
@@ -2544,7 +2547,7 @@ end
           [5.0, 6.0, 7.0]
 
     IS.remove_time_series!(sys, component, doctored)
-    @test isempty(IS.list_metadata(component))
+    @test isempty(IS.list_time_series_metadata(component))
 end
 
 @testset "Test key accessors address a Deterministic by association_id" begin
@@ -2623,7 +2626,7 @@ end
         ta = TimeSeries.TimeArray(dates, values, [IS.get_name(component)])
         IS.add_time_series!(sys, component, IS.SingleTimeSeries(; name = "val", data = ta))
     end
-    key1 = only(IS.list_metadata(component1))
+    key1 = only(IS.list_time_series_metadata(component1))
 
     @test_throws ArgumentError IS.get_time_series(component2, key1)
     @test_throws ArgumentError IS.get_time_series_values(component2, key1)
@@ -2636,7 +2639,7 @@ end
     # Both series survive the rejected calls, and each reads from its own owner.
     @test IS.get_time_series_values(component1, key1) == values1
     @test IS.get_time_series_values(
-        component2, only(IS.list_metadata(component2)),
+        component2, only(IS.list_time_series_metadata(component2)),
     ) == values2
 end
 
@@ -2661,8 +2664,9 @@ end
 end
 
 # The attributes a key deliberately does not carry are read back off the catalog row the
-# id resolves to, so the row a caller holding only a key gets is the row `list_metadata`
-# would have handed them — and it is current, not a snapshot taken when the key was made.
+# id resolves to, so the row a caller holding only a key gets is the row
+# `list_time_series_metadata` would have handed them — and it is current, not a snapshot
+# taken when the key was made.
 @testset "Test get_time_series_metadata by key" begin
     sys = IS.SystemData()
     component = IS.TestComponent("Component1", 5)
@@ -2687,8 +2691,8 @@ end
     @test IS.get_owner_id(md) == IS.get_id(component)
     @test IS.get_data_hash(md) == IS.get_time_series_hash(component, key)
 
-    # The same row `list_metadata` reports, reached by id instead of by filter.
-    listed = only(IS.list_metadata(component))
+    # The same row `list_time_series_metadata` reports, reached by id instead of by filter.
+    listed = only(IS.list_time_series_metadata(component))
     @test IS.get_name(md) == IS.get_name(listed)
     @test IS.get_association_id(md) == IS.get_association_id(listed)
 
@@ -2724,7 +2728,7 @@ end
     IS.transform_single_time_series!(
         sys, IS.DeterministicSingleTimeSeries, Dates.Hour(12), Dates.Hour(6),
     )
-    @test length(IS.list_metadata(component)) == 2
+    @test length(IS.list_time_series_metadata(component)) == 2
 
     # The derived forecast holds the SingleTimeSeries down: removing its backing series
     # would orphan it, and the store refuses rather than removing either.
@@ -2736,17 +2740,17 @@ end
     end
     @test e isa ArgumentError
     @test occursin("DeterministicSingleTimeSeries", e.msg)
-    @test length(IS.list_metadata(component)) == 2
+    @test length(IS.list_time_series_metadata(component)) == 2
 
     # Removing the forecast by its own key leaves the SingleTimeSeries alone, even
     # though the two agree on name, resolution and features.
     dst_key = only(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component; time_series_type = IS.DeterministicSingleTimeSeries,
         ),
     )
     IS.remove_time_series!(sys, component, dst_key)
-    @test IS.get_association_id(only(IS.list_metadata(component))) ==
+    @test IS.get_association_id(only(IS.list_time_series_metadata(component))) ==
           IS.get_association_id(sts_key)
     @test length(IS.get_time_series_values(component, sts_key)) == length(dates)
 end
@@ -2805,7 +2809,7 @@ end
     @test length(unique(IS.get_association_id.(keys))) == len
     for (i, key) in enumerate(keys)
         # The owner is on the row the key resolves to, not on the key.
-        row = only(IS.list_metadata(components[i]))
+        row = only(IS.list_time_series_metadata(components[i]))
         @test IS.get_time_series_key(row) == key
         @test IS.get_owner_id(row) == IS.get_id(components[i])
     end
@@ -3173,7 +3177,7 @@ end
         attr1;
         name_mapping = Dict(("not-a-real-label", "x") => "y"),
     )
-    @test isempty(IS.list_metadata(attr3))
+    @test isempty(IS.list_time_series_metadata(attr3))
 end
 
 @testset "Test copy time_series with transformed time series" begin
@@ -3851,7 +3855,7 @@ const IRREGULAR_TIMESTAMPS = [
     )
 
     # A non-sequential series is irregular, so its row carries no resolution.
-    keys = collect(IS.list_metadata(component))
+    keys = collect(IS.list_time_series_metadata(component))
     @test length(keys) == 1
     key = keys[1]
     @test IS.get_time_series_type(key) <: IS.NonSequentialTimeSeries
@@ -3864,7 +3868,7 @@ const IRREGULAR_TIMESTAMPS = [
             IS.NonSequentialTimeSeries, component, name; interval = interval),
         () -> IS.get_time_series_key(
             IS.NonSequentialTimeSeries, component, name; interval = interval),
-        () -> IS.list_metadata(
+        () -> IS.list_time_series_metadata(
             component;
             time_series_type = IS.NonSequentialTimeSeries,
             interval = interval,
@@ -4734,7 +4738,7 @@ end
 
     # Features are a column of the catalog row, so the rows are what carries them
     # here; each row hands back the key that reads it.
-    ts_keys = IS.list_metadata(component)
+    ts_keys = IS.list_time_series_metadata(component)
 
     for key in ts_keys
         timestamps = IS.get_time_series_timestamps(component, key)
@@ -5121,7 +5125,7 @@ end
 
     # The nothing-tolerant accessors keep answering "empty".
     @test !IS.has_time_series(c)
-    @test isempty(IS.list_metadata(c))
+    @test isempty(IS.list_time_series_metadata(c))
     @test isempty(collect(IS.get_time_series_multiple(c)))
 end
 
@@ -5190,7 +5194,7 @@ end
         IS.Deterministic(; name = "f", data = data, resolution = resolution),
     )
     # These are row columns now: a key carries no length, count or horizon.
-    md = only(IS.list_metadata(component; time_series_type = IS.Deterministic))
+    md = only(IS.list_time_series_metadata(component; time_series_type = IS.Deterministic))
     @test IS.get_length(md) == horizon_count
     @test IS.get_length(md) == length(md)
     @test IS.get_count(md) == 3
@@ -5377,7 +5381,7 @@ end
             )
         end
     end
-    ts_keys = IS.list_metadata(component)
+    ts_keys = IS.list_time_series_metadata(component)
     @test length(ts_keys) == 30
     actual_ts_data = Dict(IS.get_name(x) => x for x in ts_keys)
     for i in 1:30
@@ -5424,14 +5428,14 @@ end
             )
         end
     end
-    @test isempty(IS.list_metadata(component))
+    @test isempty(IS.list_time_series_metadata(component))
 
     @test_throws ArgumentError IS.time_series_transaction(sys) do txn
         for _ in 1:3
             IS.add_time_series!(txn, component, forecast)
         end
     end
-    @test isempty(IS.list_metadata(component))
+    @test isempty(IS.list_time_series_metadata(component))
 end
 
 @testset "Test bulk addition of time series with transaction" begin
@@ -5465,7 +5469,7 @@ end
             )
         end
     end
-    ts_keys = IS.list_metadata(component)
+    ts_keys = IS.list_time_series_metadata(component)
     @test length(ts_keys) == 5
     actual_ts_data = Dict(IS.get_name(x) => x for x in ts_keys)
     for i in 1:5
@@ -5526,7 +5530,7 @@ end
             end
         end,
     )
-    ts_keys = IS.list_metadata(component)
+    ts_keys = IS.list_time_series_metadata(component)
     @test length(ts_keys) == 1
     key = ts_keys[1]
     @test IS.get_name(key) == "bystander"
@@ -5808,17 +5812,17 @@ end
         ),
     )
     @test length(
-        IS.list_metadata(component; time_series_type = IS.SingleTimeSeries),
+        IS.list_time_series_metadata(component; time_series_type = IS.SingleTimeSeries),
     ) == 2
     @test length(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.SingleTimeSeries,
             resolution = resolution1,
         ),
     ) == 1
     @test length(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.SingleTimeSeries,
             name = ts_name,
@@ -5935,17 +5939,17 @@ end
         ),
     )
     @test length(
-        IS.list_metadata(component; time_series_type = IS.Deterministic),
+        IS.list_time_series_metadata(component; time_series_type = IS.Deterministic),
     ) == 2
     @test length(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.Deterministic,
             resolution = resolution1,
         ),
     ) == 1
     @test length(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.Deterministic,
             name = f_name,
@@ -6153,19 +6157,19 @@ end
         ),
     )
 
-    # list_metadata with interval
+    # list_time_series_metadata with interval
     @test length(
-        IS.list_metadata(component; time_series_type = IS.Deterministic),
+        IS.list_time_series_metadata(component; time_series_type = IS.Deterministic),
     ) == 2
     @test length(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.Deterministic,
             interval = interval1,
         ),
     ) == 1
     @test length(
-        IS.list_metadata(
+        IS.list_time_series_metadata(
             component;
             time_series_type = IS.Deterministic,
             name = f_name,
@@ -6658,12 +6662,12 @@ end
         ts_name = "test"
         data = IS.SingleTimeSeries(; data = data, name = ts_name)
         IS.add_time_series!(sys, attr, data)
-        all_metadata = IS.list_metadata(
+        all_metadata = IS.list_time_series_metadata(
             attr;
             time_series_type = IS.SingleTimeSeries,
         )
         @test isempty(
-            IS.list_metadata(
+            IS.list_time_series_metadata(
                 component;
                 time_series_type = IS.SingleTimeSeries,
             ),
@@ -6675,7 +6679,7 @@ end
             IS.remove_time_series!(sys, IS.SingleTimeSeries, attr, ts_name)
         end
         @test isempty(
-            IS.list_metadata(
+            IS.list_time_series_metadata(
                 attr;
                 time_series_type = IS.SingleTimeSeries,
             ),
@@ -6742,7 +6746,7 @@ end
     # so that we can test removing just the SingleTimeSeries from the other component
     IS.remove_time_series!(mgr, IS.DeterministicSingleTimeSeries, component2, ts_name)
 
-    metadata = IS.list_metadata(
+    metadata = IS.list_time_series_metadata(
         component;
         time_series_type = IS.SingleTimeSeries,
         name = ts_name,
@@ -6960,7 +6964,10 @@ end
     IS.transform_single_time_series!(
         sys, IS.DeterministicSingleTimeSeries, Dates.Hour(6), Dates.Hour(6))
     dst_key = only(
-        IS.list_metadata(c1; time_series_type = IS.DeterministicSingleTimeSeries))
+        IS.list_time_series_metadata(
+            c1;
+            time_series_type = IS.DeterministicSingleTimeSeries,
+        ))
     @test IS.get_time_series_hash(c1, dst_key) == h1
 
     # System-wide grouping, default: only the arrays referenced more than once.
@@ -7448,7 +7455,7 @@ end
         IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "keep")
         error("boom")
     end
-    keys = IS.list_metadata(component)
+    keys = IS.list_time_series_metadata(component)
     @test length(keys) == 1
     @test IS.get_name(keys[1]) == "keep"
     # The data came back, not just the catalog row.
@@ -7459,7 +7466,7 @@ end
     IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, make_ts("added", 100.0))
     end
-    @test length(IS.list_metadata(component)) == 2
+    @test length(IS.list_time_series_metadata(component)) == 2
 end
 
 @testset "Test failed commit rolls back the store transaction" begin
@@ -7492,7 +7499,7 @@ end
         IS.add_time_series!(txn, component, make_ts("after"))
     end
     @test !IS.InfraStore.in_transaction(store)
-    names = Set(IS.get_name(k) for k in IS.list_metadata(component))
+    names = Set(IS.get_name(k) for k in IS.list_time_series_metadata(component))
     @test names == Set(["dup", "after"])
 end
 
@@ -7517,7 +7524,7 @@ end
         # Auto-flushes at 3 and 6 drained all but the seventh entry.
         @test IS.has_staged_data(txn)
     end
-    @test length(IS.list_metadata(component)) == 7
+    @test length(IS.list_time_series_metadata(component)) == 7
 
     # The byte limit flushes long series well before the count limit would.
     # Staged-byte accounting counts the encoded array (for a Float64 series,
@@ -7530,7 +7537,7 @@ end
         # Byte-triggered flushes at 3 and 6 drained all but the seventh entry.
         @test IS.has_staged_data(txn)
     end
-    @test length(IS.list_metadata(component)) == 14
+    @test length(IS.list_time_series_metadata(component)) == 14
 
     # Auto-flushed work still rolls back with the block.
     @test_throws ErrorException IS.time_series_transaction(
@@ -7541,7 +7548,7 @@ end
         end
         error("boom")
     end
-    names = Set(IS.get_name(k) for k in IS.list_metadata(component))
+    names = Set(IS.get_name(k) for k in IS.list_time_series_metadata(component))
     @test names == union(Set("ts_$i" for i in 1:7), Set("bytes_$i" for i in 1:7))
 
     # A composite element type stages as a `length x element_row_width` matrix of
@@ -7606,7 +7613,7 @@ end
 
     # A key is its id; the names are on the rows those ids resolve to.
     stored = Dict(
-        IS.get_association_id(md) => md for md in IS.list_metadata(component)
+        IS.get_association_id(md) => md for md in IS.list_time_series_metadata(component)
     )
     @test [IS.get_name(stored[IS.get_association_id(k)]) for k in keys] ==
           ["collected_$i" for i in 1:5]
@@ -7639,7 +7646,7 @@ end
     end
     # The rollback unwrote the row, so the key naming it is dropped with it.
     @test isempty(IS.added_keys(context))
-    @test isempty(IS.list_metadata(component))
+    @test isempty(IS.list_time_series_metadata(component))
 end
 
 @testset "Test time series context nesting and reuse" begin
@@ -7666,7 +7673,7 @@ end
             error("inner failed")
         end
     end
-    names = Set(IS.get_name(k) for k in IS.list_metadata(component))
+    names = Set(IS.get_name(k) for k in IS.list_time_series_metadata(component))
     @test names == Set(["outer"])
 
     # A transaction is valid only inside its own block.

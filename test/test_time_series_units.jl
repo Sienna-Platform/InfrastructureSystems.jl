@@ -147,7 +147,7 @@ end
     # is its association id and nothing else. It does read back on the catalog
     # row, which describes a series rather than addressing one.
     @test !(:units in fieldnames(IS.TimeSeriesKey))
-    md = only(IS.list_metadata(component))
+    md = only(IS.list_time_series_metadata(component))
     @test IS.get_units(md) == "MW"
 end
 

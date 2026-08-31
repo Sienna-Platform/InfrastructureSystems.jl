@@ -101,7 +101,7 @@ file-format reference.
 ## Identifying and retrieving a time series
 
 The surface splits in two. **Identify** with
-[`InfrastructureSystems.list_metadata`](@ref), which returns a
+[`InfrastructureSystems.list_time_series_metadata`](@ref), which returns a
 [`InfrastructureSystems.TimeSeriesMetadata`](@ref) row per matching association — `name`,
 `resolution`, `features`, `initial_timestamp`, and for a forecast `horizon`, `interval` and
 `count`. **Act** with the row's
@@ -109,10 +109,10 @@ The surface splits in two. **Identify** with
 `association_id` and nothing else:
 
 ```julia
-rows = list_metadata(owner)                 # enumerate; each row carries its attributes
-get_name(rows[1])                           # a column of the row, read from the catalog
-ts = get_time_series(owner, rows[1])        # a row is accepted anywhere a key is
-key = get_time_series_key(rows[1])          # store this in your own model
+rows = list_time_series_metadata(owner)  # enumerate; each row carries its attributes
+get_name(rows[1])                        # a column of the row, read from the catalog
+ts = get_time_series(owner, rows[1])     # a row is accepted anywhere a key is
+key = get_time_series_key(rows[1])       # store this in your own model
 ```
 
 A key carries only the id because everything else is a copy of something the catalog already

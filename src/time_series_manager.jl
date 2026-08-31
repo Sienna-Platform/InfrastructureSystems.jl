@@ -332,7 +332,7 @@ get_time_series_key(
     features = features,
 )
 
-list_metadata(
+list_time_series_metadata(
     mgr::TimeSeriesManager,
     component::TimeSeriesOwners;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,

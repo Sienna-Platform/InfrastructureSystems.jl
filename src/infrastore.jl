@@ -682,7 +682,7 @@ end
 # Every keyed accessor is therefore back to **one** store call, and the race is
 # closed rather than narrowed.
 #
-# The by-name reads resolve their key out of a `list_metadata` scoped to one
+# The by-name reads resolve their key out of a `list_time_series_metadata` scoped to one
 # owner, which is where ownership is established; they take the `Store`-addressed
 # read below, which sets no guard. Re-guarding would only re-confirm what the
 # listing already said.
@@ -720,7 +720,7 @@ end
 _not_this_owners_key(owner::TimeSeriesOwners, key::TimeSeriesKey, detail) = ArgumentError(
     "TimeSeriesKey (association_id=$(get_association_id(key))) does not name a " *
     "time series of $(summary(owner)): $(detail). Pass the owner it belongs to, " *
-    "or look one up on this owner with list_metadata.",
+    "or look one up on this owner with list_time_series_metadata.",
 )
 
 # Confirm the association `key` names is attached to `owner`, against a catalog
@@ -1954,8 +1954,8 @@ _infrastore_query_types(::Nothing) = AllStoredTypes()
     return :($collapsed)
 end
 
-# The single InfraStore type to push into the core `list_metadata` filter for a query
-# type — a stored type, where `InfraStore.Deterministic` covers a
+# The single InfraStore type to push into the core `list_time_series_metadata`
+# filter for a query type — a stored type, where `InfraStore.Deterministic` covers a
 # `Deterministic`-family query because the core matches both storage forms under
 # it. `nothing` when the type spans more than that (a broader abstract family
 # like `Forecast`); the caller then applies the residual
@@ -2046,7 +2046,7 @@ _element_value_type(::Type{<:InfraStore.Probabilistic{T}}) where {T} =
 _element_value_type(::Type{<:InfraStore.Scenarios{T}}) where {T} = _is_element_type(T)
 _element_value_type(::Type) = Float64
 
-# Build the matching IS `TimeSeriesKey` from a catalog row — a `list_metadata`
+# Build the matching IS `TimeSeriesKey` from a catalog row — a `list_time_series_metadata`
 # row, which is the store's one listing shape and carries the `id` a key is
 # addressed by. A key is the id plus the stored type; every other column of the
 # row stays on the row, where a caller reads it without risk of the two drifting.
@@ -2116,7 +2116,7 @@ function get_time_series_key(store::Store, association_id::Integer)
 end
 
 # Every matching catalog row, as IS `TimeSeriesMetadata`. The core
-# `list_metadata` query filters owner / name / resolution / interval / features
+# `list_time_series_metadata` query filters owner / name / resolution / interval / features
 # (periods are canonicalized to ISO-8601 on both write and query, so a regular
 # `Hour(1)` matches a stored `Minute(60)`); an abstract `time_series_type` (or
 # `Deterministic`, which also matches a DST) is not a catalog filter column, so
@@ -2153,7 +2153,7 @@ function _infrastore_list_metadata(
     return out
 end
 
-# Owner-level `list_metadata` entry point.
+# Owner-level `list_time_series_metadata` entry point.
 function infrastore_owner_list_metadata(
     owner::TimeSeriesOwners;
     time_series_type = nothing,
@@ -2221,7 +2221,7 @@ function infrastore_get_time_series_hash(owner::TimeSeriesOwners, key::TimeSerie
 end
 
 # Content hashes for a homogeneous collection of owners, resolved by ONE catalog
-# query (`list_metadata` filtered on category/type/name/resolution/interval,
+# query (`list_time_series_metadata` filtered on category/type/name/resolution/interval,
 # whose every row carries the array's `data_hash`) instead of one per owner.
 # Returns `get_id(owner) => 64-char hex hash` for every owner in `owners` with a
 # stored series matching the filters; owners with no
@@ -2299,7 +2299,7 @@ function infrastore_group_by_hash(
 )
     # Keyed by the 64-char hex form of the content hash (the public contract).
     groups = Dict{String, Vector{Tuple{TimeSeriesOwners, TimeSeriesKey}}}()
-    for md in list_metadata(store)
+    for md in list_time_series_metadata(store)
         get_time_series_type(md) <: DeterministicSingleTimeSeries && continue
         owner = id_to_owner(get_owner_id(md), get_owner_category(md))
         pairs = get!(

@@ -140,7 +140,7 @@ end
 function keys_for(sys, comps)
     by_owner = Dict(
         IS.get_owner_id(md) => IS.get_time_series_key(md)
-        for md in IS.list_metadata(sys)
+        for md in IS.list_time_series_metadata(sys)
     )
     return [by_owner[IS.get_id(c)] for c in comps]
 end

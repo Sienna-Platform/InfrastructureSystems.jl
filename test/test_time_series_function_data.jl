@@ -118,7 +118,9 @@
                 # Wrap the key in the corresponding TimeSeriesFunctionData
                 ts_fd = TSType(key)
                 @test IS.is_time_series_backed(ts_fd)
-                @test IS.get_name(only(IS.list_metadata(component; name = name))) == name
+                @test IS.get_name(
+                    only(IS.list_time_series_metadata(component; name = name)),
+                ) == name
                 @test IS.get_time_series_key(ts_fd) == key
 
                 # Retrieve the time series via the key extracted from the wrapper,

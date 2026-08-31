@@ -173,7 +173,8 @@ end
             component,
             IS.SingleTimeSeries(name, initial_time, resolution, values),
         )
-        @test IS.get_element_type(only(IS.list_metadata(sys; name = name))) == tag
+        @test IS.get_element_type(only(IS.list_time_series_metadata(sys; name = name))) ==
+              tag
     end
 end
 

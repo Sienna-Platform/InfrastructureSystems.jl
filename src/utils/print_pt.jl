@@ -229,7 +229,8 @@ end
 # series is read for. A catalog row carries more — the owner columns (constant
 # across this table, since it IS one owner's), the content hash (32 raw bytes),
 # the remaining descriptive labels — and a table wide enough to hold all of it
-# truncates away the columns above. Reach for `list_metadata` when you want them.
+# truncates away the columns above. Reach for `list_time_series_metadata` when you
+# want them.
 const _TIME_SERIES_DISPLAY_COLUMNS = (
     :name, :element_type, :initial_timestamp, :resolution, :horizon, :interval,
     :count, :length, :units, :features,
@@ -237,7 +238,7 @@ const _TIME_SERIES_DISPLAY_COLUMNS = (
 
 function show_time_series(io::IO, owner::TimeSeriesOwners)
     data_by_type = Dict{Any, Vector{OrderedDict{String, Any}}}()
-    for md in list_metadata(owner)
+    for md in list_time_series_metadata(owner)
         # Grouped by KIND, not by the row's full type: the type parameter carries
         # the value element type too, so grouping on it would split one owner's
         # `SingleTimeSeries{Float64}` and `SingleTimeSeries{PiecewiseStepData}`

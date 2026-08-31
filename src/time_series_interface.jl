@@ -15,7 +15,7 @@ Return the [`TimeSeriesManager`](@ref) backing `owner`, or throw if there is non
 An owner that was never added to a system — or one whose type does not support time
 series — has no manager. Reading time series from it is a caller mistake, so it gets an
 actionable `ArgumentError` rather than a `FieldError` on `nothing`. Callers that treat
-"detached" as an ordinary empty answer (`has_time_series`, `list_metadata`,
+"detached" as an ordinary empty answer (`has_time_series`, `list_time_series_metadata`,
 `get_time_series_multiple`, `copy_time_series!`) check for `nothing` themselves instead.
 """
 function _get_time_series_manager_or_throw(owner)
@@ -245,7 +245,7 @@ end
 Return the [`TimeSeriesKey`](@ref) identifying the single time series of type `T`
 attached to `owner` under `name` (and the given resolution/interval/features).
 
-Pairs with [`list_metadata`](@ref) (enumeration) and
+Pairs with [`list_time_series_metadata`](@ref) (enumeration) and
 [`get_time_series(::TimeSeriesOwners, ::TimeSeriesKey)`](@ref) (retrieval).
 """
 function get_time_series_key(
@@ -272,7 +272,7 @@ end
 Return the [`TimeSeriesMetadata`](@ref) row for the single time series of type `T`
 attached to `owner` under `name` (and the given resolution/interval/features).
 
-The one-row counterpart of [`list_metadata`](@ref), and what
+The one-row counterpart of [`list_time_series_metadata`](@ref), and what
 [`get_time_series_key`](@ref) resolves through — take the row when you want the
 series' attributes, the key when you only want to address it.
 """
@@ -284,7 +284,7 @@ function get_time_series_metadata(
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Union{Nothing, Dict} = nothing,
 ) where {T <: TimeSeriesData}
-    rows = list_metadata(
+    rows = list_time_series_metadata(
         owner;
         time_series_type = T,
         name = name,
@@ -327,7 +327,7 @@ See also: [`get_time_series_metadata` by name](@ref get_time_series_metadata(
     resolution::Union{Nothing, Dates.Period} = nothing,
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Union{Nothing, Dict} = nothing,
-) where {T <: TimeSeriesData}), [`list_metadata`](@ref).
+) where {T <: TimeSeriesData}), [`list_time_series_metadata`](@ref).
 """
 get_time_series_metadata(owner::TimeSeriesOwners, key::TimeSeriesKey) =
     infrastore_get_time_series_metadata(owner, key)
@@ -1191,7 +1191,7 @@ function _copy_time_series_same_kind!(
     # `dst` holding a subset of `src`'s series.
     src_label = _copy_source_label(src)
     time_series_transaction(mgr) do _
-        for md in list_metadata(src)
+        for md in list_time_series_metadata(src)
             name = get_name(md)
             new_name = name
             if !isnothing(name_mapping)
@@ -1217,7 +1217,7 @@ function _copy_time_series_same_kind!(
 end
 
 """
-    list_metadata(owner; time_series_type, name, resolution, interval, features)
+    list_time_series_metadata(owner; time_series_type, name, resolution, interval, features)
 
 Return a [`TimeSeriesMetadata`](@ref) row for each time series attached to
 `owner`, optionally filtered by type / name / resolution / interval / features.
@@ -1230,7 +1230,7 @@ the key it carries stays valid as the catalog changes around it.
 An owner with no time series manager — one not attached to a system — has no time
 series, so this is empty rather than an error.
 """
-function list_metadata(
+function list_time_series_metadata(
     owner::TimeSeriesOwners;
     time_series_type::Union{Type{<:TimeSeriesData}, Nothing} = nothing,
     name::Union{String, Nothing} = nothing,
@@ -1240,7 +1240,7 @@ function list_metadata(
 )
     mgr = get_time_series_manager(owner)
     isnothing(mgr) && return TimeSeriesMetadata[]
-    return list_metadata(
+    return list_time_series_metadata(
         mgr,
         owner;
         time_series_type = time_series_type,
@@ -1279,7 +1279,7 @@ when processing many owners (e.g. batching model parameters by shared array).
 
 All owners must be of one category (all components or all supplemental
 attributes). `resolution`, `interval`, and `features` narrow the match the same
-way they do in [`list_metadata`](@ref); if the filters leave more than
+way they do in [`list_time_series_metadata`](@ref); if the filters leave more than
 one matching series with distinct arrays for an owner, an error is thrown.
 """
 get_time_series_hashes(
@@ -1359,7 +1359,7 @@ end
 
 # A metadata row carries the key that addresses its series, so a row is accepted
 # anywhere a key is. A caller that has just listed rows should not have to unwrap
-# every one of them to act on it, and the row is the only thing `list_metadata`
+# every one of them to act on it, and the row is the only thing `list_time_series_metadata`
 # hands back.
 for f in (
     :get_time_series,

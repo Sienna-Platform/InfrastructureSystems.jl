@@ -17,16 +17,18 @@ a scratch store — a parser building a document, say — needs the same rows be
 store's own `element_type` spelling included, so such a writer works from it alone.
 
 Both vocabularies are IS's on the way in as well as out. `time_series_type` is an **IS**
-type — the same spelling [`list_metadata`](@ref list_metadata(::TimeSeriesOwners)) on an
+type — the same spelling
+[`list_time_series_metadata`](@ref list_time_series_metadata(::TimeSeriesOwners)) on an
 owner takes, and abstract families (`Forecast`, `StaticTimeSeries`) resolve here exactly as
 they do there. And the rows come back translated: a raw store row names *InfraStore's*
 `SingleTimeSeries`, and IS exports its own, so an untranslated row would fail every
 `<: SingleTimeSeries` test a caller writes.
 """
-list_metadata(store::Store; kwargs...) = _infrastore_list_metadata(store; kwargs...)
+list_time_series_metadata(store::Store; kwargs...) =
+    _infrastore_list_metadata(store; kwargs...)
 
-list_metadata(data::SystemData; kwargs...) =
-    list_metadata(get_data_store(data); kwargs...)
+list_time_series_metadata(data::SystemData; kwargs...) =
+    list_time_series_metadata(get_data_store(data); kwargs...)
 
 """
 $(TYPEDSIGNATURES)
@@ -34,7 +36,7 @@ $(TYPEDSIGNATURES)
 Every `(component_id, component_type, attribute_id, attribute_type)` association row in
 `data`, in one catalog query.
 
-The counterpart of [`list_metadata`](@ref) for the attachment table. Callers
+The counterpart of [`list_time_series_metadata`](@ref) for the attachment table. Callers
 building a document group these by `component_id` instead of asking the store once per
 component.
 """
@@ -55,7 +57,7 @@ $(TYPEDSIGNATURES)
 
 The raw, already schema-conformant JSON array InfraStore's `openapi` module produces for
 `time_series_associations` matching the filter (the same filter keywords as
-[`list_metadata`](@ref)), each row stamped with the store's own `uri` and
+[`list_time_series_metadata`](@ref)), each row stamped with the store's own `uri` and
 `data_hash`. For a caller that embeds the JSON verbatim (into a document, say) rather than
 round-tripping it through the generated model types; see
 [`openapi_time_series_association_rows`](@ref) for that.
