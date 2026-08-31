@@ -160,15 +160,19 @@ function get_time_series(
     end
 end
 
+# Dispatch to the reader for the key's stored kind. `target` is a
+# `KeyedReadTarget`: an owner, whose ownership of the key is checked against the
+# catalog first, or the store, for a key the caller resolved from that owner's own
+# listing and so does not have to confirm again.
 _get_time_series_by_key(
-    owner::TimeSeriesOwners,
+    target::KeyedReadTarget,
     key::TimeSeriesKey{<:Forecast};
     start_time,
     len,
     count,
-) = _infrastore_get_forecast(
-    owner;
-    key = key,
+) = _infrastore_read_forecast(
+    target,
+    key;
     start_time = start_time,
     len = len,
     count = count,
@@ -177,20 +181,20 @@ _get_time_series_by_key(
 # `count` does not apply to a static series; it is accepted for interface
 # uniformity and ignored.
 _get_time_series_by_key(
-    owner::TimeSeriesOwners,
+    target::KeyedReadTarget,
     key::TimeSeriesKey{<:NonSequentialTimeSeries};
     start_time,
     len,
     count,
-) = _infrastore_read_non_sequential(owner, key; start_time = start_time, len = len)
+) = _infrastore_read_non_sequential(target, key; start_time = start_time, len = len)
 
 _get_time_series_by_key(
-    owner::TimeSeriesOwners,
+    target::KeyedReadTarget,
     key::TimeSeriesKey{<:SingleTimeSeries};
     start_time,
     len,
     count,
-) = _infrastore_read_single(owner, key; start_time = start_time, len = len)
+) = _infrastore_read_single(target, key; start_time = start_time, len = len)
 
 """
 Returns an iterator of TimeSeriesData instances attached to the component or attribute.

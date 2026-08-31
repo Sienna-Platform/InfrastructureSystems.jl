@@ -50,9 +50,9 @@ retrieved time series data.
     "The underlying `TimeSeriesFunctionData` representation of this `ValueCurve`"
     function_data::T
     "The initial input value, either a TimeSeriesKey or nothing"
-    initial_input::Union{Nothing, TimeSeriesKey}
+    initial_input::Union{Nothing, ScalarTimeSeriesKey}
     "Optional, an explicit representation of the input value at zero output."
-    input_at_zero::Union{Nothing, TimeSeriesKey} = nothing
+    input_at_zero::Union{Nothing, ScalarTimeSeriesKey} = nothing
 end
 
 TimeSeriesIncrementalCurve(function_data, initial_input) =
@@ -87,9 +87,9 @@ retrieved time series data.
     "The underlying `TimeSeriesFunctionData` representation of this `ValueCurve`"
     function_data::T
     "The initial input value, either a TimeSeriesKey or nothing"
-    initial_input::Union{Nothing, TimeSeriesKey}
+    initial_input::Union{Nothing, ScalarTimeSeriesKey}
     "Optional, an explicit representation of the input value at zero output."
-    input_at_zero::Union{Nothing, TimeSeriesKey} = nothing
+    input_at_zero::Union{Nothing, ScalarTimeSeriesKey} = nothing
 end
 
 TimeSeriesAverageRateCurve(function_data, initial_input) =

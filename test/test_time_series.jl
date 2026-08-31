@@ -2599,10 +2599,16 @@ end
           IS.get_time_series_hash(component, key)
 end
 
-# The `owner` argument is not something the id can confirm, so it is checked: a key read
+# The `owner` argument is not something the id can confirm, so it is enforced: a key read
 # or removed against the wrong owner is a caller error, not a request to act on that
-# owner's same-named series. Removal is the case that matters — without the check it would
+# owner's same-named series. Removal is the case that matters — without it the call would
 # delete a series off a component the caller never named.
+#
+# The owner goes INTO the store call (`read_by_id` / `remove_by_ids!` take an `owner`),
+# so the confirming and the acting are one operation. Checking here first would leave a
+# window: an id survives a reassignment, so a row confirmed by one call can belong to
+# someone else by the time the next one deletes it. That race is covered where it can be
+# staged, in InfraStore's own suite.
 @testset "Test key accessors reject a key belonging to another owner" begin
     sys = IS.SystemData()
     component1 = IS.TestComponent("Component1", 5)
@@ -6576,6 +6582,27 @@ end
             ),
         )
     end
+end
+
+@testset "Test a mis-shaped Deterministic read is named, not a BoundsError" begin
+    # A Deterministic's decoded values are the (horizon_count, count) matrix whose
+    # columns are its windows.
+    @test IS._check_deterministic_window_shape(zeros(4, 3), "fine", "f64") === nothing
+
+    # A higher-rank array is a row whose element_type did not decode to the values
+    # it was packed from. Slicing a column off it would raise a bare BoundsError
+    # that says nothing about why.
+    err = try
+        IS._check_deterministic_window_shape(zeros(2, 4, 3), "bad", "piecewise_step")
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    msg = sprint(showerror, err)
+    @test occursin("bad", msg)
+    @test occursin("3-dimensional", msg)
+    @test occursin("piecewise_step", msg)
 end
 
 @testset "Test removal of SingleTimeSeries attached to a DeterministicSingleTimeSeries" begin

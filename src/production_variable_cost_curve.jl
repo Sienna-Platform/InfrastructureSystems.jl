@@ -166,7 +166,7 @@ struct FuelCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
     "A fixed value for fuel cost; mutually exclusive with `fuel_cost_time_series`"
     fuel_cost::Union{Nothing, Float64}
     "The [`TimeSeriesKey`](@ref) to a fuel cost time series; mutually exclusive with `fuel_cost`"
-    fuel_cost_time_series::Union{Nothing, TimeSeriesKey}
+    fuel_cost_time_series::Union{Nothing, ScalarTimeSeriesKey}
     "(default of 0) Fuel consumption at the unit startup proceedure. Additional cost to the startup costs and related only to the initial fuel required to start the unit.
     represented as a [`LinearCurve`](@ref)"
     startup_fuel_offtake::LinearCurve

@@ -60,6 +60,42 @@ end
     @test occursin("GeographicInfo", text)
 end
 
+@testset "Test show_time_series groups by kind, not by element type" begin
+    sys = create_system_data()
+    component = IS.get_component(IS.TestComponent, sys, "Component1")
+    initial = Dates.DateTime("2020-01-01")
+    resolution = Dates.Hour(1)
+    IS.add_time_series!(
+        sys, component, IS.SingleTimeSeries("floats", initial, resolution, rand(4)),
+    )
+    IS.add_time_series!(
+        sys, component, IS.SingleTimeSeries("ints", initial, resolution, collect(1:4)),
+    )
+    IS.add_time_series!(
+        sys, component,
+        IS.SingleTimeSeries(
+            "steps", initial, resolution,
+            [IS.PiecewiseStepData([1.0, 2.0], [3.0]) for _ in 1:4],
+        ),
+    )
+
+    io = IOBuffer()
+    IS.show_time_series(io, component)
+    text = String(take!(io))
+    # One table for the kind. The row type is parameterized on the value element
+    # type as well, so grouping on it would put each of these three in a table of
+    # its own, all titled the same thing.
+    @test count("SingleTimeSeries", text) == 1
+    @test occursin("floats", text)
+    @test occursin("ints", text)
+    @test occursin("steps", text)
+    # What separates them is a column: the store's own element_type spelling.
+    @test occursin("piecewise_step", text)
+    @test occursin("i64", text)
+    # The content hash is 32 raw bytes and is not one of the columns.
+    @test !occursin("UInt8", text)
+end
+
 @testset "Test show_components units resolution for Vector columns" begin
     sys = create_system_data(; with_time_series = true, time_series_in_memory = true)
     io = IOBuffer()

@@ -425,6 +425,26 @@ end
         fuel_cost_time_series = key,
     )
 
+    # A scalar field takes a closed union of concrete key types, so it is stored
+    # inline rather than boxed. A key naming anything the field cannot resolve to
+    # one Float64 per timestep is refused where it is set, with a message that
+    # says what the field is for — not where it would be read.
+    for wrong in (
+        IS.TimeSeriesKey{IS.Probabilistic{Float64}}(1),
+        IS.TimeSeriesKey{IS.SingleTimeSeries{Float32}}(1),
+        IS.TimeSeriesKey{IS.SingleTimeSeries{IS.PiecewiseStepData}}(1),
+    )
+        err = try
+            IS.FuelCurve(vc, wrong)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("scalar time series field", sprint(showerror, err))
+    end
+    @test isconcretetype(typeof(IS.get_fuel_cost_time_series(fc_ts)))
+
     # Neither set: rejected by the inner constructor
     @test_throws ArgumentError IS.FuelCurve(; value_curve = vc)
 

@@ -1,6 +1,17 @@
 const TimeSeriesOwners = Union{InfrastructureSystemsComponent, SupplementalAttribute}
 
 """
+What a keyed read is addressed against: a `TimeSeriesOwners`, whose ownership of
+the key is confirmed against the catalog first, or the [`Store`](@ref) itself,
+for a key already known to belong to the owner the caller resolved it from.
+
+The two differ by one store call — the ownership lookup — and by nothing else, so
+the by-name accessors, which resolve their key out of one owner's own listing,
+read through the store rather than paying to confirm what the listing said.
+"""
+const KeyedReadTarget = Union{Store, TimeSeriesOwners}
+
+"""
     TimeSeriesKey{T <: TimeSeriesData}
 
 A reference to one stored time series association: its store-minted
@@ -127,6 +138,43 @@ function _key_element_type_from_name(name)
 end
 
 """
+The keys a *scalar-valued* time series field may hold — a time-series-backed
+curve's `initial_input` and `input_at_zero`, a `FuelCurve`'s
+`fuel_cost_time_series`.
+
+A closed union of concrete key types rather than the abstract
+[`TimeSeriesKey`](@ref), for the same reason the fields it types are read in
+per-window loops: a union of concrete `isbits` types is stored inline and
+union-splits, where the abstract spelling boxes every key it holds and makes each
+read of the field a dynamic dispatch.
+
+Closed at `Float64`, and at the kinds whose values resolve to one number per
+timestep, because that is what these fields mean — `build_static_curves` reads
+them as an `AbstractVector{Float64}`, so a key naming anything else could only
+fail there. Declaring it here moves that failure to where the field is set.
+"""
+const ScalarTimeSeriesKey = Union{
+    TimeSeriesKey{SingleTimeSeries{Float64}},
+    TimeSeriesKey{NonSequentialTimeSeries{Float64}},
+    TimeSeriesKey{Deterministic{Float64}},
+    TimeSeriesKey{DeterministicSingleTimeSeries{Float64}},
+}
+
+# Setting one of these fields is where a key of the wrong shape is caught, and
+# `new` gets there through `convert`. Left to Base that is a bare "Cannot
+# `convert`" naming the union and nothing else; this says which key it got and
+# what the field is for. Only reached for a key OUTSIDE the union — one already
+# inside it is not converted at all.
+Base.convert(::Type{Union{Nothing, ScalarTimeSeriesKey}}, key::TimeSeriesKey) = throw(
+    ArgumentError(
+        "$key cannot be stored in a scalar time series field: such a field is " *
+        "read one Float64 per timestep, so it takes a key naming a Float64 " *
+        "SingleTimeSeries, NonSequentialTimeSeries, Deterministic, or " *
+        "DeterministicSingleTimeSeries.",
+    ),
+)
+
+"""
     TimeSeriesMetadata{T <: TimeSeriesData}
 
 One catalog row: everything the store records about a time series association
@@ -140,11 +188,21 @@ that cached them could hand back a name the catalog had since changed.
 Fields a row's type does not use are `nothing`: `resolution` and
 `initial_timestamp` on a `NonSequentialTimeSeries` (its timestamps are irregular
 and stored with the data), `horizon` / `interval` / `count` on a static series,
-`length` on a forecast, whose per-window length is its horizon count.
+`length` on a forecast, whose per-window length is its horizon count, and
+`percentiles` on anything but a `Probabilistic`.
+
+A row carries **every** column the catalog records bar the values themselves —
+the descriptive labels (`units`, `quantity_kind`, `unit_system`,
+`component_field`) as well as the identity ones, the store's own `element_type`
+spelling, and the array's content hash. That completeness is the contract: a
+writer restaging these series into another store, or emitting them into a
+document, works from this row alone and never has to drop to the store's own
+listing for a column IS declined to carry.
 """
 struct TimeSeriesMetadata{T <: TimeSeriesData}
     key::TimeSeriesKey{T}
     owner_id::Int
+    owner_type::String
     owner_category::InfraStore.OwnerCategory
     name::String
     initial_timestamp::Union{Nothing, Dates.DateTime}
@@ -153,7 +211,26 @@ struct TimeSeriesMetadata{T <: TimeSeriesData}
     interval::Union{Nothing, Dates.Period}
     count::Union{Nothing, Int}
     length::Union{Nothing, Int}
+    percentiles::Union{Nothing, Vector{Float64}}
     features::Dict{String, Any}
+    """
+    The store's own `element_type` spelling, kept raw: a writer restaging this row
+    into another store hands it back verbatim. The IS value type it decodes to is
+    `eltype(md)`.
+    """
+    element_type::String
+    """
+    The 32-byte content hash of the array the series resolves to, as the store
+    records it. Read it with [`get_data_hash`](@ref), which renders the hex form
+    IS's public API is spelled in; the bytes are kept because a listing of a large
+    catalog would otherwise pay a string per row for a column most callers of it
+    never look at.
+    """
+    data_hash::Vector{UInt8}
+    units::Union{Nothing, String}
+    quantity_kind::Union{Nothing, String}
+    unit_system::Union{Nothing, AbstractUnitSystem}
+    component_field::Union{Nothing, String}
 end
 
 "The [`TimeSeriesKey`](@ref) that addresses the association this row describes."
@@ -161,6 +238,7 @@ get_time_series_key(md::TimeSeriesMetadata) = md.key
 get_association_id(md::TimeSeriesMetadata) = get_association_id(md.key)
 get_time_series_type(::TimeSeriesMetadata{T}) where {T} = T
 get_owner_id(md::TimeSeriesMetadata) = md.owner_id
+get_owner_type(md::TimeSeriesMetadata) = md.owner_type
 get_owner_category(md::TimeSeriesMetadata) = md.owner_category
 get_name(md::TimeSeriesMetadata) = md.name
 get_initial_timestamp(md::TimeSeriesMetadata) = md.initial_timestamp
@@ -169,6 +247,33 @@ get_horizon(md::TimeSeriesMetadata) = md.horizon
 get_interval(md::TimeSeriesMetadata) = md.interval
 get_count(md::TimeSeriesMetadata) = md.count
 get_features(md::TimeSeriesMetadata) = md.features
+get_percentiles(md::TimeSeriesMetadata) = md.percentiles
+get_units(md::TimeSeriesMetadata) = md.units
+get_quantity_kind(md::TimeSeriesMetadata) = md.quantity_kind
+get_unit_system(md::TimeSeriesMetadata) = md.unit_system
+get_component_field(md::TimeSeriesMetadata) = md.component_field
+get_element_type(md::TimeSeriesMetadata) = md.element_type
+
+"""
+The 64-char lowercase hex content hash of the stored array this row's series
+resolves to — the spelling every IS hash accessor uses. Two rows sharing it name
+the same array.
+"""
+get_data_hash(md::TimeSeriesMetadata) = bytes2hex(md.data_hash)
+
+"""
+The unparameterized time series kind of a row — `SingleTimeSeries` for a
+`SingleTimeSeries{Float64}`.
+
+[`get_time_series_type`](@ref) carries the value element type as well, which is
+what a caller dispatches on; this is what a caller *groups* or *labels* by, where
+one owner's `SingleTimeSeries{Float64}` and `SingleTimeSeries{PiecewiseStepData}`
+rows belong under one heading and the element type is a column of its own.
+"""
+get_time_series_kind(::TimeSeriesMetadata{T}) where {T} = Base.typename(T).wrapper
+
+"The IS value element type of the series this row describes."
+Base.eltype(::TimeSeriesMetadata{T}) where {T} = eltype(T)
 
 """
 The number of values one window of the series holds. A forecast row has no

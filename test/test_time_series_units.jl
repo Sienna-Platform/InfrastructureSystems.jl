@@ -143,9 +143,12 @@ end
     @test typeof(err) === ArgumentError
     @test occursin("duplicate attributes", sprint(showerror, err))
 
-    # The label appears on no key, so it cannot be filtered or addressed by.
-    key = only(IS.list_metadata(component))
-    @test !(:units in fieldnames(typeof(key)))
+    # The label appears on no key, so it cannot be addressed or filtered by: a key
+    # is its association id and nothing else. It does read back on the catalog
+    # row, which describes a series rather than addressing one.
+    @test !(:units in fieldnames(IS.TimeSeriesKey))
+    md = only(IS.list_metadata(component))
+    @test IS.get_units(md) == "MW"
 end
 
 @testset "Test units survives transform_single_time_series!" begin
