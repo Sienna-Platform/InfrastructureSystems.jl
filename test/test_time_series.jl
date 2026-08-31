@@ -7323,6 +7323,58 @@ end
     end
 end
 
+@testset "Test StaticTimeSeriesReader group accessors" begin
+    sys, comps = _create_reader_system(3)
+    t0, res = READER_T0, READER_RES
+    len = 4
+    # Two element types, so two groups: three scalar series and one of curves.
+    expected = Dict{IS.TimeSeriesKey, Vector}()
+    for (i, c) in enumerate(comps)
+        v = [10.0 * i + j for j in 1:len]
+        expected[IS.add_time_series!(sys, c, IS.SingleTimeSeries("val", t0, res, v))] = v
+    end
+    fds = [IS.LinearFunctionData(1.0 * j, 2.0 * j) for j in 1:len]
+    expected[IS.add_time_series!(
+        sys,
+        comps[1],
+        IS.SingleTimeSeries("cost", t0, res, fds),
+    )] = fds
+
+    reader = IS.build_static_time_series_reader(sys; resolution = res)
+    ngroups = IS.get_num_static_time_series_groups(reader)
+    @test ngroups == 2
+
+    entries = IS.get_static_time_series_reader_entries(reader)
+    grouped = [IS.get_static_time_series_group_entries(reader, g) for g in 1:ngroups]
+    # The group views partition the reader's entries.
+    @test sum(length, grouped) == length(reader)
+    @test Set(e.key for g in grouped for e in g) == Set(e.key for e in entries)
+
+    by_key = Dict(e.key => i for (i, e) in enumerate(entries))
+    for k in 1:len
+        IS.read_static_time_series_values!(reader, t0 + res * (k - 1))
+        for g in 1:ngroups
+            vals = IS.get_static_time_series_group_values(reader, g)
+            ents = grouped[g]
+            # The pairing the accessors promise: value i belongs to entry i.
+            @test length(vals) == length(ents)
+            for (i, e) in enumerate(ents)
+                @test e.group == g
+                @test e.column == i
+                @test vals[i] == expected[e.key][k]
+                # ... and the group path agrees with the per-entry one.
+                @test vals[i] == IS.get_static_time_series_value(reader, by_key[e.key])
+            end
+        end
+    end
+
+    # Reading a group before any read is an error, as it is per entry.
+    fresh = IS.build_static_time_series_reader(sys; resolution = res)
+    @test_throws ArgumentError IS.get_static_time_series_group_values(fresh, 1)
+    # The entry grouping is fixed at build and needs no read.
+    @test length(IS.get_static_time_series_group_entries(fresh, 1)) > 0
+end
+
 @testset "Test StaticTimeSeriesReader decodes each element type in its own group" begin
     sys, comps = _create_reader_system(2)
     t0, res = READER_T0, READER_RES

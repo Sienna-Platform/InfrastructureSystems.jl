@@ -65,6 +65,24 @@ So a `read_by_window` of 1.16 µs/op is 1.39 s ÷ 1,200,000, of which 1.04 s is
 twelve real reads of 9.2 MB each. The I/O is present and dominant; it is spread
 over 100,000 components per read.
 
+`read_by_timestamp_grouped` sweeps the same values through the group accessors —
+`get_static_time_series_group_values` / `..._group_entries`, one concrete array
+per group per timestamp taken through a function barrier — instead of
+`get_static_time_series_value`, which returns one entry at a time out of a
+container the reader cannot type and so dispatches dynamically and boxes every
+value.
+
+**Do not read the two rows against each other as an A/B.** The grouped sweep
+re-reads timestamps the per-value sweep just touched, so its storage reads are
+warm and its total is flattered; the asymmetry is fixed run to run, so each row
+still gates its own regression fine. To compare the access paths, subtract each
+row's own `*_storage_read` and compare what is left. At 100k entries that is
+**0.083 µs/value against 0.0008** — the per-value accessor's dispatch and boxing,
+which is also 91 MB of allocation per sweep against 19 MB, and which grows with
+the entry count as the box traffic outgrows the cache (0.023 µs/value at 5k,
+0.086 at 100k; the grouped path is flat at 0.0004 µs at every size). Consumers
+sweeping at scale should use the group accessors.
+
 These are **first-touch** reads — each timestep is read once, never re-read,
 which is how a simulation walks forward through time. Re-sweeping the same
 windows is ~3× cheaper (0.36 µs/op for `det`), and that warm number is the one

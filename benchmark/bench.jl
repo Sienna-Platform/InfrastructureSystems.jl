@@ -240,6 +240,19 @@ function run_static_kind(kind, eltype, n;
                 () -> sweep_static!(reader[], RES, T0, LEN, io_time))
         # µs per actual storage read, against µs per value in the row above.
         swept && report(kind, eltype, "timestamp_storage_read", LEN, io_time[], 0, "ok")
+
+        # The same values through the group accessors. Do NOT read this against
+        # `read_by_timestamp` above as an A/B: this sweep re-reads timestamps
+        # that one just touched, so its storage reads are warm and its total is
+        # flattered. The asymmetry is fixed run to run, so the row still gates a
+        # regression fine; to compare the two access paths, subtract each row's
+        # own `*_storage_read` and compare what is left.
+        gio_time = Ref(0.0)
+        gswept =
+            built && timed_op(kind, eltype, "read_by_timestamp_grouped", n * LEN,
+                () -> sweep_static_grouped!(reader[], RES, T0, LEN, gio_time))
+        gswept && report(kind, eltype, "timestamp_storage_read_grouped", LEN,
+            gio_time[], 0, "ok")
     end
     return
 end
@@ -266,6 +279,40 @@ function sweep_static!(reader, resolution, t0, len, io_time)
         end
     end
     return nread
+end
+
+# The by-timestamp sweep through the group accessors: one concrete array per
+# group per timestamp, taken through a function barrier, rather than one value at
+# a time out of a container the reader cannot type. `get_static_time_series_value`
+# dispatches dynamically and boxes its result on every call, which is both a cost
+# per value and one that grows with the entry count as the box traffic outgrows
+# the cache; this path pays neither.
+function sweep_static_grouped!(reader, resolution, t0, len, io_time)
+    ngroups = IS.get_num_static_time_series_groups(reader)
+    nread = 0
+    for k in 0:(len - 1)
+        io_time[] += @elapsed IS.read_static_time_series_values!(reader,
+            t0 + resolution * k)
+        for g in 1:ngroups
+            nread += consume_group(
+                IS.get_static_time_series_group_values(reader, g),
+                IS.get_static_time_series_group_entries(reader, g),
+            )
+        end
+    end
+    return nread
+end
+
+# The barrier itself: specialized on the group's concrete element type, so a
+# value is a plain load. Every static kind here holds one value per column, so a
+# vector group is the only shape this has to serve.
+function consume_group(vals::AbstractVector, entries)
+    n = 0
+    for i in eachindex(entries)
+        vals[i] === nothing && error("missing value at entry $i")
+        n += 1
+    end
+    return n
 end
 
 # By-window reads over every component via a prebuilt ForecastReader. See

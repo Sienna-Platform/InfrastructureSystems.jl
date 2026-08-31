@@ -76,6 +76,8 @@ const OP_ORDER = [
     "build_static_reader",
     "read_by_timestamp",
     "timestamp_storage_read",
+    "read_by_timestamp_grouped",
+    "timestamp_storage_read_grouped",
     "build_forecast_reader",
     "read_by_window",
     "window_storage_read",

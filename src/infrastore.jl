@@ -1551,6 +1551,14 @@ mutable struct StaticTimeSeriesReader
     rather than once per value.
     """
     group_element_types::Vector{Union{Nothing, String}}
+    """
+    The stretch of `entries` belonging to each group. Entries are built
+    group-major and in column order, so a group's entries are contiguous and
+    `entries[group_ranges[g]][c]` is column `c` of group `g` — which is what lets
+    [`get_static_time_series_group_entries`](@ref) hand back a view that lines up
+    positionally with the group's values.
+    """
+    group_ranges::Vector{UnitRange{Int}}
     "Per-group values cache, decoded where `group_element_types` says so; reset on each read."
     values::Vector{Any}
     has_read::Bool
@@ -1572,6 +1580,7 @@ function infrastore_build_static_time_series_reader(
     element_types = Union{Nothing, String}[]
     groups = InfraStore.static_groups(inner)
     group_element_types = Vector{Union{Nothing, String}}(undef, length(groups))
+    group_ranges = Vector{UnitRange{Int}}(undef, length(groups))
     metas = _infrastore_reader_metadata(
         store,
         Int64[id for group in groups for id in group.ids],
@@ -1580,6 +1589,7 @@ function infrastore_build_static_time_series_reader(
     for (gi, group) in enumerate(groups)
         shared = nothing
         uniform = true
+        first_entry = i + 1
         for col in eachindex(group.ids)
             i += 1
             smeta = metas[i]
@@ -1596,10 +1606,12 @@ function infrastore_build_static_time_series_reader(
             end
         end
         group_element_types[gi] = _shared_group_element_type(group, shared, uniform)
+        group_ranges[gi] = first_entry:i
     end
     values = Vector{Any}(nothing, length(groups))
     return StaticTimeSeriesReader(
-        inner, store, entries, element_types, group_element_types, values, false,
+        inner, store, entries, element_types, group_element_types, group_ranges,
+        values, false,
     )
 end
 
@@ -1679,19 +1691,73 @@ function get_static_time_series_value(
     reader::StaticTimeSeriesReader,
     entry_index::Integer,
 )
+    entry = reader.entries[entry_index]
+    return _static_group_element(
+        get_static_time_series_group_values(reader, entry.group),
+        entry.column,
+        reader.element_types[entry_index],
+    )
+end
+
+"""
+$(TYPEDSIGNATURES)
+Columnar group `group_index`'s values from the most recent
+[`read_static_time_series_values!`](@ref): one value per column, lining up
+positionally with [`get_static_time_series_group_entries`](@ref). The exception
+is a multidimensional scalar series, which keeps the stored
+`(num_columns, element_shape...)` shape, where column `c`'s value is the slice
+`vals[c, ..]`.
+
+This is the allocation-free way to sweep.
+[`get_static_time_series_value`](@ref) hands back one entry at a time out of a
+cache the reader cannot give a concrete type, so every pull costs a dynamic
+dispatch and boxes its result — at 100k entries ~0.09 µs and 32 bytes per value,
+and it worsens as the reader grows, because the box traffic outgrows the cache.
+A group is one concrete array, so a loop that takes it through a function
+barrier pays neither, and stays flat with size:
+
+```julia
+for g in 1:get_num_static_time_series_groups(reader)
+    consume!(out, get_static_time_series_group_values(reader, g),
+        get_static_time_series_group_entries(reader, g))
+end
+```
+
+The barrier is the whole point: `consume!(out, vals::Vector{Float64}, entries)`
+specializes on the group's element type, so `vals[i]` is a plain load. Written
+inline against the `Any` this returns, the loop would be no faster than the
+per-value accessor.
+
+Materializes (and decodes) the group on first touch after a read, into the same
+cache [`get_static_time_series_value`](@ref) uses, so the two may be mixed and
+the group is still built at most once per read.
+"""
+function get_static_time_series_group_values(
+    reader::StaticTimeSeriesReader,
+    group_index::Integer,
+)
     reader.has_read || throw(
         ArgumentError(
             "call read_static_time_series_values! before reading values"))
-    entry = reader.entries[entry_index]
-    vals = reader.values[entry.group]
+    vals = reader.values[group_index]
     if isnothing(vals)
-        vals = _materialize_static_group(reader, entry.group)
-        reader.values[entry.group] = vals
+        vals = _materialize_static_group(reader, group_index)
+        reader.values[group_index] = vals
     end
-    return _static_group_element(
-        vals, entry.column, reader.element_types[entry_index],
-    )
+    return vals
 end
+
+"""
+$(TYPEDSIGNATURES)
+The entries of columnar group `group_index` (1-based), as a view in column
+order — so entry `i` of this view owns value `i` of
+[`get_static_time_series_group_values`](@ref). Needs no read; the grouping is
+fixed when the reader is built.
+"""
+get_static_time_series_group_entries(
+    reader::StaticTimeSeriesReader,
+    group_index::Integer,
+) = view(reader.entries, reader.group_ranges[group_index])
 
 # One group's values for the current timestamp, decoded to one value per column
 # when every column shares a composite element type.
