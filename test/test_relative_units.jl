@@ -156,3 +156,21 @@ struct _FakeUnit <: IS.AbstractUnitSystem end
     @test_throws ArgumentError IS.convert_cost_coefficient(2.0, fake, IS.SU, 100.0, 50.0)
     @test_throws ArgumentError IS.convert_cost_coefficient(2.0, IS.DU, fake, 100.0, 50.0)
 end
+
+@testset "display_string spells per-unit tags out" begin
+    @test IS.display_string(0.6 * IS.DU) == "0.6 p.u. in component base"
+    @test IS.display_string(0.3 * IS.SU) == "0.3 p.u. in system base"
+    # Untagged values render exactly as `print` would.
+    @test IS.display_string(1.5) == "1.5"
+    @test IS.display_string(nothing) == "nothing"
+
+    # A compound field on one base states that base once, after the tuple.
+    @test IS.display_string((min = 0.0 * IS.SU, max = 2.5 * IS.SU)) ==
+          "(min = 0.0 p.u., max = 2.5 p.u.) in system base"
+    # Mixed bases have nothing to factor out, so each element is spelled out.
+    @test IS.display_string((min = 0.0 * IS.SU, max = 2.5 * IS.DU)) ==
+          "(min = 0.0 p.u. in system base, max = 2.5 p.u. in component base)"
+    # So does a tuple that is not all tagged.
+    @test IS.display_string((min = 0.0 * IS.SU, max = 2.5)) ==
+          "(min = 0.0 p.u. in system base, max = 2.5)"
+end

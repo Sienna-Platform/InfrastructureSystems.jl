@@ -8,7 +8,7 @@ Unit system for component data values.
 
 # Values
 - `SYSTEM_BASE`: Per-unit values on the system base power
-- `DEVICE_BASE`: Per-unit values on the device base power
+- `DEVICE_BASE`: Per-unit values on the component base power
 - `NATURAL_UNITS`: Values in natural units (e.g., MW, MVAR)
 """ UnitSystem
 

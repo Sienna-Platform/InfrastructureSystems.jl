@@ -1,7 +1,7 @@
 ###############################
 # Relative (per-unit) markers and RelativeQuantity wrapper.
 #
-# These types are domain-agnostic — they express "device base" / "system base"
+# These types are domain-agnostic — they express "component base" / "system base"
 # / "natural unit" without assuming any particular physical domain. Downstream
 # packages (e.g. PowerSystems) attach domain-specific meaning via categories
 # and conversions.
@@ -26,6 +26,7 @@ export RelativeQuantity
 export DU, SU, NU
 export display_units_arg
 export unitful_variant
+export display_string
 
 """
 Supertype for all unit-system markers (relative and natural). Used as the
@@ -69,7 +70,7 @@ A quantity tagged with a per-unit marker.
 
 # Examples
 ```julia
-0.6 * DU  # 0.6 per-unit on device base
+0.6 * DU  # 0.6 per-unit on component base
 0.3 * SU  # 0.3 per-unit on system base
 ```
 """
@@ -245,6 +246,57 @@ Base.show(io::IO, q::RelativeQuantity{T, SystemBaseUnit}) where {T} =
 Base.show(io::IO, ::DeviceBaseUnit) = print(io, "DU")
 Base.show(io::IO, ::SystemBaseUnit) = print(io, "SU")
 Base.show(io::IO, ::NaturalUnit) = print(io, "NU")
+
+"""
+    display_string(x) -> String
+
+Render `x` for human-facing display, spelling relative-unit tags out in full
+("0.6 p.u. in component base") where `show` prints the terse "0.6 DU". `DU`/`SU`
+are convenient to type but are not standard terminology, so verbose output
+(e.g. a component's `text/plain` display) spells them out; terse contexts such
+as tabular cells keep the short tags.
+
+Recurses into `NamedTuple`s so compound fields (e.g. `(min = …, max = …)`) are spelled
+out element-wise. When every element shares one per-unit base — the usual case for a
+compound field — the base is stated once after the tuple rather than repeated per
+element, which keeps the line readable:
+`(min = 0.0 p.u., max = 2.5 p.u.) in system base`.
+
+Anything else renders exactly as `print` would.
+"""
+display_string(x) = string(x)
+display_string(q::RelativeQuantity) =
+    string(_per_unit_string(q), " in ", _base_label(unit(q)))
+
+_per_unit_string(q::RelativeQuantity) = string(q.value, " p.u.")
+_base_label(::DeviceBaseUnit) = "component base"
+_base_label(::SystemBaseUnit) = "system base"
+
+function display_string(t::NamedTuple)
+    vals = values(t)
+    shared = _shared_relative_unit(vals)
+    isnothing(shared) || return string(
+        "(",
+        join(("$k = $(_per_unit_string(v))" for (k, v) in pairs(t)), ", "),
+        ") in ",
+        _base_label(shared),
+    )
+    return string(
+        "(",
+        join(("$k = $(display_string(v))" for (k, v) in pairs(t)), ", "),
+        ")",
+    )
+end
+
+# The single per-unit marker every value carries, or `nothing` if they are not all
+# `RelativeQuantity`s on one base (a mixed or empty tuple has no base to factor out).
+function _shared_relative_unit(vals::Tuple)
+    isempty(vals) && return nothing
+    first(vals) isa RelativeQuantity || return nothing
+    u = unit(first(vals))
+    all(v -> v isa RelativeQuantity && unit(v) === u, vals) || return nothing
+    return u
+end
 
 Base.zero(::Type{RelativeQuantity{T, U}}) where {T, U} = RelativeQuantity(zero(T), U())
 Base.one(::Type{RelativeQuantity{T, U}}) where {T, U} = RelativeQuantity(one(T), U())

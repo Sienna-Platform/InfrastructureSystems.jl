@@ -122,6 +122,34 @@ end
     @test !isnothing(val2_pos) && !isnothing(val_pos)
     @test first(val2_pos) < first(val_pos)
 
+    # A column-to-unit mapping sets units per column; a column missing from the
+    # mapping keeps its own trait default rather than inheriting a neighbor's.
+    IS.show_components(
+        io,
+        sys.components,
+        IS.TestComponent,
+        [:val, :val2];
+        units = Dict(:val => IS.DU),
+    )
+    text = String(take!(io))
+    @test occursin("DU", text)
+    @test !occursin(r"\bSU\b", text)
+
+    IS.show_components(
+        io,
+        sys.components,
+        IS.TestComponent,
+        [:val];
+        units = Dict(:val2 => IS.DU),
+    )
+    text = String(take!(io))
+    @test occursin("SU", text)
+
+    # NamedTuple mappings work the same way.
+    IS.show_components(io, sys.components, IS.TestComponent, [:val]; units = (val = IS.DU,))
+    text = String(take!(io))
+    @test occursin("DU", text)
+
     # `units` is ignored (not an error) for Dict-form additional_columns.
     IS.show_components(
         io,
