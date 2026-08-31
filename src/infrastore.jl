@@ -1539,12 +1539,19 @@ mutable struct StaticTimeSeriesReader
     store::Store
     entries::Vector{StaticTimeSeriesReaderEntry}
     """
-    Decode plan for each entry (parallel to `entries`); drives the row decode.
-    Resolved from the stored `element_type` once at build, so a per-timestamp
-    read dispatches instead of re-interpreting the tag string.
+    Each entry's stored `element_type` (parallel to `entries`). Decodes that one
+    column, and is reached only for a group whose columns disagree — see
+    `group_element_types`.
     """
     element_types::Vector{Union{Nothing, String}}
-    "Per-group materialized values cache; reset on each read."
+    """
+    Per-group decode plan: the composite `element_type` that every column of the
+    group shares, or `nothing` when the group holds scalars or its columns
+    disagree. Resolved once at build, so a read interprets a tag once per group
+    rather than once per value.
+    """
+    group_element_types::Vector{Union{Nothing, String}}
+    "Per-group values cache, decoded where `group_element_types` says so; reset on each read."
     values::Vector{Any}
     has_read::Bool
 end
@@ -1564,12 +1571,15 @@ function infrastore_build_static_time_series_reader(
     entries = StaticTimeSeriesReaderEntry[]
     element_types = Union{Nothing, String}[]
     groups = InfraStore.static_groups(inner)
+    group_element_types = Vector{Union{Nothing, String}}(undef, length(groups))
     metas = _infrastore_reader_metadata(
         store,
         Int64[id for group in groups for id in group.ids],
     )
     i = 0
     for (gi, group) in enumerate(groups)
+        shared = nothing
+        uniform = true
         for col in eachindex(group.ids)
             i += 1
             smeta = metas[i]
@@ -1579,13 +1589,42 @@ function infrastore_build_static_time_series_reader(
                 StaticTimeSeriesReaderEntry(owner, _key_from_row(smeta), gi, col),
             )
             push!(element_types, smeta.element_type)
+            if col == 1
+                shared = smeta.element_type
+            elseif smeta.element_type != shared
+                uniform = false
+            end
         end
+        group_element_types[gi] = _shared_group_element_type(group, shared, uniform)
     end
     values = Vector{Any}(nothing, length(groups))
     return StaticTimeSeriesReader(
-        inner, store, entries, element_types, values, false,
+        inner, store, entries, element_types, group_element_types, values, false,
     )
 end
+
+# The tag a whole group can be decoded by, or `nothing` to leave it raw and
+# decode per entry.
+#
+# The core groups columns by `(element_type, element_shape)`, so a group is
+# uniform in its element type by construction — but `InfraStore.StaticGroup`
+# surfaces only the derived `dtype`, so IS cannot read that guarantee off the
+# group and establishes it from the columns instead. Decoding a whole group under
+# one column's tag while another column disagreed would hand back wrong values
+# silently, which is why the disagreement is checked rather than assumed; the
+# per-entry path it falls back to is correct, only slower.
+#
+# The empty-shape guard keeps a scalar group out: a composite always occupies one
+# trailing axis, so a group with no element axis has nothing to decode.
+_shared_group_element_type(group, shared, uniform) =
+    if (
+        uniform && !isempty(group.element_shape) &&
+        InfraStore.is_composite_element_type(shared)
+    )
+        shared
+    else
+        nothing
+    end
 
 """
 $(TYPEDSIGNATURES)
@@ -1646,7 +1685,7 @@ function get_static_time_series_value(
     entry = reader.entries[entry_index]
     vals = reader.values[entry.group]
     if isnothing(vals)
-        vals = InfraStore.static_values(reader.inner, entry.group)
+        vals = _materialize_static_group(reader, entry.group)
         reader.values[entry.group] = vals
     end
     return _static_group_element(
@@ -1654,11 +1693,36 @@ function get_static_time_series_value(
     )
 end
 
-# One entry's value out of its group's materialized array. A vector group is
-# scalar data (one value per column); a higher-rank group is one of two things,
-# told apart by the tag rather than by the rank:
-#   - a composite element type — one element row per column, decoded through the
-#     entry's encoding (same scheme as `_decode_static_values`, at `len == 1`);
+# One group's values for the current timestamp, decoded to one value per column
+# when every column shares a composite element type.
+#
+# The decode is whole-group because the read is: the reader performs one `.h5`
+# read per group per timestamp, and this makes it one decode per group per
+# timestamp to match. Decoding per entry instead re-derived the same answer from
+# the same tag string once per (entry, timestamp) — a fresh `String`, a regex
+# probe for the tuple spelling, and a one-row array to unwrap, once per component
+# per timestep in a sweep. All of it is amortized over the group here, and a
+# decoded group needs no decode branch on the per-value path at all.
+#
+# The whole-group decode is paid on the group's first touch after a read, so a
+# caller pulling one entry decodes columns it will not look at. That is the same
+# bargain the values cache already makes — the `.h5` read above it is whole-group
+# too — and it is the access pattern the reader exists for.
+function _materialize_static_group(reader::StaticTimeSeriesReader, group::Integer)
+    vals = InfraStore.static_values(reader.inner, group)
+    tag = reader.group_element_types[group]
+    isnothing(tag) && return vals
+    return InfraStore.decode_element_values(vals, tag; types = _IS_ELEMENT_TYPES)
+end
+
+# One entry's value out of its group's materialized values. A vector group is one
+# value per column — scalar data, or a group already decoded by
+# `_materialize_static_group`; a higher-rank group is one of two things, told
+# apart by the tag rather than by the rank:
+#   - a composite element type this column carries alone, because the group's
+#     columns disagree — decoded one row at a time. See
+#     `_shared_group_element_type` for why that case is guarded against rather
+#     than assumed away;
 #   - a multidimensional scalar series — a `SingleTimeSeries{Float64, N}` holds an
 #     `N-1`-dimensional slice per step, and there is nothing to decode, so the
 #     slice *is* the value. Decoding one would hand back the slice unchanged and

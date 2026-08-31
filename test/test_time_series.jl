@@ -7323,6 +7323,31 @@ end
     end
 end
 
+@testset "Test StaticTimeSeriesReader decodes each element type in its own group" begin
+    sys, comps = _create_reader_system(2)
+    t0, res = READER_T0, READER_RES
+    len = 4
+    # A LinearFunctionData and an NTuple{2, Float64} are each two Float64 slots,
+    # so they agree on dtype and element_shape and are told apart only by their
+    # element_type. The store groups on that too, so these land in two groups —
+    # each decoded whole, under its own tag, into its own cache slot.
+    fds = [IS.LinearFunctionData(1.0 * i, 2.0 * i) for i in 1:len]
+    tups = [(10.0 * i, 20.0 * i) for i in 1:len]
+    fd_key = IS.add_time_series!(sys, comps[1], IS.SingleTimeSeries("v", t0, res, fds))
+    tup_key = IS.add_time_series!(sys, comps[2], IS.SingleTimeSeries("v", t0, res, tups))
+
+    reader = IS.build_static_time_series_reader(sys; resolution = res)
+    entries = IS.get_static_time_series_reader_entries(reader)
+    by_key = Dict(e.key => i for (i, e) in enumerate(entries))
+    fd_i, tup_i = by_key[fd_key], by_key[tup_key]
+    @test IS.get_num_static_time_series_groups(reader) == 2
+    for k in 1:len
+        IS.read_static_time_series_values!(reader, t0 + res * (k - 1))
+        @test IS.get_static_time_series_value(reader, fd_i) == fds[k]
+        @test IS.get_static_time_series_value(reader, tup_i) == tups[k]
+    end
+end
+
 @testset "Test StaticTimeSeriesReader with multidimensional scalar series" begin
     sys, comps = _create_reader_system(1)
     c = only(comps)
