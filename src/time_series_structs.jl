@@ -287,6 +287,10 @@ get_initial_timestamp(md::TimeSeriesMetadata) = md.initial_timestamp
 get_resolution(md::TimeSeriesMetadata) = md.resolution
 get_horizon(md::TimeSeriesMetadata) = md.horizon
 get_interval(md::TimeSeriesMetadata) = md.interval
+"""
+The number of windows a forecast row holds. `nothing` on a static series row,
+which has no windows — its per-series length is [`get_length`](@ref).
+"""
 get_count(md::TimeSeriesMetadata) = md.count
 get_features(md::TimeSeriesMetadata) = md.features
 get_percentiles(md::TimeSeriesMetadata) = md.percentiles
