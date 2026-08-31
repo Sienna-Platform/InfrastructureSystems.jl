@@ -9,6 +9,26 @@ function get_time_series_manager(owner::TimeSeriesOwners)
     return refs.time_series_manager
 end
 
+"""
+Return the [`TimeSeriesManager`](@ref) backing `owner`, or throw if there is none.
+
+An owner that was never added to a system — or one whose type does not support time
+series — has no manager. Reading time series from it is a caller mistake, so it gets an
+actionable `ArgumentError` rather than a `FieldError` on `nothing`. Callers that treat
+"detached" as an ordinary empty answer (`has_time_series`, `get_time_series_keys`,
+`get_time_series_multiple`, `copy_time_series!`) check for `nothing` themselves instead.
+"""
+function _get_time_series_manager_or_throw(owner)
+    mgr = get_time_series_manager(owner)
+    isnothing(mgr) && throw(
+        ArgumentError(
+            "$(summary(owner)) is not attached to a system (or does not support time " *
+            "series); add it to a system before reading its time series",
+        ),
+    )
+    return mgr
+end
+
 function get_time_series_storage(owner::TimeSeriesOwners)
     mgr = get_time_series_manager(owner)
     if isnothing(mgr)
@@ -232,7 +252,7 @@ function get_time_series_key(
     interval::Union{Nothing, Dates.Period} = nothing,
     features::Union{Nothing, Dict} = nothing,
 ) where {T <: TimeSeriesData}
-    mgr = get_time_series_manager(owner)
+    mgr = _get_time_series_manager_or_throw(owner)
     return get_time_series_key(
         mgr,
         owner,
@@ -996,6 +1016,10 @@ components or two supplemental attributes); anything else throws an `ArgumentErr
     provided and src has a `time_series` with a name not present in `name_mapping`, that
     `time_series` will not copied. If `name_mapping` is nothing then all `time_series` will
     be copied with src's names.
+
+Each `name_mapping` key is `(source label, time series name)`. The source label is the
+component name when `src` is a component; supplemental attributes have no name, so their
+label is their integer id as a string, `string(get_id(src))`.
 """
 function copy_time_series!(
     dst::TimeSeriesOwners,
@@ -1040,6 +1064,13 @@ _copy_time_series!(
         "destination instead.",
     ),
 )
+
+# The `name_mapping` key identifies the source owner. A component is identified by its
+# name; a supplemental attribute has none, so it is identified by its integer id — the
+# same identity the store addresses it by. This stays private: `get_name` is deliberately
+# not defined for SupplementalAttribute.
+_copy_source_label(x::InfrastructureSystemsComponent) = get_name(x)
+_copy_source_label(x::SupplementalAttribute) = string(get_id(x))
 
 function _copy_time_series_same_kind!(
     dst::TimeSeriesOwners,
@@ -1090,12 +1121,13 @@ function _copy_time_series_same_kind!(
     #
     # One transaction for the whole set, so a failure part-way through does not leave
     # `dst` holding a subset of `src`'s series.
+    src_label = _copy_source_label(src)
     time_series_transaction(mgr) do _
         for ts_key in get_time_series_keys(src)
             name = get_name(ts_key)
             new_name = name
             if !isnothing(name_mapping)
-                new_name = get(name_mapping, (get_name(src), name), nothing)
+                new_name = get(name_mapping, (src_label, name), nothing)
                 if isnothing(new_name)
                     @debug "Skip copying ts_key" _group = LOG_GROUP_TIME_SERIES name
                     continue

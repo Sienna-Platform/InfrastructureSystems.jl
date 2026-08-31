@@ -120,6 +120,13 @@ is_time_series_backed(curve::ValueCurve) =
 get_time_series_key(curve::ValueCurve{<:TimeSeriesFunctionData}) =
     get_time_series_key(get_function_data(curve))
 
+"Fallback: throw a clear `ArgumentError` when `get_time_series_key` is called on a non-TS-backed curve."
+get_time_series_key(curve::ValueCurve) = throw(
+    ArgumentError(
+        "$(nameof(typeof(curve))) is not time-series-backed; get_time_series_key is undefined",
+    ),
+)
+
 # GENERIC CONSTRUCTORS (Julia #35053 workaround)
 TimeSeriesInputOutputCurve(
     function_data::T,

@@ -84,7 +84,7 @@ function Scenarios(;
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
 )
-    data = handle_normalization_factor(data, normalization_factor)
+    data = handle_normalization_factor(convert_data(data), normalization_factor)
 
     if isnothing(interval)
         interval = get_interval_from_initial_times(get_sorted_keys(data))

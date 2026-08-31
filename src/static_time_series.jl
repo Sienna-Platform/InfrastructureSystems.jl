@@ -33,14 +33,47 @@ Base.lastindex(ts::StaticTimeSeries, d) = lastindex(get_array(ts), d)
 
 Base.eachindex(ts::StaticTimeSeries) = eachindex(get_array(ts))
 
-Base.iterate(ts::StaticTimeSeries, n = 1) = iterate(get_array(ts), n)
+# Iteration yields one *value* per step, so it is only well defined for a 1-D series:
+# `length` counts rows (dimension 1 is time), while iterating an N-D array would walk
+# every element in column-major order and disagree with it. Dispatch on the rank of the
+# array rather than on the series type, so every `StaticTimeSeries` subtype — including
+# ones defined outside IS — gets the same rule without defining its own method.
+Base.iterate(ts::StaticTimeSeries, n = 1) = _iterate_values(ts, get_array(ts), n)
+
+_iterate_values(::StaticTimeSeries, values::AbstractVector, n) = iterate(values, n)
+
+_iterate_values(ts::StaticTimeSeries, values::AbstractArray, _) = throw(
+    ArgumentError(
+        "iteration over a $(ndims(values))-dimensional $(nameof(typeof(ts))) is " *
+        "ambiguous: length(ts) counts timesteps but the values are per-step arrays. " *
+        "Iterate eachslice(get_array(ts); dims = 1) for one row per timestep, or " *
+        "get_array(ts) for the raw elements.",
+    ),
+)
+
+# Base's generic `isempty` goes through `iterate`, which is ambiguous (above) for an N-D
+# series; emptiness is a row count either way.
+Base.isempty(ts::StaticTimeSeries) = length(ts) == 0
 
 Base.first(ts::StaticTimeSeries) = head(ts, 1)
 
 Base.last(ts::StaticTimeSeries) = tail(ts, 1)
 
+# Every slicing method below can select an empty subset (an out-of-range `from`/`to`
+# bound, `head(ts, 0)`). Rebuilding a series from an empty `TimeArray` would index into
+# an empty timestamp vector, so reject it here with an actionable message.
+function _check_non_empty_subset(data::TimeSeries.TimeArray)
+    isempty(TimeSeries.timestamp(data)) &&
+        throw(ArgumentError("the selected range is empty"))
+    return data
+end
+
 """
 Refer to TimeSeries.when(). Underlying data is copied.
+
+The result carries only the selected timestamps, which a calendar predicate generally
+leaves non-contiguous, so it is always a [`NonSequentialTimeSeries`](@ref) — including
+for a [`SingleTimeSeries`](@ref) input (see that method).
 """
 function when(ts::StaticTimeSeries, period::Function, t::Integer)
     return _from_time_array(ts, TimeSeries.when(get_time_array(ts), period, t))

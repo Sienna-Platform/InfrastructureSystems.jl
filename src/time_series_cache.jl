@@ -285,6 +285,10 @@ function ForecastCache(
     end
 
     window_size = row_size * horizon_count
+    if window_size > cache_size_bytes
+        @warn "Increasing cache size to $window_size in order to accommodate one window" window_size
+        cache_size_bytes = window_size
+    end
     in_memory_count = minimum((cache_size_bytes ÷ window_size, count))
     @debug "ForecastCache" _group = LOG_GROUP_TIME_SERIES row_size window_size in_memory_count
 
@@ -360,7 +364,8 @@ return a TimeSeries.TimeArray of size 1.
 
 # Arguments
 
-  - `::Type{T}`: subtype of StaticTimeSeries
+  - `::Type{T}`: subtype of SingleTimeSeries. The cache walks a regular
+    `(initial_timestamp, resolution)` grid, so `NonSequentialTimeSeries` is not supported.
   - `component::InfrastructureSystemsComponent`: component
   - `name::AbstractString`: time series name
   - `cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES`: maximum size of data to keep in memory
@@ -374,7 +379,7 @@ function StaticTimeSeriesCache(
     cache_size_bytes = TIME_SERIES_CACHE_SIZE_BYTES,
     start_time::Union{Nothing, Dates.DateTime} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
-) where {T <: StaticTimeSeries}
+) where {T <: SingleTimeSeries}
     ts_metadata = get_time_series_key(T, component, name; resolution = resolution)
     initial_timestamp = get_initial_timestamp(ts_metadata)
     if start_time === nothing
@@ -420,6 +425,22 @@ function StaticTimeSeriesCache(
             num_iterations = total_length,
         ),
         in_memory_rows,
+    )
+end
+
+# The cache advances by `next_time + resolution`, which a NonSequentialTimeSeries has no
+# answer for. Reject it explicitly instead of letting the caller hit a MethodError.
+function StaticTimeSeriesCache(
+    ::Type{T},
+    component::InfrastructureSystemsComponent,
+    name::AbstractString;
+    kwargs...,
+) where {T <: NonSequentialTimeSeries}
+    throw(
+        ArgumentError(
+            "StaticTimeSeriesCache requires a regular-resolution series; $T is not " *
+            "supported. Read it with get_time_series_array instead.",
+        ),
     )
 end
 

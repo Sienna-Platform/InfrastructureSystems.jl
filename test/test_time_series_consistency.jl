@@ -618,3 +618,32 @@ end
     @test sys.components.time_series_manager === sys.time_series_manager
     @test sys.masked_components.time_series_manager === sys.time_series_manager
 end
+
+@testset "Test fast_deepcopy_system copy accepts writes" begin
+    sys, component = _sys_with_component()
+    attr = IS.TestSupplemental(; value = 1.0)
+    IS.add_supplemental_attribute!(sys, component, attr)
+    IS.add_time_series!(sys, component, _hourly_sts("s"))
+
+    copied = IS.fast_deepcopy_system(
+        sys;
+        skip_time_series = true,
+        skip_supplemental_attributes = false,
+    )
+    copied_component = IS.get_component(IS.TestComponent, copied, IS.get_name(component))
+    copied_attr = only(collect(IS.iterate_supplemental_attributes(copied)))
+
+    # The blank store is writable: the copy accepts new series...
+    IS.add_time_series!(copied, copied_component, _hourly_sts("new"))
+    @test IS.has_time_series(copied_component, IS.SingleTimeSeries, "new")
+
+    # ...and removing owners works instead of throwing on a read-only store.
+    IS.remove_supplemental_attribute!(copied, copied_component, copied_attr)
+    @test isempty(collect(IS.iterate_supplemental_attributes(copied)))
+    IS.remove_component!(copied, copied_component)
+    @test isempty(collect(IS.iterate_components(copied)))
+
+    # The original is untouched.
+    @test IS.has_time_series(component, IS.SingleTimeSeries, "s")
+    @test !IS.has_time_series(component, IS.SingleTimeSeries, "new")
+end

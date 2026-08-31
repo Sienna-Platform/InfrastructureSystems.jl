@@ -226,6 +226,11 @@ end
 
 """
 Remove the time series data for a component.
+
+Throws an `ArgumentError` if nothing matches `(T, name)` and the given
+resolution/interval/features — a by-name removal names one series, so a miss is a caller
+mistake. Use [`remove_time_series!(::SystemData, ::Type)`](@ref) for a bulk clear that
+tolerates zero matches.
 """
 function remove_time_series!(
     data::SystemData,
@@ -289,11 +294,15 @@ function remove_time_series!(
             interval = interval,
         )
     catch e
-        if e isa InfraStore.InvalidParameterError
+        # `catch`-block exception inspection: the DST-orphan guard can only fire for a
+        # SingleTimeSeries removal. An InvalidParameterError raised for any other query
+        # type — or for any other reason — must surface the store's own message.
+        # Mirrors `time_series_manager.jl`'s by-name removal.
+        if e isa InfraStore.InvalidParameterError && T <: SingleTimeSeries
             throw(
                 ArgumentError(
                     "Cannot remove SingleTimeSeries because they are attached to a " *
-                    "DeterministicSingleTimeSeries."),
+                    "DeterministicSingleTimeSeries. Store reported: $(e.msg)"),
             )
         end
         rethrow()
@@ -458,13 +467,46 @@ the replacement on Windows.
 """
 compact_time_series!(data::SystemData) = compact_time_series!(data.time_series_manager)
 
+# The store addresses an owner by its integer id, and every id in the time series catalog
+# must still resolve to a live object. There is exactly one way it can fail: the owner was
+# removed with `remove_time_series = false`, which leaves its association rows behind.
+# Silently skipping the orphan would hide the inconsistency, so name it and say how to fix
+# it.
+function _orphaned_owner_error(kind::AbstractString, id::Int)
+    return ArgumentError(
+        "a time series association refers to $kind id $id, which is no longer in the " *
+        "system; the owner was removed with remove_time_series = false. The orphaned " *
+        "rows can no longer be addressed by owner, so the only remedy is " *
+        "clear_time_series!, which drops every time series in the system; in future, " *
+        "remove the owner with remove_time_series = true (the default) or call " *
+        "clear_time_series!(data, owner) before removing it.",
+    )
+end
+
+function _component_with_time_series(data::SystemData, id::Int)
+    component = get(data.component_ids, id, nothing)
+    isnothing(component) && throw(_orphaned_owner_error("component", id))
+    return component
+end
+
+function _attribute_with_time_series(data::SystemData, id::Int)
+    try
+        return get_supplemental_attribute(data, id)
+    catch e
+        # `catch`-block exception inspection: the lookup reports a missing id as an
+        # ArgumentError; anything else is a different failure and propagates.
+        e isa ArgumentError || rethrow()
+        throw(_orphaned_owner_error("supplemental attribute", id))
+    end
+end
+
 function iterate_components_with_time_series(
     data::SystemData;
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
     resolution::Union{Nothing, Dates.Period} = nothing,
 )
     return (
-        get_component(data, x) for
+        _component_with_time_series(data, x) for
         x in infrastore_list_owner_ids(
             get_data_store(data),
             InfrastructureSystemsComponent;
@@ -479,7 +521,7 @@ function iterate_supplemental_attributes_with_time_series(
     time_series_type::Union{Nothing, Type{<:TimeSeriesData}} = nothing,
 )
     return (
-        get_supplemental_attribute(data, x) for
+        _attribute_with_time_series(data, x) for
         x in infrastore_list_owner_ids(
             get_data_store(data),
             SupplementalAttribute;
@@ -516,8 +558,13 @@ function get_time_series_multiple(
     type = nothing,
     name = nothing,
 )
+    # The owner ids resolve here, not inside the task: a Channel wraps whatever its body
+    # throws in a TaskFailedException, which would bury the orphaned-owner ArgumentError.
+    # `infrastore_list_owner_ids` already materializes the id list, so this adds no order
+    # of magnitude.
+    owners = collect(iterate_components_with_time_series(data; time_series_type = type))
     Channel() do channel
-        for component in iterate_components_with_time_series(data; time_series_type = type)
+        for component in owners
             for time_series in
                 get_time_series_multiple(component, filter_func; type = type, name = name)
                 put!(channel, time_series)
@@ -580,9 +627,19 @@ function transform_single_time_series!(
     end
 end
 
+# Thrown from inside the `check_transform_single_time_series` block purely to force the
+# store transaction to roll back; the answer travels in a `Ref`, not in the exception.
+struct _TransformCheckRollback <: Exception end
+
 """
 Check whether a call to `transform_single_time_series!` with the given parameters would
 complete successfully.
+
+The check runs the same sequence the transform would — including removing the existing
+`DeterministicSingleTimeSeries` views when `delete_existing` is `true`, which is what the
+transform does by default — and then rolls the whole thing back, so the system is left
+exactly as it was. Pass `delete_existing = false` to ask whether the parameters are
+compatible with the views that are already stored.
 
 Return `true` if the transform is valid, `false` otherwise.
 """
@@ -592,14 +649,42 @@ function check_transform_single_time_series(
     horizon::Dates.Period,
     interval::Dates.Period;
     resolution::Union{Nothing, Dates.Period} = nothing,
+    delete_existing::Bool = true,
 )
     if is_irregular_period(horizon) || is_irregular_period(interval) ||
        (!isnothing(resolution) && is_irregular_period(resolution))
         return false
     end
+    # A dry run in the store first: every check the real transform would run, nothing
+    # written, O(distinct resolutions), and legal on a read-only store.
+    _transform_dry_run_passes(data, horizon, interval, resolution) && return true
+    delete_existing || return false
+    # Rejected as the store stands — possibly only by a conflict with the
+    # DeterministicSingleTimeSeries that a committing call would delete first. A
+    # read-only store cannot delete them, so the committing call would fail too.
+    data.time_series_manager.read_only && return false
+    # Re-run the dry run with those views removed, then unwind the removal: the
+    # transaction is rolled back by the sentinel exception, so nothing is written.
+    valid = Ref(false)
     try
-        # A dry run in the store: every check the real transform would run,
-        # nothing written.
+        time_series_transaction(data) do _
+            remove_time_series!(
+                data,
+                DeterministicSingleTimeSeries;
+                resolution = resolution,
+            )
+            valid[] = _transform_dry_run_passes(data, horizon, interval, resolution)
+            throw(_TransformCheckRollback())
+        end
+    catch e
+        # `catch`-block exception inspection.
+        e isa _TransformCheckRollback || rethrow()
+    end
+    return valid[]
+end
+
+function _transform_dry_run_passes(data::SystemData, horizon, interval, resolution)
+    try
         infrastore_transform_single_time_series!(
             get_data_store(data),
             horizon,
@@ -608,8 +693,9 @@ function check_transform_single_time_series(
             dry_run = true,
         )
     catch e
-        e isa ConflictingInputsError && return false
-        rethrow()
+        # `catch`-block exception inspection.
+        e isa ConflictingInputsError || rethrow()
+        return false
     end
     return true
 end
@@ -1254,9 +1340,9 @@ get_time_series_resolutions(
 # Passed as a closure to the store-side readers and hash grouping.
 function _make_id_to_owner(data::SystemData)
     return (id, category) -> if category == InfraStore.Component
-        get_component(data, id)
+        _component_with_time_series(data, id)
     else
-        get_supplemental_attribute(data, id)
+        _attribute_with_time_series(data, id)
     end
 end
 
@@ -1350,6 +1436,11 @@ function build_static_time_series_reader(
     )
 end
 
+"""
+Return the period covered by the system's forecasts: from the first initial timestamp to
+the last timestamp of the last forecast window. Returns `Dates.Second(0)` if the system has
+no forecasts.
+"""
 function get_forecast_total_period(
     data::SystemData;
     resolution::Union{Nothing, Dates.Period} = nothing,
@@ -1581,6 +1672,10 @@ series and/or supplemental attributes.
 
 Note that setting both `skip_time_series` and `skip_supplemental_attributes` to `false`
 results in the same behavior as `deepcopy` with no performance improvement.
+
+When `skip_time_series` is `true` the copy gets an empty in-memory time series store. It
+is writable: the copy accepts new time series, and removing a component or supplemental
+attribute from it works normally.
 """
 function fast_deepcopy_system(
     data::SystemData;
@@ -1595,7 +1690,9 @@ function fast_deepcopy_system(
     old_supplemental_attribute_manager = data.supplemental_attribute_manager
 
     new_time_series_manager = if skip_time_series
-        TimeSeriesManager(; in_memory = true, read_only = true)
+        # Writable: the blank store holds nothing worth protecting, and a read-only one
+        # would make the copy reject `remove_component!` and every other write.
+        TimeSeriesManager(; in_memory = true)
     else
         old_time_series_manager
     end

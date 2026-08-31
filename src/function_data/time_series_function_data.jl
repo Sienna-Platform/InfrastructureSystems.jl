@@ -41,6 +41,13 @@ Return the `TimeSeriesKey` that references the underlying time series data.
 """
 get_time_series_key(fd::TimeSeriesFunctionData) = fd.time_series_key
 
+"Fallback: throw a clear `ArgumentError` when `get_time_series_key` is called on non-TS-backed function data."
+get_time_series_key(fd::FunctionData) = throw(
+    ArgumentError(
+        "$(nameof(typeof(fd))) is not time-series-backed; get_time_series_key is undefined",
+    ),
+)
+
 """
     is_time_series_backed(fd::FunctionData) -> Bool
 

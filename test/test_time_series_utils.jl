@@ -78,6 +78,19 @@ end
     @test_throws ArgumentError IS.from_iso_8601("P0DT1H1M0S")
 end
 
+@testset "Test millisecond ISO 8601 round-trip" begin
+    for n in (1, 2, 999, 1000, 1001, 1003, 1005, 12345, 123456, 999999)
+        @test IS.from_iso_8601(IS.to_iso_8601(Millisecond(n))) == Millisecond(n)
+    end
+    # Exhaustive over a range wide enough to cover every fractional remainder. Before
+    # the integer-parsing fix roughly 1.5% of these round-tripped to the wrong value.
+    @test all(
+        IS.from_iso_8601(IS.to_iso_8601(Millisecond(n))) == Millisecond(n) for n in 1:5000
+    )
+    # Sub-millisecond precision is rejected, not silently rounded.
+    @test_throws ArgumentError IS.from_iso_8601("P0DT1.0005S")
+end
+
 @testset "Test is_irregular_period" begin
     # Restrict to the periods defined by Dates. Other packages loaded in this environment
     # (such as TimeZones) can define their own Period subtypes.

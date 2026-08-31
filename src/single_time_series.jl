@@ -362,7 +362,29 @@ end
 
 # Hook for the shared `StaticTimeSeries` slicing methods.
 _from_time_array(ts::SingleTimeSeries, data::TimeSeries.TimeArray) =
-    SingleTimeSeries(ts, data)
+    SingleTimeSeries(ts, _check_non_empty_subset(data))
+
+"""
+Refer to TimeSeries.when(). Underlying data is copied.
+
+`when` selects timestamps by calendar predicate, which in general yields a non-contiguous
+subset — `when(hourly_series, Dates.hour, 3)` keeps one timestamp per day. A
+[`SingleTimeSeries`](@ref) can only represent a regular `(initial_timestamp, resolution)`
+grid, so the result is always a [`NonSequentialTimeSeries`](@ref) carrying the selected
+timestamps verbatim. The return type does not depend on whether the subset happened to be
+contiguous.
+"""
+function when(ts::SingleTimeSeries, period::Function, t::Integer)
+    subset = _check_non_empty_subset(TimeSeries.when(get_time_array(ts), period, t))
+    return NonSequentialTimeSeries(
+        get_name(ts),
+        collect(TimeSeries.timestamp(subset)),
+        TimeSeries.values(subset);
+        units = get_units(ts),
+        quantity_kind = get_quantity_kind(ts),
+        unit_system = get_unit_system(ts),
+    )
+end
 
 function make_time_array(
     time_series::SingleTimeSeries,
