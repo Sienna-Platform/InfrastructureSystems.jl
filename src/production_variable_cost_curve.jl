@@ -303,7 +303,8 @@ are rescaled — both are functions of the production quantity on the x-axis.
 
 `fuel_cost` is currency per unit of fuel, and `startup_fuel_offtake` is fuel consumed as a
 function of *downtime*: its x-axis is a duration and its y-axis is a fuel quantity, so a
-change of power units touches neither. Both carry over unchanged.
+change of power units touches neither. Both carry over unchanged, as does a
+time-series-backed `fuel_cost_time_series`.
 """
 function convert_power_units(
     curve::FuelCurve{T, U},
@@ -311,12 +312,17 @@ function convert_power_units(
     ratio::Real,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem}
     # `startup_fuel_offtake` is fuel vs. downtime — neither axis is in power units.
-    return FuelCurve(
-        _convert_value_curve(curve, ratio),
-        to,
-        get_fuel_cost(curve),
-        get_startup_fuel_offtake(curve),
-        scale_x(get_vom_cost(curve), ratio),
+    value_curve = _convert_value_curve(curve, ratio)
+    # `fuel_cost` and `fuel_cost_time_series` are mutually exclusive, and neither is in
+    # power units. Forward both by keyword: the positional constructor takes only the
+    # fixed `fuel_cost`, so a time-series-backed curve would either fail to construct
+    # (`fuel_cost` is `nothing`) or silently lose its fuel-cost series.
+    return FuelCurve{typeof(value_curve), V}(;
+        value_curve = value_curve,
+        fuel_cost = get_fuel_cost(curve),
+        fuel_cost_time_series = get_fuel_cost_time_series(curve),
+        startup_fuel_offtake = get_startup_fuel_offtake(curve),
+        vom_cost = scale_x(get_vom_cost(curve), ratio),
     )
 end
 

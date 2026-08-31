@@ -653,16 +653,7 @@ _convert(curve, to, sb, db) = IS.convert_power_units(
     @test IS.get_initial_input(pw_su) == 0.0
 
     # Time-series-backed curves have no data to rescale
-    forecast_key = IS.ForecastKey(;
-        time_series_type = IS.Deterministic,
-        name = "loss",
-        initial_timestamp = Dates.DateTime("2020-01-01"),
-        resolution = Dates.Hour(1),
-        horizon = Dates.Hour(24),
-        interval = Dates.Hour(24),
-        count = 1,
-        features = Dict{String, Any}(),
-    )
+    forecast_key = IS.TimeSeriesKey{IS.Deterministic{IS.LinearFunctionData}}(1)
     ts_vc = IS.TimeSeriesInputOutputCurve(IS.TimeSeriesLinearFunctionData(forecast_key))
     @test_throws ArgumentError _convert(
         IS.LossCurve(ts_vc, IS.NaturalUnit()), IS.SystemBaseUnit(), sys_base, dev_base)
@@ -740,16 +731,7 @@ fd_approx(a::T, b::T) where {T <: IS.FunctionData} =
 fd_approx(::IS.FunctionData, ::IS.FunctionData) = false  # differing shapes never match
 
 function ts_input_output_curve()
-    key = IS.ForecastKey(;
-        time_series_type = IS.Deterministic,
-        name = "cost",
-        initial_timestamp = Dates.DateTime("2020-01-01"),
-        resolution = Dates.Hour(1),
-        horizon = Dates.Hour(24),
-        interval = Dates.Hour(24),
-        count = 1,
-        features = Dict{String, Any}(),
-    )
+    key = IS.TimeSeriesKey{IS.Deterministic{IS.QuadraticFunctionData}}(1)
     return IS.TimeSeriesInputOutputCurve(IS.TimeSeriesQuadraticFunctionData(key))
 end
 
@@ -876,7 +858,9 @@ end
     fc_ts_cost = IS.FuelCurve(
         IS.LinearCurve(5.0),
         IS.NU,
-        IS.get_time_series_key(ts_input_output_curve()),
+        # `fuel_cost_time_series` is a scalar field -- one Float64 per timestep -- so it
+        # takes a Float64-element key, unlike the function-data keys the value curves use.
+        IS.TimeSeriesKey{IS.Deterministic{Float64}}(1),
     )
     @test IS.get_power_units(_convert(fc_ts_cost, IS.SU, sb, db)) == IS.SU
     @test_throws ArgumentError _convert(
