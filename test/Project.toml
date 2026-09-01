@@ -1,7 +1,7 @@
 [deps]
-PowerCoreOpenAPIModels = "b7b40286-e793-417d-a9a0-b1583e4da1cb"
 OpenAPI = "d5e62ea6-ddf3-4d43-8e4c-ad5e6c8bfd7d"
-PowerTimeSeriesOpenAPIModels = "8c2f6a0d-6b0e-4d0a-9d8f-2b5e6a4f9c31"
+InfrastructureCoreOpenAPIModels = "1f5e1c8d-e0cc-4dbf-8c6d-f2a3d2ae70a8"
+InfrastructureTimeSeriesOpenAPIModels = "37a216c8-a490-47cf-89d7-db2cb9618199"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 InfraStore = "6aee0376-896a-4a59-96ff-12f221c99746"
@@ -29,11 +29,18 @@ YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 InfraStore = "0.11"
 
 # `[sources]` applies ONLY to the top-level project, so the package's own entries are NOT
-# inherited by this environment. PowerCoreOpenAPIModels and PowerTimeSeriesOpenAPIModels are
-# unregistered, so without repeating them here the test env cannot resolve them at all
-# ("expected package PowerCoreOpenAPIModels to be registered"). Keep these in step with the
-# revs in ../Project.toml.
+# inherited by this environment. InfrastructureCoreOpenAPIModels and
+# InfrastructureTimeSeriesOpenAPIModels are unregistered, so without repeating them here the
+# test env cannot resolve them at all ("expected package InfrastructureCoreOpenAPIModels to be
+# registered"). Keep these in step with the revs in ../Project.toml.
+# IS itself has no self-pin here (unlike sibling repos' test/Project.toml): `dev` it
+# explicitly when instantiating this env.
+#
+# Temporary co-dev pin: the PowerOpenAPIModels split is local and unpushed. Restore the git-rev
+# pins below once that split is pushed.
+# PowerCoreOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "PowerCoreOpenAPIModels.jl"}
+# PowerTimeSeriesOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "PowerTimeSeriesOpenAPIModels.jl"}
 [sources]
-PowerCoreOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "PowerCoreOpenAPIModels.jl"}
-PowerTimeSeriesOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "PowerTimeSeriesOpenAPIModels.jl"}
+InfrastructureCoreOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "jd/schemas-0.1.0", subdir = "InfrastructureCoreOpenAPIModels.jl"}
+InfrastructureTimeSeriesOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "jd/schemas-0.1.0", subdir = "InfrastructureTimeSeriesOpenAPIModels.jl"}
 
