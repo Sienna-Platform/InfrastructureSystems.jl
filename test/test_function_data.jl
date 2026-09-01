@@ -1269,3 +1269,59 @@ end
     @test IS.is_convex(IS.InputOutputCurve(convex_pic))
     @test IS.is_convex(IS.InputOutputCurve(convex_pac))
 end
+
+@testset "Test FunctionData scale_x and scale_y" begin
+    # scale_x(f, c)(x) = f(c * x), verified pointwise on the callable types
+    ld = IS.LinearFunctionData(5, 1)         # f(x) = 5x + 1
+    ld_scaled = IS.scale_x(ld, 2.0)          # f(2x) = 10x + 1
+    @test ld_scaled isa IS.LinearFunctionData
+    @test IS.get_proportional_term(ld_scaled) == 10.0
+    @test IS.get_constant_term(ld_scaled) == 1.0
+
+    qd = IS.QuadraticFunctionData(2, 3, 4)   # f(x) = 2x^2 + 3x + 4
+    qd_scaled = IS.scale_x(qd, 3.0)          # f(3x) = 18x^2 + 9x + 4
+    @test qd_scaled isa IS.QuadraticFunctionData
+    @test IS.get_quadratic_term(qd_scaled) == 18.0
+    @test IS.get_proportional_term(qd_scaled) == 9.0
+    @test IS.get_constant_term(qd_scaled) == 4.0
+
+    for (fd, c) in Iterators.product((ld, qd), (0.5, 2.0, 7.3))
+        scaled = IS.scale_x(fd, c)
+        for x in (-2.0, 0.0, 1.5, 40.0)
+            @test scaled(x) ≈ fd(c * x)
+        end
+    end
+
+    # Piecewise: x-coordinates divide by c, y-coordinates are untouched
+    pld = IS.PiecewiseLinearData([(1, 1), (3, 5), (5, 10)])
+    pld_scaled = IS.scale_x(pld, 2.0)
+    @test pld_scaled isa IS.PiecewiseLinearData
+    @test IS.get_x_coords(pld_scaled) == [0.5, 1.5, 2.5]
+    @test IS.get_y_coords(pld_scaled) == IS.get_y_coords(pld)
+
+    psd = IS.PiecewiseStepData([1, 3, 5], [2, 2.5])
+    psd_scaled = IS.scale_x(psd, 2.0)
+    @test psd_scaled isa IS.PiecewiseStepData
+    @test IS.get_x_coords(psd_scaled) == [0.5, 1.5, 2.5]
+    @test IS.get_y_coords(psd_scaled) == IS.get_y_coords(psd)
+
+    # Identity and composition: scale_x(scale_x(f, a), b) == scale_x(f, a * b)
+    for fd in get_test_function_data()
+        @test IS.scale_x(fd, 1.0) == fd
+        @test IS.scale_x(IS.scale_x(fd, 2.0), 3.0) == IS.scale_x(fd, 6.0)
+        @test IS.scale_x(IS.scale_x(fd, 4.0), 1 / 4.0) == fd
+    end
+
+    # Only finite, strictly positive factors: a negative factor would reverse the
+    # x-ordering the piecewise types require
+    for fd in get_test_function_data()
+        for bad in (-1.0, 0.0, Inf, NaN)
+            @test_throws ArgumentError IS.scale_x(fd, bad)
+        end
+    end
+
+    # scale_y is a named alias of `*`
+    for fd in get_test_function_data()
+        @test IS.scale_y(fd, 3.0) == 3.0 * fd
+    end
+end

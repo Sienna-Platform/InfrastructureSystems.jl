@@ -164,6 +164,95 @@ Base.zero(::Union{AverageRateCurve, Type{AverageRateCurve}}) =
 Base.zero(::Union{ValueCurve, Type{ValueCurve}}) =
     Base.zero(InputOutputCurve)
 
+# SCALING
+# Both operations are defined in terms of the *input-output* function `f` the curve
+# represents, not in terms of its raw `function_data`: `IncrementalCurve` stores `f'` and
+# `AverageRateCurve` stores `f(x)/x`, so an x-scaling picks up a chain-rule factor on y for
+# those two. Anchoring on `f` is what makes the operations composable across subtypes.
+
+# `initial_input` and `input_at_zero` are absolute y-quantities, so they scale with y and
+# are untouched by an x-scaling.
+_scale_optional(::Nothing, ::Real) = nothing
+_scale_optional(x::Float64, c::Real) = c * x
+
+"Vertically scale the `InputOutputCurve`: `(c * curve)` represents `c * f(x)`"
+Base.:*(c::Real, curve::InputOutputCurve) =
+    InputOutputCurve(
+        c * get_function_data(curve),
+        _scale_optional(get_input_at_zero(curve), c),
+    )
+
+"Vertically scale the `IncrementalCurve`: `(c * curve)` represents `c * f(x)`"
+Base.:*(c::Real, curve::IncrementalCurve) =
+    IncrementalCurve(
+        c * get_function_data(curve),
+        _scale_optional(get_initial_input(curve), c),
+        _scale_optional(get_input_at_zero(curve), c),
+    )
+
+"Vertically scale the `AverageRateCurve`: `(c * curve)` represents `c * f(x)`"
+Base.:*(c::Real, curve::AverageRateCurve) =
+    AverageRateCurve(
+        c * get_function_data(curve),
+        _scale_optional(get_initial_input(curve), c),
+        _scale_optional(get_input_at_zero(curve), c),
+    )
+
+# commutativity
+"Vertically scale the `ValueCurve`: `(curve * c)` = `(c * curve)` represents `c * f(x)`"
+Base.:*(curve::ValueCurve, c::Real) = c * curve
+
+"""
+Horizontally scale the `InputOutputCurve`: the result represents `f(c * x)`, where `f` is
+the input-output function of `curve`.
+"""
+scale_x(curve::InputOutputCurve, c::Real) =
+    InputOutputCurve(
+        scale_x(get_function_data(curve), c),
+        get_input_at_zero(curve),
+    )
+
+"""
+Horizontally scale the `IncrementalCurve`: the result represents `f(c * x)`, where `f` is
+the input-output function of `curve`. Since this curve stores `f'`, the stored data picks
+up a chain-rule factor of `c` on the y-axis as well.
+"""
+scale_x(curve::IncrementalCurve, c::Real) =
+    IncrementalCurve(
+        c * scale_x(get_function_data(curve), c),
+        get_initial_input(curve),
+        get_input_at_zero(curve),
+    )
+
+"""
+Horizontally scale the `AverageRateCurve`: the result represents `f(c * x)`, where `f` is
+the input-output function of `curve`. Since this curve stores `f(x)/x`, the stored data
+picks up a factor of `c` on the y-axis as well.
+"""
+scale_x(curve::AverageRateCurve, c::Real) =
+    AverageRateCurve(
+        c * scale_x(get_function_data(curve), c),
+        get_initial_input(curve),
+        get_input_at_zero(curve),
+    )
+
+"Vertically scale the `ValueCurve`; named companion of [`scale_x`](@ref)"
+scale_y(curve::ValueCurve, c::Real) = c * curve
+
+# Time-series-backed curves hold a `TimeSeriesKey`, not data to scale. Mirrors how
+# `is_convex`/`is_concave` refuse them: resolve to a static curve per timestep first.
+_no_scaling_for_ts(op::AbstractString, curve::ValueCurve) = throw(
+    ArgumentError(
+        "$op is not defined for the time-series-backed $(nameof(typeof(curve))); " *
+        "resolve to a static curve with `build_static_curve` first",
+    ),
+)
+
+Base.:*(::Real, curve::ValueCurve{<:TimeSeriesFunctionData}) =
+    _no_scaling_for_ts("Scaling", curve)
+scale_x(curve::ValueCurve{<:TimeSeriesFunctionData}, ::Real) =
+    _no_scaling_for_ts("scale_x", curve)
+
 # CONVERSIONS: InputOutputCurve{LinearFunctionData} to InputOutputCurve{QuadraticFunctionData}
 InputOutputCurve{QuadraticFunctionData}(data::InputOutputCurve{LinearFunctionData}) =
     InputOutputCurve{QuadraticFunctionData}(

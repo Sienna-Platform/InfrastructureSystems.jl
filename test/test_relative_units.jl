@@ -108,55 +108,35 @@ end
     end
 end
 
+# `convert_cost_coefficient` no longer resolves unit systems: it applies an x-axis ratio
+# the caller supplies. Which ratio a given (from, to) pair implies is the domain package's
+# business -- `PowerSystems` owns that table and tests it against its own base machinery.
 @testset "convert_cost_coefficient" begin
-    sb, db = 100.0, 50.0
-    @testset "identity (same unit system)" begin
-        for U in (IS.SU, IS.DU, IS.NU)
-            @test IS.convert_cost_coefficient(2.5, U, U, sb, db) == 2.5
-            @test IS.convert_cost_coefficient(2.5, U, U, sb, db, 2) == 2.5
-        end
+    @testset "identity (unit ratio)" begin
+        @test IS.convert_cost_coefficient(2.5, 1.0) == 2.5
+        @test IS.convert_cost_coefficient(2.5, 1.0, 2) == 2.5
     end
 
-    @testset "DU ↔ SU (linear)" begin
-        @test IS.convert_cost_coefficient(2.0, IS.DU, IS.SU, sb, db) ≈ 2.0 * sb / db
-        @test IS.convert_cost_coefficient(2.0, IS.SU, IS.DU, sb, db) ≈ 2.0 * db / sb
-    end
-
-    @testset "NU ↔ {SU, DU} (linear)" begin
-        @test IS.convert_cost_coefficient(2.0, IS.NU, IS.SU, sb, db) ≈ 2.0 * sb
-        @test IS.convert_cost_coefficient(2.0, IS.SU, IS.NU, sb, db) ≈ 2.0 / sb
-        @test IS.convert_cost_coefficient(2.0, IS.NU, IS.DU, sb, db) ≈ 2.0 * db
-        @test IS.convert_cost_coefficient(2.0, IS.DU, IS.NU, sb, db) ≈ 2.0 / db
+    @testset "linear" begin
+        @test IS.convert_cost_coefficient(2.0, 4.0) ≈ 8.0
+        @test IS.convert_cost_coefficient(2.0, 0.25) ≈ 0.5
     end
 
     @testset "exponent (quadratic)" begin
-        @test IS.convert_cost_coefficient(2.0, IS.DU, IS.SU, sb, db, 2) ≈ 2.0 * (sb / db)^2
-        @test IS.convert_cost_coefficient(2.0, IS.NU, IS.SU, sb, db, 2) ≈ 2.0 * sb^2
+        @test IS.convert_cost_coefficient(2.0, 4.0, 2) ≈ 2.0 * 16.0
     end
 
-    @testset "round-trip is identity (linear and quadratic)" begin
-        for (Ua, Ub) in ((IS.DU, IS.SU), (IS.NU, IS.SU), (IS.NU, IS.DU))
-            for k in (1, 2)
-                forward = IS.convert_cost_coefficient(2.0, Ua, Ub, sb, db, k)
-                back = IS.convert_cost_coefficient(forward, Ub, Ua, sb, db, k)
-                @test back ≈ 2.0
-            end
+    @testset "round-trip through the reciprocal ratio" begin
+        for ratio in (2.0, 0.25, 100.0), k in (1, 2)
+            forward = IS.convert_cost_coefficient(2.0, ratio, k)
+            @test IS.convert_cost_coefficient(forward, inv(ratio), k) ≈ 2.0
         end
     end
 
-    @testset "negative exponent inverts linear ratio (used for piecewise x-coords)" begin
-        @test IS.convert_cost_coefficient(2.0, IS.DU, IS.SU, sb, db, -1) ≈ 2.0 * db / sb
-        @test IS.convert_cost_coefficient(2.0, IS.NU, IS.SU, sb, db, -1) ≈ 2.0 / sb
+    @testset "negative exponent inverts the ratio (used for piecewise x-coords)" begin
+        @test IS.convert_cost_coefficient(2.0, 4.0, -1) ≈ 0.5
     end
 end
-struct _FakeUnit <: IS.AbstractUnitSystem end
-
-@testset "convert_cost_coefficient unknown subtype" begin
-    fake = _FakeUnit()
-    @test_throws ArgumentError IS.convert_cost_coefficient(2.0, fake, IS.SU, 100.0, 50.0)
-    @test_throws ArgumentError IS.convert_cost_coefficient(2.0, IS.DU, fake, 100.0, 50.0)
-end
-
 @testset "display_string spells per-unit tags out" begin
     @test IS.display_string(0.6 * IS.DU) == "0.6 p.u. in component base"
     @test IS.display_string(0.3 * IS.SU) == "0.3 p.u. in system base"

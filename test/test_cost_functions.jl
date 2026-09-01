@@ -530,6 +530,169 @@ end
           hash(IS.AverageRateCurve(IS.LinearFunctionData(1.0, 1.0), 1.0))
 end
 
+@testset "Test IS.LossCurve" begin
+    vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1.0, 2.0, 3.0))
+    lc = IS.LossCurve(vc, IS.NaturalUnit())
+
+    @test lc isa IS.LossCurve{IS.QuadraticCurve, IS.NaturalUnit}
+    @test IS.get_value_curve(lc) == vc
+    @test IS.get_function_data(lc) == IS.QuadraticFunctionData(1.0, 2.0, 3.0)
+    @test IS.get_power_units(lc) == IS.NaturalUnit()
+    @test lc == IS.LossCurve(vc, IS.NaturalUnit())
+    @test isequal(lc, IS.LossCurve(vc, IS.NaturalUnit()))
+    @test hash(lc) == hash(IS.LossCurve(vc, IS.NaturalUnit()))
+
+    # `power_units` is a type parameter, so curves that differ only in units are distinct
+    @test IS.LossCurve(vc, IS.SystemBaseUnit()) != lc
+
+    @test IS.LossCurve(vc, IS.SystemBaseUnit()) ==
+          IS.LossCurve(; value_curve = vc, power_units = IS.SystemBaseUnit())
+
+    @test sprint(show, "text/plain", lc) ==
+          "LossCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  power_units: NU"
+    @test sprint(show, "text/plain", lc; context = :compact => true) ==
+          "LossCurve with power_units NU, and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
+end
+
+@testset "LossCurve requires explicit power_units" begin
+    # An unstated base is the ambiguity the type exists to remove, so there is no default
+    # and no `zero(::Type{LossCurve})` to smuggle one in.
+    vc = IS.InputOutputCurve(IS.LinearFunctionData(1.0, 1.0))
+    @test_throws MethodError IS.LossCurve(vc)
+    @test_throws Union{MethodError, UndefKeywordError} IS.LossCurve(; value_curve = vc)
+    @test_throws MethodError zero(IS.LossCurve)
+    # ...but a curve that already has a base can hand it to its own zero
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+        @test IS.get_power_units(zero(IS.LossCurve(vc, U))) == U
+    end
+end
+
+@testset "LossCurve serialize round-trip all unit systems" begin
+    vc = IS.InputOutputCurve(IS.LinearFunctionData(1.5, 0.25))
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+        lc = IS.LossCurve(vc, U)
+        data = IS.serialize(lc)
+        @test data["power_units"] == string(nameof(typeof(U)))
+        lc_rt = IS.deserialize(IS.LossCurve, data)
+        @test lc_rt == lc
+        @test IS.get_power_units(lc_rt) == U
+    end
+end
+
+@testset "y_axis_power_dimension trait" begin
+    # The whole difference between the families under a change of base, as one number.
+    @test IS.y_axis_power_dimension(IS.CostCurve{IS.LinearCurve, IS.NaturalUnit}) == Val(0)
+    @test IS.y_axis_power_dimension(IS.FuelCurve{IS.LinearCurve, IS.NaturalUnit}) == Val(0)
+    @test IS.y_axis_power_dimension(IS.LossCurve{IS.LinearCurve, IS.NaturalUnit}) == Val(1)
+end
+
+# `convert_power_units` takes the x-axis ratio between two bases; `PowerSystems` derives it
+# per component, so these tests spell it out. Writing `x_U = P / base_U` (with `base_NU`
+# = 1, i.e. P already in MW) gives `x_from = (base_to / base_from) * x_to`.
+_x_base(::IS.NaturalUnit, _, _) = 1.0
+_x_base(::IS.SystemBaseUnit, sb, _) = sb
+_x_base(::IS.DeviceBaseUnit, _, db) = db
+
+_convert(curve, to, sb, db) = IS.convert_power_units(
+    curve,
+    to,
+    _x_base(to, sb, db) / _x_base(IS.get_power_units(curve), sb, db),
+)
+
+@testset "LossCurve convert_power_units" begin
+    sys_base, dev_base = 100.0, 50.0
+
+    # y = 0.05 x + 2.0: 5% marginal loss plus 2 MW of fixed loss.
+    lc = IS.LossCurve(IS.LinearCurve(0.05, 2.0), IS.NaturalUnit())
+
+    su = _convert(lc, IS.SystemBaseUnit(), sys_base, dev_base)
+    @test su isa IS.LossCurve{IS.LinearCurve, IS.SystemBaseUnit}
+    # Both axes are power, so the proportional term is dimensionless and does not move;
+    # only the constant term, which is a bare power, rescales.
+    @test IS.get_function_data(su) == IS.LinearFunctionData(0.05, 2.0 / sys_base)
+
+    du = _convert(lc, IS.DeviceBaseUnit(), sys_base, dev_base)
+    @test IS.get_function_data(du) == IS.LinearFunctionData(0.05, 2.0 / dev_base)
+
+    # SU <-> DU directly, and every round trip
+    @test _convert(su, IS.DeviceBaseUnit(), sys_base, dev_base) == du
+    for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit()),
+        V in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.DeviceBaseUnit())
+
+        start = _convert(lc, U, sys_base, dev_base)
+        there = _convert(start, V, sys_base, dev_base)
+        @test _convert(there, U, sys_base, dev_base) == start
+    end
+
+    # Converting to the base the curve already carries is the identity, not a rebuild
+    @test _convert(lc, IS.NaturalUnit(), sys_base, dev_base) === lc
+
+    # The converted curve agrees pointwise with the original: the same physical loss,
+    # read off in the new base.
+    f = IS.get_value_curve(lc)
+    f_su = IS.get_value_curve(su)
+    for x_mw in (0.0, 10.0, 55.0, 100.0)
+        @test f_su(x_mw / sys_base) ≈ f(x_mw) / sys_base
+    end
+
+    # A quadratic loss curve: the quadratic term picks up one net power of the base.
+    qc = IS.LossCurve(IS.QuadraticCurve(0.01, 0.05, 2.0), IS.NaturalUnit())
+    q_su = _convert(qc, IS.SystemBaseUnit(), sys_base, dev_base)
+    @test IS.get_function_data(q_su) ==
+          IS.QuadraticFunctionData(0.01 * sys_base, 0.05, 2.0 / sys_base)
+
+    # A piecewise loss curve: breakpoints are power and move; segment slopes do not.
+    pw = IS.LossCurve(
+        IS.PiecewiseIncrementalCurve(0.0, [0.0, 50.0, 100.0], [0.03, 0.06]),
+        IS.NaturalUnit(),
+    )
+    pw_su = _convert(pw, IS.SystemBaseUnit(), sys_base, dev_base)
+    fd = IS.get_function_data(pw_su)
+    @test IS.get_x_coords(fd) == [0.0, 0.5, 1.0]
+    @test IS.get_y_coords(fd) == [0.03, 0.06]
+    @test IS.get_initial_input(pw_su) == 0.0
+
+    # Time-series-backed curves have no data to rescale
+    forecast_key = IS.TimeSeriesKey{IS.Deterministic{IS.LinearFunctionData}}(1)
+    ts_vc = IS.TimeSeriesInputOutputCurve(IS.TimeSeriesLinearFunctionData(forecast_key))
+    @test_throws ArgumentError _convert(
+        IS.LossCurve(ts_vc, IS.NaturalUnit()), IS.SystemBaseUnit(), sys_base, dev_base)
+end
+
+@testset "convert_power_units resolves at compile time" begin
+    # The design requirement: the y-axis dimension is a `Val`, so the branch between the
+    # families is dispatched, not tested at run time, and the arithmetic folds to
+    # multiplies and divides -- never a call to `^`.
+    sys_base, dev_base = 100.0, 50.0
+    curves = (
+        IS.LossCurve(IS.LinearCurve(0.05, 2.0), IS.NaturalUnit()),
+        IS.LossCurve(IS.QuadraticCurve(0.01, 0.05, 2.0), IS.NaturalUnit()),
+        IS.CostCurve(IS.LinearCurve(30.0, 100.0), IS.NaturalUnit()),
+        IS.FuelCurve(IS.LinearCurve(10.0, 5.0), IS.NaturalUnit(), 2.5),
+    )
+    for curve in curves
+        T = typeof(curve)
+        # Fully inferred, to a concrete type carrying the target unit system
+        @test isconcretetype(
+            Base.promote_op(IS.convert_power_units, T, IS.SystemBaseUnit, Float64),
+        )
+        @test (@inferred IS.convert_power_units(
+            curve, IS.SystemBaseUnit(), 2.0,
+        )) isa Union{IS.LossCurve, IS.ProductionVariableCostCurve}
+
+        # No runtime power call and no dynamic dispatch survive optimization
+        src, _ = only(
+            code_typed(
+                IS.convert_power_units, (T, IS.SystemBaseUnit, Float64);
+                optimize = true,
+            ),
+        )
+        ir = string(src.code)
+        @test !occursin("power_by_squaring", ir)
+        @test !occursin("jl_apply_generic", ir)
+    end
+end
+
 @testset "FuelCurve deserialize garbage fuel_cost (PVC-003)" begin
     fc_example = IS.FuelCurve(IS.InputOutputCurve(IS.LinearFunctionData(1.0, 0.0)), 2.5)
     bad_dict = merge(IS.serialize(fc_example), Dict("fuel_cost" => "oops"))
@@ -552,4 +715,202 @@ end
     @test io_piecewise(1.0) == 3.0
     @test io_piecewise(3.0) == 7.0
     @test io_piecewise(5.0) == 11.0
+end
+
+# Helpers for the scaling / unit-conversion testsets below. `FunctionData` has no
+# `isapprox`, so compare the defining terms elementwise.
+_fd_terms(fd::IS.LinearFunctionData) =
+    [IS.get_proportional_term(fd), IS.get_constant_term(fd)]
+_fd_terms(fd::IS.QuadraticFunctionData) =
+    [IS.get_quadratic_term(fd), IS.get_proportional_term(fd), IS.get_constant_term(fd)]
+_fd_terms(fd::Union{IS.PiecewiseLinearData, IS.PiecewiseStepData}) =
+    vcat(IS.get_x_coords(fd), IS.get_y_coords(fd))
+
+fd_approx(a::T, b::T) where {T <: IS.FunctionData} =
+    all(isapprox.(_fd_terms(a), _fd_terms(b)))
+fd_approx(::IS.FunctionData, ::IS.FunctionData) = false  # differing shapes never match
+
+function ts_input_output_curve()
+    key = IS.TimeSeriesKey{IS.Deterministic{IS.QuadraticFunctionData}}(1)
+    return IS.TimeSeriesInputOutputCurve(IS.TimeSeriesQuadraticFunctionData(key))
+end
+
+@testset "ValueCurve scaling (scale_x, scale_y)" begin
+    ratio = 4.0
+    # scale_x is defined on the input-output function a curve represents, so it must
+    # commute with conversion to InputOutputCurve for every representation.
+    for curve in (
+        IS.IncrementalCurve(IS.LinearFunctionData(4, 6), 4.0),
+        IS.AverageRateCurve(IS.LinearFunctionData(2, 3), 4.0),
+        IS.IncrementalCurve(IS.PiecewiseStepData([1, 2, 4], [10, 20]), 5.0),
+        IS.AverageRateCurve(IS.PiecewiseStepData([1, 2, 4], [10, 20]), 5.0),
+    )
+        via_scale = IS.InputOutputCurve(IS.scale_x(curve, ratio))
+        via_convert = IS.scale_x(IS.InputOutputCurve(curve), ratio)
+        @test fd_approx(IS.get_function_data(via_scale), IS.get_function_data(via_convert))
+    end
+
+    # An InputOutputCurve evaluates as f(c * x)
+    io = IS.InputOutputCurve(IS.QuadraticFunctionData(2, 3, 4))
+    io_scaled = IS.scale_x(io, ratio)
+    for x in (0.5, 1.0, 2.0)
+        @test io_scaled(x) ≈ io(ratio * x)
+    end
+    @test IS.scale_x(io, 1.0) == io
+
+    # Piecewise input-output data keeps its y-coordinates; only x moves
+    pw_io = IS.InputOutputCurve(IS.PiecewiseLinearData([(1, 1), (3, 5), (5, 10)]))
+    pw_io_scaled = IS.scale_x(pw_io, ratio)
+    @test IS.get_x_coords(IS.get_function_data(pw_io_scaled)) ≈ [0.25, 0.75, 1.25]
+    @test IS.get_y_coords(IS.get_function_data(pw_io_scaled)) ==
+          IS.get_y_coords(IS.get_function_data(pw_io))
+
+    # Vertical scaling also scales initial_input and input_at_zero, and skips `nothing`
+    inc = IS.IncrementalCurve(IS.LinearFunctionData(4, 6), 4.0, 2.0)
+    inc_scaled = 3.0 * inc
+    @test IS.get_initial_input(inc_scaled) == 12.0
+    @test IS.get_input_at_zero(inc_scaled) == 6.0
+    @test IS.get_function_data(inc_scaled) == 3.0 * IS.get_function_data(inc)
+    @test inc * 3.0 == inc_scaled
+    @test IS.scale_y(inc, 3.0) == inc_scaled
+    @test IS.get_input_at_zero(2.0 * IS.InputOutputCurve(IS.LinearFunctionData(1, 1))) ===
+          nothing
+    @test IS.get_initial_input(
+        2.0 * IS.IncrementalCurve(IS.LinearFunctionData(1, 1),
+            nothing),
+    ) === nothing
+
+    # Time-series-backed curves have no data to scale
+    ts_vc = ts_input_output_curve()
+    @test_throws ArgumentError IS.scale_x(ts_vc, 2.0)
+    @test_throws ArgumentError 2.0 * ts_vc
+end
+
+@testset "convert_power_units for CostCurve and FuelCurve" begin
+    sb, db = 100.0, 50.0
+    # The cost of producing a given *physical* quantity must not change with the units
+    # it is expressed in: x_NU MW == x_NU/sb system-base pu == x_NU/db device-base pu.
+    denominators = Dict(IS.NU => 1.0, IS.SU => sb, IS.DU => db)
+
+    cc = IS.CostCurve(IS.QuadraticCurve(2.0, 3.0, 4.0), IS.NU, IS.LinearCurve(7.0, 1.0))
+    for to in (IS.NU, IS.SU, IS.DU)
+        converted = _convert(cc, to, sb, db)
+        @test converted isa IS.CostCurve
+        @test IS.get_power_units(converted) == to
+        for mw in (10.0, 55.0)
+            x = mw / denominators[to]
+            @test IS.get_value_curve(converted)(x) ≈ IS.get_value_curve(cc)(mw)
+            @test IS.get_vom_cost(converted)(x) ≈ IS.get_vom_cost(cc)(mw)
+        end
+    end
+
+    # Round trips through every intermediate unit system return the original curve
+    for mid in (IS.NU, IS.SU, IS.DU)
+        there = _convert(cc, mid, sb, db)
+        back = _convert(there, IS.NU, sb, db)
+        @test fd_approx(IS.get_function_data(back), IS.get_function_data(cc))
+        @test IS.get_vom_cost(back) == IS.get_vom_cost(cc)
+    end
+
+    # Converting to the unit system a curve already carries is the identity
+    @test _convert(cc, IS.NU, sb, db) === cc
+    cc_su = IS.CostCurve(IS.LinearCurve(5.0), IS.SU)
+    @test _convert(cc_su, IS.SU, sb, db) === cc_su
+
+    # Piecewise and incremental representations convert too
+    pw = IS.CostCurve(
+        IS.PiecewiseIncrementalCurve(1.0, [1.0, 2.0, 4.0], [10.0, 20.0]),
+        IS.NU,
+    )
+    pw_su = _convert(pw, IS.SU, sb, db)
+    @test IS.get_x_coords(IS.get_function_data(pw_su)) ≈ [0.01, 0.02, 0.04]
+    @test IS.get_y_coords(IS.get_function_data(pw_su)) ≈ [1000.0, 2000.0]
+    @test IS.get_initial_input(pw_su) == IS.get_initial_input(pw)
+
+    # FuelCurve: fuel_cost is currency per unit of fuel and is unit-system agnostic
+    fc = IS.FuelCurve(
+        IS.QuadraticCurve(2.0, 3.0, 4.0),
+        IS.NU,
+        12.5,
+        IS.LinearCurve(3.0),
+        IS.LinearCurve(7.0),
+    )
+    fc_su = _convert(fc, IS.SU, sb, db)
+    @test fc_su isa IS.FuelCurve
+    @test IS.get_power_units(fc_su) == IS.SU
+    @test IS.get_fuel_cost(fc_su) == 12.5
+    for mw in (10.0, 55.0)
+        @test IS.get_value_curve(fc_su)(mw / sb) ≈ IS.get_value_curve(fc)(mw)
+        @test IS.get_vom_cost(fc_su)(mw / sb) ≈ IS.get_vom_cost(fc)(mw)
+    end
+    # startup_fuel_offtake is fuel consumed as a function of downtime: its x-axis is a
+    # duration and its y-axis a fuel quantity, so a change of power units must not touch
+    # it. Guards against it being swept up with the power-indexed fields.
+    @test IS.get_startup_fuel_offtake(fc_su) == IS.get_startup_fuel_offtake(fc)
+    for to in (IS.NU, IS.SU, IS.DU)
+        @test IS.get_startup_fuel_offtake(_convert(fc, to, sb, db)) ==
+              IS.get_startup_fuel_offtake(fc)
+    end
+    @test _convert(fc, IS.NU, sb, db) === fc
+
+    # A time-series-backed fuel_cost is fine (it carries no power units); a
+    # time-series-backed value curve is not
+    fc_ts_cost = IS.FuelCurve(
+        IS.LinearCurve(5.0),
+        IS.NU,
+        # `fuel_cost_time_series` is a scalar field -- one Float64 per timestep -- so it
+        # takes a Float64-element key, unlike the function-data keys the value curves use.
+        IS.TimeSeriesKey{IS.Deterministic{Float64}}(1),
+    )
+    @test IS.get_power_units(_convert(fc_ts_cost, IS.SU, sb, db)) == IS.SU
+    @test_throws ArgumentError _convert(
+        IS.CostCurve(ts_input_output_curve(), IS.NU), IS.SU, sb, db,
+    )
+end
+
+@testset "CostCurve from FuelCurve" begin
+    # Multiplying through by a scalar fuel cost gives the equivalent CostCurve
+    fc = IS.FuelCurve(IS.QuadraticCurve(2.0, 3.0, 4.0), IS.NU, 12.5, IS.LinearCurve(0.0),
+        IS.LinearCurve(7.0))
+    cc = IS.CostCurve(fc)
+    @test cc isa IS.CostCurve
+    @test IS.get_power_units(cc) == IS.NU
+    for mw in (10.0, 55.0)
+        @test IS.get_value_curve(cc)(mw) ≈ 12.5 * IS.get_value_curve(fc)(mw)
+    end
+    # vom_cost is already in currency, so it carries over untouched
+    @test IS.get_vom_cost(cc) == IS.get_vom_cost(fc)
+
+    # The unit system is preserved
+    for units in (IS.NU, IS.SU, IS.DU)
+        @test IS.get_power_units(
+            IS.CostCurve(IS.FuelCurve(IS.LinearCurve(5.0), units, 2.0)),
+        ) == units
+    end
+
+    # Incremental representation: initial_input scales with the rest of the curve
+    inc = IS.FuelCurve(IS.PiecewiseIncrementalCurve(1.0, [1.0, 2.0, 4.0], [10.0, 20.0]),
+        IS.NU, 3.0)
+    inc_cc = IS.CostCurve(inc)
+    @test IS.get_initial_input(inc_cc) == 3.0
+    @test IS.get_y_coords(IS.get_function_data(inc_cc)) == [30.0, 60.0]
+
+    # Nonzero startup_fuel_offtake cannot be represented and must not vanish silently
+    @test_throws ArgumentError IS.CostCurve(
+        IS.FuelCurve(IS.LinearCurve(5.0), IS.NU, 2.0, IS.LinearCurve(1.0),
+            IS.LinearCurve(0.0)),
+    )
+    @test_throws ArgumentError IS.CostCurve(
+        IS.FuelCurve(IS.LinearCurve(5.0), IS.NU, 2.0, IS.LinearCurve(0.0, 1.0),
+            IS.LinearCurve(0.0)),
+    )
+
+    # A time-series-backed fuel cost is not a scalar
+    @test_throws ArgumentError IS.CostCurve(
+        IS.FuelCurve(
+            IS.LinearCurve(5.0),
+            IS.NU,
+            IS.get_time_series_key(ts_input_output_curve()),
+        ),
+    )
 end
