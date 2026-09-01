@@ -73,13 +73,13 @@ openapi_time_series_association_json(data::SystemData; kwargs...) =
 $(TYPEDSIGNATURES)
 
 The rows of [`openapi_time_series_association_json`](@ref), deserialized into
-`PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation` — the oneOf wrapper whose `.value` picks
-its concrete per-type struct (`SingleTimeSeries`, `Deterministic`, ...) from each row's own
-`time_series_type` discriminator.
+`InfrastructureTimeSeriesOpenAPIModels.TimeSeriesAssociation` — the oneOf wrapper whose
+`.value` picks its concrete per-type struct (`SingleTimeSeries`, `Deterministic`, ...) from
+each row's own `time_series_type` discriminator.
 """
 function openapi_time_series_association_rows(store::Store; kwargs...)
     return _openapi_rows(
-        PowerTimeSeriesOpenAPIModels.TimeSeriesAssociation,
+        InfrastructureTimeSeriesOpenAPIModels.TimeSeriesAssociation,
         openapi_time_series_association_json(store; kwargs...),
     )
 end
@@ -106,11 +106,11 @@ openapi_supplemental_attribute_association_json(data::SystemData) =
 $(TYPEDSIGNATURES)
 
 The rows of [`openapi_supplemental_attribute_association_json`](@ref), deserialized into
-`PowerCoreOpenAPIModels.SupplementalAttributeAssociation`.
+`InfrastructureCoreOpenAPIModels.SupplementalAttributeAssociation`.
 """
 function openapi_supplemental_attribute_association_rows(store::Store)
     return _openapi_rows(
-        PowerCoreOpenAPIModels.SupplementalAttributeAssociation,
+        InfrastructureCoreOpenAPIModels.SupplementalAttributeAssociation,
         openapi_supplemental_attribute_association_json(store),
     )
 end

@@ -112,7 +112,7 @@ end
     )
 
     row = _openapi_row(data, "static")
-    @test typeof(row) === PowerTimeSeriesOpenAPIModels.SingleTimeSeries
+    @test typeof(row) === InfrastructureTimeSeriesOpenAPIModels.SingleTimeSeries
     @test row.time_series_type == "SingleTimeSeries"
     @test row.owner_id == IS.get_id(component)
     @test row.owner_type == "TestComponent"
@@ -149,7 +149,7 @@ end
     )
 
     row = _openapi_row(data, "irregular")
-    @test typeof(row) === PowerTimeSeriesOpenAPIModels.NonSequentialTimeSeries
+    @test typeof(row) === InfrastructureTimeSeriesOpenAPIModels.NonSequentialTimeSeries
     @test row.length == 3
     # ABSENT, not null: an irregular series has no `initial + k * resolution` grid, and the
     # schema says so by not declaring the fields on this type.
@@ -188,7 +188,7 @@ end
     )
 
     det = _openapi_row(data, "det")
-    @test typeof(det) === PowerTimeSeriesOpenAPIModels.Deterministic
+    @test typeof(det) === InfrastructureTimeSeriesOpenAPIModels.Deterministic
     @test det.horizon == "PT4H"
     @test det.interval == "PT1H"
     @test det.count == 2
@@ -196,14 +196,14 @@ end
     @test !hasfield(typeof(det), :length)
 
     prob = _openapi_row(data, "prob")
-    @test typeof(prob) === PowerTimeSeriesOpenAPIModels.Probabilistic
+    @test typeof(prob) === InfrastructureTimeSeriesOpenAPIModels.Probabilistic
     @test prob.percentiles == [0.1, 0.5, 0.9]
     @test prob.count == 2
 
     # `scenario_count` is the stored array's leading axis, which the catalog reports as
     # `length` — the same column a Probabilistic spends on its percentile count.
     scen = _openapi_row(data, "scen")
-    @test typeof(scen) === PowerTimeSeriesOpenAPIModels.Scenarios
+    @test typeof(scen) === InfrastructureTimeSeriesOpenAPIModels.Scenarios
     @test scen.scenario_count == 5
     @test scen.count == 2
 
@@ -232,7 +232,8 @@ end
     derived = only(
         filter(
             r ->
-                typeof(r) === PowerTimeSeriesOpenAPIModels.DeterministicSingleTimeSeries,
+                typeof(r) ===
+                InfrastructureTimeSeriesOpenAPIModels.DeterministicSingleTimeSeries,
             rows,
         ),
     )
@@ -240,7 +241,7 @@ end
     # Deterministic under the discriminator.
     @test derived.time_series_type == "DeterministicSingleTimeSeries"
     @test derived.count == 3
-    @test !any(r -> typeof(r) === PowerTimeSeriesOpenAPIModels.Deterministic, rows)
+    @test !any(r -> typeof(r) === InfrastructureTimeSeriesOpenAPIModels.Deterministic, rows)
     @test OpenAPI.check_required(derived)
 end
 
@@ -361,7 +362,7 @@ end
     rows = IS.openapi_supplemental_attribute_association_rows(data)
     @test length(rows) == 2
     @test all(
-        r -> typeof(r) === PowerCoreOpenAPIModels.SupplementalAttributeAssociation,
+        r -> typeof(r) === InfrastructureCoreOpenAPIModels.SupplementalAttributeAssociation,
         rows,
     )
     # Document/store ids agree by construction now: the association row's ids ARE the IS ids.

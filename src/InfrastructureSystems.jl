@@ -42,8 +42,8 @@ import JSON
 import TimeZones
 import GeoJSON
 import OpenAPI
-import PowerCoreOpenAPIModels
-import PowerTimeSeriesOpenAPIModels
+import InfrastructureCoreOpenAPIModels
+import InfrastructureTimeSeriesOpenAPIModels
 import Logging
 import Random
 import Pkg

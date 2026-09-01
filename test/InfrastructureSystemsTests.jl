@@ -16,8 +16,8 @@ import JSON
 import InfrastructureSystems
 import InfrastructureSystems as IS
 import OpenAPI
-import PowerCoreOpenAPIModels
-import PowerTimeSeriesOpenAPIModels
+import InfrastructureCoreOpenAPIModels
+import InfrastructureTimeSeriesOpenAPIModels
 
 import Aqua
 # `piracies` crashes on Julia 1.12+ (`Core.TypeName.mt` was removed), unfixed in Aqua 0.8.11.

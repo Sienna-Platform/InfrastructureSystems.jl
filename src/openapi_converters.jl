@@ -28,11 +28,11 @@ function to_openapi end
 
 # ── GeographicInfo ──────────────────────────────────────────────────────────────
 
-from_openapi(po::PowerCoreOpenAPIModels.GeographicInfo) =
+from_openapi(po::InfrastructureCoreOpenAPIModels.GeographicInfo) =
     GeographicInfo(; geo_json = po.geo_json)
 
 to_openapi(geo::GeographicInfo, id::Int) =
-    PowerCoreOpenAPIModels.GeographicInfo(; id = id, geo_json = get_geo_json(geo))
+    InfrastructureCoreOpenAPIModels.GeographicInfo(; id = id, geo_json = get_geo_json(geo))
 
 # ── DataSource ──────────────────────────────────────────────────────────────────
 #
@@ -69,7 +69,7 @@ _datasource_fields(v) = collect(String, v)
 _datasource_extra(::Nothing) = Dict{String, Any}()
 _datasource_extra(d) = Dict{String, Any}(k => v for (k, v) in d)
 
-function from_openapi(po::PowerCoreOpenAPIModels.DataSource)
+function from_openapi(po::InfrastructureCoreOpenAPIModels.DataSource)
     return DataSource(;
         organization = po.organization,
         retrieved_at = _datasource_utc(po.retrieved_at),
@@ -85,7 +85,7 @@ function from_openapi(po::PowerCoreOpenAPIModels.DataSource)
 end
 
 function to_openapi(ds::DataSource, id::Int)
-    return PowerCoreOpenAPIModels.DataSource(;
+    return InfrastructureCoreOpenAPIModels.DataSource(;
         id = id,
         organization = get_organization(ds),
         retrieved_at = _datasource_zoned(get_retrieved_at(ds)),
