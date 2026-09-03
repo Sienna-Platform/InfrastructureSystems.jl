@@ -54,6 +54,17 @@ end
     @test sprint(show, IS.NU) == "NU"
 end
 
+@testset "unit markers broadcast as scalars" begin
+    # Regression for #629: without `broadcastable`, Base's fallback tries to
+    # `collect` the marker and fails with `no method matching length(::DeviceBaseUnit)`.
+    scale(x, ::IS.AbstractUnitSystem) = x
+    for units in (IS.DU, IS.SU, IS.NU)
+        @test scale.([1.0, 2.0, 3.0], units) == [1.0, 2.0, 3.0]
+    end
+    # an array of markers is still broadcast element-wise
+    @test ([IS.DU, IS.SU] .=== IS.DU) == [true, false]
+end
+
 @testset "Double-tagging is rejected" begin
     @test_throws ArgumentError (0.6 * IS.DU) * IS.SU
     @test_throws ArgumentError IS.SU * (0.6 * IS.DU)

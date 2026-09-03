@@ -247,6 +247,14 @@ Base.show(io::IO, ::DeviceBaseUnit) = print(io, "DU")
 Base.show(io::IO, ::SystemBaseUnit) = print(io, "SU")
 Base.show(io::IO, ::NaturalUnit) = print(io, "NU")
 
+# Unit markers are scalars in a broadcast (`get_rating.(components, DU)`), not
+# containers to iterate over: without this, Base's `broadcastable` fallback tries
+# to `collect` the marker and fails with a confusing `no method matching
+# length(::DeviceBaseUnit)`. Same treatment Base gives its own parameter-like
+# values (`RoundingMode`, `Val`) and Unitful gives its units — which is why
+# broadcasting already worked with `MW` but not with `DU`/`SU`/`NU`.
+Base.Broadcast.broadcastable(u::AbstractUnitSystem) = Ref(u)
+
 """
     display_string(x) -> String
 
