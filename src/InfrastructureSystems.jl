@@ -53,7 +53,9 @@ import SHA
 import StringTemplates
 import TerminalLoggers: TerminalLogger, ProgressLevel
 import TimeSeries
+import CodecZlib
 import InfraStore
+import Tar
 import TimerOutputs
 import TOML
 using DataStructures: OrderedDict, SortedDict
@@ -237,6 +239,7 @@ include("utils/print_pt.jl")
 include("utils/test.jl")
 include("units.jl")
 include("value_curve.jl")
+include("sienna_archive.jl")
 include("time_series_value_curve.jl")
 include("cost_aliases.jl")
 include("function_data/convexity_checks.jl")
