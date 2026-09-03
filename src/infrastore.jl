@@ -60,13 +60,22 @@ The writable copy holds its catalog in memory: it is scratch, and the system it 
 itself in memory, so a crash loses both regardless. Changes reach disk only when the
 system is serialized. A read-only open leaves the catalog attached — nothing mutates it,
 so there is nothing to gain by reading it into RAM.
+
+# An artifact with no catalog
+
+A `source` with no `.sqlite` beside it is an arrays-plus-document bundle (see
+[`serialize_arrays`](@ref)): the caller holds the association rows in a document of its own
+and replays them after this returns. Such a source is always copied out and given a freshly
+minted catalog, `read_only` or not — there is no catalog to open in place, and minting one
+into the caller's directory is exactly the mutation `read_only` exists to prevent.
 """
 function open_deserialized_infrastore_store(
     source::AbstractString,
     directory::Union{Nothing, AbstractString},
     read_only::Bool,
 )
-    read_only && return open_infrastore_store(source; read_only = true)
+    has_catalog = isfile(source * ".sqlite")
+    read_only && has_catalog && return open_infrastore_store(source; read_only = true)
     dir = if isnothing(directory)
         tempdir()
     else
@@ -74,11 +83,13 @@ function open_deserialized_infrastore_store(
     end
     mkpath(dir)
     dst = joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
+    cp(source, dst; force = true)
+    if !has_catalog
+        return deserialize_arrays(dst)
+    end
     # The `.sqlite` is copied so the open below has a catalog to read into memory; it
     # is ignored from then on, and `serialize` writes a fresh pair.
-    cp(source, dst; force = true)
-    src_sqlite = source * ".sqlite"
-    isfile(src_sqlite) && cp(src_sqlite, dst * ".sqlite"; force = true)
+    cp(source * ".sqlite", dst * ".sqlite"; force = true)
     return open_infrastore_store(dst; read_only = false, catalog = :memory)
 end
 
@@ -395,6 +406,39 @@ function serialize(store::Store, file_path::AbstractString)
     InfraStore.persist!(store.inner, file_path)
     @info "Serialized InfraStore store to $file_path (+ .sqlite)"
     return
+end
+
+"""
+    serialize_arrays(store::Store, file_path)
+
+Persist only the array half to `file_path`, writing no `.sqlite` beside it.
+
+For a writer whose own document already carries the catalog's association rows —
+every row's `association_id` and its `data_hash` pointer into the file written
+here — so the SQLite half would be a third artifact nothing reads. Read such a
+bundle back with [`deserialize_arrays`](@ref) plus the document's rows.
+
+Atomic, unlike [`serialize`](@ref): one file, one rename.
+"""
+function serialize_arrays(store::Store, file_path::AbstractString)
+    InfraStore.persist_arrays!(store.inner, file_path)
+    @info "Serialized InfraStore arrays to $file_path (no .sqlite)"
+    return
+end
+
+"""
+    deserialize_arrays(file_path)
+
+Open an array-only artifact — a `file_path` with no `.sqlite` beside it — and
+mint an empty catalog for a document's rows to be replayed into.
+
+The read counterpart of [`serialize_arrays`](@ref). The returned store holds
+every array and no associations; load the rows with
+[`import_time_series_association_rows!`](@ref) and
+[`import_supplemental_attribute_association_rows!`](@ref).
+"""
+function deserialize_arrays(file_path::AbstractString)
+    return Store(InfraStore.open_store_without_catalog(String(file_path)))
 end
 
 """Remove all time series (data + metadata) from the store."""
