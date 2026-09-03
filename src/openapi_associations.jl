@@ -135,3 +135,21 @@ import_supplemental_attribute_association_rows!(data::SystemData, json::Abstract
     import_supplemental_attribute_association_rows!(
         get_data_store(data.supplemental_attribute_manager), json,
     )
+
+"""
+$(TYPEDSIGNATURES)
+
+Bulk-ingest a JSON array of time-series association OpenAPI rows into the store's
+`time_series_associations` table in one all-or-nothing transaction. Passthrough to
+`InfraStore.import_time_series_associations_openapi!`; returns the number of rows inserted.
+
+The import half of [`openapi_time_series_association_json`](@ref). Each row references an
+array the store **already holds**, by the row's own `data_hash`, so this replays a catalog
+over existing array bytes — it never carries values itself. That makes it the piece a reader
+needs when the association tables travel in a document rather than in a persisted catalog.
+"""
+import_time_series_association_rows!(store::Store, json::AbstractString) =
+    InfraStore.import_time_series_associations_openapi!(store.inner, json)
+
+import_time_series_association_rows!(data::SystemData, json::AbstractString) =
+    import_time_series_association_rows!(get_data_store(data), json)
