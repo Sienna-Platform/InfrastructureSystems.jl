@@ -6739,12 +6739,13 @@ end
     @test IS.has_time_series(component2, IS.SingleTimeSeries, ts_name)
     @test IS.has_time_series(component2, IS.DeterministicSingleTimeSeries, ts_name)
 
-    # removing from one component is fine, as long as another still has the SingleTimeSeries
+    # the derived forecast must go before its backing SingleTimeSeries; once both are gone,
+    # the underlying array survives because component still references it
     mgr = IS.get_time_series_manager(component2)
     @test !isnothing(mgr)
-    IS.remove_time_series!(mgr, IS.SingleTimeSeries, component2, ts_name)
-    # so that we can test removing just the SingleTimeSeries from the other component
     IS.remove_time_series!(mgr, IS.DeterministicSingleTimeSeries, component2, ts_name)
+    # so that we can test removing just the SingleTimeSeries from the other component
+    IS.remove_time_series!(mgr, IS.SingleTimeSeries, component2, ts_name)
 
     metadata = IS.list_time_series_metadata(
         component;
