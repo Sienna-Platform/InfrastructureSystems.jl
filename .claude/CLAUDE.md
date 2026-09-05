@@ -17,6 +17,11 @@ julia --project=<psy6-workspace-root> -e 'using PowerSystems, PowerNetworkMatric
 
 (The psy5 line's PowerSimulations/PSID consume the *top-level* IS checkout on `main`, not this one.)
 
+Two consumers now depend on things IS owns *because* they are shared, so a rename here is a rename
+there: PowerSystems calls the `*_sienna_archive` trio and `serialize_arrays`/`deserialize_arrays` from
+`src/openapi/file_io.jl`, and PowerSystemsInvestmentsPortfolios is the second archive consumer these
+were factored out for.
+
 ## Source layout — the non-obvious parts
 
 - `src/InfrastructureSystems.jl` — the **only** place exports are allowed (see Export policy).
@@ -28,10 +33,56 @@ julia --project=<psy6-workspace-root> -e 'using PowerSystems, PowerNetworkMatric
   the two hand-written supplemental attributes (`GeographicInfo`, `DataSource`); neither is
   exported, and both are shared across components create-once/link-many via the association
   store rather than owned by one component.
+- `src/sienna_archive.jl` — the **`.sn` archive container**, and only the container (see below).
 - `src/generated/` — auto-generated (**never edit**); `src/descriptors/structs.json` is its source.
 - `src/Optimization/` — **abstract types only** (~185 lines): container/key abstracts, formulation
   abstracts, construct stages, enums. The concrete results/container machinery was removed in IS4;
   the consumer defining concretes in this line is **InfrastructureOptimizationModels (IOM)**.
+
+## The Sienna archive and the store's two halves
+
+`src/sienna_archive.jl` owns the **`.sn`** container: a directory of files, tar'd and gzip'd into one
+file. It lives here rather than in a consumer because nothing about the container is specific to a
+`System` — PowerSystems packs a system document plus its time-series sidecars, PowerSystemsInvestments-
+Portfolios will pack whatever a portfolio needs, and reimplementing the rules per package is how two
+archives end up disagreeing about what `.sn` means.
+
+```julia
+is_sienna_archive(path)                            # extension test a reader dispatches on
+create_sienna_archive(fill!, path; force = false)  # fill! populates a staging dir; that becomes the archive
+extract_sienna_archive(path)                       # -> directory holding the members
+```
+
+Three things to know before touching it:
+
+- **`fill!` decides the contents, this file decides nothing about them.** Keep it that way; a member
+  list belongs to the package that writes it.
+- **The extension is enforced on write** because it is the whole read-side test. An archive named
+  otherwise could not be found again, so a non-`.sn` path is a `DataFormatError`, not a warning.
+- **`extract_sienna_archive`'s directory outlives the call.** `mktempdir()`'s default
+  `cleanup = true` registers it for atexit deletion, which a caller that keeps reading from the
+  extracted files needs — a store opened in place out of the archive, say. Do not wrap it in a
+  `do` block.
+
+`Tar` and `CodecZlib` are dependencies for this and nothing else.
+
+### Arrays with and without the catalog
+
+An InfraStore artifact is an HDF5 file plus a `.sqlite` catalog, and `serialize` writes both. A writer
+whose own document already carries the catalog's association rows does not need the second half:
+
+- `serialize_arrays(store, path)` writes the array half alone. Atomic, unlike `serialize`.
+- `deserialize_arrays(path)` opens such an artifact and mints an empty catalog for a document's rows.
+- `import_time_series_association_rows!(store_or_data, json)` replays them — the counterpart of
+  `import_supplemental_attribute_association_rows!`.
+
+`open_deserialized_infrastore_store` detects a source with no `.sqlite` beside it and mints rather than
+copying one that is not there. Such a source is copied out and given a fresh catalog **`read_only` or
+not**: there is no catalog to open in place, and minting one into the caller's directory is exactly the
+mutation `read_only` exists to prevent.
+
+These wrap `Store::persist_arrays_to` and `Store::open_without_catalog`, which are **unreleased**
+(NatLabRockies/infrastore#71). `[compat] InfraStore` is deliberately unbumped until they ship.
 
 ## Units Layer (RelativeUnits)
 

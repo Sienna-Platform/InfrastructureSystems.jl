@@ -123,6 +123,27 @@ openapi_supplemental_attribute_association_rows(data::SystemData) =
 """
 $(TYPEDSIGNATURES)
 
+Bulk-ingest a JSON array of time-series association OpenAPI rows into the store's
+`time_series_associations` table in one all-or-nothing transaction. Passthrough to
+`InfraStore.import_time_series_associations_openapi!`; returns the number of rows inserted.
+
+Rows only: the document carries locators, never values, so every row must name an array the
+store already holds — and, for a `NonSequentialTimeSeries`, a stored time axis. Each row keeps
+the `association_id` the document recorded, which is the point: an import that assigned fresh
+ids would leave every reference the document holds pointing at the wrong series.
+
+This is the write half of the arrays-plus-document bundle, whose store comes from
+`deserialize_arrays`.
+"""
+import_time_series_association_rows!(store::Store, json::AbstractString) =
+    InfraStore.import_time_series_associations_openapi!(store.inner, json)
+
+import_time_series_association_rows!(data::SystemData, json::AbstractString) =
+    import_time_series_association_rows!(get_data_store(data), json)
+
+"""
+$(TYPEDSIGNATURES)
+
 Bulk-ingest a JSON array of supplemental-attribute association OpenAPI rows into the store's
 `supplemental_attribute_associations` table in one all-or-nothing transaction. Passthrough to
 `InfraStore.import_supplemental_attribute_associations_openapi!`; returns the number of rows
