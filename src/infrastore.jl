@@ -304,6 +304,8 @@ function serialize_single!(
     # `get_array` returns the raw `Array{T, N}` (no TimeArray allocation). The
     # store names the element type from the values and packs them itself.
     values = get_array(sts)
+    # The units metadata rides on the series: the store reads it off the struct,
+    # not off the add call.
     tss_ts = InfraStore.SingleTimeSeries(
         get_initial_timestamp(sts),
         get_resolution(sts),

@@ -361,8 +361,13 @@ TimeSeriesData end` must become `<: TimeSeriesData{Float64}`.
 
 One primitive: `time_series_transaction(data) do txn ... end`. The yielded
 `TimeSeriesContext` is the block's API surface: call `add_time_series!(txn, owner, ts)` on it
-and the adds are buffered and written as one bulk call — that batching is what buys
-block-sized array writes and feature-set dedup, which a transaction does not provide. The
+and the adds are buffered and written as one bulk call. That client-side batching is
+what buys feature-set dedup across the block; it also buys block-sized array writes, though
+InfraStore ≥ the `feat/txn-buffered-adds` line coalesces adds inside an open transaction
+into batch-sized blocks on its own, so the `AddBatch` is no longer the only thing standing
+between a run of adds and one-column datasets. Keep it anyway: measured at 100k series,
+store-level single adds inside a transaction cost 3.7× the ingest time of the same adds
+staged and committed as bulk, for the same resulting file. The
 block is also an InfraStore transaction: if it throws, everything it did is rolled back,
 **including removals**, which are irreversible outside one (the store frees an array once
 its last reference goes; inside a transaction that free is deferred to the commit).
