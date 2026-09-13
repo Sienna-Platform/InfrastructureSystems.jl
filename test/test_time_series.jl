@@ -2778,6 +2778,15 @@ end
     @test_throws ArgumentError IS.add_time_series!(sys, component3, ts)
 end
 
+# Yields `item` once; the first `iterate` call spends it, as a stream would.
+mutable struct _SinglePass
+    item::Any
+    done::Bool
+end
+Base.IteratorSize(::Type{_SinglePass}) = Base.SizeUnknown()
+Base.iterate(it::_SinglePass, _ = nothing) =
+    it.done ? nothing : (it.done = true; (it.item, nothing))
+
 @testset "Test add_time_series multiple components" begin
     sys = IS.SystemData()
     components = []
@@ -2808,6 +2817,14 @@ end
         @test IS.get_time_series_key(row) == key
         @test IS.get_owner_id(row) == IS.get_id(components[i])
     end
+
+    # An iterator that advances on every `iterate` call loses no component, and an
+    # empty collection is named.
+    once = IS.TestComponent("once", 9)
+    IS.add_component!(sys, once)
+    @test length(IS.add_time_series!(sys, _SinglePass(once, false), ts)) == 1
+    @test IS.has_time_series(once, IS.SingleTimeSeries, name)
+    @test_throws ArgumentError IS.add_time_series!(sys, IS.TestComponent[], ts)
 
     hash_ta_main = nothing
     for i in 1:len
@@ -7532,8 +7549,7 @@ end
         pw_key = IS.add_time_series!(store, 1, "ThermalStandard", category, pw)
         @test pw_key isa IS.TimeSeriesKey{IS.SingleTimeSeries{IS.LinearFunctionData}}
         # The key the add hands back is the key the catalog resolves that id to,
-        # element type included — what a caller reading the key back off the store
-        # used to get, and what a wire-format curve naming this association needs.
+        # element type included.
         @test IS.get_time_series_key(store, Int(IS.get_association_id(pw_key))) == pw_key
 
         # An irregular series goes through the same call.
@@ -7613,7 +7629,6 @@ end
         @test IS.has_time_series(component, IS.SingleTimeSeries, "rolled")
         error("boom")
     end
-    @test !isnothing(key)
     @test isempty(IS.list_time_series_metadata(component))
     @test_throws ArgumentError IS.get_time_series(component, key)
 end

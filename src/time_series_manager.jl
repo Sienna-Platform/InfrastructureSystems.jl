@@ -108,17 +108,10 @@ Open a block of time series work and run `func` on it, inside a store transactio
 This is how many series are added: call `add_time_series!` on the yielded
 [`TimeSeriesContext`](@ref) once per series and let the block do the batching.
 
-Each addition goes straight to the store and returns its
-[`TimeSeriesKey`](@ref) — there is no buffer on this side. The batching is the
-store's: inside an open transaction it accumulates the packed arrays into a
-pending block per pool and writes each block whole at the outermost commit, so a
-run of adds produces the same one dataset per pool that a single bulk write would,
-while holding a bounded amount of data in memory. The block also pays one catalog
-transaction for the whole run instead of one per series. It commits when `func`
-returns.
-
-Reads inside the block see what the block has written; the store serves a pending
-array out of its own buffer.
+Each addition goes straight to the store and returns its [`TimeSeriesKey`](@ref);
+the store does the batching (see [`TimeSeriesContext`](@ref)), and the block pays
+one catalog transaction for the whole run. It commits when `func` returns. Reads
+inside the block see what the block has written.
 
 If `func` throws, the transaction is rolled back and the whole block is undone,
 **including removals**. A removal is recoverable only in here; outside a block the
@@ -220,21 +213,18 @@ function add_time_series!(
     time_series::TimeSeriesData;
     features::Union{Nothing, Dict} = nothing,
 )
-    peeled = Iterators.peel(components)
-    isnothing(peeled) && throw(
+    # One pass, then the emptiness check: `components` may be a single-pass
+    # iterator, which a check up front would consume.
+    keys = [
+        add_time_series!(context, c, time_series; features = features)
+        for c in components
+    ]
+    isempty(keys) && throw(
         ArgumentError(
             "`components` is empty; there is nothing to associate " *
             "$(summary(time_series)) with",
         ),
     )
-    first_component, rest = peeled
-    first_key = add_time_series!(context, first_component, time_series;
-        features = features)
-    keys = [first_key]
-    for component in rest
-        push!(keys, add_time_series!(context, component, time_series;
-            features = features))
-    end
     return keys
 end
 

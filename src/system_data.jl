@@ -120,22 +120,9 @@ function get_next_id!(data::SystemData)
 end
 
 """
-Open a block of time series work and run `func` on it, inside a store transaction.
-This is how many series are added: call `add_time_series!` on the yielded
-[`TimeSeriesContext`](@ref) once per series and let the block do the batching.
-
-Each addition goes straight to the store and returns its
-[`TimeSeriesKey`](@ref) — there is no buffer on this side. The batching is the
-store's: inside an open transaction it accumulates the packed arrays into a
-pending block per pool and writes each block whole at the outermost commit, so a
-run of adds produces the same one dataset per pool that a single bulk write would,
-while holding a bounded amount of data in memory. The block commits when `func`
-returns; if it throws, everything the block did is rolled back — **including
-removals**, which are recoverable only in here.
-
-Reads inside the block see what the block has written. Blocks nest
-innermost-first, and an open block holds the store's write lock, so gather the
-data before opening one.
+Open a block of time series work on `data` and run `func` on it, inside a store
+transaction. Behaves as the `TimeSeriesManager` method does, and additionally
+validates each add's owner against `data`.
 
 ```julia
 time_series_transaction(data) do txn

@@ -21,9 +21,8 @@ transaction: the store defers freeing an array until the outermost commit, so th
 bytes are still there if the catalog rewinds.
 
 Reads inside a block see what the block has written — the store serves a pending
-array out of its buffer — and there is no staged metadata overlay to reconcile,
-because IS keeps no in-memory association index. The store is the single source of
-truth.
+array out of its buffer. IS keeps no in-memory association index; the store is the
+single source of truth.
 
 The context is the block's API surface: `add_time_series!` dispatches on it as the
 first argument, the Julia shape of calling methods on the yielded transaction
@@ -120,7 +119,6 @@ exception is already propagating, and the error that caused the unwind is the on
 the caller needs to see.
 """
 function discard!(context::TimeSeriesContext)
-    empty!(context.params_cache)
     context.closed = true
     context.transactional || return
     try

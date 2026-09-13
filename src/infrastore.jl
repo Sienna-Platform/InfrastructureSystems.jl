@@ -272,7 +272,7 @@ function add_time_series!(
     # This store has no transaction around it to flush at a commit, so the write is
     # made durable here.
     flush!(store)
-    return build_key(StagedKey{_key_type(ts)}(), only(added))
+    return TimeSeriesKey{_key_type(ts)}(only(added))
 end
 
 # A forecast carries window parameters that only a manager validates against the
@@ -566,27 +566,12 @@ new_params_cache() =
 Route an `add_time_series!` to the InfraStore store and return the
 [`TimeSeriesKey`](@ref) of the row it wrote.
 
-Every add is one call: the store is what batches. Inside an open transaction its
-HDF5 backend accumulates the packed arrays into a pending block per pool and
-writes the block whole at the outermost commit, so a run of adds through a
-[`TimeSeriesContext`](@ref) produces the same one dataset per pool that a bulk
-add does. This is why IS keeps no add buffer of its own; see
-[`time_series_transaction`](@ref).
+Every add is one call; the store is what batches — see [`TimeSeriesContext`](@ref),
+whose fields `params_cache` and `batch` are. A lone add gets its own of each.
 
 Nothing is flushed here. Outside a transaction the arrays are already written and
 the catalog already committed; inside one, flushing is what would spill the
 store's pending block a column at a time, and the outermost commit flushes anyway.
-
-`params_cache` carries the forecast window parameters per `(resolution, interval)`
-group so a run of forecast adds pays one catalog query per group rather than one
-per add. A lone add gets a cache of its own.
-
-`batch` is scratch: the one-item buffer this add marshals through on its way to
-the store. `add_time_series_bulk!` drains it and leaves it reusable, so a caller
-making many adds passes the same one every time rather than allocating an FFI
-handle — and registering a finalizer — per add. A lone add gets one of its own.
-
-Data identity is the array content hash.
 """
 function infrastore_add_time_series!(
     mgr::TimeSeriesManager,
@@ -596,7 +581,7 @@ function infrastore_add_time_series!(
     batch::InfraStore.AddBatch = InfraStore.AddBatch();
     features::Union{Nothing, Dict} = nothing,
 )
-    staged = _infrastore_stage!(
+    _infrastore_stage!(
         batch,
         mgr,
         params_cache,
@@ -615,7 +600,7 @@ function infrastore_add_time_series!(
     end
     # The row is written by the time we get here, so the key is built around the id
     # the catalog actually filed it under.
-    return build_key(staged, only(added))
+    return TimeSeriesKey{_key_type(time_series)}(only(added))
 end
 
 # The store's duplicate-association rejection, which the add paths rely on
@@ -1009,9 +994,7 @@ end
 
 """
 Stage one `(owner, time_series)` association onto `batch`, applying the validation
-common to every add, and return its [`StagedKey`](@ref). The association has no id
-to build a `TimeSeriesKey` around until the batch is committed — see
-[`build_key`](@ref). `params_cache` carries the forecast window parameters per
+common to every add. `params_cache` carries the forecast window parameters per
 `(resolution, interval)` group so forecasts are checked for compatibility against
 both the store and each other with one catalog query per group.
 """
@@ -1055,7 +1038,7 @@ function _infrastore_stage_data!(
     feats = _infrastore_features(features)
     serialize_single!(batch, owner_id, owner_type, category, name,
         time_series; features = feats)
-    return StagedKey{_key_type(time_series)}()
+    return
 end
 
 function _infrastore_stage_data!(
@@ -1071,7 +1054,7 @@ function _infrastore_stage_data!(
     feats = _infrastore_features(features)
     serialize_non_sequential!(batch, owner_id, owner_type, category, name,
         time_series; features = feats)
-    return StagedKey{_key_type(time_series)}()
+    return
 end
 
 # Validate a forecast's window parameters against its `(resolution, interval)`
@@ -1098,10 +1081,8 @@ function _infrastore_check_staged_forecast!(
 end
 
 # The three dense-forecast stagers differ only in how they build the InfraStore
-# forecast object; the validation, owner marshalling, add, and returned
-# `StagedKey` around it are shared. `build(initial, resolution, horizon, interval,
-# name)` returns that object together with its window count, which is the one
-# field the callers disagree on.
+# forecast object, which `build(initial, resolution, horizon, interval, name)`
+# returns; the validation, owner marshalling, and add around it are shared.
 function _infrastore_stage_forecast!(
     build,
     batch::InfraStore.AddBatch,
@@ -1119,10 +1100,10 @@ function _infrastore_stage_forecast!(
     interval = get_interval(ts)
     horizon = get_horizon(ts)
     feats = _infrastore_features(features)
-    obj, _ = build(initial, resolution, horizon, interval, name)
+    obj = build(initial, resolution, horizon, interval, name)
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
         features = feats)
-    return StagedKey{_key_type(ts)}()
+    return
 end
 
 function _infrastore_stage_data!(
@@ -1142,7 +1123,7 @@ function _infrastore_stage_data!(
             units = get_units(ts),
             quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
-        return (prob, get_count(ts))
+        return prob
     end
 end
 
@@ -1167,7 +1148,7 @@ function _infrastore_stage_data!(
             units = get_units(ts),
             quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
-        return (det, length(windows))
+        return det
     end
 end
 
@@ -1186,7 +1167,7 @@ function _infrastore_stage_data!(
             get_count(ts), _dense_forecast_array(ts, get_scenario_count(ts)), name;
             units = get_units(ts), quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
-        return (scen, get_count(ts))
+        return scen
     end
 end
 
