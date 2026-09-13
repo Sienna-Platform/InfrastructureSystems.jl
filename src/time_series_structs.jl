@@ -344,7 +344,7 @@ end
 
 """
 The time series type of an addition staged onto a batch, held for the span between
-staging and the store writing it.
+the add call and the store writing it.
 
 The catalog mints the id on insert, so a staged addition does not have one yet, and a
 key is immutable. Staging therefore produces this — the one thing a key needs besides

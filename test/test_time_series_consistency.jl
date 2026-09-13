@@ -87,36 +87,30 @@ end
     @test_throws ArgumentError IS.get_time_series(IS.Forecast, component, "fx")
 end
 
-@testset "Test transaction reads require an explicit flush" begin
+@testset "Test a transaction reads its own writes" begin
     sys, component = _sys_with_component()
     IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, _hourly_sts("v"))
-        @test IS.has_staged_data(txn)
-        @test !IS.has_time_series(component, IS.SingleTimeSeries, "v")
-        @test isempty(IS.list_time_series_metadata(component))
-        IS.flush!(txn)
-        @test !IS.has_staged_data(txn)
+        # No flush: the add wrote the row, and the store serves the array out of
+        # the block's own pending buffer.
         @test IS.has_time_series(component, IS.SingleTimeSeries, "v")
         @test length(IS.list_time_series_metadata(component)) == 1
         @test IS.get_time_series_values(IS.SingleTimeSeries, component, "v") ==
               collect(1.0:24)
-        # Adds keep working after an explicit flush, and the block stays one transaction.
         IS.add_time_series!(txn, component, _hourly_sts("w"))
     end
     @test IS.has_time_series(component, IS.SingleTimeSeries, "w")
 
-    # A removal inside the block of a series staged earlier in it removes it.
+    # A removal inside the block of a series added earlier in it removes it.
     IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, _hourly_sts("x"))
-        IS.flush!(txn)
         IS.remove_time_series!(sys, IS.SingleTimeSeries, component, "x")
     end
     @test !IS.has_time_series(component, IS.SingleTimeSeries, "x")
 
-    # A transform inside the block covers the staged series.
+    # A transform inside the block covers a series added in it.
     IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, _hourly_sts("y"))
-        IS.flush!(txn)
         IS.transform_single_time_series!(
             sys,
             IS.DeterministicSingleTimeSeries,
@@ -126,10 +120,9 @@ end
     end
     @test IS.has_time_series(component, IS.DeterministicSingleTimeSeries, "y")
 
-    # Everything flushed inside a failing block still rolls back.
+    # Everything written inside a failing block still rolls back.
     @test_throws ErrorException IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, _hourly_sts("z"))
-        IS.flush!(txn)
         @test IS.has_time_series(component, IS.SingleTimeSeries, "z")
         error("boom")
     end

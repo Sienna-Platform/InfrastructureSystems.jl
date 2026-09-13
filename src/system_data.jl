@@ -120,29 +120,22 @@ function get_next_id!(data::SystemData)
 end
 
 """
-Open a batch of time series work and run `func` on it, inside a store transaction.
+Open a block of time series work and run `func` on it, inside a store transaction.
+This is how many series are added: call `add_time_series!` on the yielded
+[`TimeSeriesContext`](@ref) once per series and let the block do the batching.
 
-Additions made through the yielded [`TimeSeriesContext`](@ref) are buffered and
-written as one bulk call. The block commits when `func` returns; if it throws,
-everything the block did is rolled back — **including removals**, which are
-recoverable only in here.
+Each addition goes straight to the store and returns its
+[`TimeSeriesKey`](@ref) — there is no buffer on this side. The batching is the
+store's: inside an open transaction it accumulates the packed arrays into a
+pending block per pool and writes each block whole at the outermost commit, so a
+run of adds produces the same one dataset per pool that a single bulk write would,
+while holding a bounded amount of data in memory. The block commits when `func`
+returns; if it throws, everything the block did is rolled back — **including
+removals**, which are recoverable only in here.
 
-Buffered additions are not visible to reads through the system until the block
-commits. Call `flush!(txn)` first when a read inside the block must see additions
-staged through `txn`; doing so creates a batching boundary but keeps the writes
-inside the transaction.
-
-Blocks nest innermost-first.
-
-A batch that grows past `auto_flush_threshold` staged additions or
-`auto_flush_bytes` of staged array data — whichever comes first — is written out
-mid-block, so an arbitrarily large block holds a bounded amount of data in memory.
-Flushed work stays inside the transaction and rolls back with it.
-
-`add_time_series!` through the yielded context returns `nothing`: an addition has no
-key until the store writes it and mints its association id. Pass `collect_keys = true`
-to keep one key per written addition, and read them with [`added_keys`](@ref) after
-the block — or call `flush!(txn)` first to see the ones staged so far.
+Reads inside the block see what the block has written. Blocks nest
+innermost-first, and an open block holds the store's write lock, so gather the
+data before opening one.
 
 ```julia
 time_series_transaction(data) do txn
@@ -152,14 +145,13 @@ time_series_transaction(data) do txn
 end
 ```
 """
-function time_series_transaction(func::Function, data::SystemData; kwargs...)
+function time_series_transaction(func::Function, data::SystemData)
     # The transaction carries the system-level owner check, so adds made through it
     # validate exactly as adds made through `data` itself.
     return _time_series_transaction(
         func,
         data.time_series_manager,
-        owner -> _validate(data, owner);
-        kwargs...,
+        owner -> _validate(data, owner),
     )
 end
 
@@ -211,12 +203,10 @@ function add_time_series!(
     time_series::TimeSeriesData;
     features::Union{Nothing, Dict} = nothing,
 )
-    # A block opened for just this call, so the components land as one batch,
-    # atomically. The transaction's dispatch stores the array once and validates
-    # each component against `data`. The keys come from the context rather than the
-    # block's return value: they exist only once the block has committed, which is
-    # after the block itself has run.
-    return _transaction_added_keys(
+    # A block opened for just this call, so the components land atomically and the
+    # store writes their one shared array as a block. The transaction's dispatch
+    # stores the array once and validates each component against `data`.
+    return _time_series_transaction(
         data.time_series_manager,
         owner -> _validate(data, owner),
     ) do txn

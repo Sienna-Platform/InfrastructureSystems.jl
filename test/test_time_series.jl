@@ -2439,12 +2439,9 @@ end
     data = Dict(initial_time => rand(horizon_count), other_time => rand(horizon_count))
     forecast = IS.Deterministic("fx", data, resolution)
 
-    # A staged addition has no key until the store writes it and mints the id, so the
-    # block flushes and reads the keys back off the transaction.
-    key = IS.time_series_transaction(sys; collect_keys = true) do txn
+    # The add writes the row and hands back the key the store filed it under.
+    key = IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, forecast)
-        IS.flush!(txn)
-        return only(IS.added_keys(txn))
     end
 
     # The owner is a column of the catalog row; the key is the id that finds it.
@@ -2559,10 +2556,8 @@ end
     resolution = Dates.Hour(1)
     other_time = initial_time + resolution
     data = Dict(initial_time => collect(1.0:24.0), other_time => collect(25.0:48.0))
-    key = IS.time_series_transaction(sys; collect_keys = true) do txn
+    key = IS.time_series_transaction(sys) do txn
         IS.add_time_series!(txn, component, IS.Deterministic("fx", data, resolution))
-        IS.flush!(txn)
-        return only(IS.added_keys(txn))
     end
 
     # A key is its association id and the stored type; nothing else is carried,
@@ -7504,71 +7499,70 @@ end
     @test names == Set(["dup", "after"])
 end
 
-@testset "Test time series auto flush" begin
-    sys = IS.SystemData()
-    component = IS.TestComponent("Component1", 5)
-    IS.add_component!(sys, component)
-    initial_time = Dates.DateTime("2020-09-01")
-    resolution = Dates.Hour(1)
-    make_ts(name) = IS.SingleTimeSeries(;
-        data = TimeSeries.TimeArray(
-            range(initial_time; length = 8, step = resolution), collect(1.0:8.0),
-        ),
-        name = name,
-    )
+@testset "Test adding to a bare store by owner id" begin
+    # The store-writing seam: no SystemData, no component — the owner is an id and a
+    # type name, as an importer staging a document's sidecar has.
+    store = IS.Store(; in_memory = true)
+    try
+        category = IS.get_owner_category(IS.InfrastructureSystemsComponent)
+        timestamps = range(Dates.DateTime(2024, 1, 1); length = 3, step = Dates.Hour(1))
+        sts = IS.SingleTimeSeries(;
+            name = "max_active_power",
+            data = TimeSeries.TimeArray(timestamps, [0.5, 0.6, 0.7]),
+        )
+        key = IS.add_time_series!(store, 7, "PowerLoad", category, sts)
+        @test key isa IS.TimeSeriesKey{IS.SingleTimeSeries{Float64}}
 
-    # A batch past the threshold drains mid-block instead of accumulating in memory.
-    IS.time_series_transaction(sys; auto_flush_threshold = 3) do txn
-        for i in 1:7
-            IS.add_time_series!(txn, component, make_ts("ts_$i"))
-        end
-        # Auto-flushes at 3 and 6 drained all but the seventh entry.
-        @test IS.has_staged_data(txn)
+        row = only(IS.list_time_series_metadata(store))
+        @test IS.get_association_id(row) == IS.get_association_id(key)
+        @test IS.get_owner_id(row) == 7
+        @test IS.get_name(row) == "max_active_power"
+        @test IS.get_time_series_key(row) == key
+
+        # A composite element type survives the same path; the key types on it, which
+        # is what a wire-format curve naming this association depends on.
+        pw = IS.SingleTimeSeries(;
+            name = "heat_rate",
+            data = TimeSeries.TimeArray(
+                timestamps,
+                [IS.LinearFunctionData(8.0, 0.0), IS.LinearFunctionData(8.5, 0.0),
+                    IS.LinearFunctionData(9.0, 0.0)],
+            ),
+        )
+        pw_key = IS.add_time_series!(store, 1, "ThermalStandard", category, pw)
+        @test pw_key isa IS.TimeSeriesKey{IS.SingleTimeSeries{IS.LinearFunctionData}}
+        # The key the add hands back is the key the catalog resolves that id to,
+        # element type included — what a caller reading the key back off the store
+        # used to get, and what a wire-format curve naming this association needs.
+        @test IS.get_time_series_key(store, Int(IS.get_association_id(pw_key))) == pw_key
+
+        # An irregular series goes through the same call.
+        nts = IS.NonSequentialTimeSeries(;
+            name = "irregular",
+            data = TimeSeries.TimeArray(
+                [Dates.DateTime(2024, 1, 1), Dates.DateTime(2024, 1, 1, 3)], [1.0, 2.0],
+            ),
+        )
+        nts_key = IS.add_time_series!(store, 7, "PowerLoad", category, nts)
+        @test nts_key isa IS.TimeSeriesKey{IS.NonSequentialTimeSeries{Float64}}
+        @test length(IS.list_time_series_metadata(store)) == 3
+
+        # A forecast is named, not a MethodError: its window parameters need a manager
+        # to validate against the rest of the store.
+        forecast = IS.Deterministic(
+            "fx",
+            Dict(Dates.DateTime(2024, 1, 1) => collect(1.0:3.0)),
+            Dates.Hour(1),
+        )
+        @test_throws ArgumentError IS.add_time_series!(
+            store, 7, "PowerLoad", category, forecast,
+        )
+    finally
+        IS.close!(store)
     end
-    @test length(IS.list_time_series_metadata(component)) == 7
-
-    # The byte limit flushes long series well before the count limit would.
-    # Staged-byte accounting counts the encoded array (for a Float64 series,
-    # exactly its raw values), not the wrapper objects.
-    series_bytes = sizeof(TimeSeries.values(IS.get_data(make_ts("probe"))))
-    IS.time_series_transaction(sys; auto_flush_bytes = 3 * series_bytes) do txn
-        for i in 1:7
-            IS.add_time_series!(txn, component, make_ts("bytes_$i"))
-        end
-        # Byte-triggered flushes at 3 and 6 drained all but the seventh entry.
-        @test IS.has_staged_data(txn)
-    end
-    @test length(IS.list_time_series_metadata(component)) == 14
-
-    # Auto-flushed work still rolls back with the block.
-    @test_throws ErrorException IS.time_series_transaction(
-        sys; auto_flush_threshold = 2,
-    ) do txn
-        for i in 1:5
-            IS.add_time_series!(txn, component, make_ts("rolled_$i"))
-        end
-        error("boom")
-    end
-    names = Set(IS.get_name(k) for k in IS.list_time_series_metadata(component))
-    @test names == union(Set("ts_$i" for i in 1:7), Set("bytes_$i" for i in 1:7))
-
-    # A composite element type stages as a `length x element_row_width` matrix of
-    # Float64 while Julia holds one pointer per value, so `sizeof` under-counts it
-    # by the row width — unbounded for ragged piecewise data.
-    scalars = collect(1.0:8.0)
-    @test IS._staged_nbytes(scalars) == sizeof(scalars)
-    pw = [
-        IS.PiecewiseLinearData([(x = 1.0, y = j), (x = 2.0, y = 2j), (x = 3.0, y = 3j)])
-        for j in 1.0:4.0
-    ]
-    # 3 points => 1 count slot + 2 slots per point.
-    @test IS._staged_nbytes(pw) == length(pw) * 7 * sizeof(Float64)
-    @test IS._staged_nbytes(pw) > sizeof(pw)
-    # A forecast stages an `(horizon, count)` matrix; the width applies just the same.
-    @test IS._staged_nbytes(reduce(hcat, [pw, pw])) == 2 * length(pw) * 7 * sizeof(Float64)
 end
 
-@testset "Test staged additions take their ids from the store" begin
+@testset "Test additions take their ids from the store" begin
     sys = IS.SystemData()
     component = IS.TestComponent("Component1", 5)
     IS.add_component!(sys, component)
@@ -7581,49 +7575,26 @@ end
         name = name,
     )
 
-    # A staged addition has no id until the store writes it, so there is no key to
-    # hand back at stage time.
-    IS.time_series_transaction(sys) do txn
-        @test isnothing(IS.add_time_series!(txn, component, make_ts("staged")))
-    end
-
-    # Without `collect_keys` the context keeps none, so a bulk ingest does not retain
-    # a key per series.
-    IS.time_series_transaction(sys) do txn
-        IS.add_time_series!(txn, component, make_ts("uncollected"))
-        IS.flush!(txn)
-        @test isempty(IS.added_keys(txn))
-    end
-
-    # With it, the keys appear as the block flushes -- including the auto-flushes -- and
-    # carry the ids the catalog actually filed the rows under.
-    keys = IS.time_series_transaction(
-        sys;
-        collect_keys = true,
-        auto_flush_threshold = 2,
-    ) do txn
-        for i in 1:5
-            IS.add_time_series!(txn, component, make_ts("collected_$i"))
-        end
-        # Auto-flushes at 2 and 4 have resolved four of the five.
-        @test length(IS.added_keys(txn)) == 4
-        IS.flush!(txn)
-        return copy(IS.added_keys(txn))
+    # An add through a transaction writes the row on the spot, so it hands back the
+    # key just as a direct add does — there is nothing buffered to defer it.
+    keys = IS.time_series_transaction(sys) do txn
+        return [IS.add_time_series!(txn, component, make_ts("added_$i")) for i in 1:5]
     end
     @test length(keys) == 5
+    @test all(k -> k isa IS.TimeSeriesKey{<:IS.SingleTimeSeries}, keys)
 
     # A key is its id; the names are on the rows those ids resolve to.
     stored = Dict(
         IS.get_association_id(md) => md for md in IS.list_time_series_metadata(component)
     )
     @test [IS.get_name(stored[IS.get_association_id(k)]) for k in keys] ==
-          ["collected_$i" for i in 1:5]
+          ["added_$i" for i in 1:5]
     for key in keys
         @test IS.get_time_series_key(stored[IS.get_association_id(key)]) == key
     end
 end
 
-@testset "Test a rolled-back block leaves no keys behind" begin
+@testset "Test a rolled-back block unwrites the rows its keys named" begin
     sys = IS.SystemData()
     component = IS.TestComponent("Component1", 5)
     IS.add_component!(sys, component)
@@ -7635,19 +7606,16 @@ end
         name = "rolled",
     )
 
-    context = nothing
-    @test_throws ErrorException IS.time_series_transaction(
-        sys; collect_keys = true, auto_flush_threshold = 1,
-    ) do txn
-        context = txn
-        IS.add_time_series!(txn, component, ts)
-        # The auto-flush has already minted an id and built its key.
-        @test length(IS.added_keys(txn)) == 1
+    key = nothing
+    @test_throws ErrorException IS.time_series_transaction(sys) do txn
+        key = IS.add_time_series!(txn, component, ts)
+        # The row is written and its id minted; the rollback below unwrites both.
+        @test IS.has_time_series(component, IS.SingleTimeSeries, "rolled")
         error("boom")
     end
-    # The rollback unwrote the row, so the key naming it is dropped with it.
-    @test isempty(IS.added_keys(context))
+    @test !isnothing(key)
     @test isempty(IS.list_time_series_metadata(component))
+    @test_throws ArgumentError IS.get_time_series(component, key)
 end
 
 @testset "Test time series context nesting and reuse" begin
