@@ -1,14 +1,12 @@
 # OpenAPI serde for the supplemental attributes InfrastructureSystems itself owns.
 #
 # `GeographicInfo` and `DataSource` are IS types, so their field mapping belongs here rather
-# than in a domain package: PowerSystems previously carried the `GeographicInfo` pair only
-# because it happened to own the document walk, which meant a second domain package wanting
-# the same attribute would have had to duplicate it.
+# than in a domain package: a second domain package wanting the same attribute does not have
+# to duplicate it.
 #
-# These take no `OpenAPIRefs`. That registry lives in the domain package because it carries
-# the document's `unit_system` and `base_power` — power-domain state IS has no notion of —
-# so the export direction takes the id its caller already resolved. Neither type has a
-# unit-bearing field, so there is nothing else the domain layer would need to supply.
+# These take no `OpenAPIRefs`: that registry carries power-domain state (`unit_system`,
+# `base_power`) IS has no notion of, so the export direction takes the id its caller already
+# resolved.
 
 """
 Convert an OpenAPI-model instance into the matching Sienna type.
@@ -29,33 +27,43 @@ function to_openapi end
 # ── GeographicInfo ──────────────────────────────────────────────────────────────
 
 from_openapi(po::InfrastructureCoreOpenAPIModels.GeographicInfo) =
-    GeographicInfo(; geo_json = po.geo_json)
+    GeographicInfo(; geo_json = po.geo_json.additional_properties)
 
 to_openapi(geo::GeographicInfo, id::Int) =
-    InfrastructureCoreOpenAPIModels.GeographicInfo(; id = id, geo_json = get_geo_json(geo))
+    InfrastructureCoreOpenAPIModels.GeographicInfo(;
+        id = id,
+        geo_json = InfrastructureCoreOpenAPIModels.GeographicInfoGeoJson(;
+            additional_properties = get_geo_json(geo),
+        ),
+    )
 
 # ── DataSource ──────────────────────────────────────────────────────────────────
 #
-# The document states both timestamps as `ZonedDateTime` while `DataSource` stores plain
-# `DateTime`, so import drops the offset after normalizing to UTC and export re-attaches
-# UTC. Normalizing rather than discarding the zone matters: two documents recording the same
-# instant in different zones must import to the same `DateTime`, which `DateTime(zdt)` alone
-# would not give.
+# Both timestamps are plain `Dates.DateTime` on both sides (IS treats them as UTC wall
+# clocks; the document carries no offset), so `retrieved_at`/`published_at` pass straight
+# through with no zone conversion.
 #
 # `extra` widens `Dict{String, String}` to the `Dict{String, Any}` the field declares; on the
 # way out, values are stringified, since the schema types that map as strings.
 
-_datasource_utc(zdt) = Dates.DateTime(TimeZones.astimezone(zdt, TimeZones.tz"UTC"))
-_datasource_utc(::Nothing) = nothing
+# `organization`/`dataset`/`url`/`version`/`confidence` are optional in the document
+# (unset decodes to `ABSENT`) but IS's own `DataSource` declares them as plain, defaulted
+# `String` fields, so both "unset" spellings normalize to `""`.
+_datasource_required_string(s::AbstractString) = s
+_datasource_required_string(::Nothing) = ""
+_datasource_required_string(::OpenAPI.Runtime.Absent) = ""
 
-_datasource_zoned(dt::Dates.DateTime) = TimeZones.ZonedDateTime(dt, TimeZones.tz"UTC")
+# `recorded_by`/`published_at` are nullable on both sides; only the document's extra
+# "unset" spelling needs folding into the one IS already accepts.
+_datasource_nullable(x) = x
+_datasource_nullable(::OpenAPI.Runtime.Absent) = nothing
 
 # `published_at`/`recorded_by` are absence-by-predicate, not absence-by-`nothing`: their
 # accessors error rather than return a sentinel, so the export path asks first. An absent
 # field is written as `null`, which the schema marks optional.
 function _datasource_published_at(ds::DataSource)
     has_published_at(ds) || return nothing
-    return _datasource_zoned(get_published_at(ds))
+    return get_published_at(ds)
 end
 
 function _datasource_recorded_by(ds::DataSource)
@@ -67,18 +75,20 @@ _datasource_fields(::Nothing) = String[]
 _datasource_fields(v) = collect(String, v)
 
 _datasource_extra(::Nothing) = Dict{String, Any}()
-_datasource_extra(d) = Dict{String, Any}(k => v for (k, v) in d)
+_datasource_extra(::OpenAPI.Runtime.Absent) = Dict{String, Any}()
+_datasource_extra(d::InfrastructureCoreOpenAPIModels.DataSourceExtra) =
+    Dict{String, Any}(k => v for (k, v) in d.additional_properties)
 
 function from_openapi(po::InfrastructureCoreOpenAPIModels.DataSource)
     return DataSource(;
-        organization = po.organization,
-        retrieved_at = _datasource_utc(po.retrieved_at),
-        dataset = po.dataset,
-        url = po.url,
-        version = po.version,
-        published_at = _datasource_utc(po.published_at),
-        confidence = po.confidence,
-        recorded_by = po.recorded_by,
+        organization = _datasource_required_string(po.organization),
+        retrieved_at = po.retrieved_at,
+        dataset = _datasource_required_string(po.dataset),
+        url = _datasource_required_string(po.url),
+        version = _datasource_required_string(po.version),
+        published_at = _datasource_nullable(po.published_at),
+        confidence = _datasource_required_string(po.confidence),
+        recorded_by = _datasource_nullable(po.recorded_by),
         fields = _datasource_fields(po.fields),
         extra = _datasource_extra(po.extra),
     )
@@ -88,7 +98,7 @@ function to_openapi(ds::DataSource, id::Int)
     return InfrastructureCoreOpenAPIModels.DataSource(;
         id = id,
         organization = get_organization(ds),
-        retrieved_at = _datasource_zoned(get_retrieved_at(ds)),
+        retrieved_at = get_retrieved_at(ds),
         dataset = get_dataset(ds),
         url = get_url(ds),
         version = get_version(ds),
@@ -96,6 +106,10 @@ function to_openapi(ds::DataSource, id::Int)
         confidence = get_confidence(ds),
         recorded_by = _datasource_recorded_by(ds),
         fields = get_fields(ds),
-        extra = Dict{String, String}(k => string(v) for (k, v) in get_extra(ds)),
+        extra = InfrastructureCoreOpenAPIModels.DataSourceExtra(;
+            additional_properties = Dict{String, String}(
+                k => string(v) for (k, v) in get_extra(ds)
+            ),
+        ),
     )
 end

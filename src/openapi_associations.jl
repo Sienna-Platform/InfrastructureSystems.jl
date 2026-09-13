@@ -5,24 +5,12 @@
 """
 $(TYPEDSIGNATURES)
 
-A [`TimeSeriesMetadata`](@ref) row for every time series in a store matching the
-(all-optional, independent) filters — the same filter keywords as
-`InfraStore.list_metadata`: `owner_id`, `owner_category`, `time_series_type`, `name`,
-`name_glob`, `resolution`, `interval`, `features`, `component_field`, `zoneless` — in one
-catalog query.
+A [`TimeSeriesMetadata`](@ref) row for every time series in a store matching the given
+(all-optional, independent) filters — the same keywords as `InfraStore.list_metadata`.
 
-Takes the store directly as well as a `SystemData`, because a writer that stages series into
-a scratch store — a parser building a document, say — needs the same rows before any
-`SystemData` exists. A row carries every column the catalog holds, `data_hash` and the
-store's own `element_type` spelling included, so such a writer works from it alone.
-
-Both vocabularies are IS's on the way in as well as out. `time_series_type` is an **IS**
-type — the same spelling
-[`list_time_series_metadata`](@ref list_time_series_metadata(::TimeSeriesOwners)) on an
-owner takes, and abstract families (`Forecast`, `StaticTimeSeries`) resolve here exactly as
-they do there. And the rows come back translated: a raw store row names *InfraStore's*
-`SingleTimeSeries`, and IS exports its own, so an untranslated row would fail every
-`<: SingleTimeSeries` test a caller writes.
+Also callable on a `Store` directly, for a writer staging series before any `SystemData`
+exists. `time_series_type` and the returned rows use IS's own vocabulary, translated from
+InfraStore's.
 """
 list_time_series_metadata(store::Store; kwargs...) =
     _infrastore_list_metadata(store; kwargs...)
@@ -48,9 +36,6 @@ list_supplemental_attribute_association_rows(data::SystemData) =
 # `JSON.parse` yields `AbstractDict{String, Any}` rows, which `decode` takes as-is. A oneOf
 # wrapper picks its concrete member type from the row's own discriminator field, so no
 # dispatch is needed here.
-#
-# `decode` is the generated packages' public entry point, replacing OpenAPI.jl 0.2's
-# `OpenAPI.from_json`, which 1.x deleted along with the rest of that model runtime.
 function _openapi_rows(::Type{T}, json::AbstractString) where {T}
     return T[
         InfrastructureCoreOpenAPIModels.decode(T, row) for row in JSON.parse(json)
@@ -129,16 +114,9 @@ openapi_supplemental_attribute_association_rows(data::SystemData) =
 $(TYPEDSIGNATURES)
 
 Bulk-ingest a JSON array of time-series association OpenAPI rows into the store's
-`time_series_associations` table in one all-or-nothing transaction. Passthrough to
-`InfraStore.import_time_series_associations_openapi!`; returns the number of rows inserted.
-
-Rows only: the document carries locators, never values, so every row must name an array the
-store already holds — and, for a `NonSequentialTimeSeries`, a stored time axis. Each row keeps
-the `association_id` the document recorded, which is the point: an import that assigned fresh
-ids would leave every reference the document holds pointing at the wrong series.
-
-This is the write half of the arrays-plus-document bundle, whose store comes from
-`deserialize_arrays`.
+`time_series_associations` table in one all-or-nothing transaction; returns the number of
+rows inserted. Each row must name an array the store already holds and keeps the
+`association_id` the document recorded, so existing document references stay valid.
 """
 import_time_series_association_rows!(store::Store, json::AbstractString) =
     InfraStore.import_time_series_associations_openapi!(store.inner, json)

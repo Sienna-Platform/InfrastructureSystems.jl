@@ -116,7 +116,7 @@ end
     @test row.time_series_type == "SingleTimeSeries"
     @test row.owner_id == IS.get_id(component)
     @test row.owner_type == "TestComponent"
-    @test row.owner_category == "Component"
+    @test row.owner_category.value == "Component"
     @test row.name == "static"
     @test row.resolution == "PT1H"
     @test row.length == 6
@@ -126,12 +126,13 @@ end
     @test row.data_hash == row.uri
     @test row.units == "MW"
     @test row.quantity_kind == "ActivePower"
-    # Declared by nobody stays unset: unspecified is deliberately not NATURAL_UNITS.
-    @test isnothing(row.unit_system)
+    # Declared by nobody stays unset: unspecified is deliberately not NATURAL_UNITS. An
+    # absent optional field decodes to `ABSENT`, not `nothing` (`nothing` means an explicit
+    # JSON `null`).
+    @test row.unit_system isa OpenAPI.Runtime.Absent
     # From the catalog, never re-derived: a scalar series has an empty per-step shape.
     @test row.element_type == "f64"
     @test isempty(row.element_shape)
-    @test OpenAPI.check_required(row)
 end
 
 @testset "openapi_time_series_association_rows: NonSequentialTimeSeries declares no grid at all" begin
@@ -156,7 +157,8 @@ end
     for absent in (:initial_timestamp, :resolution, :horizon, :interval, :count)
         @test !hasfield(typeof(row), absent)
     end
-    @test OpenAPI.check_required(row)
+    # `decode` itself raises on a missing required field, so a row that exists has already
+    # passed that check.
 end
 
 @testset "openapi_time_series_association_rows: every forecast type carries its own window geometry" begin
@@ -206,10 +208,6 @@ end
     @test typeof(scen) === InfrastructureTimeSeriesOpenAPIModels.Scenarios
     @test scen.scenario_count == 5
     @test scen.count == 2
-
-    for row in (det, prob, scen)
-        @test OpenAPI.check_required(row)
-    end
 end
 
 @testset "openapi_time_series_association_rows: transform_single_time_series! rows keep their own discriminator, distinct from Deterministic" begin
@@ -242,7 +240,6 @@ end
     @test derived.time_series_type == "DeterministicSingleTimeSeries"
     @test derived.count == 3
     @test !any(r -> typeof(r) === InfrastructureTimeSeriesOpenAPIModels.Deterministic, rows)
-    @test OpenAPI.check_required(derived)
 end
 
 @testset "openapi_time_series_association_rows: the unit system a series declares round trips, unset stays absent" begin
@@ -270,9 +267,9 @@ end
             ),
         )
         row = _openapi_row(data, string("series_", spelling))
-        @test row.unit_system == spelling
+        @test row.unit_system.value == spelling
     end
-    @test isnothing(_openapi_row(data, "series_unset").unit_system)
+    @test _openapi_row(data, "series_unset").unit_system isa OpenAPI.Runtime.Absent
 end
 
 @testset "openapi_time_series_association_rows: a sub-second resolution round trips through the document" begin
@@ -291,7 +288,6 @@ end
     )
     row = _openapi_row(data, "subsecond")
     @test row.resolution == "PT0.5S"
-    @test OpenAPI.check_required(row)
 end
 
 @testset "openapi_time_series_association_json: raw JSON matches the typed rows field-for-field" begin
@@ -334,10 +330,8 @@ end
         return IS.openapi_time_series_association_json(data)
     end
 
-    # The store assigns `id` from its own rowid counter, so it tracks INSERT order, not sort
-    # order — two stores built by inserting the same series in a different sequence get
-    # different rowids and are not byte-identical. What "the store sorts" guarantees is the
-    # ROW ORDER in the export, by the identity tuple, independent of insertion order.
+    # The store assigns `id` by insertion order, so two stores are not byte-identical; the
+    # export guarantees ROW ORDER by the identity tuple, independent of insertion order.
     forward = [row["name"] for row in JSON.parse(_build(names))]
     shuffled = [row["name"] for row in JSON.parse(_build(reverse(names)))]
     @test forward == shuffled == sort(names)
@@ -365,15 +359,12 @@ end
         r -> typeof(r) === InfrastructureCoreOpenAPIModels.SupplementalAttributeAssociation,
         rows,
     )
-    # Document/store ids agree by construction now: the association row's ids ARE the IS ids.
+    # Document/store ids agree by construction: the association row's ids ARE the IS ids.
     @test Set(r.component_id for r in rows) ==
           Set([IS.get_id(first_component), IS.get_id(second_component)])
     @test all(r -> r.attribute_id == IS.get_id(shared), rows)
     @test all(r -> r.attribute_type == "GeographicInfo", rows)
     @test all(r -> r.component_type == "TestComponent", rows)
-    for row in rows
-        @test OpenAPI.check_required(row)
-    end
 end
 
 @testset "list_supplemental_attribute_association_rows reads the whole table" begin
@@ -413,7 +404,7 @@ end
     windows = [initial, initial + resolution]
     # The explicit-`scenario_count` constructor takes the count independently of the
     # per-window matrices, so it can disagree with their actual width (3 here, not 5) —
-    # the geometry-vs-association mismatch the store now rejects at addition.
+    # the geometry-vs-association mismatch the store rejects at addition.
     mismatched = IS.Scenarios(
         "scen_mismatch",
         SortedDict(w => rand(4, 3) for w in windows),
@@ -467,10 +458,9 @@ end
     # GeographicInfo does not support time series at all; TestSupplemental does.
     attribute = IS.TestSupplemental(; value = 1.0)
     IS.set_id!(attribute, 55)
-    # Simulate an importer adopting a sidecar that already carries a time series owned by
-    # this (not-yet-attached) attribute: wire the manager reference the way
-    # `attach_supplemental_attribute!` itself would, then add the series through the
-    # manager-level API, which needs only an owner id/category, not an association row.
+    # Simulate an importer adopting a sidecar that already carries a time series: wire the
+    # manager reference the way `attach_supplemental_attribute!` would, then add the series
+    # through the manager-level API directly (no association row yet).
     IS.set_shared_system_references!(
         attribute,
         IS.SharedSystemReferences(;
@@ -537,11 +527,9 @@ end
     end
     # The failed batch wrote nothing, so there is no half-applied association table.
     @test iszero(IS.get_num_associations(data.supplemental_attribute_manager.associations))
-    # Regression guard for the orphan bug: the first `add_supplemental_attribute!` attaches
-    # `shared` to the manager's `mgr.data` before buffering its association row, so without a
-    # rollback of the manager too, `shared` would be left attached with no association
-    # pointing at it. The SystemData-level `begin_association_batch` wraps the batch in
-    # `begin_supplemental_attributes_update`, which must undo that attach on failure.
+    # Regression guard: the first `add_supplemental_attribute!` attaches `shared` before
+    # buffering the association row, so a failed batch must roll back that attach too, or
+    # `shared` is left attached with no association pointing at it.
     @test isempty(collect(IS.iterate_supplemental_attributes(data)))
 end
 
