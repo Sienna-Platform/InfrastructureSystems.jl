@@ -374,8 +374,12 @@ that free is deferred to the commit).
 on its own, still returning its key. There is no `context` kwarg — the transaction is
 selected by dispatch on the first argument. A transaction opened on a `SystemData` carries
 its owner validation (`owner_validator`); one opened on a bare manager does not. The context
-holds only the manager, the forecast-parameters cache, and the validator, so it is cheap;
-read paths still take no context.
+holds the manager, the forecast-parameters cache, the validator, and one **scratch**
+`InfraStore.AddBatch` — scratch, not a buffer: every add drains it. It exists only because an
+`AddBatch` owns an FFI handle and registers a finalizer, so allocating one per add puts 10k
+finalizers in front of the GC over a bulk ingest; measured on the forecast rows that is worth
+~10 points of the ingest cost. It is created on the first add, so read paths still allocate
+nothing.
 
 Reads inside a block see what the block has written — the store serves a pending array out
 of its own buffer — so removals, transforms and reads of a series added earlier in the same

@@ -202,7 +202,8 @@ function add_time_series!(
         context.mgr,
         owner,
         time_series,
-        context.params_cache;
+        context.params_cache,
+        _scratch_batch!(context);
         features = features,
     )
 end

@@ -33,6 +33,14 @@ operation. Read paths never allocate a context at all.
 """
 mutable struct TimeSeriesContext{M <: AbstractTimeSeriesManager, V}
     mgr::M
+    """
+    Scratch for the one-item buffer each add marshals through. Not a staging
+    area — it is drained by every add — but an `InfraStore.AddBatch` owns an FFI
+    handle and registers a finalizer, so allocating one per add puts 10k
+    finalizers in front of the GC over a bulk ingest. Created on the first add,
+    so a block that only reads never makes one.
+    """
+    batch::Union{Nothing, InfraStore.AddBatch}
     "Forecast window parameters per `(resolution, interval)` group."
     params_cache::Dict{
         Tuple{Dates.Period, Dates.Period},
@@ -53,7 +61,14 @@ end
 no_owner_validation(::TimeSeriesOwners) = nothing
 
 TimeSeriesContext(mgr::AbstractTimeSeriesManager, owner_validator = no_owner_validation) =
-    TimeSeriesContext(mgr, new_params_cache(), false, false, owner_validator)
+    TimeSeriesContext(mgr, nothing, new_params_cache(), false, false, owner_validator)
+
+# The scratch buffer, made on first use so a read-only block never allocates an
+# FFI batch handle.
+function _scratch_batch!(context::TimeSeriesContext)
+    isnothing(context.batch) && (context.batch = InfraStore.AddBatch())
+    return context.batch
+end
 
 function _throw_if_closed(context::TimeSeriesContext)
     context.closed && throw(

@@ -579,17 +579,23 @@ store's pending block a column at a time, and the outermost commit flushes anywa
 
 `params_cache` carries the forecast window parameters per `(resolution, interval)`
 group so a run of forecast adds pays one catalog query per group rather than one
-per add. A lone add gets a cache of its own. Data identity is the array content
-hash.
+per add. A lone add gets a cache of its own.
+
+`batch` is scratch: the one-item buffer this add marshals through on its way to
+the store. `add_time_series_bulk!` drains it and leaves it reusable, so a caller
+making many adds passes the same one every time rather than allocating an FFI
+handle — and registering a finalizer — per add. A lone add gets one of its own.
+
+Data identity is the array content hash.
 """
 function infrastore_add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
     time_series::TimeSeriesData,
-    params_cache::AbstractDict = new_params_cache();
+    params_cache::AbstractDict = new_params_cache(),
+    batch::InfraStore.AddBatch = InfraStore.AddBatch();
     features::Union{Nothing, Dict} = nothing,
 )
-    batch = InfraStore.AddBatch()
     staged = _infrastore_stage!(
         batch,
         mgr,
