@@ -308,12 +308,13 @@ function serialize_single!(
         get_initial_timestamp(sts),
         get_resolution(sts),
         values,
-        name,
+        name;
+        units = units,
+        quantity_kind = quantity_kind,
+        unit_system = _to_store_unit_system(unit_system),
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
-        owner_category, tss_ts; features = features, units = units,
-        quantity_kind = quantity_kind,
-        unit_system = _to_store_unit_system(unit_system))
+        owner_category, tss_ts; features = features)
     # Drives auto-flush; measured as the store packs it, not as Julia holds it.
     return _staged_nbytes(values)
 end
@@ -344,11 +345,16 @@ function serialize_non_sequential!(
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(nts),
 )
     values = get_array(nts)
-    tss_ts = InfraStore.NonSequentialTimeSeries(get_timestamps(nts), values, name)
-    InfraStore.add_time_series!(batch, owner_id, owner_type,
-        owner_category, tss_ts; features = features, units = units,
+    tss_ts = InfraStore.NonSequentialTimeSeries(
+        get_timestamps(nts),
+        values,
+        name;
+        units = units,
         quantity_kind = quantity_kind,
-        unit_system = _to_store_unit_system(unit_system))
+        unit_system = _to_store_unit_system(unit_system),
+    )
+    InfraStore.add_time_series!(batch, owner_id, owner_type,
+        owner_category, tss_ts; features = features)
     # The staged bytes are the encoded array plus the timestamps the association carries.
     return _staged_nbytes(values) + sizeof(get_timestamps(nts))
 end
