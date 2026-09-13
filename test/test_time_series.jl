@@ -7573,6 +7573,36 @@ end
         @test_throws ArgumentError IS.add_time_series!(
             store, 7, "PowerLoad", category, forecast,
         )
+
+        # The same data checks and feature normalization as the manager path.
+        backwards = IS.NonSequentialTimeSeries(
+            "backwards",
+            [Dates.DateTime(2024, 1, 1, 3), Dates.DateTime(2024, 1, 1)],
+            [1.0, 2.0],
+        )
+        @test_throws IS.ConflictingInputsError IS.add_time_series!(
+            store, 7, "PowerLoad", category, backwards,
+        )
+        featured = IS.SingleTimeSeries(sts, "featured")
+        IS.add_time_series!(store, 7, "PowerLoad", category, featured;
+            features = Dict(:scenario => "high"))
+        @test IS.get_features(
+            only(IS.list_time_series_metadata(store; name = "featured")),
+        ) ==
+              Dict("scenario" => "high")
+
+        # Inside a store transaction the add defers to the commit rather than flushing.
+        IS.InfraStore.begin_transaction!(store.inner)
+        IS.add_time_series!(
+            store,
+            7,
+            "PowerLoad",
+            category,
+            IS.SingleTimeSeries(sts, "txn"),
+        )
+        @test IS.InfraStore.in_transaction(store.inner)
+        IS.InfraStore.commit_transaction!(store.inner)
+        @test length(IS.list_time_series_metadata(store; name = "txn")) == 1
     finally
         IS.close!(store)
     end

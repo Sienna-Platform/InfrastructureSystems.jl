@@ -265,13 +265,15 @@ function add_time_series!(
     ts::StaticTimeSeries;
     features::Union{Nothing, Dict} = nothing,
 )
+    check_time_series_data(ts)
     batch = InfraStore.AddBatch()
     _serialize_static!(batch, owner_id, owner_type, owner_category, get_name(ts), ts;
-        features = features)
+        features = _infrastore_features(features))
     added = InfraStore.add_time_series_bulk!(store.inner, batch)
-    # This store has no transaction around it to flush at a commit, so the write is
-    # made durable here.
-    flush!(store)
+    # Inside a transaction the outermost commit writes the pending block whole;
+    # flushing here would spill it one add at a time. Outside one, nothing else
+    # will make the write durable.
+    InfraStore.in_transaction(store.inner) || flush!(store)
     return TimeSeriesKey{_key_type(ts)}(only(added))
 end
 
