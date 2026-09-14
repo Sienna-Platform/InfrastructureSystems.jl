@@ -83,24 +83,36 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Extract the Sienna archive at `path` and return the directory holding its
-members, which persists until the Julia session ends.
+Extract the Sienna archive at `path` into `directory` and return it. The
+caller owns `directory` and its lifetime.
 """
-function extract_sienna_archive(path::AbstractString)
+function extract_sienna_archive(path::AbstractString; directory::AbstractString)
     if !isfile(path)
         throw(DataFormatError("$path does not exist"))
     end
-    dir = mktempdir()
     open(path, "r") do io
         archive = ZipArchives.ZipReader(Mmap.mmap(io))
         for i in 1:ZipArchives.zip_nentries(archive)
             name = ZipArchives.zip_name(archive, i)
+            _check_archive_member_name(name)
             ZipArchives.zip_openentry(archive, i) do member
-                open(joinpath(dir, name), "w") do io
+                open(joinpath(directory, name), "w") do io
                     write(io, member)
                 end
             end
         end
     end
-    return dir
+    return directory
+end
+
+function _check_archive_member_name(name::AbstractString)
+    if isempty(name) || name in (".", "..") || name != basename(name)
+        throw(
+            DataFormatError(
+                "archive member name $(repr(name)) is not a flat filename; " *
+                "Sienna archives contain only top-level members",
+            ),
+        )
+    end
+    return nothing
 end
