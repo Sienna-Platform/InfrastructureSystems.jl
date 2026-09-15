@@ -91,9 +91,8 @@ function extract_sienna_archive(path::AbstractString)
         throw(DataFormatError("$path does not exist"))
     end
     dir = mktempdir()
-    bytes = open(Mmap.mmap, path)
-    try
-        archive = ZipArchives.ZipReader(bytes)
+    open(path, "r") do io
+        archive = ZipArchives.ZipReader(Mmap.mmap(io))
         for i in 1:ZipArchives.zip_nentries(archive)
             name = ZipArchives.zip_name(archive, i)
             ZipArchives.zip_openentry(archive, i) do member
@@ -102,9 +101,7 @@ function extract_sienna_archive(path::AbstractString)
                 end
             end
         end
-    finally
-        # mmap locks files on Windows so tempdir won't cleanup
-        finalize(bytes.ref.mem)
     end
+    GC.gc() # ensures mmap is freed on Windows
     return dir
 end
