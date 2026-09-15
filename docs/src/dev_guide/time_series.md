@@ -125,16 +125,14 @@ all three facts the store never rewrites — so it rebuilds itself without the c
 minted it. Nothing has to be scoped around a deserialization that may meet one.
 
 The store mints that id as it inserts the row, which is why a key exists only once the
-addition has been written. A direct `add_time_series!(sys, owner, ts)` writes on the spot and
-returns the key. An addition staged into a `time_series_transaction` is still buffered, so it
-has no id yet and the call returns `nothing`; open the block with `collect_keys = true` and
-read `added_keys(txn)` once it has flushed:
+addition has been written. Every `add_time_series!` writes on the spot and returns the key,
+inside a `time_series_transaction` or out of it:
 
 ```julia
-key = time_series_transaction(sys; collect_keys = true) do txn
+key = add_time_series!(sys, component, ts)
+
+key = time_series_transaction(sys) do txn
     add_time_series!(txn, component, ts)
-    flush!(txn)
-    only(added_keys(txn))
 end
 ```
 

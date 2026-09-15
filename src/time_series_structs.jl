@@ -343,26 +343,6 @@ function Base.show(io::IO, md::TimeSeriesMetadata{T}) where {T}
 end
 
 """
-The time series type of an addition staged onto a batch, held for the span between
-staging and the store writing it.
-
-The catalog mints the id on insert, so a staged addition does not have one yet, and a
-key is immutable. Staging therefore produces this — the one thing a key needs besides
-the id — and [`build_key`](@ref) turns it into the real key once the write hands back
-the id it was filed under.
-"""
-struct StagedKey{T <: TimeSeriesData} end
-
-"""
-    build_key(staged::StagedKey, association_id) -> TimeSeriesKey
-
-The key `staged` describes, filed under `association_id` — the id the store minted for
-its row.
-"""
-build_key(::StagedKey{T}, association_id::Integer) where {T} =
-    TimeSeriesKey{T}(association_id)
-
-"""
 Provides counts of time series including attachments to components and supplemental
 attributes.
 """
