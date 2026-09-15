@@ -366,16 +366,16 @@ end
 Macro to define an enum whose values are reached through a module namespace, keeping the
 top level scope clean.
 
-This is a thin wrapper over `EnumX.@enumx` that pins the base type to `Int64` and picks up
-the Sienna additions defined for `EnumX.Enum` below: construction from a name,
-implicit conversion from an integer, and `serialize`/`deserialize`.
+A thin wrapper over `EnumX.@enumx` that pins the base type to `Int64`, emits a
+non-allocating `Base.string`, and picks up the additions defined for `EnumX.Enum` below:
+construction from a name, conversion from an integer, and `serialize`/`deserialize`.
 
-`\$T` is defined as a **module**; the enum type itself is `\$T.T`, which is what belongs in
-a type annotation. The values are `\$T.NAME`, unchanged from the pre-4.0 spelling.
+`\$T` is a **module**; the enum type is `\$T.T`, which is what belongs in a type
+annotation. The values are `\$T.NAME`.
 
-Deliberately **not** a `Base.getproperty` overload on the enum type: superseding
-`getproperty(::Type, ::Symbol)` invalidated tens of thousands of compiled MethodInstances
-on every package load. A module namespace costs nothing.
+The values must be reached through a module rather than a `Base.getproperty` overload on
+the type: such an overload supersedes `getproperty(::Type, ::Symbol)` and invalidates tens
+of thousands of MethodInstances on every package load.
 
 # Examples
 
@@ -397,16 +397,37 @@ julia> @scoped_enum(Fruit,
 ```
 """
 macro scoped_enum(T, args...)
-    # `esc` on the whole macrocall, not on the pieces: `@enumx` wants raw `Symbol`s and does
-    # its own escaping. Escaping `T` alone hands it an `Expr(:escape, ...)`, and escaping
-    # nothing lets hygiene resolve `T` to a `GlobalRef` before `@enumx` ever sees it.
+    # Escape the result as a whole, never piece by piece: `@enumx` wants raw `Symbol`s and
+    # escapes them itself.
+    enum_call = Expr(
+        :macrocall,
+        GlobalRef(EnumX, Symbol("@enumx")),
+        __source__,
+        Expr(:(::), T, :Int64),
+        args...,
+    )
+    # `string` is on the serialization path and must not allocate, so it returns an
+    # interned name; `Base.Enums`' default builds one through an `IOBuffer`. It has to be
+    # emitted per enum rather than written once as a `@generated` method on `EnumX.Enum`,
+    # whose generator could not see `instances` for an enum defined after IS was compiled.
+    names_const = Symbol("_", T, "_VALUE_NAMES")
+    label = String(T)
+    # `:toplevel`, not a `quote` block: `@enumx` expands to a module definition.
     return esc(
         Expr(
-            :macrocall,
-            GlobalRef(EnumX, Symbol("@enumx")),
-            __source__,
-            Expr(:(::), T, :Int64),
-            args...,
+            :toplevel,
+            enum_call,
+            :(const $names_const =
+                Tuple(String(Symbol(v)) for v in instances($T.T))),
+            quote
+                function Base.string(x::$T.T)
+                    vals = instances($T.T)
+                    for i in eachindex(vals)
+                        @inbounds vals[i] === x && return @inbounds $names_const[i]
+                    end
+                    throw(ArgumentError("invalid " * $label * " value: " * repr(x)))
+                end
+            end,
         ),
     )
 end
@@ -414,9 +435,8 @@ end
 """
 Construct an enum value from its name, e.g. `Fruit.T(:APPLE)` or `Fruit.T("APPLE")`.
 
-`EnumX` itself only provides construction from the integer value. Name-based construction
-is what the JSON and OpenAPI paths deserialize through, so it is defined once here for
-every enum in the Sienna stack.
+`EnumX` provides only construction from the integer value; the JSON and OpenAPI paths
+deserialize through the name.
 """
 function (::Type{T})(name::Union{Symbol, AbstractString}) where {T <: EnumX.Enum}
     sym = Symbol(name)

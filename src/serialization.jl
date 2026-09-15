@@ -184,9 +184,7 @@ _resolve_serialized_type_parameter(_module::Module, x::AbstractString) =
 
 serialize(val::Base.RefValue{T}) where {T} = serialize(val[])
 
-# Enums (`@scoped_enum`) round-trip as their bare value name, e.g. `"SYSTEM_BASE"`.
-# `Base.string` on an `EnumX.Enum` already yields that name, so the stored representation is
-# unchanged from the pre-4.0 hand-rolled enum.
+# Enums round-trip as their bare value name, e.g. `"SYSTEM_BASE"`.
 
 serialize(val::EnumX.Enum) = string(val)
 serialize(vals::Vector{<:EnumX.Enum}) = serialize.(vals)
