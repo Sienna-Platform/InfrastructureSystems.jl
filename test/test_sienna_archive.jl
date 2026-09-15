@@ -21,6 +21,10 @@ end
         end
         # The staging directory's own name must not become a prefix inside the archive.
         @test sort(readdir(extracted)) == ["arrays.h5", "document.json", "extras.json"]
+
+        # Make sure Windows isn't locking any files
+        rm(path)
+        @test !isfile(path)
     end
 end
 

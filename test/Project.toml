@@ -1,18 +1,18 @@
 [deps]
-OpenAPI = "d5e62ea6-ddf3-4d43-8e4c-ad5e6c8bfd7d"
-InfrastructureCoreOpenAPIModels = "1f5e1c8d-e0cc-4dbf-8c6d-f2a3d2ae70a8"
-InfrastructureTimeSeriesOpenAPIModels = "37a216c8-a490-47cf-89d7-db2cb9618199"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
-InfraStore = "6aee0376-896a-4a59-96ff-12f221c99746"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+InfraStore = "6aee0376-896a-4a59-96ff-12f221c99746"
+InfrastructureCoreOpenAPIModels = "1f5e1c8d-e0cc-4dbf-8c6d-f2a3d2ae70a8"
 InfrastructureSystems = "2cd47ed4-ca9b-11e9-27f2-ab636a7671f1"
+InfrastructureTimeSeriesOpenAPIModels = "37a216c8-a490-47cf-89d7-db2cb9618199"
 InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 Mustache = "ffc61752-8dc7-55ee-8c37-f3e9cdd09e70"
+OpenAPI = "d5e62ea6-ddf3-4d43-8e4c-ad5e6c8bfd7d"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 PrettyTables = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
 ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
@@ -25,18 +25,10 @@ TimeSeries = "9e3dc215-6440-5c97-bce1-76c03772f85e"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
+[sources]
+InfrastructureCoreOpenAPIModels = {rev = "main", subdir = "InfrastructureCoreOpenAPIModels.jl", url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git"}
+InfrastructureSystems = {path = ".."}
+InfrastructureTimeSeriesOpenAPIModels = {rev = "main", subdir = "InfrastructureTimeSeriesOpenAPIModels.jl", url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git"}
+
 [compat]
 InfraStore = "0.13"
-
-# `[sources]` applies ONLY to the top-level project, so the package's own entries are NOT
-# inherited by this environment. InfrastructureCoreOpenAPIModels and
-# InfrastructureTimeSeriesOpenAPIModels are unregistered, so without repeating them here the
-# test env cannot resolve them at all ("expected package InfrastructureCoreOpenAPIModels to be
-# registered"). Keep these in step with the revs in ../Project.toml.
-# IS itself has no self-pin here (unlike sibling repos' test/Project.toml): `dev` it
-# explicitly when instantiating this env.
-[sources]
-# Pins until the OpenAPI packages are registered.
-InfrastructureCoreOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "InfrastructureCoreOpenAPIModels.jl"}
-InfrastructureTimeSeriesOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "InfrastructureTimeSeriesOpenAPIModels.jl"}
-

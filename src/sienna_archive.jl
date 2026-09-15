@@ -91,8 +91,9 @@ function extract_sienna_archive(path::AbstractString)
         throw(DataFormatError("$path does not exist"))
     end
     dir = mktempdir()
-    open(path, "r") do io
-        archive = ZipArchives.ZipReader(Mmap.mmap(io))
+    bytes = open(Mmap.mmap, path)
+    try
+        archive = ZipArchives.ZipReader(bytes)
         for i in 1:ZipArchives.zip_nentries(archive)
             name = ZipArchives.zip_name(archive, i)
             ZipArchives.zip_openentry(archive, i) do member
@@ -101,6 +102,11 @@ function extract_sienna_archive(path::AbstractString)
                 end
             end
         end
+    finally
+        # Ensures mmap is released on Windows
+        # This is the recommended approach from JuliaLang/julia#54210
+        # Julia 1.14 has munmap from JuliaLang/julia#60955
+        finalize(bytes.ref.mem)
     end
     return dir
 end
