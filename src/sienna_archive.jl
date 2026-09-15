@@ -104,7 +104,7 @@ function extract_sienna_archive(path::AbstractString)
         end
     finally
         # mmap locks files on Windows so tempdir won't cleanup
-        finalize(bytes)
+        finalize(bytes.ref.mem)
     end
     return dir
 end
