@@ -184,6 +184,11 @@ _resolve_serialized_type_parameter(_module::Module, x::AbstractString) =
 
 serialize(val::Base.RefValue{T}) where {T} = serialize(val[])
 
+# Enums round-trip as their bare value name, e.g. `"SYSTEM_BASE"`.
+
+serialize(val::EnumX.Enum) = string(val)
+serialize(vals::Vector{<:EnumX.Enum}) = serialize.(vals)
+
 # The default implementation allows any scalar type (or collection of scalar types) to
 # work. The JSON library must be able to encode and decode anything passed here.
 
@@ -289,6 +294,10 @@ end
 function deserialize(::Type{Dates.Period}, data::Dict)
     return getproperty(Dates, Symbol(data[TYPE_KEY]))(data["value"])
 end
+
+deserialize(::Type{T}, val) where {T <: EnumX.Enum} = T(val)
+deserialize(::Type{Vector{T}}, vals::Vector) where {T <: EnumX.Enum} =
+    [deserialize(T, v) for v in vals]
 
 deserialize(::Type{Dates.DateTime}, val::AbstractString) = Dates.DateTime(val)
 

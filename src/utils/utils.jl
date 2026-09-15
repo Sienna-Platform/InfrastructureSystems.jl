@@ -362,10 +362,20 @@ function compare_values(
     return match
 end
 
-# Copied from https://discourse.julialang.org/t/encapsulating-enum-access-via-dot-syntax/11785/10
-# Some InfrastructureSystems-specific modifications
 """
-Macro to wrap Enum in a module to keep the top level scope clean.
+Macro to define an enum whose values are reached through a module namespace, keeping the
+top level scope clean.
+
+A thin wrapper over `EnumX.@enumx` that pins the base type to `Int64`, emits a
+non-allocating `Base.string`, and picks up the additions defined for `EnumX.Enum` below:
+construction from a name, conversion from an integer, and `serialize`/`deserialize`.
+
+`\$T` is a **module**; the enum type is `\$T.T`, which is what belongs in a type
+annotation. The values are `\$T.NAME`.
+
+The values must be reached through a module rather than a `Base.getproperty` overload on
+the type: such an overload supersedes `getproperty(::Type, ::Symbol)` and invalidates tens
+of thousands of MethodInstances on every package load.
 
 # Examples
 
@@ -375,8 +385,10 @@ julia> @scoped_enum Fruit APPLE = 1 ORANGE = 2
 julia> value = Fruit.APPLE
 Fruit.APPLE = 1
 
-julia> value = Fruit(1)
+julia> value = Fruit.T(1)
 Fruit.APPLE = 1
+
+julia> function eat(x::Fruit.T) end
 
 julia> @scoped_enum(Fruit,
     APPLE = 1,  # comment
@@ -385,65 +397,62 @@ julia> @scoped_enum(Fruit,
 ```
 """
 macro scoped_enum(T, args...)
-    hn_methods = Array{Expr}(undef, length(args))
-    n2v_methods = Array{Expr}(undef, length(args))
-    v2n_methods = Array{Expr}(undef, length(args))
-    for (i, p) in enumerate(args)
-        _ValKey = Val{first(p.args)}
-        _value = Int64(last(p.args))
-        hn_methods[i] = :(_hasname(::$_ValKey) = true)
-        n2v_methods[i] = :(_name2value(::$_ValKey) = $_value)
-        v2n_methods[i] = :(_value2name(::Val{$_value}) = $(String(first(p.args))))
-    end
-    blk = esc(
-        :(
-            module $(Symbol("$(T)Module"))
-            import InfrastructureSystems
-            export $T
-            struct $T
-                value::Int64
-            end
-
-            # A set, implemented by multiple dispatch
-            $(hn_methods...)
-            _hasname(::Val) = false
-
-            # Some dictionaries, implemented by multiple dispath
-            $(n2v_methods...)
-            _name2value(name::Symbol) = _name2value(Val(name))
-            _name2value(name::String) = _name2value(Symbol(name))
-
-            $(v2n_methods...)
-            _value2name(value::Int64) = _value2name(Val{value}())
-
-            const _ALL_NAMES = Tuple(first(x.args) for x in $args)
-            const _ALL_INSTANCES = Tuple($T(last(x.args)) for x in $args)
-
-            $T(name::Union{Symbol, String}) = $T(_name2value(name))
-            Base.string(e::$T) = _value2name(e.value)
-            Base.getproperty(::Type{$T}, sym::Symbol) =
-                _hasname(Val(sym)) ? $T(sym) : getfield($T, sym)
-            Base.show(io::IO, e::$T) =
-                print(io, string($T, ".", string(e), " = ", e.value))
-            Base.propertynames(::Type{$T}) = _ALL_NAMES
-
-            InfrastructureSystems.serialize(val::$T) = Base.string(val)
-            InfrastructureSystems.serialize(vals::Vector{$T}) =
-                InfrastructureSystems.serialize.(vals)
-            InfrastructureSystems.deserialize(::Type{$T}, val) = $T(val)
-            InfrastructureSystems.deserialize(::Type{Vector{$T}}, vals::Vector) =
-                [InfrastructureSystems.deserialize($T, v) for v in vals]
-
-            Base.convert(::Type{$T}, val::Integer) = $T(val)
-            Base.isless(val::$T, other::$T) = isless(val.value, other.value)
-            Base.instances(::Type{$T}) = _ALL_INSTANCES
-            end
+    # Escape the result as a whole, never piece by piece: `@enumx` wants raw `Symbol`s and
+    # escapes them itself.
+    enum_call = Expr(
+        :macrocall,
+        GlobalRef(EnumX, Symbol("@enumx")),
+        __source__,
+        Expr(:(::), T, :Int64),
+        args...,
+    )
+    # `string` is on the serialization path and must not allocate, so it returns an
+    # interned name; `Base.Enums`' default builds one through an `IOBuffer`. It has to be
+    # emitted per enum rather than written once as a `@generated` method on `EnumX.Enum`,
+    # whose generator could not see `instances` for an enum defined after IS was compiled.
+    names_const = Symbol("_", T, "_VALUE_NAMES")
+    label = String(T)
+    # `:toplevel`, not a `quote` block: `@enumx` expands to a module definition.
+    return esc(
+        Expr(
+            :toplevel,
+            enum_call,
+            :(const $names_const =
+                Tuple(String(Symbol(v)) for v in instances($T.T))),
+            quote
+                function Base.string(x::$T.T)
+                    vals = instances($T.T)
+                    for i in eachindex(vals)
+                        @inbounds vals[i] === x && return @inbounds $names_const[i]
+                    end
+                    throw(ArgumentError("invalid " * $label * " value: " * repr(x)))
+                end
+            end,
         ),
     )
-    top = Expr(:toplevel, blk)
-    push!(top.args, :(using .$(Symbol("$(T)Module"))))
-    return top
 end
+
+"""
+Construct an enum value from its name, e.g. `Fruit.T(:APPLE)` or `Fruit.T("APPLE")`.
+
+`EnumX` provides only construction from the integer value; the JSON and OpenAPI paths
+deserialize through the name.
+"""
+function (::Type{T})(name::Union{Symbol, AbstractString}) where {T <: EnumX.Enum}
+    sym = Symbol(name)
+    # `instances` keeps declaration order, so the error message below is deterministic.
+    for candidate in instances(T)
+        Symbol(candidate) === sym && return candidate
+    end
+    throw(
+        ArgumentError(
+            "enum $(nameof(parentmodule(T))) has no value named $(repr(String(sym))); " *
+            "valid names are $(join(Symbol.(instances(T)), ", "))",
+        ),
+    )
+end
+
+Base.convert(::Type{T}, val::Integer) where {T <: EnumX.Enum} = T(val)
 
 function compose_function_delegation_string(
     sender_type::String,
