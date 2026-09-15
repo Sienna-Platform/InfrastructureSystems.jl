@@ -31,7 +31,7 @@ struct CompressionSettings
     "Controls whether compression is enabled."
     enabled::Bool
     "Specifies the type of compression to use."
-    type::CompressionTypes
+    type::CompressionTypes.T
     "Supported values are 0-9. Higher values deliver better compression ratios but take longer."
     level::Int
     "Controls whether to enable the shuffle filter. Used with DEFLATE."

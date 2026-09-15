@@ -36,6 +36,7 @@ export set_name!
 
 import Base: @kwdef
 import DataFrames
+import EnumX
 import DataFrames: DataFrame
 import Dates
 import JSON

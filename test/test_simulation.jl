@@ -1,10 +1,10 @@
 const Sim = IS.Simulation
 
 @testset "Simulation enums" begin
-    @test Sim.RunStatus.INITIALIZED == Sim.RunStatus(-1)
-    @test Sim.RunStatus.SUCCESSFULLY_FINALIZED == Sim.RunStatus(0)
-    @test Sim.SimulationBuildStatus.BUILT == Sim.SimulationBuildStatus(0)
-    @test Sim.SimulationBuildStatus.EMPTY == Sim.SimulationBuildStatus(2)
+    @test Sim.RunStatus.INITIALIZED == Sim.RunStatus.T(-1)
+    @test Sim.RunStatus.SUCCESSFULLY_FINALIZED == Sim.RunStatus.T(0)
+    @test Sim.SimulationBuildStatus.BUILT == Sim.SimulationBuildStatus.T(0)
+    @test Sim.SimulationBuildStatus.EMPTY == Sim.SimulationBuildStatus.T(2)
 end
 
 @testset "SimulationInfo" begin
@@ -25,6 +25,6 @@ end
 end
 
 @testset "Simulation status enums convert from String" begin
-    @test convert(Sim.RunStatus, "RUNNING") == Sim.RunStatus.RUNNING
-    @test convert(Sim.SimulationBuildStatus, "BUILT") == Sim.SimulationBuildStatus.BUILT
+    @test convert(Sim.RunStatus.T, "RUNNING") == Sim.RunStatus.RUNNING
+    @test convert(Sim.SimulationBuildStatus.T, "BUILT") == Sim.SimulationBuildStatus.BUILT
 end
