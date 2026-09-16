@@ -371,7 +371,7 @@ non-allocating `Base.string`, construction from a name, and conversion from an
 integer. `serialize`/`deserialize` come from the `EnumX.Enum` methods in
 `serialization.jl`.
 
-`\$T` is a **module**; the enum type is `\$T.T`, which is what belongs in a type
+`\$T` is a **module**; the enum type is `\$T.Value`, which is what belongs in a type
 annotation. The values are `\$T.NAME`.
 
 The values must be reached through a module rather than a `Base.getproperty` overload on
@@ -386,10 +386,10 @@ julia> @scoped_enum Fruit APPLE = 1 ORANGE = 2
 julia> value = Fruit.APPLE
 Fruit.APPLE = 1
 
-julia> value = Fruit.T(1)
+julia> value = Fruit.Value(1)
 Fruit.APPLE = 1
 
-julia> function eat(x::Fruit.T) end
+julia> function eat(x::Fruit.Value) end
 
 julia> @scoped_enum(Fruit,
     APPLE = 1,  # comment
@@ -404,6 +404,7 @@ macro scoped_enum(T, args...)
         :macrocall,
         GlobalRef(EnumX, Symbol("@enumx")),
         __source__,
+        Expr(:(=), :T, :Value),  # name the type `$T.Value`; `@enumx` would call it `$T.Value`
         Expr(:(::), T, :Int64),
         args...,
     )
@@ -419,19 +420,19 @@ macro scoped_enum(T, args...)
             :toplevel,
             enum_call,
             :(const $names_const =
-                Tuple(String(Symbol(v)) for v in instances($T.T))),
+                Tuple(String(Symbol(v)) for v in instances($T.Value))),
             quote
-                function Base.string(x::$T.T)
-                    vals = instances($T.T)
+                function Base.string(x::$T.Value)
+                    vals = instances($T.Value)
                     for i in eachindex(vals)
                         @inbounds vals[i] === x && return @inbounds $names_const[i]
                     end
                     throw(ArgumentError("invalid " * $label * " value: " * repr(x)))
                 end
 
-                function $T.T(name::Union{Symbol, AbstractString})
+                function $T.Value(name::Union{Symbol, AbstractString})
                     sym = Symbol(name)
-                    vals = instances($T.T)
+                    vals = instances($T.Value)
                     for i in eachindex(vals)
                         @inbounds Symbol(vals[i]) === sym && return @inbounds vals[i]
                     end
@@ -443,7 +444,7 @@ macro scoped_enum(T, args...)
                     )
                 end
 
-                Base.convert(::Type{$T.T}, val::Integer) = $T.T(val)
+                Base.convert(::Type{$T.Value}, val::Integer) = $T.Value(val)
             end,
         ),
     )

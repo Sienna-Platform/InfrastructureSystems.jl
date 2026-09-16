@@ -1,3 +1,3 @@
 @scoped_enum(ModelBuildStatus, IN_PROGRESS = -1, BUILT = 0, FAILED = 1, EMPTY = 2,)
 
-Base.convert(::Type{ModelBuildStatus.T}, val::String) = ModelBuildStatus.T(val)
+Base.convert(::Type{ModelBuildStatus.Value}, val::String) = ModelBuildStatus.Value(val)

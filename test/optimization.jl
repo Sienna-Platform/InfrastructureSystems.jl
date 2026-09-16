@@ -57,10 +57,13 @@ end
 
 @testset "IS.Optimization enums" begin
     @test IS.Optimization.ModelBuildStatus.IN_PROGRESS ==
-          IS.Optimization.ModelBuildStatus.T(-1)
-    @test IS.Optimization.ModelBuildStatus.BUILT == IS.Optimization.ModelBuildStatus.T(0)
-    @test IS.Optimization.ModelBuildStatus.FAILED == IS.Optimization.ModelBuildStatus.T(1)
-    @test IS.Optimization.ModelBuildStatus.EMPTY == IS.Optimization.ModelBuildStatus.T(2)
+          IS.Optimization.ModelBuildStatus.Value(-1)
+    @test IS.Optimization.ModelBuildStatus.BUILT ==
+          IS.Optimization.ModelBuildStatus.Value(0)
+    @test IS.Optimization.ModelBuildStatus.FAILED ==
+          IS.Optimization.ModelBuildStatus.Value(1)
+    @test IS.Optimization.ModelBuildStatus.EMPTY ==
+          IS.Optimization.ModelBuildStatus.Value(2)
 end
 
 @testset "IS.Optimization construction stages" begin
@@ -81,8 +84,8 @@ end
 end
 
 @testset "ModelBuildStatus convert from String" begin
-    @test convert(IS.Optimization.ModelBuildStatus.T, "BUILT") ==
+    @test convert(IS.Optimization.ModelBuildStatus.Value, "BUILT") ==
           IS.Optimization.ModelBuildStatus.BUILT
-    @test convert(IS.Optimization.ModelBuildStatus.T, "IN_PROGRESS") ==
+    @test convert(IS.Optimization.ModelBuildStatus.Value, "IN_PROGRESS") ==
           IS.Optimization.ModelBuildStatus.IN_PROGRESS
 end

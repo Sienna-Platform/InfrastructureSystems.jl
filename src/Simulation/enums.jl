@@ -9,5 +9,6 @@
 
 @scoped_enum(SimulationBuildStatus, IN_PROGRESS = -1, BUILT = 0, FAILED = 1, EMPTY = 2,)
 
-Base.convert(::Type{SimulationBuildStatus.T}, val::String) = SimulationBuildStatus.T(val)
-Base.convert(::Type{RunStatus.T}, val::String) = RunStatus.T(val)
+Base.convert(::Type{SimulationBuildStatus.Value}, val::String) =
+    SimulationBuildStatus.Value(val)
+Base.convert(::Type{RunStatus.Value}, val::String) = RunStatus.Value(val)
