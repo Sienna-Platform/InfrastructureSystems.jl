@@ -367,8 +367,9 @@ Macro to define an enum whose values are reached through a module namespace, kee
 top level scope clean.
 
 A thin wrapper over `EnumX.@enumx` that pins the base type to `Int64`, emits a
-non-allocating `Base.string`, and picks up the additions defined for `EnumX.Enum` below:
-construction from a name, conversion from an integer, and `serialize`/`deserialize`.
+non-allocating `Base.string`, construction from a name, and conversion from an
+integer. `serialize`/`deserialize` come from the `EnumX.Enum` methods in
+`serialization.jl`.
 
 `\$T` is a **module**; the enum type is `\$T.T`, which is what belongs in a type
 annotation. The values are `\$T.NAME`.
@@ -427,32 +428,26 @@ macro scoped_enum(T, args...)
                     end
                     throw(ArgumentError("invalid " * $label * " value: " * repr(x)))
                 end
+
+                function $T.T(name::Union{Symbol, AbstractString})
+                    sym = Symbol(name)
+                    vals = instances($T.T)
+                    for i in eachindex(vals)
+                        @inbounds Symbol(vals[i]) === sym && return @inbounds vals[i]
+                    end
+                    throw(
+                        ArgumentError(
+                            $label * " has no value named " * repr(String(sym)) *
+                            "; valid names are " * join($names_const, ", "),
+                        ),
+                    )
+                end
+
+                Base.convert(::Type{$T.T}, val::Integer) = $T.T(val)
             end,
         ),
     )
 end
-
-"""
-Construct an enum value from its name, e.g. `Fruit.T(:APPLE)` or `Fruit.T("APPLE")`.
-
-`EnumX` provides only construction from the integer value; the JSON and OpenAPI paths
-deserialize through the name.
-"""
-function (::Type{T})(name::Union{Symbol, AbstractString}) where {T <: EnumX.Enum}
-    sym = Symbol(name)
-    # `instances` keeps declaration order, so the error message below is deterministic.
-    for candidate in instances(T)
-        Symbol(candidate) === sym && return candidate
-    end
-    throw(
-        ArgumentError(
-            "enum $(nameof(parentmodule(T))) has no value named $(repr(String(sym))); " *
-            "valid names are $(join(Symbol.(instances(T)), ", "))",
-        ),
-    )
-end
-
-Base.convert(::Type{T}, val::Integer) where {T <: EnumX.Enum} = T(val)
 
 function compose_function_delegation_string(
     sender_type::String,
