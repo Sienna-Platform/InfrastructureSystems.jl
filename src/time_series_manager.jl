@@ -104,34 +104,22 @@ function _check_interval_supported(::Type{T}, interval) where {T <: TimeSeriesDa
 end
 
 """
-Open a batch of time series work and run `func` on it, inside a store transaction.
+Open a block of time series work and run `func` on it, inside a store transaction.
+This is how many series are added: call `add_time_series!` on the yielded
+[`TimeSeriesContext`](@ref) once per series and let the block do the batching.
 
-Additions made through the yielded [`TimeSeriesContext`](@ref) are buffered and
-written as one bulk call, so the store pays one catalog transaction for the block
-instead of one per series. The block commits when `func` returns.
+Each addition goes straight to the store and returns its [`TimeSeriesKey`](@ref);
+the store does the batching (see [`TimeSeriesContext`](@ref)), and the block pays
+one catalog transaction for the whole run. It commits when `func` returns. Reads
+inside the block see what the block has written.
 
-Buffered additions are not visible to reads through the manager or system until
-the block commits. Call `flush!(txn)` first when a read inside the block must see
-additions staged through `txn`; doing so creates a batching boundary but keeps the
-writes inside the transaction.
-
-If `func` throws, the transaction is rolled back and the whole block is undone —
-buffered additions never reached the store, and everything that did, **including
-removals**, is reversed. A removal is recoverable only in here; outside a block the
+If `func` throws, the transaction is rolled back and the whole block is undone,
+**including removals**. A removal is recoverable only in here; outside a block the
 store frees the array as soon as its last reference goes.
 
 Blocks nest innermost-first: an inner block must finish before the one enclosing
-it.
-
-A batch that grows past `auto_flush_threshold` staged additions or
-`auto_flush_bytes` of staged array data — whichever comes first — is written out
-mid-block, so an arbitrarily large block holds a bounded amount of data in memory.
-Flushed work stays inside the transaction and rolls back with it.
-
-`add_time_series!` through the yielded context returns `nothing`: an addition has no
-key until the store writes it and mints its association id. Pass `collect_keys = true`
-to keep one key per written addition, and read them with [`added_keys`](@ref) after
-the block — or call `flush!(txn)` first to see the ones staged so far.
+it. An open block holds the store's write lock, so gather the data before opening
+one.
 
 ```julia
 time_series_transaction(mgr) do txn
@@ -141,52 +129,24 @@ time_series_transaction(mgr) do txn
 end
 ```
 """
-function time_series_transaction(func::Function, mgr::TimeSeriesManager; kwargs...)
-    return _time_series_transaction(func, mgr, no_owner_validation; kwargs...)
+function time_series_transaction(func::Function, mgr::TimeSeriesManager)
+    return _time_series_transaction(func, mgr, no_owner_validation)
 end
 
 function _time_series_transaction(
     func::Function,
     mgr::TimeSeriesManager,
-    owner_validator::Function;
-    auto_flush_threshold::Int = AUTO_FLUSH_THRESHOLD,
-    auto_flush_bytes::Int = AUTO_FLUSH_BYTES,
-    collect_keys::Bool = false,
+    owner_validator::Function,
 )
     _throw_if_read_only(mgr)
-    context = TimeSeriesContext(
-        mgr,
-        owner_validator;
-        auto_flush_threshold = auto_flush_threshold,
-        auto_flush_bytes = auto_flush_bytes,
-        collect_keys = collect_keys,
-    )
-    return _run_transaction(func, context)
-end
-
-# The keys an add produced exist only once the store has written the rows and minted
-# their ids, which happens in `commit!` — after `func` has already returned. So a
-# caller that wants them runs the block for its effect and reads them off the context
-# afterwards, rather than through the block's own return value.
-function _transaction_added_keys(
-    func::Function,
-    mgr::TimeSeriesManager,
-    owner_validator::Function;
-    kwargs...,
-)
-    _throw_if_read_only(mgr)
-    context = TimeSeriesContext(mgr, owner_validator; collect_keys = true, kwargs...)
-    _run_transaction(func, context)
-    return added_keys(context)
+    return _run_transaction(func, TimeSeriesContext(mgr, owner_validator))
 end
 
 function _run_transaction(func::Function, context::TimeSeriesContext)
     begin_transaction!(context)
-    # `commit!` must stay inside the protected region: buffered additions are only
-    # written (and validated by the store) at the final flush it performs, so a bad
-    # add in a small block throws here rather than at `add_time_series!` time. If it
-    # escaped the try, `discard!` would never run and the store transaction would be
-    # left open holding the write lock.
+    # `commit!` must stay inside the protected region: if it escaped the try,
+    # `discard!` would never run on a commit failure and the store transaction
+    # would be left open holding the write lock.
     result = try
         r = func(context)
         commit!(context)
@@ -199,9 +159,11 @@ function _run_transaction(func::Function, context::TimeSeriesContext)
 end
 
 """
-Add a time series directly to the store, outside any batch. A single add is atomic
-on its own; to batch many adds, open [`time_series_transaction`](@ref) and call
-`add_time_series!` on the yielded transaction instead.
+Add a time series directly to the store, outside any transaction, and return its
+[`TimeSeriesKey`](@ref). A single add is atomic on its own; to add many, open
+[`time_series_transaction`](@ref) and call `add_time_series!` on the yielded
+transaction, which makes the run atomic as a whole and lets the store write the
+arrays in blocks.
 """
 function add_time_series!(
     mgr::TimeSeriesManager,
@@ -214,14 +176,12 @@ function add_time_series!(
 end
 
 """
-Add a time series through an open transaction, buffering it into the block's one
-bulk write. If the block throws, the addition is rolled back with the rest of it.
+Add a time series through an open transaction and return its
+[`TimeSeriesKey`](@ref). If the block throws, the addition is rolled back with the
+rest of it.
 
-Returns `nothing`. The addition has no key yet: the store mints the association id
-as it inserts the row, which has not happened while the addition is still buffered.
-Open the block with `collect_keys = true` and read [`added_keys`](@ref) once it has
-flushed, or use the direct `add_time_series!(mgr, owner, ts)`, which writes on the
-spot and hands back the key.
+The same call as the direct one, with the block's atomicity and array blocking
+around it — a run of these is what replaces a bulk add.
 """
 function add_time_series!(
     context::TimeSeriesContext,
@@ -231,16 +191,21 @@ function add_time_series!(
 )
     _throw_if_closed(context)
     context.owner_validator(owner)
-    _stage_on_context!(context, owner, time_series; features = features)
-    return
+    return infrastore_add_time_series!(
+        context.mgr,
+        owner,
+        time_series,
+        context.params_cache,
+        _scratch_batch!(context);
+        features = features,
+    )
 end
 
 """
 Add the same time series to multiple components through an open transaction. Only
-one copy of the array is stored, but each component gets its own association row —
-and so its own key, available through [`added_keys`](@ref) once the block flushes.
-
-Returns `nothing`, as the single-owner method does and for the same reason.
+one copy of the array is stored, but each component gets its own association row,
+and so its own key: this returns a `Vector` of keys, one per component, in the
+order of `components`.
 """
 function add_time_series!(
     context::TimeSeriesContext,
@@ -248,45 +213,19 @@ function add_time_series!(
     time_series::TimeSeriesData;
     features::Union{Nothing, Dict} = nothing,
 )
-    peeled = Iterators.peel(components)
-    isnothing(peeled) && throw(
+    # One pass, then the emptiness check: `components` may be a single-pass
+    # iterator, which a check up front would consume.
+    keys = [
+        add_time_series!(context, c, time_series; features = features)
+        for c in components
+    ]
+    isempty(keys) && throw(
         ArgumentError(
             "`components` is empty; there is nothing to associate " *
             "$(summary(time_series)) with",
         ),
     )
-    first_component, rest = peeled
-    add_time_series!(context, first_component, time_series; features = features)
-    for component in rest
-        add_time_series!(context, component, time_series; features = features)
-    end
-    return
-end
-
-function _stage_on_context!(
-    context::TimeSeriesContext,
-    owner::TimeSeriesOwners,
-    time_series::TimeSeriesData;
-    features::Union{Nothing, Dict} = nothing,
-)
-    staged, nbytes = _infrastore_stage!(
-        _batch!(context),
-        context.mgr,
-        context.params_cache,
-        owner,
-        time_series;
-        features = features,
-    )
-    push!(context.staged, staged)
-    # `nbytes` is the exact size of the encoded array the batch copied at stage
-    # time (computed where the array is materialized — never derived by walking
-    # the source objects, which costs more than the rest of the stage combined).
-    context.staged_bytes += nbytes
-    if length(context.staged) >= context.auto_flush_threshold ||
-       context.staged_bytes >= context.auto_flush_bytes
-        flush!(context)
-    end
-    return
+    return keys
 end
 
 function clear_time_series!(mgr::TimeSeriesManager)
