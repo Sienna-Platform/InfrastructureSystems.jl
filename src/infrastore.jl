@@ -240,43 +240,69 @@ end
 # ---- Operations (thin delegations to InfraStore) ----------------------
 
 """
-    make_add_batch() -> batch
+    add_time_series!(store::Store, owner_id, owner_type, owner_category, ts;
+                     features = nothing) -> TimeSeriesKey
 
-A client-side staging buffer for [`serialize_single!`](@ref) /
-[`serialize_non_sequential!`](@ref), committed with [`commit_batch!`](@ref).
-Exists so packages that write stores directly (e.g. a parser emitting a
-serialized system) never touch the InfraStore module themselves.
+Add one static time series to `store` for an owner named by **id and type**, and
+return the [`TimeSeriesKey`](@ref) of the row written.
+
+For a package writing a store that has no `SystemData` behind it — an importer
+staging a document's time series sidecar, a parser emitting a serialized system —
+where the owner is an id in that document rather than a component in a system.
+Every other add derives these three from the owner object; this is the one place
+they are passed in. `owner_category` is the `InfraStore.OwnerCategory` enum.
+
+The array is content-addressed, so identical arrays are de-duplicated. To write
+many series, open a transaction on the store first and call this in a loop: the
+store then packs their arrays into blocks, the same way
+[`time_series_transaction`](@ref) does for a system.
 """
-make_add_batch() = InfraStore.AddBatch()
-
-# The bytes one staged array holds in the batch's buffer, which is what drives
-# auto-flush. `sizeof` is the answer only for a plain numeric array: a composite
-# element type is stored as one pointer per value but staged as a
-# `length x element_row_width` matrix of `Float64`, so `sizeof` under-counts it by
-# the row width — a factor that is unbounded for ragged piecewise data, and would
-# let a block hold gigabytes past the byte threshold before flushing.
-_staged_nbytes(values::AbstractArray) = sizeof(values)
-_staged_nbytes(values::AbstractArray{<:StaticFunctionData}) = _encoded_nbytes(values)
-_staged_nbytes(values::AbstractArray{<:Tuple{Vararg{Float64}}}) = _encoded_nbytes(values)
-
-# `element_row_width` is defined on the flat vector of values the store packs, so
-# a forecast's `(horizon, count)` matrix is measured through `vec` (a reshape, not
-# a copy).
-_encoded_nbytes(values::AbstractArray) =
-    length(values) * InfraStore.element_row_width(vec(values)) * sizeof(Float64)
-
-"""
-    commit_batch!(store::Store, batch)
-
-Commit a staged batch to `store` as one all-or-nothing bulk add. The backend
-packs the arrays into batch-sized datasets written whole-chunk, so this is
-materially cheaper than the same adds issued one at a time.
-"""
-function commit_batch!(store::Store, batch::InfraStore.AddBatch)
-    InfraStore.add_time_series_bulk!(store.inner, batch)
-    flush!(store)
-    return
+function add_time_series!(
+    store::Store,
+    owner_id::Integer,
+    owner_type::AbstractString,
+    owner_category::InfraStore.OwnerCategory,
+    ts::StaticTimeSeries;
+    features::Union{Nothing, Dict} = nothing,
+)
+    check_time_series_data(ts)
+    batch = InfraStore.AddBatch()
+    _serialize_static!(batch, owner_id, owner_type, owner_category, get_name(ts), ts;
+        features = _infrastore_features(features))
+    added = InfraStore.add_time_series_bulk!(store.inner, batch)
+    # Inside a transaction the outermost commit writes the pending block whole;
+    # flushing here would spill it one add at a time. Outside one, nothing else
+    # will make the write durable.
+    InfraStore.in_transaction(store.inner) || flush!(store)
+    return TimeSeriesKey{_key_type(ts)}(only(added))
 end
+
+# A forecast carries window parameters that only a manager validates against the
+# rest of the store, so the owner-id form covers static series alone.
+add_time_series!(
+    ::Store,
+    ::Integer,
+    ::AbstractString,
+    ::InfraStore.OwnerCategory,
+    ts::TimeSeriesData;
+    features::Union{Nothing, Dict} = nothing,
+) = throw(
+    ArgumentError(
+        "Adding a $(typeof(ts)) by owner id is not supported; the owner-id form " *
+        "takes a SingleTimeSeries or NonSequentialTimeSeries. Add a forecast " *
+        "through a SystemData or TimeSeriesManager, which validates its window " *
+        "parameters against the rest of the store.",
+    ),
+)
+
+_serialize_static!(batch, owner_id, owner_type, category, name, ts::SingleTimeSeries;
+    features) = serialize_single!(batch, owner_id, owner_type, category, name, ts;
+    features = features)
+
+_serialize_static!(batch, owner_id, owner_type, category, name,
+    ts::NonSequentialTimeSeries; features) =
+    serialize_non_sequential!(batch, owner_id, owner_type, category, name, ts;
+        features = features)
 
 """
     serialize_single!(batch, owner_id, owner_type, owner_category, name, sts;
@@ -286,8 +312,7 @@ end
 Stage a `SingleTimeSeries` (data + metadata) onto a `InfraStore.AddBatch` for a
 bulk commit (a direct add is a one-item batch). The array is content-addressed;
 identical arrays are de-duplicated automatically. `owner_category` is the
-`InfraStore.OwnerCategory` enum. Returns the encoded array's byte size — the
-amount the batch keeps buffered until it flushes.
+`InfraStore.OwnerCategory` enum.
 """
 function serialize_single!(
     batch::InfraStore.AddBatch,
@@ -304,6 +329,8 @@ function serialize_single!(
     # `get_array` returns the raw `Array{T, N}` (no TimeArray allocation). The
     # store names the element type from the values and packs them itself.
     values = get_array(sts)
+    # The units metadata rides on the series: the store reads it off the struct,
+    # not off the add call.
     tss_ts = InfraStore.SingleTimeSeries(
         get_initial_timestamp(sts),
         get_resolution(sts),
@@ -315,8 +342,7 @@ function serialize_single!(
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features)
-    # Drives auto-flush; measured as the store packs it, not as Julia holds it.
-    return _staged_nbytes(values)
+    return
 end
 
 """
@@ -329,8 +355,7 @@ Stage a `NonSequentialTimeSeries` (irregular timestamps + data) onto a
 `InfraStore.AddBatch` for a bulk commit (a direct add is a one-item batch). The
 array is content-addressed (and de-duplicated); the explicit timestamps are
 carried on the association. `owner_category` is the `InfraStore.OwnerCategory`
-enum. Returns the byte size of the encoded array plus timestamps — the amount
-the batch keeps buffered until it flushes.
+enum.
 """
 function serialize_non_sequential!(
     batch::InfraStore.AddBatch,
@@ -355,8 +380,7 @@ function serialize_non_sequential!(
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features)
-    # The staged bytes are the encoded array plus the timestamps the association carries.
-    return _staged_nbytes(values) + sizeof(get_timestamps(nts))
+    return
 end
 
 # Rebuild the IS `NonSequentialTimeSeries` from whatever the store handed back,
@@ -534,23 +558,35 @@ end
 # ---- TimeSeriesManager routing ---------------------------------------------
 
 """
-Route a manager-level `add_time_series!` to the InfraStore store. A direct add
-is a one-item batch through the staging path (which applies the same
-validation and key construction as bulk adds), committed immediately — exactly
-what the store's own single-add entry point does. Data identity is the array
-content hash.
+A fresh forecast-parameters cache, keyed by `(resolution, interval)`. See
+[`infrastore_add_time_series!`](@ref).
+"""
+new_params_cache() =
+    Dict{Tuple{Dates.Period, Dates.Period}, Union{Nothing, ForecastParameters}}()
+
+"""
+Route an `add_time_series!` to the InfraStore store and return the
+[`TimeSeriesKey`](@ref) of the row it wrote.
+
+Every add is one call; the store is what batches — see [`TimeSeriesContext`](@ref),
+whose fields `params_cache` and `batch` are. A lone add gets its own of each.
+
+Nothing is flushed here. Outside a transaction the arrays are already written and
+the catalog already committed; inside one, flushing is what would spill the
+store's pending block a column at a time, and the outermost commit flushes anyway.
 """
 function infrastore_add_time_series!(
     mgr::TimeSeriesManager,
     owner::TimeSeriesOwners,
-    time_series::TimeSeriesData;
+    time_series::TimeSeriesData,
+    params_cache::AbstractDict = new_params_cache(),
+    batch::InfraStore.AddBatch = InfraStore.AddBatch();
     features::Union{Nothing, Dict} = nothing,
 )
-    batch = InfraStore.AddBatch()
-    staged, _ = _infrastore_stage!(
+    _infrastore_stage!(
         batch,
         mgr,
-        Dict{Tuple{Dates.Period, Dates.Period}, Any}(),
+        params_cache,
         owner,
         time_series;
         features = features,
@@ -566,7 +602,7 @@ function infrastore_add_time_series!(
     end
     # The row is written by the time we get here, so the key is built around the id
     # the catalog actually filed it under.
-    return build_key(staged, only(added))
+    return TimeSeriesKey{_key_type(time_series)}(only(added))
 end
 
 # The store's duplicate-association rejection, which the add paths rely on
@@ -953,45 +989,16 @@ function _infrastore_read_non_sequential(
     return _non_sequential_from_store(nts, nts.name)
 end
 
-# ---- Bulk staging ----------------------------------------------------------
-# The bulk-add fast path stages every association onto a `InfraStore.AddBatch` and
-# commits once: one metadata transaction, and the backend packs the arrays into
-# batch-sized datasets with whole-chunk writes (no per-add read-modify-write).
+# ---- Staging ---------------------------------------------------------------
+# One association at a time onto a one-item `InfraStore.AddBatch`, which the caller
+# commits straight away. Nothing accumulates on this side: the store's own
+# transaction is what turns a run of adds into block-sized array writes.
 
 """
-Commit a staged `AddBatch` to the store as one all-or-nothing bulk add, returning
-the catalog `id` the store filed each request under, in the order they were staged.
-
-The backend packs the arrays into batch-sized datasets written whole-chunk, so
-this is materially cheaper than the same adds issued one at a time — which is why
-the client-side buffer exists even though the store now has transactions.
-
-Each returned id is the `association_id` the catalog minted for that row. That id
-is the reason the write, not the staging, is where a `TimeSeriesKey` can first be
-built: the store owns the id stream, so nothing before this call knows what a
-staged association will be filed under.
-"""
-function _infrastore_commit_batch!(mgr::AbstractTimeSeriesManager, batch)
-    added = try
-        InfraStore.add_time_series_bulk!(mgr.data_store.inner, batch)
-    catch e
-        _infrastore_is_duplicate_error(e) && throw(
-            ArgumentError("Time series data with duplicate attributes are already stored"),
-        )
-        rethrow()
-    end
-    flush!(mgr.data_store)
-    return added
-end
-
-"""
-Stage one `(owner, time_series)` association onto `batch`, applying the same
-validation as the per-add path, and return its [`StagedKey`](@ref) together with
-the bytes it buffered. The write happens when the batch is committed, and only
-then does the association have an id to build a `TimeSeriesKey` around — see
-[`build_key`](@ref). `params_cache` carries the forecast window parameters per
-`(resolution, interval)` group so staged forecasts are checked for compatibility
-against both the store and each other with one catalog query per group.
+Stage one `(owner, time_series)` association onto `batch`, applying the validation
+common to every add. `params_cache` carries the forecast window parameters per
+`(resolution, interval)` group so forecasts are checked for compatibility against
+both the store and each other with one catalog query per group.
 """
 function _infrastore_stage!(
     batch::InfraStore.AddBatch,
@@ -1031,10 +1038,9 @@ function _infrastore_stage_data!(
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(time_series)
     feats = _infrastore_features(features)
-    nbytes = serialize_single!(batch, owner_id, owner_type, category, name,
+    serialize_single!(batch, owner_id, owner_type, category, name,
         time_series; features = feats)
-    staged = StagedKey{_key_type(time_series)}()
-    return staged, nbytes
+    return
 end
 
 function _infrastore_stage_data!(
@@ -1048,16 +1054,15 @@ function _infrastore_stage_data!(
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(time_series)
     feats = _infrastore_features(features)
-    nbytes = serialize_non_sequential!(batch, owner_id, owner_type, category, name,
+    serialize_non_sequential!(batch, owner_id, owner_type, category, name,
         time_series; features = feats)
-    staged = StagedKey{_key_type(time_series)}()
-    return staged, nbytes
+    return
 end
 
-# Validate a staged forecast's window parameters against its `(resolution,
-# interval)` group: the store's parameters are fetched once per group and the
-# staged parameters become the group's baseline thereafter, so forecasts inside
-# one batch are checked against each other as well as against the store.
+# Validate a forecast's window parameters against its `(resolution, interval)`
+# group: the store's parameters are fetched once per group and this forecast's
+# become the group's baseline thereafter, so a run of adds sharing one cache is
+# checked against itself as well as against the store.
 function _infrastore_check_staged_forecast!(
     params_cache::AbstractDict,
     mgr::TimeSeriesManager,
@@ -1078,10 +1083,8 @@ function _infrastore_check_staged_forecast!(
 end
 
 # The three dense-forecast stagers differ only in how they build the InfraStore
-# forecast object; the validation, owner marshalling, add, and returned
-# `(StagedKey, staged_nbytes)` pair around it are shared. `build(initial,
-# resolution, horizon, interval, name)` returns that object together
-# with its window count, which is the one field the callers disagree on.
+# forecast object, which `build(initial, resolution, horizon, interval, name)`
+# returns; the validation, owner marshalling, and add around it are shared.
 function _infrastore_stage_forecast!(
     build,
     batch::InfraStore.AddBatch,
@@ -1099,13 +1102,10 @@ function _infrastore_stage_forecast!(
     interval = get_interval(ts)
     horizon = get_horizon(ts)
     feats = _infrastore_features(features)
-    obj, count = build(initial, resolution, horizon, interval, name)
+    obj = build(initial, resolution, horizon, interval, name)
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
         features = feats)
-    staged = StagedKey{_key_type(ts)}()
-    # `obj.data` is the dense window array the batch buffers; its encoded byte size
-    # drives auto-flush.
-    return staged, _staged_nbytes(obj.data)
+    return
 end
 
 function _infrastore_stage_data!(
@@ -1125,7 +1125,7 @@ function _infrastore_stage_data!(
             units = get_units(ts),
             quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
-        return (prob, get_count(ts))
+        return prob
     end
 end
 
@@ -1150,7 +1150,7 @@ function _infrastore_stage_data!(
             units = get_units(ts),
             quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
-        return (det, length(windows))
+        return det
     end
 end
 
@@ -1169,7 +1169,7 @@ function _infrastore_stage_data!(
             get_count(ts), _dense_forecast_array(ts, get_scenario_count(ts)), name;
             units = get_units(ts), quantity_kind = get_quantity_kind(ts),
             unit_system = _to_store_unit_system(get_unit_system(ts)))
-        return (scen, get_count(ts))
+        return scen
     end
 end
 

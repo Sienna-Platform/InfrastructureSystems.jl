@@ -1,3 +1,7 @@
+# The container takes its extension from the caller, so these tests name one the way a
+# consumer does. `.sns` is PowerSystems'; `.snp` stands in for any other package's.
+const TEST_ARCHIVE_EXTENSION = ".sns"
+
 """Members exercising both compression paths, written into `staging`."""
 function _fill_test_archive(staging::AbstractString)
     mkpath(staging)
@@ -9,8 +13,8 @@ end
 
 @testset "Test Sienna archive round trip" begin
     mktempdir() do dir
-        path = joinpath(dir, "case.sn")
-        IS.create_sienna_archive(_fill_test_archive, path)
+        path = joinpath(dir, "case.sns")
+        IS.create_sienna_archive(_fill_test_archive, path, TEST_ARCHIVE_EXTENSION)
         @test isfile(path)
 
         extracted = IS.extract_sienna_archive(path)
@@ -21,13 +25,22 @@ end
         end
         # The staging directory's own name must not become a prefix inside the archive.
         @test sort(readdir(extracted)) == ["arrays.h5", "document.json", "extras.json"]
+
+        # An explicit destination is used as given, rather than a fresh temp dir.
+        into = mkpath(joinpath(dir, "into"))
+        @test IS.extract_sienna_archive(path; directory = into) == into
+        @test sort(readdir(into)) == ["arrays.h5", "document.json", "extras.json"]
+
+        # Make sure Windows isn't locking any files
+        rm(path)
+        @test !isfile(path)
     end
 end
 
 @testset "Test Sienna archive compresses everything but HDF5" begin
     mktempdir() do dir
-        path = joinpath(dir, "case.sn")
-        IS.create_sienna_archive(_fill_test_archive, path)
+        path = joinpath(dir, "case.sns")
+        IS.create_sienna_archive(_fill_test_archive, path, TEST_ARCHIVE_EXTENSION)
 
         archive = IS.ZipArchives.ZipReader(read(path))
         compressed = Dict(
@@ -49,25 +62,37 @@ end
         @test_throws IS.DataFormatError IS.create_sienna_archive(
             filler,
             joinpath(dir, "case.zip"),
+            TEST_ARCHIVE_EXTENSION,
         )
         @test_throws IS.DataFormatError IS.create_sienna_archive(
             filler,
             joinpath(dir, "case"),
+            TEST_ARCHIVE_EXTENSION,
         )
-        @test !filled[]
-
-        mkpath(joinpath(dir, "directory.sn"))
+        # Another package's Sienna extension is not this caller's: the guard compares against
+        # what was asked for, so the two archive kinds cannot be written through each other.
         @test_throws IS.DataFormatError IS.create_sienna_archive(
             filler,
-            joinpath(dir, "directory.sn"),
+            joinpath(dir, "case.snp"),
+            TEST_ARCHIVE_EXTENSION,
         )
         @test !filled[]
 
-        path = joinpath(dir, "case.sn")
-        IS.create_sienna_archive(_fill_test_archive, path)
-        @test_throws IS.DataFormatError IS.create_sienna_archive(_fill_test_archive, path)
+        mkpath(joinpath(dir, "directory.sns"))
+        @test_throws IS.DataFormatError IS.create_sienna_archive(
+            filler,
+            joinpath(dir, "directory.sns"),
+            TEST_ARCHIVE_EXTENSION,
+        )
+        @test !filled[]
 
-        IS.create_sienna_archive(path; force = true) do staging
+        path = joinpath(dir, "case.sns")
+        IS.create_sienna_archive(_fill_test_archive, path, TEST_ARCHIVE_EXTENSION)
+        @test_throws IS.DataFormatError IS.create_sienna_archive(
+            _fill_test_archive, path, TEST_ARCHIVE_EXTENSION,
+        )
+
+        IS.create_sienna_archive(path, TEST_ARCHIVE_EXTENSION; force = true) do staging
             mkpath(staging)
             write(joinpath(staging, "only.json"), "{}")
         end
