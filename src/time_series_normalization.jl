@@ -7,7 +7,7 @@ Types of normalization that can be applied to time series data.
 - `MAX`: Normalize by the maximum value in the time series
 """ NormalizationTypes
 
-const NormalizationFactor = Union{Float64, NormalizationTypes}
+const NormalizationFactor = Union{Float64, NormalizationTypes.Value}
 
 get_max_value(ta::TimeSeries.TimeArray) = maximum(TimeSeries.values(ta))
 get_max_value(ta::AbstractArray) = maximum(ta)
@@ -31,7 +31,7 @@ Normalize forecast window data by the maximum value across *all* windows, matchi
 """
 function handle_normalization_factor(
     data::AbstractDict,
-    normalization_factor::NormalizationTypes,
+    normalization_factor::NormalizationTypes.Value,
 )
     if normalization_factor != NormalizationTypes.MAX
         throw(
@@ -62,7 +62,7 @@ end
 
 function handle_normalization_factor(
     ta::Union{TimeSeries.AbstractTimeSeries, AbstractArray},
-    normalization_factor::NormalizationTypes,
+    normalization_factor::NormalizationTypes.Value,
 )
     if normalization_factor != NormalizationTypes.MAX
         throw(
