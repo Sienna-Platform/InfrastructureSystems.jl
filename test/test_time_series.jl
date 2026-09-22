@@ -2937,7 +2937,7 @@ end
     # has no file to rewrite.
     data = create_system_data(; time_series_in_memory = false)
     component = first(IS.iterate_components(data))
-    path = IS._store_path(data.time_series_manager.data_store)
+    path = IS.get_file_path(data.time_series_manager.data_store)
     resolution = Dates.Hour(1)
     initial_time = Dates.DateTime("2020-01-01T00:00:00")
 
@@ -4446,7 +4446,7 @@ end
     ENV[IS.TIME_SERIES_DIRECTORY_ENV_VAR] = path
     try
         sys = IS.SystemData(; time_series_in_memory = false)
-        @test splitpath(IS._store_path(sys.time_series_manager.data_store))[1] == path
+        @test splitpath(IS.get_file_path(sys.time_series_manager.data_store))[1] == path
     finally
         pop!(ENV, IS.TIME_SERIES_DIRECTORY_ENV_VAR)
     end
@@ -7536,6 +7536,12 @@ end
         @test IS.get_name(row) == "max_active_power"
         @test IS.get_time_series_key(row) == key
 
+        # No SystemData behind this store either, so the round trip goes through the
+        # store-level read directly.
+        @test IS.get_array(IS.get_time_series(store, key)) == IS.get_array(sts)
+        sliced = IS.get_time_series(store, key; start_time = timestamps[2], len = 2)
+        @test IS.get_array(sliced) == IS.get_array(sts)[2:3]
+
         # A composite element type survives the same path; the key types on it, which
         # is what a wire-format curve naming this association depends on.
         pw = IS.SingleTimeSeries(;
@@ -7562,17 +7568,22 @@ end
         nts_key = IS.add_time_series!(store, 7, "PowerLoad", category, nts)
         @test nts_key isa IS.TimeSeriesKey{IS.NonSequentialTimeSeries{Float64}}
         @test length(IS.list_time_series_metadata(store)) == 3
+        @test IS.get_array(IS.get_time_series(store, nts_key)) == IS.get_array(nts)
 
-        # A forecast is named, not a MethodError: its window parameters need a manager
-        # to validate against the rest of the store.
+        # A forecast's window parameters are validated against the store itself, the
+        # same as the manager path does against a TimeSeriesManager.
         forecast = IS.Deterministic(
             "fx",
             Dict(Dates.DateTime(2024, 1, 1) => collect(1.0:3.0)),
             Dates.Hour(1),
         )
-        @test_throws ArgumentError IS.add_time_series!(
-            store, 7, "PowerLoad", category, forecast,
-        )
+        forecast_key = IS.add_time_series!(store, 7, "PowerLoad", category, forecast)
+        @test forecast_key isa IS.TimeSeriesKey{IS.Deterministic{Float64}}
+        @test IS.get_data(IS.get_time_series(store, forecast_key)) ==
+              IS.get_data(forecast)
+        @test IS.get_count(IS.get_time_series(store, forecast_key; count = 1)) == 1
+        # `count` names forecast windows; it does not apply to a static key.
+        @test_throws ArgumentError IS.get_time_series(store, key; count = 1)
 
         # The same data checks and feature normalization as the manager path.
         backwards = IS.NonSequentialTimeSeries(
@@ -7603,6 +7614,72 @@ end
         @test IS.InfraStore.in_transaction(store.inner)
         IS.InfraStore.commit_transaction!(store.inner)
         @test length(IS.list_time_series_metadata(store; name = "txn")) == 1
+    finally
+        IS.close!(store)
+    end
+end
+
+@testset "Test get_file_path(store)" begin
+    mktempdir() do dir
+        store = IS.Store(; in_memory = true)
+        path = joinpath(dir, "sidecar")
+        try
+            IS.serialize(store, path)
+        finally
+            IS.close!(store)
+        end
+        reopened = IS.open_infrastore_store(path)
+        try
+            @test IS.get_file_path(reopened) == abspath(path)
+        finally
+            IS.close!(reopened)
+        end
+    end
+end
+
+@testset "Test add_time_series! (Forecast) by owner id" begin
+    store = IS.Store(; in_memory = true)
+    try
+        category = IS.get_owner_category(IS.InfrastructureSystemsComponent)
+        resolution = Dates.Hour(1)
+        initial_time = Dates.DateTime("2024-01-01")
+        horizon_count = 3
+
+        # (a) Two windows round-trip with both windows.
+        data = Dict(
+            initial_time => collect(1.0:horizon_count),
+            initial_time + resolution => collect(2.0:(horizon_count + 1)),
+        )
+        forecast = IS.Deterministic("fx", data, resolution)
+        key = IS.add_time_series!(store, 7, "PowerLoad", category, forecast)
+        @test IS.get_count(IS.get_time_series(store, key)) == 2
+        @test IS.get_data(IS.get_time_series(store, key)) == IS.get_data(forecast)
+
+        # (b) A different (resolution, interval) group is independent.
+        other = IS.Deterministic(
+            "fx_daily",
+            Dict(initial_time => collect(1.0:horizon_count)),
+            Dates.Day(1),
+        )
+        other_key = IS.add_time_series!(store, 7, "PowerLoad", category, other)
+        @test IS.get_resolution(IS.get_time_series(store, other_key)) == Dates.Day(1)
+
+        # (c) A horizon that disagrees with the group's existing forecast is rejected,
+        # the same as the manager path rejects it.
+        conflicting = IS.Deterministic(
+            "fx_conflict",
+            Dict(initial_time => collect(1.0:(horizon_count + 1))),
+            resolution;
+            interval = resolution,
+        )
+        @test_throws IS.ConflictingInputsError IS.add_time_series!(
+            store, 7, "PowerLoad", category, conflicting,
+        )
+
+        # (d) Adding the same owner/name twice is a duplicate.
+        @test_throws ArgumentError IS.add_time_series!(
+            store, 7, "PowerLoad", category, forecast,
+        )
     finally
         IS.close!(store)
     end

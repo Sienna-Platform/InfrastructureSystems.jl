@@ -32,8 +32,13 @@ function open_infrastore_store(
     return Store(inner)
 end
 
-# The store's backing path (nothing for an in-memory store).
-_store_path(store::Store) = InfraStore.get_path(store.inner)
+"""
+    get_file_path(store::Store)
+
+The `.h5` file `store` writes its arrays to (`nothing` for an in-memory store). Its
+catalog sits beside it as `<path>.sqlite`.
+"""
+get_file_path(store::Store) = InfraStore.get_path(store.inner)
 
 # Translate the `InfraStore.get_compression` NamedTuple back into a
 # `CompressionSettings`.
@@ -105,7 +110,7 @@ function Base.deepcopy_internal(store::Store, dict::IdDict)
     # `persist!` copies an on-disk store's artifacts and materializes an in-memory one.
     # An in-memory store has no path, so its copy lands in `tempdir()` and is therefore
     # disk-backed: the backend gives us no way to clone in-memory state in place.
-    path = _store_path(store)
+    path = get_file_path(store)
     directory = if isnothing(path)
         tempdir()
     else
@@ -243,8 +248,12 @@ end
     add_time_series!(store::Store, owner_id, owner_type, owner_category, ts;
                      features = nothing) -> TimeSeriesKey
 
-Add one static time series to `store` for an owner named by **id and type**, and
-return the [`TimeSeriesKey`](@ref) of the row written.
+Add one time series to `store` for an owner named by **id and type**, and return the
+[`TimeSeriesKey`](@ref) of the row written. Covers every [`TimeSeriesData`](@ref): a
+`StaticTimeSeries` writes straight through; a `Forecast` first validates its window
+parameters against `store`'s existing `(resolution, interval)` groups — the same
+check a `TimeSeriesManager` runs against the rest of a system, run here directly
+against `store` since there is no manager.
 
 For a package writing a store that has no `SystemData` behind it — an importer
 staging a document's time series sidecar, a parser emitting a serialized system —
@@ -277,23 +286,42 @@ function add_time_series!(
     return TimeSeriesKey{_key_type(ts)}(only(added))
 end
 
-# A forecast carries window parameters that only a manager validates against the
-# rest of the store, so the owner-id form covers static series alone.
-add_time_series!(
-    ::Store,
-    ::Integer,
-    ::AbstractString,
-    ::InfraStore.OwnerCategory,
-    ts::TimeSeriesData;
+"""
+    add_time_series!(store::Store, owner_id, owner_type, owner_category, ts::Forecast;
+                     features = nothing) -> TimeSeriesKey
+
+The `Forecast` form of the owner-id add above. Validates `ts`'s window parameters
+against `store`'s own forecasts in the same `(resolution, interval)` group and
+raises [`ConflictingInputsError`](@ref) on a mismatch, then builds and writes the
+InfraStore forecast object the same way the manager's stager does.
+"""
+function add_time_series!(
+    store::Store,
+    owner_id::Integer,
+    owner_type::AbstractString,
+    owner_category::InfraStore.OwnerCategory,
+    ts::Forecast;
     features::Union{Nothing, Dict} = nothing,
-) = throw(
-    ArgumentError(
-        "Adding a $(typeof(ts)) by owner id is not supported; the owner-id form " *
-        "takes a SingleTimeSeries or NonSequentialTimeSeries. Add a forecast " *
-        "through a SystemData or TimeSeriesManager, which validates its window " *
-        "parameters against the rest of the store.",
-    ),
 )
+    check_time_series_data(ts)
+    _infrastore_check_staged_forecast!(new_params_cache(), store, ts)
+    name = get_name(ts)
+    initial = get_initial_timestamp(ts)
+    resolution = get_resolution(ts)
+    interval = get_interval(ts)
+    horizon = get_horizon(ts)
+    obj = _infrastore_build_forecast(ts, initial, resolution, horizon, interval, name)
+    batch = InfraStore.AddBatch()
+    InfraStore.add_time_series!(batch, owner_id, owner_type, owner_category, obj;
+        features = _infrastore_features(features))
+    added = try
+        InfraStore.add_time_series_bulk!(store.inner, batch)
+    catch e
+        _infrastore_rethrow_duplicate(e, owner_type, name)
+    end
+    InfraStore.in_transaction(store.inner) || flush!(store)
+    return TimeSeriesKey{_key_type(ts)}(only(added))
+end
 
 _serialize_static!(batch, owner_id, owner_type, category, name, ts::SingleTimeSeries;
     features) = serialize_single!(batch, owner_id, owner_type, category, name, ts;
@@ -1062,16 +1090,18 @@ end
 # Validate a forecast's window parameters against its `(resolution, interval)`
 # group: the store's parameters are fetched once per group and this forecast's
 # become the group's baseline thereafter, so a run of adds sharing one cache is
-# checked against itself as well as against the store.
+# checked against itself as well as against the store. Shared by the manager's
+# stager and the store-level owner-id add — both validate against a `Store`, and a
+# `TimeSeriesManager` has nothing else this needs.
 function _infrastore_check_staged_forecast!(
     params_cache::AbstractDict,
-    mgr::TimeSeriesManager,
+    store::Store,
     ts::Forecast,
 )
     group = (get_resolution(ts), get_interval(ts))
     existing = get!(params_cache, group) do
         infrastore_forecast_parameters(
-            mgr.data_store;
+            store;
             resolution = group[1],
             interval = group[2],
         )
@@ -1082,11 +1112,61 @@ function _infrastore_check_staged_forecast!(
     return
 end
 
-# The three dense-forecast stagers differ only in how they build the InfraStore
-# forecast object, which `build(initial, resolution, horizon, interval, name)`
-# returns; the validation, owner marshalling, and add around it are shared.
+# The InfraStore forecast object for `ts`, dispatched per concrete type — the one
+# place this is built, so the manager's stager and the store-level owner-id add
+# cannot drift apart.
+function _infrastore_build_forecast(
+    ts::Probabilistic,
+    initial,
+    resolution,
+    horizon,
+    interval,
+    name,
+)
+    return InfraStore.Probabilistic(initial, resolution, horizon, interval,
+        get_count(ts), Float64.(get_percentiles(ts)),
+        _dense_forecast_array(ts, length(get_percentiles(ts))), name;
+        units = get_units(ts),
+        quantity_kind = get_quantity_kind(ts),
+        unit_system = _to_store_unit_system(get_unit_system(ts)))
+end
+
+# (horizon_count, count) for scalars; (horizon_count, count, k) tagged with the
+# element type for FunctionData and NTuple windows — a composite element type is
+# packed across a further axis by the store.
+function _infrastore_build_forecast(
+    ts::Deterministic,
+    initial,
+    resolution,
+    horizon,
+    interval,
+    name,
+)
+    windows = collect(values(get_data(ts)))
+    return InfraStore.Deterministic(initial, resolution, horizon, interval,
+        length(windows), reduce(hcat, windows), name;
+        units = get_units(ts),
+        quantity_kind = get_quantity_kind(ts),
+        unit_system = _to_store_unit_system(get_unit_system(ts)))
+end
+
+function _infrastore_build_forecast(
+    ts::Scenarios,
+    initial,
+    resolution,
+    horizon,
+    interval,
+    name,
+)
+    return InfraStore.Scenarios(initial, resolution, horizon, interval,
+        get_count(ts), _dense_forecast_array(ts, get_scenario_count(ts)), name;
+        units = get_units(ts), quantity_kind = get_quantity_kind(ts),
+        unit_system = _to_store_unit_system(get_unit_system(ts)))
+end
+
+# Validation, owner marshalling, and the add around `_infrastore_build_forecast`;
+# shared by every dense-forecast stager.
 function _infrastore_stage_forecast!(
-    build,
     batch::InfraStore.AddBatch,
     mgr::TimeSeriesManager,
     params_cache::AbstractDict,
@@ -1094,7 +1174,7 @@ function _infrastore_stage_forecast!(
     ts::Forecast;
     features::Union{Nothing, Dict} = nothing,
 )
-    _infrastore_check_staged_forecast!(params_cache, mgr, ts)
+    _infrastore_check_staged_forecast!(params_cache, mgr.data_store, ts)
     owner_id, owner_type, category = _infrastore_owner_args(owner)
     name = get_name(ts)
     initial = get_initial_timestamp(ts)
@@ -1102,7 +1182,7 @@ function _infrastore_stage_forecast!(
     interval = get_interval(ts)
     horizon = get_horizon(ts)
     feats = _infrastore_features(features)
-    obj = build(initial, resolution, horizon, interval, name)
+    obj = _infrastore_build_forecast(ts, initial, resolution, horizon, interval, name)
     InfraStore.add_time_series!(batch, owner_id, owner_type, category, obj;
         features = feats)
     return
@@ -1118,15 +1198,7 @@ function _infrastore_stage_data!(
 )
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
-    ) do initial, resolution, horizon, interval, name
-        prob = InfraStore.Probabilistic(initial, resolution, horizon, interval,
-            get_count(ts), Float64.(get_percentiles(ts)),
-            _dense_forecast_array(ts, length(get_percentiles(ts))), name;
-            units = get_units(ts),
-            quantity_kind = get_quantity_kind(ts),
-            unit_system = _to_store_unit_system(get_unit_system(ts)))
-        return prob
-    end
+    )
 end
 
 function _infrastore_stage_data!(
@@ -1139,19 +1211,7 @@ function _infrastore_stage_data!(
 )
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
-    ) do initial, resolution, horizon, interval, name
-        # (horizon_count, count) for scalars; (horizon_count, count, k) tagged
-        # with the element type for FunctionData and NTuple windows.
-        # `(horizon_count, count)` of whatever the windows hold; a composite
-        # element type is packed across a further axis by the store.
-        windows = collect(values(get_data(ts)))
-        det = InfraStore.Deterministic(initial, resolution, horizon, interval,
-            length(windows), reduce(hcat, windows), name;
-            units = get_units(ts),
-            quantity_kind = get_quantity_kind(ts),
-            unit_system = _to_store_unit_system(get_unit_system(ts)))
-        return det
-    end
+    )
 end
 
 function _infrastore_stage_data!(
@@ -1164,13 +1224,7 @@ function _infrastore_stage_data!(
 )
     return _infrastore_stage_forecast!(
         batch, mgr, params_cache, owner, ts; features = features,
-    ) do initial, resolution, horizon, interval, name
-        scen = InfraStore.Scenarios(initial, resolution, horizon, interval,
-            get_count(ts), _dense_forecast_array(ts, get_scenario_count(ts)), name;
-            units = get_units(ts), quantity_kind = get_quantity_kind(ts),
-            unit_system = _to_store_unit_system(get_unit_system(ts)))
-        return scen
-    end
+    )
 end
 
 _infrastore_stage_data!(
@@ -2375,22 +2429,54 @@ function infrastore_get_time_series_multiple(
     store = _owner_store(owner)
     Channel() do channel
         for m in metas
-            ts = _infrastore_read_key(store, get_time_series_key(m))
+            ts = get_time_series(store, get_time_series_key(m))
             (isnothing(filter_func) || filter_func(ts)) && put!(channel, ts)
         end
     end
 end
 
-# Read one series by its already-resolved key — no catalog re-resolution, and
-# store-addressed, since every key here came from the owner's own listing.
-_infrastore_read_key(store::Store, key::TimeSeriesKey{<:Forecast}) =
-    _infrastore_read_forecast(store, key)
+"""
+    get_time_series(store::Store, key::TimeSeriesKey; start_time = nothing, len = nothing, count = nothing)
 
-_infrastore_read_key(store::Store, key::TimeSeriesKey{<:NonSequentialTimeSeries}) =
-    _infrastore_read_non_sequential(store, key)
+Read one series from `store` by its key, with no owner in hand — for a package reading a store
+that has no `SystemData` behind it (a results store, an importer's staging store). `start_time`,
+`len` and `count` slice as they do for the owner form; `count` applies to forecasts only.
+"""
+function get_time_series(
+    store::Store,
+    key::TimeSeriesKey{<:Forecast};
+    start_time::Union{Nothing, Dates.DateTime} = nothing,
+    len::Union{Nothing, Int} = nothing,
+    count::Union{Nothing, Int} = nothing,
+)
+    return _infrastore_read_forecast(
+        store, key; start_time = start_time, len = len, count = count,
+    )
+end
 
-_infrastore_read_key(store::Store, key::TimeSeriesKey{<:SingleTimeSeries}) =
-    _infrastore_read_single(store, key)
+function get_time_series(
+    store::Store,
+    key::TimeSeriesKey{<:NonSequentialTimeSeries};
+    start_time::Union{Nothing, Dates.DateTime} = nothing,
+    len::Union{Nothing, Int} = nothing,
+    count::Union{Nothing, Int} = nothing,
+)
+    isnothing(count) ||
+        throw(ArgumentError("`count` does not apply to a NonSequentialTimeSeries"))
+    return _infrastore_read_non_sequential(store, key; start_time = start_time, len = len)
+end
+
+function get_time_series(
+    store::Store,
+    key::TimeSeriesKey{<:SingleTimeSeries};
+    start_time::Union{Nothing, Dates.DateTime} = nothing,
+    len::Union{Nothing, Int} = nothing,
+    count::Union{Nothing, Int} = nothing,
+)
+    isnothing(count) ||
+        throw(ArgumentError("`count` does not apply to a SingleTimeSeries"))
+    return _infrastore_read_single(store, key; start_time = start_time, len = len)
+end
 
 # ---- Store-wide aggregates -------------------------------------------------
 
