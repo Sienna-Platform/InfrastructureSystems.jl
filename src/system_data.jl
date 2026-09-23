@@ -820,7 +820,7 @@ function serialize(data::SystemData)
             if isempty(store)
                 json_data["time_series_compression_enabled"] =
                     get_compression_settings(store).enabled
-                json_data["time_series_in_memory"] = isnothing(_store_path(store))
+                json_data["time_series_in_memory"] = isnothing(get_file_path(store))
             else
                 # InfraStore backend: write the .h5 arrays + standalone .sqlite metadata.
                 time_series_base_name =
@@ -1647,7 +1647,7 @@ clear_supplemental_attributes!(data::SystemData) =
     clear_supplemental_attributes!(data.supplemental_attribute_manager)
 
 stores_time_series_in_memory(data::SystemData) =
-    isnothing(_store_path(get_data_store(data)))
+    isnothing(get_file_path(get_data_store(data)))
 
 """
 Make a `deepcopy` of a [`SystemData`](@ref) more quickly by skipping the copying of time
