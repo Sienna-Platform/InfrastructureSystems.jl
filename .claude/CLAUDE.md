@@ -95,26 +95,13 @@ These wrap `Store::persist_arrays_to` and `Store::open_without_catalog`, which a
 
 IS provides unit-system *plumbing* only — SU/CU/NU acquire domain meaning in PowerSystems.jl.
 IS itself performs no domain conversions; only the plumbing and `convert_cost_coefficient`
-math are testable here. IS exports the markers and `RelativeQuantity` only — there is **no
-unit-string vocabulary in IS**; that vocabulary lives in `SiennaSchemas/Core/units.json` for
-the data pipeline.
+math are testable here. IS names no domain quantity: it must work equally for, say, a gas network.
 
-```
-RelativeUnits submodule (src/relative_units.jl)
-  AbstractUnitSystem ⊃ {AbstractRelativeUnit ⊃ {ComponentBaseUnit, SystemBaseUnit}, NaturalUnit}
-  const singletons CU, SU, NU
-  RelativeQuantity{T<:Number, U<:AbstractRelativeUnit} <: Number  (built via `0.6 * CU`)
-  convert_cost_coefficient + 9-method _cost_coeff_ratio dispatch table (+ erroring catch-all)
-  traits: _strip_units (domain packages MUST extend for their quantity types), display_units_arg
-```
-
-Guard rails (all dispatch-based, erroring `ArgumentError`s):
-- Re-tagging a tagged value (`(0.6CU) * SU`) throws — no silent nesting.
-- Cross-unit `+`, `-`, `==`, `<`, `<=`, `isless`, `isapprox` throw — convert explicitly first.
-- Tagged-vs-untagged `==`/`+`/`-` (`0.6CU == 0.5`) throw.
-- `Base.hash` is defined consistently with the cross-payload `==` (Dict/Set safe for same-unit keys).
-- Note: `isequal` falls back to the throwing `==`, so *mixed-unit* Dict keys can throw on
-  hash collision — define a non-throwing `isequal` if that's ever needed.
+- Per-unit values are `Unitful.Quantity`s. `RelativeQuantity` is **deleted**; don't reintroduce it.
+- `RelativeUnits`: the `CU`/`SU`/`NU` markers, now only a type parameter (`CostCurve{T,U}`) and export mode. `0.6 * CU` throws.
+- `PerUnit`: generic `u"CU"`/`u"SU"`/`u"NU"` (own dimensions) and `resolve_per_unit(units, cu_base, su_base, natural)`, which swaps them for a field's units. Domains define the base dimensions. `u"CU"` needs `PerUnit` bound in the caller.
+- `resolve_per_unit` folds at compile time via `@generated` + `Val` dispatch; don't turn it into a runtime loop.
+- Display: `display_string` + domain hooks `display_base_label`/`display_value`.
 
 `CostCurve{T,U}` / `FuelCurve{T,U}` carry `U <: AbstractUnitSystem` as a type parameter
 (replacing the old `power_units::UnitSystem` runtime field). Serialized under the
