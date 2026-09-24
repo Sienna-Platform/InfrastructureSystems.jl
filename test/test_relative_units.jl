@@ -47,7 +47,8 @@ end
     # Per-unit values of different kinds, once resolved, no longer add.
     other_base = _CU_BASE^2
     @test_throws DimensionError 1.0 * resolve(u"CU") +
-                                1.0 * IS.resolve_per_unit(u"CU", other_base, _SU_BASE, _NATURAL)
+                                1.0 *
+                                IS.resolve_per_unit(u"CU", other_base, _SU_BASE, _NATURAL)
 
     # Runs on every unit-aware getter: must fold to a constant with the target passed as an
     # argument, as a getter receives it.
@@ -118,11 +119,33 @@ end
     end
 end
 
+# A stand-in domain labeling its per-unit values for display.
+struct _LabeledValue
+    value::Float64
+    base::String
+end
+IS.display_base_label(v::_LabeledValue) = v.base
+IS.display_value(v::_LabeledValue) = "$(v.value) p.u."
+
 @testset "display_string" begin
-    # Anything without a domain method renders exactly as `print` would.
+    # Anything without a base label renders exactly as `print` would.
     @test IS.display_string(1.5) == "1.5"
     @test IS.display_string(nothing) == "nothing"
     @test IS.display_string(0.6u"CU") == "0.6 CU"
-    # Compound fields render element-wise.
     @test IS.display_string((min = 0.0, max = 2.5)) == "(min = 0.0, max = 2.5)"
+
+    @test IS.display_string(_LabeledValue(0.6, "component base")) ==
+          "0.6 p.u. in component base"
+    # A compound field on one base states it once, after the tuple…
+    @test IS.display_string((
+        min = _LabeledValue(0.0, "system base"),
+        max = _LabeledValue(2.5, "system base"),
+    )) == "(min = 0.0 p.u., max = 2.5 p.u.) in system base"
+    # …but mixed bases, or unlabeled elements, are spelled out per element.
+    @test IS.display_string((
+        min = _LabeledValue(0.0, "system base"),
+        max = _LabeledValue(2.5, "component base"),
+    )) == "(min = 0.0 p.u. in system base, max = 2.5 p.u. in component base)"
+    @test IS.display_string((min = _LabeledValue(0.0, "system base"), max = 2.5)) ==
+          "(min = 0.0 p.u. in system base, max = 2.5)"
 end
