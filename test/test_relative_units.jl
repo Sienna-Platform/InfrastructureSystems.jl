@@ -1,57 +1,74 @@
-@testset "RelativeQuantity construction and arithmetic" begin
-    a = 0.6 * IS.CU
-    b = 0.4 * IS.CU
-    @test a isa IS.RelativeQuantity{Float64, IS.ComponentBaseUnit}
-    @test IS._strip_units(a + b) ≈ 1.0
-    @test IS._strip_units(a - b) ≈ 0.2
-    @test IS._strip_units(-a) ≈ -0.6
-    # scalar multiplication dispatches differently on each side
-    @test IS._strip_units(2.0 * a) ≈ 1.2
-    @test IS._strip_units(a * 2.0) ≈ 1.2
-    @test IS._strip_units(a / 2.0) ≈ 0.3
+# Stand-in domain bases for `resolve_per_unit`, deliberately not power-system ones: IS must
+# work for any network.
+module TestPerUnitBases
+using Unitful: @dimension, @refunit
+@dimension 𝐂𝐩𝐫 "Cpr" CompPressureBase
+@dimension 𝐒𝐩𝐫 "Spr" SysPressureBase
+@refunit CUpr "CUpr" CUpr 𝐂𝐩𝐫 false
+@refunit SUpr "SUpr" SUpr 𝐒𝐩𝐫 false
 end
 
-@testset "RelativeQuantity comparisons" begin
-    @test 0.6 * IS.CU < 0.7 * IS.CU
-    @test 0.6 * IS.CU <= 0.6 * IS.CU
-    @test isapprox(0.6 * IS.CU, 0.60000001 * IS.CU; atol = 1e-6)
-    @test isless(0.6 * IS.CU, 0.7 * IS.CU)
+const _CU_BASE = TestPerUnitBases.CUpr
+const _SU_BASE = TestPerUnitBases.SUpr
+
+@testset "generic per-unit units" begin
+    @test string(0.6u"CU") == "0.6 CU"
+    @test string(0.3u"SU") == "0.3 SU"
+    @test 0.6u"CU" + 0.4u"CU" ≈ 1.0u"CU"
+    # Each carries its own dimension: no mixing bases, no conversion to a natural unit.
+    @test_throws DimensionError 0.6u"CU" + 0.4u"SU"
+    @test_throws DimensionError uconvert(u"hr", 0.6u"CU")
+    @test_throws DimensionError 0.6u"CU" + 0.4
 end
 
-@testset "CU and SU cannot be mixed" begin
-    # Cross-unit operations now throw ArgumentError with a clear message
-    # instead of a cryptic ErrorException from Base's promotion path.
-    @test_throws ArgumentError 0.6 * IS.CU + 0.4 * IS.SU
-    @test_throws ArgumentError 0.6 * IS.CU == 0.4 * IS.SU
-    @test_throws ArgumentError 0.6 * IS.CU < 0.4 * IS.SU
-    # isapprox lives outside the @eval loop (needs kwargs) — most regression-prone
-    @test_throws ArgumentError isapprox(0.6 * IS.CU, 0.6 * IS.SU)
-    # subtraction and isless are inside the @eval loop — verify they also throw
-    @test_throws ArgumentError 0.6 * IS.CU - 0.4 * IS.SU
-    @test_throws ArgumentError isless(0.6 * IS.CU, 0.7 * IS.SU)
+@testset "resolve_per_unit" begin
+    resolve(u) = IS.resolve_per_unit(u, _CU_BASE, _SU_BASE)
+
+    @test resolve(u"CU") == _CU_BASE
+    @test resolve(u"SU") == _SU_BASE
+    # The caller's residual is kept around the swapped-in base.
+    @test resolve(u"CU/hr") == _CU_BASE / u"hr"
+    @test resolve(u"SU*hr") == _SU_BASE * u"hr"
+    # A natural target has nothing to resolve.
+    @test resolve(u"hr") == u"hr"
+
+    # Neither says which base the field is per-unit on.
+    @test_throws ArgumentError resolve(u"CU^2")
+    @test_throws ArgumentError resolve(u"CU^-1")
+    @test_throws ArgumentError resolve(u"CU*SU")
+    @test_throws ArgumentError resolve(u"CU^(1/2)")
+
+    # Per-unit values of different kinds, once resolved, no longer add.
+    other_base = _CU_BASE^2
+    @test_throws DimensionError 1.0 * resolve(u"CU") +
+                                1.0 * IS.resolve_per_unit(u"CU", other_base, _SU_BASE)
+
+    # Runs on every unit-aware getter: must fold to a constant with the target passed as an
+    # argument, as a getter receives it.
+    g(units) = IS.resolve_per_unit(units, _CU_BASE, _SU_BASE)
+    for units in (u"CU", u"SU/hr", u"hr")
+        code, return_type = only(code_typed(g, (typeof(units),)))
+        @test isconcretetype(return_type)
+        @test length(code.code) == 1  # `return <constant>`
+        g(units)
+        @test (@allocated g(units)) == 0
+    end
 end
 
-@testset "tagged-vs-untagged mixing raises ArgumentError" begin
-    # RelativeQuantity <: Number but NOT <: Real: the (RQ, Real) and (Real, RQ)
-    # erroring methods use Real to avoid any ambiguity with (RQ, RQ) pairs.
-    @test_throws ArgumentError 0.6 * IS.CU == 0.5
-    @test_throws ArgumentError 0.5 + 0.6 * IS.CU
-    @test_throws ArgumentError 0.6 * IS.CU - 0.5
-    # Same-unit comparison must still work (more-specific dispatch is not disrupted)
-    @test (0.6 * IS.CU == 0.6 * IS.CU)
+@testset "_strip_units" begin
+    @test IS._strip_units(0.6u"CU") == 0.6
+    @test IS._strip_units(2.0u"hr") == 2.0
+    @test IS._strip_units((min = 0.1u"CU", max = 0.9u"CU")) == (min = 0.1, max = 0.9)
+    @test IS._strip_units(1.5) == 1.5
 end
 
-@testset "RelativeQuantity zero and one" begin
-    @test zero(IS.RelativeQuantity{Float64, IS.ComponentBaseUnit}) == 0.0 * IS.CU
-    @test one(IS.RelativeQuantity{Float64, IS.ComponentBaseUnit}) == 1.0 * IS.CU
-end
-
-@testset "RelativeQuantity display" begin
-    @test sprint(show, 0.6 * IS.CU) == "0.6 CU"
-    @test sprint(show, 0.3 * IS.SU) == "0.3 SU"
+@testset "unit-system markers" begin
     @test sprint(show, IS.CU) == "CU"
     @test sprint(show, IS.SU) == "SU"
     @test sprint(show, IS.NU) == "NU"
+    # The pre-Unitful `0.6 * CU` spelling errors, naming `0.6u"CU"`.
+    @test_throws ArgumentError 0.6 * IS.CU
+    @test_throws ArgumentError IS.SU * 0.6
 end
 
 @testset "unit markers broadcast as scalars" begin
@@ -63,60 +80,6 @@ end
     end
     # an array of markers is still broadcast element-wise
     @test ([IS.CU, IS.SU] .=== IS.CU) == [true, false]
-end
-
-@testset "Double-tagging is rejected" begin
-    @test_throws ArgumentError (0.6 * IS.CU) * IS.SU
-    @test_throws ArgumentError IS.SU * (0.6 * IS.CU)
-end
-
-@testset "RelativeQuantity hash matches ==" begin
-    q1 = 1.0 * IS.CU
-    q2 = 1 * IS.CU
-    @test q1 == q2
-    @test hash(q1) == hash(q2)
-    d = Dict(q1 => "a")
-    d[q2] = "b"
-    @test length(d) == 1
-end
-
-@testset "RelativeQuantity Number interface completeness" begin
-    q = 0.6 * IS.CU
-
-    @testset "instance zero/one and predicates" begin
-        @test zero(q) == 0.0 * IS.CU
-        @test one(q) == 1.0 * IS.CU
-        @test !iszero(q)
-        @test iszero(zero(q))
-        @test isfinite(q)
-        @test !isnan(q)
-        @test isnan(IS.RelativeQuantity(NaN, IS.CU))
-        @test !isfinite(IS.RelativeQuantity(Inf, IS.SU))
-        @test isinf(IS.RelativeQuantity(Inf, IS.SU))
-        @test abs(-q) == q
-    end
-
-    @testset "isapprox against an untagged number errors clearly" begin
-        @test_throws ArgumentError isapprox(q, 0.6)
-        @test_throws ArgumentError isapprox(0.6, q)
-    end
-
-    @testset "isequal is total for container semantics" begin
-        @test isequal(0.6 * IS.CU, 0.6 * IS.CU)
-        @test !isequal(0.6 * IS.CU, 0.6 * IS.SU)
-        @test !isequal(q, 0.6)
-        @test !isequal(0.6, q)
-        d = Dict((0.6 * IS.CU) => 1)
-        @test !haskey(d, 0.6 * IS.SU)
-        s = Set([0.6 * IS.CU])
-        @test !(0.6 * IS.SU in s)
-    end
-
-    @testset "products of tagged quantities error clearly" begin
-        @test_throws ArgumentError q * q
-        @test_throws ArgumentError q^2
-        @test_throws ArgumentError q / (0.5 * IS.CU)
-    end
 end
 
 # `convert_cost_coefficient` no longer resolves unit systems: it applies an x-axis ratio
@@ -148,20 +111,12 @@ end
         @test IS.convert_cost_coefficient(2.0, 4.0, -1) ≈ 0.5
     end
 end
-@testset "display_string spells per-unit tags out" begin
-    @test IS.display_string(0.6 * IS.CU) == "0.6 p.u. in component base"
-    @test IS.display_string(0.3 * IS.SU) == "0.3 p.u. in system base"
-    # Untagged values render exactly as `print` would.
+
+@testset "display_string" begin
+    # Anything without a domain method renders exactly as `print` would.
     @test IS.display_string(1.5) == "1.5"
     @test IS.display_string(nothing) == "nothing"
-
-    # A compound field on one base states that base once, after the tuple.
-    @test IS.display_string((min = 0.0 * IS.SU, max = 2.5 * IS.SU)) ==
-          "(min = 0.0 p.u., max = 2.5 p.u.) in system base"
-    # Mixed bases have nothing to factor out, so each element is spelled out.
-    @test IS.display_string((min = 0.0 * IS.SU, max = 2.5 * IS.CU)) ==
-          "(min = 0.0 p.u. in system base, max = 2.5 p.u. in component base)"
-    # So does a tuple that is not all tagged.
-    @test IS.display_string((min = 0.0 * IS.SU, max = 2.5)) ==
-          "(min = 0.0 p.u. in system base, max = 2.5)"
+    @test IS.display_string(0.6u"CU") == "0.6 CU"
+    # Compound fields render element-wise.
+    @test IS.display_string((min = 0.0, max = 2.5)) == "(min = 0.0, max = 2.5)"
 end

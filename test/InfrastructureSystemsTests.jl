@@ -15,6 +15,8 @@ import JSON
 
 import InfrastructureSystems
 import InfrastructureSystems as IS
+using InfrastructureSystems: PerUnit
+using Unitful: @u_str, uconvert, DimensionError
 import OpenAPI
 import InfrastructureCoreOpenAPIModels
 import InfrastructureTimeSeriesOpenAPIModels
