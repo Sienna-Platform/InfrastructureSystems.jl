@@ -10,25 +10,30 @@ end
 
 const _CU_BASE = TestPerUnitBases.CUpr
 const _SU_BASE = TestPerUnitBases.SUpr
+const _NATURAL = u"Pa"
 
 @testset "generic per-unit units" begin
     @test string(0.6u"CU") == "0.6 CU"
     @test string(0.3u"SU") == "0.3 SU"
+    @test string(2.0u"NU") == "2.0 NU"
     @test 0.6u"CU" + 0.4u"CU" ≈ 1.0u"CU"
     # Each carries its own dimension: no mixing bases, no conversion to a natural unit.
     @test_throws DimensionError 0.6u"CU" + 0.4u"SU"
+    @test_throws DimensionError 0.6u"CU" + 0.4u"NU"
     @test_throws DimensionError uconvert(u"hr", 0.6u"CU")
     @test_throws DimensionError 0.6u"CU" + 0.4
 end
 
 @testset "resolve_per_unit" begin
-    resolve(u) = IS.resolve_per_unit(u, _CU_BASE, _SU_BASE)
+    resolve(u) = IS.resolve_per_unit(u, _CU_BASE, _SU_BASE, _NATURAL)
 
     @test resolve(u"CU") == _CU_BASE
     @test resolve(u"SU") == _SU_BASE
+    @test resolve(u"NU") == _NATURAL
     # The caller's residual is kept around the swapped-in base.
     @test resolve(u"CU/hr") == _CU_BASE / u"hr"
     @test resolve(u"SU*hr") == _SU_BASE * u"hr"
+    @test resolve(u"NU/s") == _NATURAL / u"s"
     # A natural target has nothing to resolve.
     @test resolve(u"hr") == u"hr"
 
@@ -36,17 +41,18 @@ end
     @test_throws ArgumentError resolve(u"CU^2")
     @test_throws ArgumentError resolve(u"CU^-1")
     @test_throws ArgumentError resolve(u"CU*SU")
+    @test_throws ArgumentError resolve(u"CU*NU")
     @test_throws ArgumentError resolve(u"CU^(1/2)")
 
     # Per-unit values of different kinds, once resolved, no longer add.
     other_base = _CU_BASE^2
     @test_throws DimensionError 1.0 * resolve(u"CU") +
-                                1.0 * IS.resolve_per_unit(u"CU", other_base, _SU_BASE)
+                                1.0 * IS.resolve_per_unit(u"CU", other_base, _SU_BASE, _NATURAL)
 
     # Runs on every unit-aware getter: must fold to a constant with the target passed as an
     # argument, as a getter receives it.
-    g(units) = IS.resolve_per_unit(units, _CU_BASE, _SU_BASE)
-    for units in (u"CU", u"SU/hr", u"hr")
+    g(units) = IS.resolve_per_unit(units, _CU_BASE, _SU_BASE, _NATURAL)
+    for units in (u"CU", u"SU/hr", u"NU", u"hr")
         code, return_type = only(code_typed(g, (typeof(units),)))
         @test isconcretetype(return_type)
         @test length(code.code) == 1  # `return <constant>`
