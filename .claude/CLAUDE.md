@@ -94,37 +94,27 @@ These wrap `Store::persist_arrays_to` and `Store::open_without_catalog`, which a
 ## Units Layer (RelativeUnits)
 
 IS provides unit-system *plumbing* only — SU/CU/NU acquire domain meaning in PowerSystems.jl.
-The rule for what goes here: it must apply equally well to a non-power network (gas pipelines,
-say). IS performs no domain conversions and names no domain quantity; only the plumbing and
-`convert_cost_coefficient` math are testable here. There is **no unit-string vocabulary in
-IS**; that lives in `SiennaSchemas/Core/units.json` for the data pipeline.
-
-Per-unit *values* are `Unitful.Quantity`s. `RelativeQuantity` and its arithmetic guards were
-**deleted**: Unitful's dimension checking replaces them. Do not reintroduce a hand-rolled per-unit number type.
+IS itself performs no domain conversions; only the plumbing and `convert_cost_coefficient`
+math are testable here. IS exports the markers and `RelativeQuantity` only — there is **no
+unit-string vocabulary in IS**; that vocabulary lives in `SiennaSchemas/Core/units.json` for
+the data pipeline.
 
 ```
-RelativeUnits submodule (src/relative_units.jl) — unit-system markers
+RelativeUnits submodule (src/relative_units.jl)
   AbstractUnitSystem ⊃ {AbstractRelativeUnit ⊃ {ComponentBaseUnit, SystemBaseUnit}, NaturalUnit}
-  const singletons CU, SU, NU     (a type parameter / dispatch target, e.g. CostCurve{T, U})
-  `0.6 * CU` throws, naming the `0.6u"CU"` spelling
-  convert_cost_coefficient; traits: _strip_units, display_units_arg, unitful_variant
-
-PerUnit submodule (src/per_unit.jl) — Unitful side
-  generic units u"CU", u"SU", u"NU", each with its own dimension (no mixing, no uconvert)
-  resolve_per_unit(units, component_base, system_base, natural): swaps the caller's generic
-    unit for the field's units, keeping the residual (u"CU/hr" -> component_base/hr)
+  const singletons CU, SU, NU
+  RelativeQuantity{T<:Number, U<:AbstractRelativeUnit} <: Number  (built via `0.6 * CU`)
+  convert_cost_coefficient + 9-method _cost_coeff_ratio dispatch table (+ erroring catch-all)
+  traits: _strip_units (domain packages MUST extend for their quantity types), display_units_arg
 ```
 
-- **Domain packages own the base dimensions** (PowerSystems: component/system base power,
-  component base voltage) and pass each field's base units to `resolve_per_unit`. That's what
-  makes per-unit resistance + per-unit power a `DimensionError`. IS must not define them.
-- `u"CU"` needs `PerUnit` bound in the calling module: Unitful's `@u_str` only searches unit
-  modules the caller has by name. Use `using InfrastructureSystems: PerUnit`, or re-export it.
-- `PerUnit`, not `RelativeUnits`, holds the Unitful `CU`/`SU` because `RelativeUnits.CU` is the
-  marker; the two coexist under different modules.
-- `resolve_per_unit` runs on every unit-aware getter and folds to a constant (tested). Its
-  exponents come from a `@generated` function and the branch from `Val` dispatch; a runtime
-  loop also folds, but via const-prop and at ~20% more compile time. Don't "simplify" it back.
+Guard rails (all dispatch-based, erroring `ArgumentError`s):
+- Re-tagging a tagged value (`(0.6CU) * SU`) throws — no silent nesting.
+- Cross-unit `+`, `-`, `==`, `<`, `<=`, `isless`, `isapprox` throw — convert explicitly first.
+- Tagged-vs-untagged `==`/`+`/`-` (`0.6CU == 0.5`) throw.
+- `Base.hash` is defined consistently with the cross-payload `==` (Dict/Set safe for same-unit keys).
+- Note: `isequal` falls back to the throwing `==`, so *mixed-unit* Dict keys can throw on
+  hash collision — define a non-throwing `isequal` if that's ever needed.
 
 `CostCurve{T,U}` / `FuelCurve{T,U}` carry `U <: AbstractUnitSystem` as a type parameter
 (replacing the old `power_units::UnitSystem` runtime field). Serialized under the
@@ -224,7 +214,7 @@ produces two getter variants and one setter:
   returned quantity type).
 - `get_X_unitful(value, units)` — returns the field value as a unit-bearing quantity.
 - `set_X!(value, val)` — takes **no** `units` argument. The caller must supply a value that
-  already carries its own unit tag (a `Unitful.Quantity`); `set_value`
+  already carries its own unit tag (a `RelativeQuantity` or domain quantity); `set_value`
   strips it internally. This asymmetry is intentional: getters need to know the target unit
   system (e.g. `SU`, `CU`, `MW`) at call time, while setters rely on the value itself to
   carry unit information.
