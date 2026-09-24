@@ -110,9 +110,9 @@ RelativeUnits submodule (src/relative_units.jl) — unit-system markers
   convert_cost_coefficient; traits: _strip_units, display_units_arg, unitful_variant
 
 PerUnit submodule (src/per_unit.jl) — Unitful side
-  generic units u"CU", u"SU", each with its own dimension (no mixing, no uconvert to natural)
-  resolve_per_unit(units, component_base, system_base): swaps the caller's generic CU/SU
-    for a field's base units, keeping the residual (u"CU/hr" -> component_base/hr)
+  generic units u"CU", u"SU", u"NU", each with its own dimension (no mixing, no uconvert)
+  resolve_per_unit(units, component_base, system_base, natural): swaps the caller's generic
+    unit for the field's units, keeping the residual (u"CU/hr" -> component_base/hr)
 ```
 
 - **Domain packages own the base dimensions** (PowerSystems: component/system base power,
