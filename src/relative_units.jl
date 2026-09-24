@@ -99,15 +99,55 @@ Base.Broadcast.broadcastable(u::AbstractUnitSystem) = Ref(u)
 """
     display_string(x) -> String
 
-Render `x` for human-facing display. Domain packages extend it for values whose `show`
-is too terse for a component's verbose (`text/plain`) display. Recurses into
-`NamedTuple`s so compound fields (e.g. `(min = …, max = …)`) are rendered element-wise.
+Render `x` for human-facing display, spelling a per-unit value's base out in full
+("0.6 p.u. in component base") where `show` prints a terse unit. Driven by two hooks a
+domain package extends: [`display_base_label`](@ref) and [`display_value`](@ref).
 
-Anything else renders exactly as `print` would.
+Recurses into `NamedTuple`s so compound fields (e.g. `(min = …, max = …)`) are rendered
+element-wise; when every element shares one base, it is stated once after the tuple:
+`(min = 0.0 p.u., max = 2.5 p.u.) in system base`.
+
+Anything without a base label renders exactly as `print` would.
 """
-display_string(x) = string(x)
-display_string(t::NamedTuple) =
-    string("(", join(("$k = $(display_string(v))" for (k, v) in pairs(t)), ", "), ")")
+display_string(x) = _display_string(display_base_label(x), x)
+_display_string(::Nothing, x) = string(x)
+_display_string(label, x) = string(display_value(x), " in ", label)
+
+function display_string(t::NamedTuple)
+    shared = _shared_label(map(display_base_label, values(t)))
+    isnothing(shared) &&
+        return string(
+            "(",
+            join(("$k = $(display_string(v))" for (k, v) in pairs(t)), ", "),
+            ")",
+        )
+    return string(
+        "(", join(("$k = $(display_value(v))" for (k, v) in pairs(t)), ", "), ") in ",
+        shared)
+end
+
+# The one base label every element carries, or `nothing` (empty, mixed, or unlabeled).
+_shared_label(::Tuple{}) = nothing
+function _shared_label(labels::Tuple)
+    label = first(labels)
+    return !isnothing(label) && all(==(label), labels) ? label : nothing
+end
+
+"""
+    display_base_label(x) -> Union{Nothing, String}
+
+The base a per-unit value is on, for [`display_string`](@ref) (e.g. `"system base"`), or
+`nothing` for anything that is not per-unit. Domain packages extend it for their units.
+"""
+display_base_label(_) = nothing
+
+"""
+    display_value(x) -> String
+
+`x` rendered without its base, for [`display_string`](@ref) (e.g. `"0.6 p.u."`). Only
+called when [`display_base_label`](@ref) returns a label.
+"""
+display_value(x) = string(x)
 
 """
     convert_cost_coefficient(value, ratio, exponent::Int = 1) → Float64
