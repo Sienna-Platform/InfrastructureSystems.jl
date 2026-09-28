@@ -1,9 +1,13 @@
 # InfrastructureSystems.jl
 
-[![Main - CI](https://github.com/Sienna-Platform/InfrastructureSystems.jl/actions/workflows/main-tests.yml/badge.svg)](https://github.com/Sienna-Platform/InfrastructureSystems.jl/actions/workflows/main-tests.yml)
-[![codecov](https://codecov.io/gh/Sienna-Platform/InfrastructureSystems.jl/graph/badge.svg?token=I73yjxYxgn)](https://codecov.io/gh/Sienna-Platform/InfrastructureSystems.jl)
-[![Documentation](https://github.com/Sienna-Platform/InfrastructureSystems.jl/workflows/Documentation/badge.svg)](https://sienna-platform.github.io/InfrastructureSystems.jl/stable/)
-[![DOI](https://zenodo.org/badge/202787784.svg)](https://zenodo.org/badge/latestdoi/202787784)
+| **Documentation** | **Build Status** |
+|:---:|:---:|
+| [![][docs-stable-img]][docs-stable-url] [![][docs-dev-img]][docs-dev-url] | [![Main - CI](https://github.com/Sienna-Platform/InfrastructureSystems.jl/actions/workflows/main-tests.yml/badge.svg)](https://github.com/Sienna-Platform/InfrastructureSystems.jl/actions/workflows/main-tests.yml) [![codecov](https://codecov.io/gh/Sienna-Platform/InfrastructureSystems.jl/graph/badge.svg?token=I73yjxYxgn)](https://codecov.io/gh/Sienna-Platform/InfrastructureSystems.jl) [![DOI](https://zenodo.org/badge/202787784.svg)](https://zenodo.org/badge/latestdoi/202787784) |
+
+[docs-stable-img]: https://img.shields.io/badge/docs-stable-blue.svg
+[docs-stable-url]: https://sienna-platform.github.io/InfrastructureSystems.jl/stable/
+[docs-dev-img]: https://img.shields.io/badge/docs-dev-blue.svg
+[docs-dev-url]: https://sienna-platform.github.io/InfrastructureSystems.jl/dev/
 
 The `InfrastructureSystems.jl` package provides utilities to support data models for infrastructure modeling in [Sienna-Platform](https://github.com/Sienna-Platform). The `InfrastructureSystems.jl` package is used to support functionalities in [PowerSystems.jl](https://github.com/Sienna-Platform/PowerSystems.jl), [PowerSimulations.jl](https://github.com/Sienna-Platform/PowerSimulations.jl), [PowerSimulationsDynamics.jl](https://github.com/Sienna-Platform/PowerSimulationsDynamics.jl) and other modeling packages in the Sienna ecosystem.
 
