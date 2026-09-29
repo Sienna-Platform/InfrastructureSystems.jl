@@ -11,48 +11,6 @@ abstract type ProductionVariableCostCurve{T <: ValueCurve} <: ValueCurveWrapper{
 "Get the variable operation and maintenance cost in currency/MWh"
 get_vom_cost(cost::ProductionVariableCostCurve) = cost.vom_cost
 
-# ── Bridge: legacy `power_units` arguments ───────────────────────────────────
-# Temporary, remove once downstream packages stop passing units to cost curves.
-# `NaturalUnit()` still works with a deprecation warning; other unit systems throw.
-
-_natural_units_only(::NaturalUnit) = nothing
-_natural_units_only(units) = throw(
-    ArgumentError(
-        "cost curves are natural units only (x axis in MW); got power_units $units",
-    ),
-)
-
-_deprecated_power_units(::Nothing, ::Symbol) = nothing
-function _deprecated_power_units(units::AbstractUnitSystem, caller::Symbol)
-    _natural_units_only(units)
-    Base.depwarn(
-        "power_units is deprecated: cost curves are always natural units (MW); " *
-        "drop the argument",
-        caller,
-    )
-    return
-end
-
-# Downstream calls this per device per time step, and `--depwarn=yes` pays for a
-# backtrace on every `depwarn`, so warn once per session. Set after `depwarn` returns,
-# so `--depwarn=error` still throws on every call.
-const _POWER_UNITS_DEPWARNED = Threads.Atomic{Bool}(false)
-
-@noinline function _depwarn_get_power_units()
-    Base.depwarn(
-        "get_power_units is deprecated for cost curves: they are always natural units (MW)",
-        :get_power_units,
-    )
-    _POWER_UNITS_DEPWARNED[] = true
-    return
-end
-
-"Deprecated: cost curves are always in natural units (MW). Returns `NaturalUnit()`."
-function get_power_units(::ProductionVariableCostCurve)
-    _POWER_UNITS_DEPWARNED[] || _depwarn_get_power_units()
-    return NaturalUnit()
-end
-
 """
 $(TYPEDEF)
 $(TYPEDFIELDS)
@@ -75,29 +33,10 @@ end
 
 CostCurve(value_curve::ValueCurve) = CostCurve(value_curve, LinearCurve(0.0))
 
-function CostCurve(;
+CostCurve(;
     value_curve::ValueCurve,
     vom_cost::LinearCurve = LinearCurve(0.0),
-    power_units::Union{Nothing, AbstractUnitSystem} = nothing,  # bridge
-)
-    _deprecated_power_units(power_units, :CostCurve)
-    return CostCurve(value_curve, vom_cost)
-end
-
-# Bridge: positional `power_units`. Each method warns itself, so the warning names the
-# caller's line rather than another bridge method.
-function CostCurve(value_curve::ValueCurve, power_units::AbstractUnitSystem)
-    _deprecated_power_units(power_units, :CostCurve)
-    return CostCurve(value_curve)
-end
-function CostCurve(
-    value_curve::ValueCurve,
-    power_units::AbstractUnitSystem,
-    vom_cost::LinearCurve,
-)
-    _deprecated_power_units(power_units, :CostCurve)
-    return CostCurve(value_curve, vom_cost)
-end
+) = CostCurve(value_curve, vom_cost)
 
 "Get a `CostCurve` representing zero variable cost"
 Base.zero(::Union{CostCurve, Type{CostCurve}}) = CostCurve(zero(ValueCurve))
@@ -166,9 +105,7 @@ function FuelCurve(;
     fuel_cost_time_series::Union{Nothing, TimeSeriesKey} = nothing,
     startup_fuel_offtake::LinearCurve = LinearCurve(0.0),
     vom_cost::LinearCurve = LinearCurve(0.0),
-    power_units::Union{Nothing, AbstractUnitSystem} = nothing,  # bridge
 )
-    _deprecated_power_units(power_units, :FuelCurve)
     return FuelCurve{typeof(value_curve)}(
         value_curve,
         _normalize_fuel_cost(fuel_cost),
@@ -192,26 +129,6 @@ FuelCurve(
     startup_fuel_offtake,
     vom_cost,
 )
-
-# Bridge: positional `power_units`.
-function FuelCurve(
-    value_curve::ValueCurve,
-    power_units::AbstractUnitSystem,
-    fuel_cost::Union{Real, TimeSeriesKey},
-)
-    _deprecated_power_units(power_units, :FuelCurve)
-    return FuelCurve(value_curve, fuel_cost)
-end
-function FuelCurve(
-    value_curve::ValueCurve,
-    power_units::AbstractUnitSystem,
-    fuel_cost::Union{Real, TimeSeriesKey},
-    startup_fuel_offtake::LinearCurve,
-    vom_cost::LinearCurve,
-)
-    _deprecated_power_units(power_units, :FuelCurve)
-    return FuelCurve(value_curve, fuel_cost, startup_fuel_offtake, vom_cost)
-end
 
 "Get a `FuelCurve` representing zero fuel usage and zero fuel cost"
 Base.zero(::Union{FuelCurve, Type{FuelCurve}}) = FuelCurve(zero(ValueCurve), 0.0)
@@ -293,10 +210,15 @@ end
 # `serialize` and the value_curve field live in value_curve_wrapper.jl, shared with
 # LossCurve. Cost curves write no "power_units" key.
 
-# Data written before cost curves dropped their unit system carries "power_units".
-# "NaturalUnit" is what they are now, so it is ignored; any other value is refused.
+# Older data carries a "power_units" key. "NaturalUnit" is what cost curves are, so it
+# is ignored; any other value is refused.
 _check_legacy_power_units(::Nothing) = nothing
-_check_legacy_power_units(name) = name == "NaturalUnit" || _natural_units_only(name)
+_check_legacy_power_units(name) =
+    name == "NaturalUnit" || throw(
+        ArgumentError(
+            "cost curves are natural units only (x axis in MW); got power_units $name",
+        ),
+    )
 
 function deserialize(::Type{T}, data::Dict) where {T <: ProductionVariableCostCurve}
     _check_legacy_power_units(get(data, "power_units", nothing))

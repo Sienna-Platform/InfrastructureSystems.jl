@@ -463,8 +463,7 @@ end
 end
 
 @testset "cost curve legacy power_units key" begin
-    # Data written while cost curves carried a unit system has a "power_units" key.
-    # "NaturalUnit" is what every cost curve now is, so it loads; anything else throws.
+    # Older data has a "power_units" key: "NaturalUnit" loads, anything else throws.
     vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1.0, 2.0, 3.0))
     for (T, curve) in
         ((IS.CostCurve, IS.CostCurve(vc)), (IS.FuelCurve, IS.FuelCurve(vc, 5.0)))
@@ -811,47 +810,18 @@ end
     @test_throws ArgumentError IS.CostCurve(fc_ts)
 end
 
-@testset "cost curve power_units bridge" begin
-    # Short-lived bridge: NaturalUnit is accepted with a deprecation warning, any other
-    # unit system throws. `@test_deprecated` checks the warning when depwarn is on.
+@testset "cost curves take no power_units" begin
     vc = IS.InputOutputCurve(IS.QuadraticFunctionData(1.0, 2.0, 3.0))
-    vom = IS.LinearCurve(7.0)
-    startup = IS.LinearCurve(2.0)
-    cc = IS.CostCurve(vc)
-    cc_vom = IS.CostCurve(vc, vom)
-    fc = IS.FuelCurve(vc, 4.0)
-    fc_full = IS.FuelCurve(vc, 4.0, startup, vom)
-
-    @test (@test_deprecated IS.CostCurve(vc, IS.NU)) == cc
-    @test (@test_deprecated IS.CostCurve(vc, IS.NU, vom)) == cc_vom
-    @test (@test_deprecated IS.CostCurve(; value_curve = vc, power_units = IS.NU)) == cc
-    @test (@test_deprecated IS.FuelCurve(vc, IS.NU, 4.0)) == fc
-    @test (@test_deprecated IS.FuelCurve(vc, IS.NU, 4.0, startup, vom)) == fc_full
-    @test (@test_deprecated IS.FuelCurve(;
+    @test !hasmethod(IS.get_power_units, Tuple{IS.CostCurve{typeof(vc)}})
+    @test !hasmethod(IS.get_power_units, Tuple{IS.FuelCurve{typeof(vc)}})
+    @test_throws MethodError IS.CostCurve(vc, IS.NU)
+    @test_throws MethodError IS.CostCurve(; value_curve = vc, power_units = IS.NU)
+    @test_throws MethodError IS.FuelCurve(vc, IS.NU, 4.0)
+    @test_throws MethodError IS.FuelCurve(;
         value_curve = vc,
         fuel_cost = 4.0,
         power_units = IS.NU,
-    )) == fc
-    # get_power_units warns once per session; reset so each call warns.
-    IS._POWER_UNITS_DEPWARNED[] = false
-    @test (@test_deprecated IS.get_power_units(cc)) === IS.NU
-    IS._POWER_UNITS_DEPWARNED[] = false
-    @test (@test_deprecated IS.get_power_units(fc)) === IS.NU
-    @test (@test_logs min_level = Logging.Warn IS.get_power_units(cc)) === IS.NU
-    @test (@inferred IS.get_power_units(cc)) === IS.NU
-
-    for U in (IS.SU, IS.CU)
-        @test_throws ArgumentError IS.CostCurve(vc, U)
-        @test_throws ArgumentError IS.CostCurve(vc, U, vom)
-        @test_throws ArgumentError IS.CostCurve(; value_curve = vc, power_units = U)
-        @test_throws ArgumentError IS.FuelCurve(vc, U, 4.0)
-        @test_throws ArgumentError IS.FuelCurve(vc, U, 4.0, startup, vom)
-        @test_throws ArgumentError IS.FuelCurve(;
-            value_curve = vc,
-            fuel_cost = 4.0,
-            power_units = U,
-        )
-    end
+    )
 end
 
 @testset "ValueCurveWrapper is the unit-free parent of cost and loss curves" begin
