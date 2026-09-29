@@ -102,9 +102,6 @@ end
 "Get a `CostCurve` representing zero variable cost"
 Base.zero(::Union{CostCurve, Type{CostCurve}}) = CostCurve(zero(ValueCurve))
 
-# Deprecated: `CostCurve{T}` no longer has a unit-system parameter to abstract over.
-Base.@deprecate_binding AnyCostCurve CostCurve false
-
 """
 $(TYPEDEF)
 $(TYPEDFIELDS)

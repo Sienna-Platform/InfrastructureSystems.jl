@@ -123,8 +123,7 @@ other value throws an `ArgumentError`.
 A short-lived bridge keeps downstream call sites working until they drop units:
 `get_power_units(::ProductionVariableCostCurve)` returns `NaturalUnit()` with a depwarn,
 and constructors still accept a positional or keyword `power_units = NaturalUnit()` with a
-depwarn (`SystemBaseUnit()`/`ComponentBaseUnit()` throw). `AnyCostCurve` is a deprecated
-binding for `CostCurve`.
+depwarn (`SystemBaseUnit()`/`ComponentBaseUnit()` throw).
 `LossCurve{T,U}` keeps `U <: AbstractUnitSystem` (both axes are power), serialized under
 `"power_units"` as the marker type name (e.g. `"SystemBaseUnit"`) and decoded by
 `_unit_system_instance`. The legacy IS3 `UnitSystem` enum value-names (`"SYSTEM_BASE"`) are

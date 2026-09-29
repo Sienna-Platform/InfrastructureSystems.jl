@@ -852,10 +852,6 @@ end
             power_units = U,
         )
     end
-
-    # Deprecated alias for the single-parameter type
-    @test IS.AnyCostCurve === IS.CostCurve
-    @test cc isa IS.AnyCostCurve{typeof(vc)}
 end
 
 @testset "ValueCurveWrapper is the unit-free parent of cost and loss curves" begin
