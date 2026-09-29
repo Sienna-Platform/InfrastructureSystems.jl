@@ -208,10 +208,8 @@ end
 
 # ── Serialization ─────────────────────────────────────────────────────────────
 # `serialize` and the value_curve field live in value_curve_wrapper.jl, shared with
-# LossCurve. Cost curves write no "power_units" key.
-
-# Older data carries a "power_units" key. "NaturalUnit" is what cost curves are, so it
-# is ignored; any other value is refused.
+# LossCurve. Cost curves write no "power_units" key; on read, a legacy "NaturalUnit" is
+# ignored and any other value is refused.
 _check_legacy_power_units(::Nothing) = nothing
 _check_legacy_power_units(name) =
     name == "NaturalUnit" || throw(
