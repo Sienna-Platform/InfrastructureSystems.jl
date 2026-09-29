@@ -395,10 +395,9 @@ end
         ts_io = IS.TimeSeriesInputOutputCurve(
             IS.TimeSeriesLinearFunctionData(forecast_key(IS.LinearFunctionData)),
         )
-        # CostCurve preserves value_curve and accepts power_units
-        cc = IS.CostCurve(ts_io, IS.SystemBaseUnit())
+        # CostCurve preserves value_curve
+        cc = IS.CostCurve(ts_io)
         @test IS.get_value_curve(cc) === ts_io
-        @test IS.get_power_units(cc) == IS.SystemBaseUnit()
 
         # FuelCurve preserves fuel_cost
         fc = IS.FuelCurve(ts_io, 5.0)

@@ -116,15 +116,20 @@ Guard rails (all dispatch-based, erroring `ArgumentError`s):
 - Note: `isequal` falls back to the throwing `==`, so *mixed-unit* Dict keys can throw on
   hash collision — define a non-throwing `isequal` if that's ever needed.
 
-`CostCurve{T,U}` / `FuelCurve{T,U}` carry `U <: AbstractUnitSystem` as a type parameter
-(replacing the old `power_units::UnitSystem` runtime field). Serialized under the
-`"power_units"` key as the marker type name (e.g. `"SystemBaseUnit"`); `_unit_system_instance`
-decodes that name back to the singleton. IS4 is a breaking release: the legacy IS3
-`UnitSystem` enum is **no longer accepted** anywhere in the cost-curve API — not as a
-constructor argument, not as a serialized value-name (`"SYSTEM_BASE"`). Downstream packages
-(PowerSystemCaseBuilder, PowerSystems) must pass `SystemBaseUnit()`/`ComponentBaseUnit()`/
-`NaturalUnit()` instances. `zero(c)` preserves the unit parameter; `zero(CostCurve)`
-(type form) defaults to NU.
+Cost curves (`CostCurve{T}` / `FuelCurve{T}`, under `ProductionVariableCostCurve{T}`) are
+always in natural units: x is power in MW. They have no unit-system parameter and write no
+`"power_units"` key. On read, a legacy `"power_units": "NaturalUnit"` is ignored and any
+other value throws an `ArgumentError`.
+A short-lived bridge keeps downstream call sites working until they drop units:
+`get_power_units(::ProductionVariableCostCurve)` returns `NaturalUnit()` with a depwarn,
+and constructors still accept a positional or keyword `power_units = NaturalUnit()` with a
+depwarn (`SystemBaseUnit()`/`ComponentBaseUnit()` throw). `AnyCostCurve` is a deprecated
+binding for `CostCurve`.
+`LossCurve{T,U}` keeps `U <: AbstractUnitSystem` (both axes are power), serialized under
+`"power_units"` as the marker type name (e.g. `"SystemBaseUnit"`) and decoded by
+`_unit_system_instance`. The legacy IS3 `UnitSystem` enum value-names (`"SYSTEM_BASE"`) are
+not accepted. Both families share the unit-free parent `ValueCurveWrapper{T}`;
+`ValueCurveWithUnits{T,U}` is the LossCurve branch.
 
 ### Time series accessors and the multiplier contract
 
@@ -428,7 +433,8 @@ context's own add buffer: `flush!(txn)`, `has_staged_data`, `added_keys`, `colle
 - `SystemData`
 - `TimeSeriesData{T}` (see Time Series Type Hierarchy)
 - `ValueCurve` (static and `TimeSeries*` curves)
-- `ProductionVariableCostCurve` (`CostCurve{T,U}`, `FuelCurve{T,U}`)
+- `ValueCurveWrapper`: `ProductionVariableCostCurve` (`CostCurve{T}`, `FuelCurve{T}`) and
+  `ValueCurveWithUnits` (`LossCurve{T,U}`)
 - `FunctionData` (`StaticFunctionData`, `TimeSeriesFunctionData`)
 - `RelativeUnits.AbstractUnitSystem` (`CU`, `SU`, `NU` singletons)
 - `ComponentSelector`

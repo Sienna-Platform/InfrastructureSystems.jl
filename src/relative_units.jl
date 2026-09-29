@@ -30,8 +30,8 @@ export display_string
 
 """
 Supertype for all unit-system markers (relative and natural). Used as the
-`U` type parameter on `ProductionVariableCostCurve` and related parametric
-types so that the unit system can be dispatched on at compile time.
+`U` type parameter on `LossCurve`, so that the unit system can be dispatched on at
+compile time, and as the `unit_system` label on time series metadata.
 """
 abstract type AbstractUnitSystem end
 

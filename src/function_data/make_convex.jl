@@ -419,7 +419,7 @@ end
 """
     increasing_curve_convex_approximation(cost::CostCurve; kwargs...)
 
-Delegates to underlying ValueCurve. Preserves `power_units` and `vom_cost`.
+Delegates to underlying ValueCurve. Preserves `vom_cost`.
 """
 function increasing_curve_convex_approximation(
     cost::CostCurve;
@@ -437,13 +437,13 @@ function increasing_curve_convex_approximation(
         device_name = device_name,
         negative_slope_atol = negative_slope_atol,
     )
-    return CostCurve(convex_vc, get_power_units(cost), get_vom_cost(cost))
+    return CostCurve(convex_vc, get_vom_cost(cost))
 end
 
 """
     increasing_curve_convex_approximation(cost::FuelCurve; kwargs...)
 
-Delegates to underlying ValueCurve. Preserves `power_units`, `fuel_cost`, `startup_fuel_offtake`, `vom_cost`.
+Delegates to underlying ValueCurve. Preserves `fuel_cost`, `fuel_cost_time_series`, `startup_fuel_offtake`, `vom_cost`.
 """
 function increasing_curve_convex_approximation(
     cost::FuelCurve;
@@ -463,7 +463,6 @@ function increasing_curve_convex_approximation(
     )
     return FuelCurve(;
         value_curve = convex_vc,
-        power_units = get_power_units(cost),
         fuel_cost = cost.fuel_cost,
         fuel_cost_time_series = cost.fuel_cost_time_series,
         startup_fuel_offtake = cost.startup_fuel_offtake,

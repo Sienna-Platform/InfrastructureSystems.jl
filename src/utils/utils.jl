@@ -628,7 +628,7 @@ isequal_from_fields(a::T, b::T) where {T} =
 Compute a hash of the instance `a` by combining hashes of all its fields along with its
 concrete type. The type must be included because instances that differ only in type
 parameters carrying no field data -- e.g. the `U <: AbstractUnitSystem` marker of
-`CostCurve{T, U}` -- would otherwise hash identically while comparing unequal.
+`LossCurve{T, U}` -- would otherwise hash identically while comparing unequal.
 """
 hash_from_fields(a) = hash_from_fields(a, zero(UInt))
 

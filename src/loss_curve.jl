@@ -9,8 +9,8 @@ Representation of the losses of a component as a function of its flow or current
 of a [`ValueCurve`](@ref) that may represent input-output, incremental, or average rate
 data.
 
-**Both** axes of a `LossCurve` are power, and both are in the unit system given 
-by the second type parameter`U <: AbstractUnitSystem`: x is the flow through the component
+**Both** axes of a `LossCurve` are power, and both are in the unit system given
+by the second type parameter `U <: AbstractUnitSystem`: x is the flow through the component
 and y is the loss incurred at that flow, in the same base. See [`y_axis_power_dimension`](@ref).
 
 `power_units` has deliberately **no default**: an unstated base is ambiguous.
@@ -58,7 +58,9 @@ Convert `curve` to the `to` unit system, given the x-axis `ratio` between the tw
 (`x_from = ratio * x_to`). Both axes are power, so the y-axis rescales along with the
 x-axis: the result represents `f_to(x) = f_from(ratio * x) / ratio`.
 
-See [`convert_power_units(::CostCurve, ::Any, ::Real)`](@ref) on where `ratio` comes from.
+`ratio` is supplied by the caller: `InfrastructureSystems` has no component or base power
+to derive it from, so the domain package that owns the bases (in the Sienna stack,
+`PowerSystems`) resolves it per component.
 """
 convert_power_units(
     curve::LossCurve{T, U},
