@@ -8,7 +8,7 @@ Methods that only read the wrapped curve live here.
 abstract type ValueCurveWrapper{T <: ValueCurve} end
 
 """
-A [`ValueCurveWrapper`](@ref) that carries its own unit system `U <: AbstractUnitSystem`
+A `ValueCurveWrapper` that carries its own unit system `U <: AbstractUnitSystem`
 for its power axes. `U` governs both axes; [`y_axis_power_dimension`](@ref) gives the
 power of the base the y-axis carries.
 

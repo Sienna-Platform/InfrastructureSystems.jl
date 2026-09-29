@@ -1,7 +1,7 @@
 """
 Supertype for production variable cost curve representations.
 
-A [`ValueCurveWrapper`](@ref) that additionally carries a `vom_cost`. Cost curves are
+A `ValueCurveWrapper` that additionally carries a `vom_cost`. Cost curves are
 always in natural units: the x-axis is power in MW.
 
 Concrete subtypes are [`CostCurve`](@ref) and [`FuelCurve`](@ref).
