@@ -33,12 +33,23 @@ function _deprecated_power_units(units::AbstractUnitSystem, caller::Symbol)
     return
 end
 
-"Deprecated: cost curves are always in natural units (MW). Returns `NaturalUnit()`."
-function get_power_units(::ProductionVariableCostCurve)
+# Downstream calls this per device per time step, and `--depwarn=yes` pays for a
+# backtrace on every `depwarn`, so warn once per session. Set after `depwarn` returns,
+# so `--depwarn=error` still throws on every call.
+const _POWER_UNITS_DEPWARNED = Threads.Atomic{Bool}(false)
+
+@noinline function _depwarn_get_power_units()
     Base.depwarn(
         "get_power_units is deprecated for cost curves: they are always natural units (MW)",
         :get_power_units,
     )
+    _POWER_UNITS_DEPWARNED[] = true
+    return
+end
+
+"Deprecated: cost curves are always in natural units (MW). Returns `NaturalUnit()`."
+function get_power_units(::ProductionVariableCostCurve)
+    _POWER_UNITS_DEPWARNED[] || _depwarn_get_power_units()
     return NaturalUnit()
 end
 

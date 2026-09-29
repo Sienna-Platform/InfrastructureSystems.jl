@@ -832,8 +832,12 @@ end
         fuel_cost = 4.0,
         power_units = IS.NU,
     )) == fc
+    # get_power_units warns once per session; reset so each call warns.
+    IS._POWER_UNITS_DEPWARNED[] = false
     @test (@test_deprecated IS.get_power_units(cc)) === IS.NU
+    IS._POWER_UNITS_DEPWARNED[] = false
     @test (@test_deprecated IS.get_power_units(fc)) === IS.NU
+    @test (@test_logs min_level = Logging.Warn IS.get_power_units(cc)) === IS.NU
     @test (@inferred IS.get_power_units(cc)) === IS.NU
 
     for U in (IS.SU, IS.CU)

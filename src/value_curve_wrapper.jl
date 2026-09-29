@@ -9,8 +9,8 @@ abstract type ValueCurveWrapper{T <: ValueCurve} end
 
 """
 A [`ValueCurveWrapper`](@ref) that carries its own unit system `U <: AbstractUnitSystem`
-for its power axes. The x-axis is always power, so `U` always governs it; the
-[`y_axis_power_dimension`](@ref) trait says whether it also governs the y-axis.
+for its power axes. `U` governs both axes; [`y_axis_power_dimension`](@ref) gives the
+power of the base the y-axis carries.
 
 The subtype is [`LossCurve`](@ref), whose axes are both power in base `U`. Cost curves are
 always in natural units (MW) and are not `ValueCurveWithUnits`.
@@ -85,21 +85,19 @@ ratio between the two bases, the converted curve represents
 
 where `p` is this dimension.
 
-Returned as a `Val` rather than an `Int` so the exponent is part of the type: the
-conversion below dispatches on it, so the branch is resolved at compile time and the
-arithmetic folds to a multiply or a divide, never a call to `^`.
+Returned as a `Val` rather than an `Int` so the conversion dispatches on it and never
+calls `^`. Only `Val(1)` has a conversion method.
 """
 function y_axis_power_dimension end
 
-# `f_to(x) = f_from(ρ * x) / ρ^p`, one method per `p`, so `^` never appears.
+# `f_to(x) = f_from(ρ * x) / ρ`, the `p = 1` case.
 @inline _convert_curve_axes(vc::ValueCurve, ratio::Real, ::Val{1}) =
     inv(ratio) * scale_x(vc, ratio)
 
 """
-Rescale the value curve of `curve` by `ratio`, applying the change of base to whichever
-axes the family's units govern. `ratio` is the x-axis ratio between the two bases
-(`x_from = ratio * x_to`), resolved by the caller: `InfrastructureSystems` has no
-component or base power to derive it from.
+Rescale the value curve of `curve` by `ratio`, applying the change of base to both axes.
+`ratio` is the x-axis ratio between the two bases (`x_from = ratio * x_to`), resolved by
+the caller: `InfrastructureSystems` has no component or base power to derive it from.
 """
 @inline _convert_value_curve(curve::C, ratio::Real) where {C <: ValueCurveWithUnits} =
     _convert_curve_axes(get_value_curve(curve), ratio, y_axis_power_dimension(C))
