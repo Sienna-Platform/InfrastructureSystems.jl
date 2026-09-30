@@ -1486,35 +1486,47 @@ _decode_forecast_reader_window(::Type{T}, raw, _element_type) where {T <: Foreca
 """
 One forecast in a [`ForecastReader`], bound to its owner. `slot` is the 1-based
 index of the deduplicated window read backing this entry; entries that share a
-forecast array (and read plan) report the same `slot`.
+forecast array (and read plan) report the same `slot`. `group` and `position`
+locate the entry among the reader's typed groups: it owns window `position` of
+[`get_forecast_group_windows`](@ref)`(reader, group)`.
 """
 struct ForecastReaderEntry
     owner::TimeSeriesOwners
     key::TimeSeriesKey{<:Forecast}
     slot::Int
+    group::Int
+    position::Int
 end
 
 """
 A timestamp-oriented reader over every forecast matching a build filter. Drive it
 with [`read_forecast_window!`](@ref), then pull each entry's window with
-[`get_forecast_window`](@ref). Build one with `build_forecast_reader(data, T; ...)`.
+[`get_forecast_window`](@ref) — or, to sweep every entry, take whole groups with
+[`get_forecast_group_windows`](@ref) and [`get_forecast_group_entries`](@ref),
+which is markedly cheaper at scale. Build one with
+`build_forecast_reader(data, T; ...)`.
 
 Forecasts that share an underlying array read the `.h5` file once per timestamp
 (and materialize once in Julia); inspect the sharing via the entries' `slot`
 field or [`get_num_forecast_slots`](@ref).
+
+Entries are grouped at build by what their windows decode to — the stored dtype,
+the window's rank, and the element type — so every window in one group has the
+same concrete type. See [`get_num_forecast_groups`](@ref).
 """
 mutable struct ForecastReader{T <: Forecast}
     inner::InfraStore.ForecastReader
     store::Store
     entries::Vector{ForecastReaderEntry}
+    "Each group's stored `element_type`, shared by every entry in it."
+    group_element_types::Vector{Union{Nothing, String}}
+    "Each group's entry indices, in `position` order."
+    group_members::Vector{Vector{Int}}
     """
-    Decode plan for each entry (parallel to `entries`). Resolved from the stored
-    `element_type` once at build, so a per-timestamp read dispatches instead of
-    re-interpreting the tag string.
+    Per-group window cache: one concrete `Vector` of windows per group once
+    materialized, `nothing` before; reset on each read.
     """
-    element_types::Vector{Union{Nothing, String}}
-    "Per-slot materialized window cache; reset on each read."
-    windows::Vector{Any}
+    group_windows::Vector{Any}
     has_read::Bool
 end
 
@@ -1528,7 +1540,8 @@ _infrastore_reader_metadata(store::Store, ids::Vector{Int64}) =
 
 # Build a reader from the store. `id_to_owner(owner_id::Int, category::String)`
 # resolves each entry's owner object (the system holds the owner maps). Per-entry
-# metadata (owner, key, element_type) is resolved once here, off the read path.
+# metadata (owner, key, element_type) and the grouping are resolved once here, off
+# the read path.
 function infrastore_build_forecast_reader(
     store::Store,
     id_to_owner,
@@ -1543,15 +1556,28 @@ function infrastore_build_forecast_reader(
     metas = _infrastore_reader_metadata(store, Int64[e.id for e in tss_entries])
     n = length(tss_entries)
     entries = Vector{ForecastReaderEntry}(undef, n)
-    element_types = Vector{Union{Nothing, String}}(undef, n)
+    # A window's decoded type is fixed by the stored dtype, the window's rank and
+    # the element type, so entries agreeing on all three decode to one concrete type.
+    group_of = Dict{Tuple{DataType, Int, Union{Nothing, String}}, Int}()
+    group_element_types = Union{Nothing, String}[]
+    group_members = Vector{Int}[]
     for (i, (e, fmeta)) in enumerate(zip(tss_entries, metas))
         owner = id_to_owner(Int(fmeta.owner_id), fmeta.owner_category)
-        element_types[i] = fmeta.element_type
+        g = get!(group_of, (e.dtype, length(e.window_shape), fmeta.element_type)) do
+            push!(group_element_types, fmeta.element_type)
+            push!(group_members, Int[])
+            length(group_members)
+        end
+        push!(group_members[g], i)
         # `e.slot` is 0-based in the InfraStore store; carry it 1-based for Julia.
-        entries[i] = ForecastReaderEntry(owner, _key_from_row(fmeta), e.slot + 1)
+        entries[i] = ForecastReaderEntry(
+            owner, _key_from_row(fmeta), e.slot + 1, g, length(group_members[g]))
     end
-    windows = Vector{Any}(nothing, InfraStore.forecast_num_slots(inner))
-    return ForecastReader{T}(inner, store, entries, element_types, windows, false)
+    group_windows = Vector{Any}(nothing, length(group_members))
+    return ForecastReader{T}(
+        inner, store, entries, group_element_types, group_members, group_windows,
+        false,
+    )
 end
 
 """
@@ -1575,19 +1601,30 @@ The number of deduplicated window slots — the count of physical `.h5` reads
 [`read_forecast_window!`](@ref) performs per timestamp. Entries that share a
 forecast array collapse to one slot, so this is `≤ length(get_forecast_reader_entries(reader))`.
 """
-get_num_forecast_slots(reader::ForecastReader) = length(reader.windows)
+get_num_forecast_slots(reader::ForecastReader) =
+    InfraStore.forecast_num_slots(reader.inner)
+
+"""
+$(TYPEDSIGNATURES)
+The number of typed groups. Every window in one group decodes to the same
+concrete type, so a sweep through [`get_forecast_group_windows`](@ref) pays one
+dynamic dispatch per group rather than one per entry. Forecasts of one element
+type and window rank share a group, so this is typically 1.
+"""
+get_num_forecast_groups(reader::ForecastReader) = length(reader.group_members)
 
 Base.length(reader::ForecastReader) = length(reader.entries)
 
 """
 $(TYPEDSIGNATURES)
 Read the forecast window at `timestamp` for every entry, performing one `.h5`
-read per unique slot. Follow with [`get_forecast_window`](@ref). Throws if
+read per unique slot. Follow with [`get_forecast_window`](@ref) per entry, or
+[`get_forecast_group_windows`](@ref) per group to sweep them all. Throws if
 `timestamp` is off the window timeline.
 """
 function read_forecast_window!(reader::ForecastReader, timestamp::Dates.DateTime)
     InfraStore.forecast_read!(reader.inner, timestamp)
-    fill!(reader.windows, nothing)
+    fill!(reader.group_windows, nothing)
     reader.has_read = true
     return reader
 end
@@ -1597,18 +1634,68 @@ $(TYPEDSIGNATURES)
 The decoded window for entry `entry_index` (1-based) from the most recent
 [`read_forecast_window!`](@ref). Entries that share a slot return the same
 materialized array (read once per timestamp); treat it as read-only.
+
+This is the one-entry accessor: it returns out of a cache the reader cannot give
+a concrete type, so every call costs a dynamic dispatch. A sweep over every entry
+should go through [`get_forecast_group_windows`](@ref) instead.
 """
-function get_forecast_window(reader::ForecastReader{T}, entry_index::Integer) where {T}
+function get_forecast_window(reader::ForecastReader, entry_index::Integer)
+    entry = reader.entries[entry_index]
+    return get_forecast_group_windows(reader, entry.group)[entry.position]
+end
+
+"""
+$(TYPEDSIGNATURES)
+Group `group_index`'s windows from the most recent
+[`read_forecast_window!`](@ref): one per entry, lining up positionally with
+[`get_forecast_group_entries`](@ref). The result is a concrete `Vector` (e.g.
+`Vector{Vector{Float64}}`), so a loop that takes it through a function barrier
+reads each window without a dynamic dispatch:
+
+```julia
+for g in 1:get_num_forecast_groups(reader)
+    consume!(out, get_forecast_group_windows(reader, g),
+        get_forecast_group_entries(reader, g))
+end
+```
+
+Materializes (and decodes) the whole group on first touch after a read, into the
+same cache [`get_forecast_window`](@ref) uses, so the two may be mixed and each
+slot is still decoded at most once per read. Treat the windows as read-only.
+"""
+function get_forecast_group_windows(reader::ForecastReader, group_index::Integer)
     reader.has_read || throw(
         ArgumentError("call read_forecast_window! before reading window values"))
-    entry = reader.entries[entry_index]
-    cached = reader.windows[entry.slot]
-    isnothing(cached) || return cached
-    raw = InfraStore.forecast_values(reader.inner, entry_index)
-    window =
-        _decode_forecast_reader_window(T, raw, reader.element_types[entry_index])
-    reader.windows[entry.slot] = window
-    return window
+    windows = reader.group_windows[group_index]
+    if isnothing(windows)
+        windows = _materialize_forecast_group(reader, group_index)
+        reader.group_windows[group_index] = windows
+    end
+    return windows
+end
+
+"""
+$(TYPEDSIGNATURES)
+The entries of group `group_index` (1-based), as a view in `position` order — so
+entry `i` of this view owns window `i` of [`get_forecast_group_windows`](@ref).
+Needs no read; the grouping is fixed when the reader is built.
+"""
+get_forecast_group_entries(reader::ForecastReader, group_index::Integer) =
+    view(reader.entries, reader.group_members[group_index])
+
+# One group's windows for the current timestamp. The comprehension collects to the
+# windows' shared concrete type, which is what the grouping guarantees. Entries
+# sharing a slot share one decoded array.
+function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) where {T}
+    tag = reader.group_element_types[group]
+    by_slot = Dict{Int, Any}()
+    return [
+        get!(by_slot, reader.entries[i].slot) do
+            _decode_forecast_reader_window(
+                T, InfraStore.forecast_values(reader.inner, i), tag)
+        end
+        for i in reader.group_members[group]
+    ]
 end
 
 # ---- StaticTimeSeriesReader ------------------------------------------------
