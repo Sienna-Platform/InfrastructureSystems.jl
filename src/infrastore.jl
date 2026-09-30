@@ -858,7 +858,7 @@ end
 
 "The store the owner's time series manager holds."
 _owner_store(owner::TimeSeriesOwners) =
-    _get_time_series_manager_or_throw(owner).data_store
+    _get_time_series_manager_or_throw(owner).data_store::Store
 
 # The store an owner's manager holds, and the row `key`'s id resolves to in it —
 # for the catalog-row accessors, which want the row itself rather than the data.
@@ -2269,7 +2269,7 @@ function infrastore_owner_list_metadata(
     !isnothing(time_series_type) &&
         _check_interval_supported(time_series_type, interval)
     mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
+    store = mgr.data_store::Store
     owner_id, _, category = _infrastore_owner_args(owner)
     return _infrastore_list_metadata(store;
         owner_id = owner_id, owner_category = category,
@@ -2345,7 +2345,7 @@ function infrastore_get_time_series_hashes(
     isempty(owners) && return hashes
     owner = first(owners)
     mgr = _get_time_series_manager_or_throw(owner)
-    store = mgr.data_store
+    store = mgr.data_store::Store
     # The single-query design filters on ONE owner category, so a mixed collection would
     # silently drop every owner of the other kind. The id collection already walks
     # `owners`, so checking the category costs nothing.

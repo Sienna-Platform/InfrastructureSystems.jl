@@ -35,7 +35,7 @@ function get_time_series_storage(owner::TimeSeriesOwners)
         return nothing
     end
 
-    return mgr.data_store
+    return mgr.data_store::Store
 end
 
 """
