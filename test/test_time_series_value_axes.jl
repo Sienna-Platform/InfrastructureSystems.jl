@@ -333,3 +333,32 @@ end
 
     @test_throws ArgumentError IS.make_time_array(_va_nd_det("d"; count = 1))
 end
+
+@testset "Test value_axes survive both serialization paths" begin
+    sys, owners = _va_system(2)
+    axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), _va_bus_axis(3)]
+    IS.add_time_series!(sys, owners, _va_sts("f", rand(24, 2, 3); value_axes = axes))
+    IS.transform_single_time_series!(
+        sys, IS.DeterministicSingleTimeSeries, Dates.Hour(6), Dates.Hour(6),
+    )
+
+    # Legacy: the JSON document plus the store's .h5 and .sqlite.
+    sys2, ok = validate_serialization(sys)
+    @test ok
+    owner2 = IS.get_component(IS.TestComponent, sys2, IS.get_name(owners[1]))
+    @test IS.get_value_axes(IS.get_time_series(IS.SingleTimeSeries, owner2, "f")) == axes
+    @test IS.get_value_axes(IS.get_time_series(IS.Deterministic, owner2, "f")) == axes
+
+    # OpenAPI: the association rows plus the array half alone.
+    dir = mktempdir()
+    rows = IS.openapi_time_series_association_json(sys)
+    IS.serialize_arrays(IS.get_data_store(sys), joinpath(dir, "arrays.h5"))
+    store = IS.deserialize_arrays(joinpath(dir, "arrays.h5"))
+    IS.import_time_series_association_rows!(store, rows)
+    mds = IS.list_time_series_metadata(owners[1])
+    @test length(mds) == 2
+    for md in mds
+        @test IS.get_value_axes(IS.get_time_series(store, IS.get_time_series_key(md))) ==
+              axes
+    end
+end
