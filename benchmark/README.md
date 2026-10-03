@@ -184,6 +184,7 @@ julia --project=test benchmark/matrix_bench.jl > matrix.csv
 | `M2-DST` | `M2` plus `transform_single_time_series!` |
 
 Sizes come from `MATRIX_BUSES` (50000), `MATRIX_ZONES` (8) and `MATRIX_STEPS` (24).
+Zones are disjoint by default; `MATRIX_MEMBERS=18000:22000` draws each zone's size from that range instead, so a bus can sit in several zones (every bus is in at least one).
 Every timed op repeats `MATRIX_REPEATS` (3) times; take the median of its rows.
 Each write repeat builds a fresh system and payload outside the timer, and the last system serves the reads and serializations.
 Each serialization repeat writes to a fresh directory and its deserialization reads from that directory.
@@ -205,3 +206,22 @@ How to read the rows:
 - `de_legacy` and `de_openapi` are not like for like: `de_legacy` copies the store's `.h5` and `.sqlite` and loads the finished catalog, while `de_openapi` opens the arrays file in place and replays every association row from the JSON document.
   Neither reads an array.
 - A check that throws is reported as an `error: <op>: <message>` row, so the case still reaches its `maxrss` row.
+
+## Linked reserve offers
+
+`reserves_bench.jl` stores one `Int64` link matrix per device: each hour a (blocks x products) matrix whose entry is the step a shared block became in that product's offer curve, or 0.
+It reuses `matrix_bench.jl`'s serialization and reporting helpers and runs each case in a fresh process.
+
+```sh
+julia --project=test benchmark/reserves_bench.jl > reserves.csv
+```
+
+| case | what is stored |
+|---|---|
+| `R-dev` | `SingleTimeSeries{Int64, 3}` per device, rows padded to that device's busiest hour, `value_axes = [block, product]` |
+| `R-fixed` | the same, with every device padded to `RESERVE_MAX_BLOCKS` rows, so all devices share one element shape |
+| `R-tuple` | one `Float64` tuple per hour (column-major blocks x products), the form IS stored before `value_axes`; no labels |
+
+Every case is transformed to `DeterministicSingleTimeSeries` and read back as forecast windows two ways: `read_each` (one window read per device) and `reader_window` (every device at one timestamp through `build_forecast_reader`; `reader_build` times building it).
+Sizes come from `RESERVE_DEVICES` (4500), `RESERVE_STEPS` (24) and `RESERVE_MAX_BLOCKS` (10); repeats come from `MATRIX_REPEATS`.
+The size and memory rows read as in the section above.

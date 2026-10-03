@@ -3,7 +3,8 @@
 #   julia --project=test benchmark/matrix_bench.jl > matrix.csv   # every case, fresh process each
 #   julia --project=test benchmark/matrix_bench.jl M2              # one case, rows only
 #
-# Sizes: MATRIX_BUSES (50000), MATRIX_ZONES (8), MATRIX_STEPS (24). See README.md.
+# Sizes: MATRIX_BUSES (50000), MATRIX_ZONES (8), MATRIX_STEPS (24), and MATRIX_MEMBERS
+# ("lo:hi" overlapping zone sizes; unset = disjoint zones). See README.md.
 include(joinpath(@__DIR__, "bench.jl"))  # helpers only; its own run is guarded
 
 const TS_NAME = "distribution_factor"
@@ -18,15 +19,42 @@ struct Fixture
     factors::Vector{Matrix{Float64}}  # (steps, members) per zone; each row sums to 1
 end
 
-# Bus b sits in zone mod1(b, nzone). Factors are smooth in time, distinct per bus so the
-# store cannot deduplicate them, and normalized within each zone at every step.
-function Fixture(nzone, nbus, steps)
-    members = [collect(z:nzone:nbus) for z in 1:nzone]
-    factors = map(members) do buses
-        raw = [1.0 + 0.5 * sinpi(2 * (t + b) / steps) + 1e-6 * b for t in 1:steps, b in buses]
+# Factors are smooth in time, distinct per (zone, bus) so the store cannot deduplicate
+# them, and normalized within each zone at every step.
+function Fixture(nzone, nbus, steps; sizes = nothing)
+    members = zone_members(nzone, nbus, sizes)
+    factors = map(enumerate(members)) do (z, buses)
+        raw = [
+            1.0 + 0.5 * sinpi(2 * (t + b + z) / steps) + 1e-6 * b for t in 1:steps,
+            b in buses
+        ]
         raw ./ sum(raw; dims = 2)
     end
     return Fixture(nzone, nbus, steps, members, factors)
+end
+
+# Disjoint zones: bus b sits in zone mod1(b, nzone).
+zone_members(nzone, nbus, ::Nothing) = [collect(z:nzone:nbus) for z in 1:nzone]
+
+# Overlapping zones: zone z holds sizes[z] buses drawn at random (seeded), and every bus
+# belongs to at least one zone.
+function zone_members(nzone, nbus, sizes::AbstractVector{Int})
+    rng = Random.Xoshiro(42)
+    sets = [Set{Int}() for _ in 1:nzone]
+    foreach(b -> push!(sets[rand(rng, 1:nzone)], b), 1:nbus)
+    for (z, n) in enumerate(sizes)
+        while length(sets[z]) < min(n, nbus)
+            push!(sets[z], rand(rng, 1:nbus))
+        end
+    end
+    return [sort!(collect(s)) for s in sets]
+end
+
+# MATRIX_MEMBERS="lo:hi" draws each zone's size from lo:hi; unset keeps zones disjoint.
+function member_sizes(spec, nzone)
+    isempty(spec) && return nothing
+    lo, hi = parse.(Int, split(spec, ":"))
+    return rand(Random.Xoshiro(7), lo:hi, nzone)
 end
 
 # ---- payloads (built outside the timed write) ----------------------------------
@@ -371,10 +399,12 @@ function main(args)
         println("DONE")
         return
     end
+    nzone = parse(Int, get(ENV, "MATRIX_ZONES", "8"))
     fx = Fixture(
-        parse(Int, get(ENV, "MATRIX_ZONES", "8")),
+        nzone,
         parse(Int, get(ENV, "MATRIX_BUSES", "50000")),
-        parse(Int, get(ENV, "MATRIX_STEPS", "24")),
+        parse(Int, get(ENV, "MATRIX_STEPS", "24"));
+        sizes = member_sizes(get(ENV, "MATRIX_MEMBERS", ""), nzone),
     )
     case = only(args)
     case in CASES || error("unknown case $case; expected one of $(join(CASES, ", "))")
