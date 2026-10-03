@@ -98,6 +98,27 @@ For the authoritative on-disk format — HDF5 dataset layout, hashing, the SQLit
 the `DATA_FORMAT_VERSION` compatibility contract — see the `InfraStore` repository's
 file-format reference.
 
+### N-D values and `value_axes`
+
+A `SingleTimeSeries` or `Deterministic` may hold an array per step, such as a `[steps, zones, buses]` array.
+`value_axes` names each non-time dimension and labels its entries with a [`InfrastructureSystems.TimeSeriesAxis`](@ref):
+
+```julia
+axes = [TimeSeriesAxis("zone", ["LZ1", "LZ2"]), TimeSeriesAxis("bus", bus_numbers)]
+ts = SingleTimeSeries("factors", initial_timestamp, resolution, values; value_axes = axes)
+get_value_axes(get_time_series(SingleTimeSeries, component, "factors"))  # axes
+```
+
+  - Each non-time dimension gets one axis, sized to it, with unique names and unique integer or string labels.
+  - IS stores the axes as JSON in the association row's `application_data`, under the `"value_axes"` key, and leaves any other payload there alone.
+  - Like `units`, the axes describe the values and are not part of identity: they never filter a query or appear on a `TimeSeriesKey`.
+  - `get_value_axes(md)` decodes them from a `TimeSeriesMetadata` row, for readers that hand back raw arrays, such as the forecast reader.
+
+A `Deterministic` window over N-D values is an `[H, *E]` array: the horizon first, then the per-step value shape `E`.
+A `DeterministicSingleTimeSeries` derived from an N-D `SingleTimeSeries` reads back the same way and keeps its axes.
+A `TimeArray` holds at most a (time, column) matrix, so `get_window`, `get_time_array` and `get_time_series_array` throw an `ArgumentError` for values of rank 3 or more.
+Read those with `get_data(forecast)[initial_time]` or `get_array` instead.
+
 ## Identifying and retrieving a time series
 
 The surface splits in two. **Identify** with
