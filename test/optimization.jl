@@ -35,6 +35,16 @@ IS.Optimization.should_write_resulting_value(::Type{MockExpression2}) = false
     @test MockStoreParams <: IS.Optimization.AbstractModelStoreParams
 end
 
+@testset "LeftHandSideParameter is a ParameterType sibling" begin
+    @test IS.Optimization.LeftHandSideParameter <: IS.Optimization.ParameterType
+    @test !(IS.Optimization.LeftHandSideParameter <: IS.Optimization.RightHandSideParameter)
+    @test !(
+        IS.Optimization.LeftHandSideParameter <: IS.Optimization.ObjectiveFunctionParameter
+    )
+    @test isdefined(IS.Optimization, :LeftHandSideParameter) &&
+          :LeftHandSideParameter in names(IS.Optimization)
+end
+
 @testset "IS.Optimization utility functions" begin
     # Test default values
     @test IS.Optimization.convert_output_to_natural_units(MockVariable) == false
