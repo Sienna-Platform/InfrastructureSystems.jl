@@ -1,0 +1,459 @@
+# Labeled value axes on N-D time series, and N-D Deterministic / DST reads.
+
+const _VA_T0 = Dates.DateTime("2024-01-01T00:00:00")
+
+_va_bus_axis(n) = IS.TimeSeriesAxis("bus", collect(101:(100 + n)))
+
+@testset "Test value_axes TimeSeriesAxis construction" begin
+    axis = IS.TimeSeriesAxis("bus", Int32[1, 2])
+    @test axis.labels isa Vector{Int64}
+    @test axis == IS.TimeSeriesAxis("bus", [1, 2])
+    @test hash(axis) == hash(IS.TimeSeriesAxis("bus", [1, 2]))
+    @test axis != IS.TimeSeriesAxis("bus", ["1", "2"])
+    @test IS.TimeSeriesAxis("zone", SubString.(["a", "b"])).labels isa Vector{String}
+    # Review focus: a DataFrame column with missing values, or an unsupported label type.
+    @test_throws ArgumentError IS.TimeSeriesAxis("bus", [1, missing])
+    @test_throws ArgumentError IS.TimeSeriesAxis("bus", [:a, :b])
+end
+
+@testset "Test value_axes validation against value dimensions" begin
+    axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), IS.TimeSeriesAxis("bus", [1, 2, 3])]
+    @test IS._check_value_axes(axes, (2, 3)) === nothing
+    @test IS._check_value_axes(nothing, (2, 3)) === nothing
+    @test_throws ArgumentError IS._check_value_axes(axes, (2,))
+    @test_throws ArgumentError IS._check_value_axes(axes, (2, 4))
+    @test_throws ArgumentError IS._check_value_axes(
+        [IS.TimeSeriesAxis("bus", [1, 1])],
+        (2,),
+    )
+    @test_throws ArgumentError IS._check_value_axes(
+        [IS.TimeSeriesAxis("x", [1]), IS.TimeSeriesAxis("x", [2])],
+        (1, 1),
+    )
+end
+
+@testset "Test value_axes application_data codec" begin
+    axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), IS.TimeSeriesAxis("bus", [7, 9])]
+    encoded = IS._value_axes_application_data(axes)
+    @test IS._value_axes_from_application_data(encoded) == axes
+    @test IS._value_axes_application_data(nothing) === nothing
+    @test IS._value_axes_from_application_data(nothing) === nothing
+    # Another client's payload: not JSON, JSON that is not an object, an object without the key.
+    @test IS._value_axes_from_application_data("not json {") === nothing
+    @test IS._value_axes_from_application_data("[1, 2]") === nothing
+    @test IS._value_axes_from_application_data("{\"other\": 1}") === nothing
+    # Malformed payloads under IS's own "value_axes" key must error, not silently coerce.
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": \"x\"}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [1]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"labels\": [1]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"label_type\": \"int\", \"labels\": [1]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": 123, \"label_type\": \"int\", \"labels\": [1]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": [\"a\"]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"float\", \"labels\": [1.5]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": [1.0]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": {}}",
+    )
+    # Labels field must be a list.
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": 5}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"string\", \"labels\": \"abc\"}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"unknown\", \"labels\": 5}]}",
+    )
+    # Bool coerces to integer; must error.
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": [true]}]}",
+    )
+    # Oversized integer (BigInt) must error.
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": [99999999999999999999]}]}",
+    )
+end
+
+function _va_system(n_owners = 1)
+    sys = IS.SystemData()
+    owners = [IS.TestComponent("va$i", i) for i in 1:n_owners]
+    foreach(owner -> IS.add_component!(sys, owner), owners)
+    return sys, owners
+end
+
+_va_sts(name, data; value_axes = nothing) =
+    IS.SingleTimeSeries(name, _VA_T0, Dates.Hour(1), data; value_axes = value_axes)
+
+# Writes a row straight to the store with an `application_data` the test chooses, as
+# another client of the same store would.
+function _va_add_raw!(sys, owner, name, data, application_data)
+    store = IS.get_data_store(sys)
+    owner_id, owner_type, category = IS._infrastore_owner_args(owner)
+    raw = IS.InfraStore.SingleTimeSeries(
+        _VA_T0, Dates.Hour(1), data, name; application_data = application_data,
+    )
+    batch = IS.InfraStore.AddBatch()
+    IS.InfraStore.add_time_series!(batch, owner_id, owner_type, category, raw)
+    IS.InfraStore.add_time_series_bulk!(store.inner, batch)
+    IS.flush!(store)
+    return
+end
+
+@testset "Test value_axes on SingleTimeSeries construction" begin
+    data = rand(24, 3)
+    ts = _va_sts("f", data; value_axes = [_va_bus_axis(3)])
+    @test IS.get_value_axes(ts) == [_va_bus_axis(3)]
+    @test IS.get_value_axes(_va_sts("f", data)) === nothing
+    @test_throws "ArgumentError: value axis 'bus' has 4 labels, but its dimension has size 3" _va_sts(
+        "f",
+        data;
+        value_axes = [_va_bus_axis(4)],
+    )
+    @test_throws "ArgumentError: value_axes names 1 axes, but each value has 0 dimensions" _va_sts(
+        "f",
+        rand(24);
+        value_axes = [_va_bus_axis(1)],
+    )
+    @test IS.get_value_axes(IS.SingleTimeSeries(ts, "g")) == [_va_bus_axis(3)]
+    kw = IS.SingleTimeSeries(;
+        name = "k",
+        data = data,
+        initial_timestamp = _VA_T0,
+        resolution = Dates.Hour(1),
+        value_axes = [_va_bus_axis(3)],
+    )
+    @test IS.get_value_axes(kw) == [_va_bus_axis(3)]
+    # Review focus: time slicing keeps the value axes.
+    @test IS.get_value_axes(IS.head(ts, 5)) == [_va_bus_axis(3)]
+    @test IS.get_value_axes(IS.tail(ts, 5)) == [_va_bus_axis(3)]
+end
+
+@testset "Test value_axes round-trip through the store" begin
+    sys, (owner,) = _va_system()
+    data = rand(24, 2, 3)
+    axes = [IS.TimeSeriesAxis("zone", ["LZ1", "LZ2"]), _va_bus_axis(3)]
+    IS.add_time_series!(sys, owner, _va_sts("f", data; value_axes = axes))
+    back = IS.get_time_series(IS.SingleTimeSeries, owner, "f")
+    @test IS.get_array(back) == data
+    @test IS.get_value_axes(back) == axes
+    sliced = IS.get_time_series(
+        IS.SingleTimeSeries, owner, "f"; start_time = _VA_T0 + Dates.Hour(2), len = 5,
+    )
+    @test IS.get_array(sliced) == data[3:7, :, :]
+    @test IS.get_value_axes(sliced) == axes
+    @test IS.get_value_axes(only(IS.list_time_series_metadata(owner))) == axes
+end
+
+@testset "Test value_axes with one array shared by several owners" begin
+    sys, owners = _va_system(3)
+    data = rand(24, 3)
+    IS.add_time_series!(
+        sys,
+        owners[1:2],
+        _va_sts("f", data; value_axes = [_va_bus_axis(3)]),
+    )
+    for owner in owners[1:2]
+        back = IS.get_time_series(IS.SingleTimeSeries, owner, "f")
+        @test IS.get_value_axes(back) == [_va_bus_axis(3)]
+    end
+    # Review focus: labels live on each row, so one array can carry different labels.
+    other = IS.TimeSeriesAxis("bus", [7, 8, 9])
+    IS.add_time_series!(sys, owners[3], _va_sts("f", data; value_axes = [other]))
+    @test IS.get_value_axes(IS.get_time_series(IS.SingleTimeSeries, owners[3], "f")) ==
+          [other]
+    hashes = IS.get_time_series_hashes(owners, IS.SingleTimeSeries, "f")
+    @test length(unique(values(hashes))) == 1
+    # Review focus: copying a row keeps its labels.
+    copy_owner = IS.TestComponent("va_copy", 9)
+    IS.add_component!(sys, copy_owner)
+    IS.copy_time_series!(copy_owner, owners[1])
+    @test IS.get_value_axes(IS.get_time_series(IS.SingleTimeSeries, copy_owner, "f")) ==
+          [_va_bus_axis(3)]
+end
+
+@testset "Test value_axes leaves another client's application_data alone" begin
+    sys, (owner,) = _va_system()
+    _va_add_raw!(sys, owner, "foreign", rand(24, 3), "not json {")
+    _va_add_raw!(sys, owner, "other_json", rand(24, 3), "{\"other\": 1}")
+    for name in ("foreign", "other_json")
+        back = IS.get_time_series(IS.SingleTimeSeries, owner, name)
+        @test IS.get_value_axes(back) === nothing
+    end
+    # IS's own key disagreeing with the stored shape is a storage inconsistency.
+    bad = IS._value_axes_application_data([_va_bus_axis(4)])
+    _va_add_raw!(sys, owner, "bad", rand(24, 3), bad)
+    mismatch = "ArgumentError: value axis 'bus' has 4 labels, but its dimension has size 3"
+    @test_throws mismatch IS.get_time_series(IS.SingleTimeSeries, owner, "bad")
+    md = only(IS.list_time_series_metadata(owner; name = "bad"))
+    @test_throws mismatch IS.get_value_axes(md)
+end
+
+function _va_nd_det(name; count = 2, horizon = 4, dims = (2, 3), value_axes = nothing)
+    data = SortedDict{Dates.DateTime, Array{Float64, length(dims) + 1}}(
+        _VA_T0 + Dates.Hour(horizon) * (k - 1) => rand(horizon, dims...) for k in 1:count
+    )
+    return IS.Deterministic(
+        name, data, Dates.Hour(1);
+        interval = Dates.Hour(horizon), value_axes = value_axes,
+    )
+end
+
+function _va_same_windows(a, b)
+    da, db = IS.get_data(a), IS.get_data(b)
+    return collect(keys(da)) == collect(keys(db)) &&
+           all(da[k] == db[k] for k in keys(da))
+end
+
+@testset "Test value_axes N-D Deterministic construction" begin
+    axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), _va_bus_axis(3)]
+    det = _va_nd_det("d"; value_axes = axes)
+    @test det isa IS.Deterministic{Float64, 3}
+    @test IS.get_value_axes(det) == axes
+    @test IS.get_value_axes(IS.Deterministic(det, "e")) == axes
+    @test_throws ArgumentError _va_nd_det("d"; value_axes = [_va_bus_axis(3)])
+    ragged = SortedDict{Dates.DateTime, Array{Float64, 3}}(
+        _VA_T0 => rand(4, 2, 3),
+        _VA_T0 + Dates.Hour(4) => rand(4, 2, 2),
+    )
+    @test_throws ArgumentError IS.Deterministic(
+        "r", ragged, Dates.Hour(1); interval = Dates.Hour(4),
+    )
+    composite = SortedDict{Dates.DateTime, Matrix{IS.LinearFunctionData}}(
+        _VA_T0 => fill(IS.LinearFunctionData(1.0, 0.0), 4, 2),
+    )
+    @test_throws ArgumentError IS.Deterministic(
+        "c", composite, Dates.Hour(1); interval = Dates.Hour(4),
+    )
+end
+
+@testset "Test value_axes N-D Deterministic round-trip through the store" begin
+    sys, (owner,) = _va_system()
+    axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), _va_bus_axis(3)]
+    det = _va_nd_det("d"; value_axes = axes)
+    IS.add_time_series!(sys, owner, det)
+    back = IS.get_time_series(IS.Deterministic, owner, "d")
+    @test back isa IS.Deterministic{Float64, 3}
+    @test _va_same_windows(back, det)
+    @test IS.get_value_axes(back) == axes
+    short = IS.get_time_series(IS.Deterministic, owner, "d"; len = 2)
+    for (k, w) in IS.get_data(det)
+        @test IS.get_data(short)[k] == w[1:2, :, :]
+    end
+    @test IS.get_value_axes(short) == axes
+    # A stored Deterministic row's element_shape leads with the count axis.
+    md = only(IS.list_time_series_metadata(owner; time_series_type = IS.Deterministic))
+    @test IS.get_value_axes(md) == axes
+    IS.add_time_series!(sys, owner, _va_nd_det("plain"; dims = ()))
+    plain_md = only(
+        IS.list_time_series_metadata(
+            owner; time_series_type = IS.Deterministic, name = "plain",
+        ),
+    )
+    @test IS.get_value_axes(plain_md) === nothing
+
+    reader = IS.build_forecast_reader(
+        sys, IS.Deterministic; resolution = Dates.Hour(1), name = "d",
+    )
+    IS.read_forecast_window!(reader, _VA_T0 + Dates.Hour(4))
+    @test only(IS.get_forecast_window(reader, i) for i in 1:length(reader)) ==
+          IS.get_data(det)[_VA_T0 + Dates.Hour(4)]
+end
+
+@testset "Test value_axes DST over N-D SingleTimeSeries" begin
+    sys, owners = _va_system(2)
+    cube = rand(24, 2, 3)
+    cube_axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), _va_bus_axis(3)]
+    mat = rand(24, 3)
+    IS.add_time_series!(sys, owners, _va_sts("f", cube; value_axes = cube_axes))
+    IS.add_time_series!(sys, owners[1], _va_sts("g", mat; value_axes = [_va_bus_axis(3)]))
+    IS.transform_single_time_series!(
+        sys, IS.DeterministicSingleTimeSeries, Dates.Hour(6), Dates.Hour(6),
+    )
+    for owner in owners
+        det = IS.get_time_series(IS.Deterministic, owner, "f")
+        @test IS.get_count(det) == 4
+        for (i, w) in enumerate(values(IS.get_data(det)))
+            @test w == cube[(6 * (i - 1) + 1):(6 * i), :, :]
+        end
+        @test IS.get_value_axes(det) == cube_axes
+        # Review focus: a narrower window keeps its shape and its axes.
+        short = IS.get_time_series(
+            IS.Deterministic, owner, "f";
+            start_time = _VA_T0 + Dates.Hour(6), len = 3, count = 1,
+        )
+        @test only(values(IS.get_data(short))) == cube[7:9, :, :]
+        @test IS.get_value_axes(short) == cube_axes
+    end
+    matrix_det = IS.get_time_series(IS.Deterministic, owners[1], "g")
+    @test first(values(IS.get_data(matrix_det))) == mat[1:6, :]
+    @test IS.get_value_axes(matrix_det) == [_va_bus_axis(3)]
+
+    # The forecast reader reads the shared array once and hands back raw [H, *E] windows.
+    reader = IS.build_forecast_reader(
+        sys, IS.Deterministic; resolution = Dates.Hour(1), name = "f",
+    )
+    @test IS.get_num_forecast_slots(reader) == 1
+    IS.read_forecast_window!(reader, _VA_T0 + Dates.Hour(12))
+    for i in 1:length(reader)
+        @test IS.get_forecast_window(reader, i) == cube[13:18, :, :]
+    end
+    md = only(
+        IS.list_time_series_metadata(
+            owners[1]; time_series_type = IS.DeterministicSingleTimeSeries, name = "f",
+        ),
+    )
+    @test IS.get_value_axes(md) == cube_axes
+end
+
+@testset "Test value_axes get_window rejects N-D windows" begin
+    @test_throws "ArgumentError: get_window returns a TimeArray, which holds at most 2 dimensions, but this window has 3" IS.get_window(
+        _va_nd_det("d"),
+        _VA_T0,
+    )
+    vector_det = IS.Deterministic(
+        "v",
+        SortedDict{Dates.DateTime, Vector{Float64}}(_VA_T0 => collect(1.0:4)),
+        Dates.Hour(1),
+    )
+    @test IS.TimeSeries.values(IS.get_window(vector_det, _VA_T0; len = 2)) == [1.0, 2.0]
+
+    sys, (owner,) = _va_system()
+    IS.add_time_series!(sys, owner, _va_nd_det("d"))
+    @test_throws ArgumentError IS.get_time_series_array(
+        IS.Deterministic, owner, "d"; start_time = _VA_T0,
+    )
+    @test_throws ArgumentError IS.get_time_series_values(
+        IS.Deterministic, owner, "d"; start_time = _VA_T0,
+    )
+
+    @test_throws ArgumentError IS.make_time_array(_va_nd_det("d"; count = 1))
+end
+
+@testset "Test value_axes survive both serialization paths" begin
+    sys, owners = _va_system(2)
+    axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), _va_bus_axis(3)]
+    IS.add_time_series!(sys, owners, _va_sts("f", rand(24, 2, 3); value_axes = axes))
+    IS.transform_single_time_series!(
+        sys, IS.DeterministicSingleTimeSeries, Dates.Hour(6), Dates.Hour(6),
+    )
+
+    # Legacy: the JSON document plus the store's .h5 and .sqlite.
+    sys2, ok = validate_serialization(sys)
+    @test ok
+    owner2 = IS.get_component(IS.TestComponent, sys2, IS.get_name(owners[1]))
+    @test IS.get_value_axes(IS.get_time_series(IS.SingleTimeSeries, owner2, "f")) == axes
+    @test IS.get_value_axes(IS.get_time_series(IS.Deterministic, owner2, "f")) == axes
+
+    # OpenAPI: the association rows plus the array half alone.
+    dir = mktempdir()
+    rows = IS.openapi_time_series_association_json(sys)
+    IS.serialize_arrays(IS.get_data_store(sys), joinpath(dir, "arrays.h5"))
+    store = IS.deserialize_arrays(joinpath(dir, "arrays.h5"))
+    IS.import_time_series_association_rows!(store, rows)
+    mds = IS.list_time_series_metadata(owners[1])
+    @test length(mds) == 2
+    for md in mds
+        @test IS.get_value_axes(IS.get_time_series(store, IS.get_time_series_key(md))) ==
+              axes
+    end
+end
+
+@testset "Test value_axes copied at construction" begin
+    axes = [_va_bus_axis(3)]
+    ts = _va_sts("f", rand(24, 3); value_axes = axes)
+    det = _va_nd_det("d"; dims = (3,), value_axes = axes)
+    push!(axes, IS.TimeSeriesAxis("zone", ["a"]))
+    @test IS.get_value_axes(ts) == [_va_bus_axis(3)]
+    @test IS.get_value_axes(det) == [_va_bus_axis(3)]
+end
+
+@testset "Test value_axes concatenating SingleTimeSeries" begin
+    axes = [_va_bus_axis(3)]
+    part(t, data; value_axes = axes) = IS.SingleTimeSeries(
+        "f", _VA_T0 + Dates.Hour(t), Dates.Hour(1), data; value_axes = value_axes,
+    )
+    a, b = rand(4, 3), rand(4, 3)
+    joined = IS.SingleTimeSeries([part(0, a), part(4, b)])
+    @test IS.get_array(joined) == vcat(a, b)
+    @test IS.get_value_axes(joined) == axes
+    cube = rand(4, 2, 3)
+    cube_axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), _va_bus_axis(3)]
+    joined3 = IS.SingleTimeSeries([
+        part(0, cube; value_axes = cube_axes),
+        part(4, cube; value_axes = cube_axes),
+    ])
+    @test IS.get_array(joined3) == vcat(cube, cube)
+    @test IS.get_value_axes(joined3) == cube_axes
+    other = [IS.TimeSeriesAxis("bus", [7, 8, 9])]
+    @test_throws "ArgumentError: cannot concatenate SingleTimeSeries with different value_axes" IS.SingleTimeSeries(
+        [part(0, a), part(4, b; value_axes = other)],
+    )
+    @test_throws "ArgumentError: cannot concatenate SingleTimeSeries with different value shapes" IS.SingleTimeSeries(
+        [part(0, a; value_axes = nothing), part(4, rand(4, 2); value_axes = nothing)],
+    )
+    # 1-D series join as before, with no axes.
+    flat = IS.SingleTimeSeries([
+        part(0, [1.0, 2.0]; value_axes = nothing),
+        part(2, [3.0, 4.0]; value_axes = nothing),
+    ])
+    @test IS.get_array(flat) == [1.0, 2.0, 3.0, 4.0]
+    @test IS.get_value_axes(flat) === nothing
+end
+
+@testset "Test value_axes TimeArray accessors reject N-D static series" begin
+    msg = "ArgumentError: get_time_array is only defined for 1- or 2-D values (got N = 3)"
+    sys, (owner,) = _va_system()
+    ts = _va_sts("f", rand(24, 2, 3))
+    IS.add_time_series!(sys, owner, ts)
+    @test_throws msg IS.get_time_series_array(owner, ts)
+    @test_throws msg IS.get_time_series_array(
+        owner, ts; start_time = _VA_T0 + Dates.Hour(1), len = 5,
+    )
+    nst = IS.NonSequentialTimeSeries(
+        "n", collect(_VA_T0 .+ Dates.Hour.(0:23)), rand(24, 2, 3),
+    )
+    @test_throws msg IS.make_time_array(nst, _VA_T0 + Dates.Hour(1); len = 5)
+    mat = _va_sts("m", rand(24, 3))
+    sub = IS.get_time_series_array(owner, mat; start_time = _VA_T0 + Dates.Hour(1), len = 5)
+    @test IS.TimeSeries.values(sub) == IS.get_array(mat)[2:6, :]
+end
+
+@testset "Test value_axes metadata of composite element types" begin
+    sys, (owner,) = _va_system()
+    linear = fill(IS.LinearFunctionData(1.0, 2.0), 24)
+    IS.add_time_series!(sys, owner, _va_sts("f", linear; value_axes = IS.TimeSeriesAxis[]))
+    md = only(IS.list_time_series_metadata(owner; name = "f"))
+    @test IS.get_element_shape(md) == (2,)
+    @test IS.get_value_axes(md) == IS.TimeSeriesAxis[]
+    windows = SortedDict(
+        _VA_T0 => fill(IS.PiecewiseLinearData([(0.0, 1.0), (1.0, 2.0)]), 4),
+        _VA_T0 + Dates.Hour(4) =>
+            fill(IS.PiecewiseLinearData([(0.0, 1.0), (1.0, 3.0)]), 4),
+    )
+    det = IS.Deterministic(
+        "d", windows, Dates.Hour(1);
+        interval = Dates.Hour(4), value_axes = IS.TimeSeriesAxis[],
+    )
+    IS.add_time_series!(sys, owner, det)
+    det_md = only(IS.list_time_series_metadata(owner; name = "d"))
+    @test IS.get_value_axes(det_md) == IS.TimeSeriesAxis[]
+end

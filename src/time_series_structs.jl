@@ -215,12 +215,13 @@ A row carries **every** column the catalog records bar the values themselves —
 the descriptive labels (`units`, `quantity_kind`, `unit_system`,
 `component_field`) as well as the identity ones, the store's own `element_type`
 and `element_shape`, the array's content hash, the row's `time_reference`, and
-the opaque `application_data` another client may have attached. That completeness
-is the contract: a writer restaging these series into another store, or emitting
-them into a document, works from this row alone and never has to drop to the
-store's own listing for a column IS declined to carry. The last three are columns
-IS itself neither writes nor interprets; they are carried so that restaging a row
-written by another client does not silently drop them.
+its `application_data`. That completeness is the contract: a writer restaging
+these series into another store, or emitting them into a document, works from this
+row alone and never has to drop to the store's own listing for a column IS declined
+to carry. IS neither writes nor interprets the hash or `time_reference`. In
+`application_data` it writes and reads its own `"value_axes"` key (see
+[`get_value_axes`](@ref)) and leaves any other payload alone, so restaging a row
+written by another client does not silently drop it.
 """
 struct TimeSeriesMetadata{T <: TimeSeriesData}
     key::TimeSeriesKey{T}
@@ -269,8 +270,8 @@ struct TimeSeriesMetadata{T <: TimeSeriesData}
     """
     time_reference::Union{Nothing, InfraStore.TimeReference}
     """
-    The opaque per-association blob a client may attach to a row. IS attaches
-    none and never looks inside one.
+    The per-association blob a client may attach to a row. IS writes and reads its
+    own `"value_axes"` key there and leaves any other payload alone.
     """
     application_data::Union{Nothing, String}
 end
@@ -302,6 +303,27 @@ get_element_type(md::TimeSeriesMetadata) = md.element_type
 get_element_shape(md::TimeSeriesMetadata) = md.element_shape
 get_time_reference(md::TimeSeriesMetadata) = md.time_reference
 get_application_data(md::TimeSeriesMetadata) = md.application_data
+
+"""
+Decode the value axes IS stored on this catalog row, or `nothing` when the row has none.
+For readers that hand back raw arrays, such as the forecast reader.
+"""
+function get_value_axes(md::TimeSeriesMetadata)
+    value_axes = _value_axes_from_application_data(md.application_data)
+    _check_value_axes(value_axes, _row_value_dims(md))
+    return value_axes
+end
+
+# Per-step value shape of a row. A stored Deterministic's array is (horizon, count, *E),
+# so its element_shape leads with the count axis; DST and static rows report *E alone.
+_row_value_dims(md::TimeSeriesMetadata) =
+    _unpacked_dims(md.element_shape, md.element_type)
+_row_value_dims(md::TimeSeriesMetadata{<:Deterministic}) =
+    _unpacked_dims(Base.tail(md.element_shape), md.element_type)
+
+# A composite element type (FunctionData, NTuple) is packed across one trailing axis.
+_unpacked_dims(dims::Dims, element_type::String) =
+    InfraStore.is_composite_element_type(element_type) ? Base.front(dims) : dims
 
 """
 The 64-char lowercase hex content hash of the stored array this row's series

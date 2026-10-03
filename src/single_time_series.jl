@@ -7,6 +7,7 @@
         units::Union{Nothing, String}
         quantity_kind::Union{Nothing, String}
         unit_system::Union{Nothing, AbstractUnitSystem}
+        value_axes::Union{Nothing, Vector{TimeSeriesAxis}}
     end
 
 A single column of time series data for a particular data field in a Component.
@@ -36,8 +37,11 @@ scalar-per-step case, `N >= 2` is multidimensional per-step values).
     quantity the values measure (e.g. `"ActivePower"`)
   - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
     the values are already expressed in (`NU`, `CU`, or `SU`)
+  - `value_axes::Union{Nothing, Vector{TimeSeriesAxis}}`: optional labels for each
+    non-time dimension of the values, e.g. `[TimeSeriesAxis("bus", bus_numbers)]`
 
-See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref).
+See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref),
+[`get_value_axes`](@ref).
 """
 struct SingleTimeSeries{T, N} <: StaticTimeSeries{T}
     "user-defined name"
@@ -54,6 +58,8 @@ struct SingleTimeSeries{T, N} <: StaticTimeSeries{T}
     quantity_kind::Union{Nothing, String}
     "unit system the values are already expressed in (`NU`/`CU`/`SU`), or `nothing`"
     unit_system::Union{Nothing, AbstractUnitSystem}
+    "labeled non-time axes of the values (see [`TimeSeriesAxis`](@ref)), or `nothing`"
+    value_axes::Union{Nothing, Vector{TimeSeriesAxis}}
 end
 
 # Derive the regular timestamp range from the stored metadata.
@@ -89,8 +95,11 @@ function SingleTimeSeries(
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+    value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
 )
     arr = _ensure_array(data)
+    value_axes = _copy_value_axes(value_axes)
+    _check_value_axes(value_axes, Base.tail(size(arr)))
     return SingleTimeSeries{eltype(arr), ndims(arr)}(
         String(name),
         initial_timestamp,
@@ -99,6 +108,7 @@ function SingleTimeSeries(
         _maybe_string(units),
         _maybe_string(quantity_kind),
         unit_system,
+        value_axes,
     )
 end
 
@@ -146,6 +156,7 @@ function SingleTimeSeries(;
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+    value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
 )
     first_timestamp, res, arr = _single_time_series_args(
         data,
@@ -156,6 +167,7 @@ function SingleTimeSeries(;
     return SingleTimeSeries(
         name, first_timestamp, res, arr;
         units = units, quantity_kind = quantity_kind, unit_system = unit_system,
+        value_axes = value_axes,
     )
 end
 
@@ -184,6 +196,7 @@ function SingleTimeSeries(
         units = src.units,
         quantity_kind = src.quantity_kind,
         unit_system = src.unit_system,
+        value_axes = src.value_axes,
     )
 end
 
@@ -283,14 +296,27 @@ function SingleTimeSeries(time_series::AbstractVector{<:SingleTimeSeries})
         collect(Iterators.flatten(_get_timestamps(x) for x in time_series)),
         resolution,
     )
+    value_dims = Base.tail(size(get_array(src)))
+    all(x -> Base.tail(size(get_array(x))) == value_dims, time_series) || throw(
+        ArgumentError(
+            "cannot concatenate SingleTimeSeries with different value shapes: " *
+            "$(unique(Base.tail(size(get_array(x))) for x in time_series))",
+        ),
+    )
+    all(x -> get_value_axes(x) == get_value_axes(src), time_series) || throw(
+        ArgumentError(
+            "cannot concatenate SingleTimeSeries with different value_axes",
+        ),
+    )
     concatenated = SingleTimeSeries(
         get_name(src),
         get_initial_timestamp(src),
         resolution,
-        collect(Iterators.flatten(get_array(x) for x in time_series));
+        reduce(vcat, [get_array(x) for x in time_series]);
         units = get_units(src),
         quantity_kind = get_quantity_kind(src),
         unit_system = get_unit_system(src),
+        value_axes = get_value_axes(src),
     )
     @debug "concatenated time_series" LOG_GROUP_TIME_SERIES concatenated
     return concatenated
@@ -321,14 +347,8 @@ Build a fresh `TimeSeries.TimeArray` from a [`SingleTimeSeries`](@ref)'s
 Defined for `N in (1, 2)` (a `TimeArray` is at most matrix-valued); for `N > 2` it
 throws and callers should use [`get_array`](@ref).
 """
-function get_time_array(value::SingleTimeSeries{T, N}) where {T, N}
-    N <= 2 || throw(
-        ArgumentError(
-            "get_time_array is only defined for 1- or 2-D values (got N = $N); use get_array",
-        ),
-    )
-    return TimeSeries.TimeArray(collect(_get_timestamps(value)), value.data)
-end
+get_time_array(value::SingleTimeSeries) =
+    _static_time_array(collect(_get_timestamps(value)), value.data)
 
 """
 Get [`SingleTimeSeries`](@ref) `data` as a `TimeArray`.
@@ -346,6 +366,12 @@ get_resolution(value::SingleTimeSeries) = value.resolution
 get_initial_timestamp(time_series::SingleTimeSeries) = time_series.initial_timestamp
 
 """
+Get [`SingleTimeSeries`](@ref) `value_axes`: one [`TimeSeriesAxis`](@ref) per non-time
+dimension of the values, or `nothing`.
+"""
+get_value_axes(value::SingleTimeSeries) = value.value_axes
+
+"""
 Creates a new SingleTimeSeries from an existing instance and a subset of data.
 """
 function SingleTimeSeries(time_series::SingleTimeSeries, data::TimeSeries.TimeArray)
@@ -357,6 +383,7 @@ function SingleTimeSeries(time_series::SingleTimeSeries, data::TimeSeries.TimeAr
         units = get_units(time_series),
         quantity_kind = get_quantity_kind(time_series),
         unit_system = get_unit_system(time_series),
+        value_axes = get_value_axes(time_series),
     )
 end
 
@@ -420,5 +447,5 @@ function make_time_array(
     colons = ntuple(_ -> Colon(), ndims(time_series.data) - 1)
     sub = time_series.data[start_index:end_index, colons...]
     timestamps = range(start_time; step = resolution, length = len)
-    return TimeSeries.TimeArray(collect(timestamps), sub)
+    return _static_time_array(collect(timestamps), sub)
 end

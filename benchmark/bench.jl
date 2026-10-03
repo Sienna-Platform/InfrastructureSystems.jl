@@ -698,10 +698,13 @@ function run_all(n, sweep_n, scaling_n)
     return
 end
 
-println("kind,eltype,op,n,total_s,us_per_op,bytes,status")
-# Warmup (JIT) on a small system.
-redirect_stdout(devnull) do
-    run_all(40, 40, 40)
+# Guarded so other benchmark scripts can include this file for its helpers.
+if abspath(PROGRAM_FILE) == @__FILE__
+    println("kind,eltype,op,n,total_s,us_per_op,bytes,status")
+    # Warmup (JIT) on a small system.
+    redirect_stdout(devnull) do
+        run_all(40, 40, 40)
+    end
+    run_all(N, SWEEP_N, SCALING_N)
+    println("DONE")
 end
-run_all(N, SWEEP_N, SCALING_N)
-println("DONE")
