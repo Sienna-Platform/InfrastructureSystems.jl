@@ -99,8 +99,6 @@ function _value_axes_from_parsed(parsed::Dict{String, Any})
     return _decode_axes_list(raw)
 end
 
-_decode_axes_list(::Nothing) = nothing
-
 function _decode_axes_list(axes::AbstractVector)
     return TimeSeriesAxis[_decode_axis(axis) for axis in axes]
 end
@@ -127,13 +125,15 @@ end
 
 function _fetch_required_string_key(dict::Dict, key::String)
     val = _fetch_required_key(dict, key)
-    val isa AbstractString || throw(
-        ArgumentError(
-            "value axis field '$key' must be a string; got $(typeof(val))",
-        ),
-    )
-    return String(val)
+    return _string_field(val, key)
 end
+
+_string_field(val::AbstractString, ::String) = String(val)
+_string_field(val, key) = throw(
+    ArgumentError(
+        "value axis field '$key' must be a string; got $(typeof(val))",
+    ),
+)
 
 function _decode_labels(label_type::AbstractString, labels::AbstractVector)
     label_type == "int" &&
@@ -143,7 +143,30 @@ function _decode_labels(label_type::AbstractString, labels::AbstractVector)
     throw(ArgumentError("unknown value axis label_type '$label_type'"))
 end
 
-_int_label(label::Integer, ::AbstractString) = Int64(label)
+_decode_labels(label_type, labels) = throw(
+    ArgumentError(
+        "value axis field 'labels' must be a list; got $(typeof(labels))",
+    ),
+)
+
+_int_label(label::Bool, label_type) = throw(
+    ArgumentError(
+        "value axis with label_type '$label_type' has label of type $(typeof(label)); " *
+        "expected Integer",
+    ),
+)
+
+function _int_label(label::Integer, label_type)
+    typemin(Int64) <= label <= typemax(Int64) ||
+        throw(
+            ArgumentError(
+                "value axis with label_type '$label_type' has label $label; " *
+                "outside Int64 range",
+            ),
+        )
+    return Int64(label)
+end
+
 _int_label(label, label_type) = throw(
     ArgumentError(
         "value axis with label_type '$label_type' has label of type $(typeof(label)); " *

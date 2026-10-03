@@ -73,4 +73,22 @@ end
     @test_throws ArgumentError IS._value_axes_from_application_data(
         "{\"value_axes\": {}}",
     )
+    # Labels field must be a list.
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": 5}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"string\", \"labels\": \"abc\"}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"unknown\", \"labels\": 5}]}",
+    )
+    # Bool coerces to integer; must error.
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": [true]}]}",
+    )
+    # Oversized integer (BigInt) must error.
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": [99999999999999999999]}]}",
+    )
 end
