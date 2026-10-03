@@ -96,14 +96,65 @@ _value_axes_from_parsed(_parsed) = nothing
 function _value_axes_from_parsed(parsed::Dict{String, Any})
     raw = get(parsed, _VALUE_AXES_KEY, nothing)
     isnothing(raw) && return nothing
-    return TimeSeriesAxis[
-        TimeSeriesAxis(axis["name"], _decode_labels(axis["label_type"], axis["labels"]))
-        for axis in raw
-    ]
+    return _decode_axes_list(raw)
+end
+
+_decode_axes_list(::Nothing) = nothing
+
+function _decode_axes_list(axes::AbstractVector)
+    return TimeSeriesAxis[_decode_axis(axis) for axis in axes]
+end
+
+_decode_axes_list(axes) =
+    throw(ArgumentError("value_axes must be a list; got $(typeof(axes))"))
+
+_decode_axis(axis::Dict{String, Any}) = TimeSeriesAxis(
+    _fetch_required_string_key(axis, "name"),
+    _decode_labels(
+        _fetch_required_string_key(axis, "label_type"),
+        _fetch_required_key(axis, "labels"),
+    ),
+)
+
+_decode_axis(axis) =
+    throw(ArgumentError("value axis must be a dict; got $(typeof(axis))"))
+
+function _fetch_required_key(dict::Dict, key::String)
+    haskey(dict, key) ||
+        throw(ArgumentError("value axis missing required key '$key'"))
+    return dict[key]
+end
+
+function _fetch_required_string_key(dict::Dict, key::String)
+    val = _fetch_required_key(dict, key)
+    val isa AbstractString || throw(
+        ArgumentError(
+            "value axis field '$key' must be a string; got $(typeof(val))",
+        ),
+    )
+    return String(val)
 end
 
 function _decode_labels(label_type::AbstractString, labels::AbstractVector)
-    label_type == "int" && return Int64[label for label in labels]
-    label_type == "string" && return String[label for label in labels]
+    label_type == "int" &&
+        return Int64[_int_label(label, label_type) for label in labels]
+    label_type == "string" &&
+        return String[_string_label(label, label_type) for label in labels]
     throw(ArgumentError("unknown value axis label_type '$label_type'"))
 end
+
+_int_label(label::Integer, ::AbstractString) = Int64(label)
+_int_label(label, label_type) = throw(
+    ArgumentError(
+        "value axis with label_type '$label_type' has label of type $(typeof(label)); " *
+        "expected Integer",
+    ),
+)
+
+_string_label(label::AbstractString, ::AbstractString) = String(label)
+_string_label(label, label_type) = throw(
+    ArgumentError(
+        "value axis with label_type '$label_type' has label of type $(typeof(label)); " *
+        "expected AbstractString",
+    ),
+)

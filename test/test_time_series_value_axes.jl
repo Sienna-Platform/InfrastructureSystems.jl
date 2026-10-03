@@ -22,7 +22,10 @@ end
     @test IS._check_value_axes(nothing, (2, 3)) === nothing
     @test_throws ArgumentError IS._check_value_axes(axes, (2,))
     @test_throws ArgumentError IS._check_value_axes(axes, (2, 4))
-    @test_throws ArgumentError IS._check_value_axes([IS.TimeSeriesAxis("bus", [1, 1])], (2,))
+    @test_throws ArgumentError IS._check_value_axes(
+        [IS.TimeSeriesAxis("bus", [1, 1])],
+        (2,),
+    )
     @test_throws ArgumentError IS._check_value_axes(
         [IS.TimeSeriesAxis("x", [1]), IS.TimeSeriesAxis("x", [2])],
         (1, 1),
@@ -39,7 +42,35 @@ end
     @test IS._value_axes_from_application_data("not json {") === nothing
     @test IS._value_axes_from_application_data("[1, 2]") === nothing
     @test IS._value_axes_from_application_data("{\"other\": 1}") === nothing
+    # Malformed payloads under IS's own "value_axes" key must error, not silently coerce.
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": \"x\"}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [1]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"labels\": [1]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"label_type\": \"int\", \"labels\": [1]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": 123, \"label_type\": \"int\", \"labels\": [1]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": [\"a\"]}]}",
+    )
     @test_throws ArgumentError IS._value_axes_from_application_data(
         "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"float\", \"labels\": [1.5]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": [1.0]}]}",
+    )
+    @test_throws ArgumentError IS._value_axes_from_application_data(
+        "{\"value_axes\": {}}",
     )
 end
