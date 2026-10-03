@@ -29,7 +29,8 @@ A deterministic forecast for a particular data field in a Component.
     non-time dimension of the values, e.g. `[TimeSeriesAxis("bus", bus_numbers)]`
   - `internal::InfrastructureSystemsInternal`
 
-See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref).
+See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref),
+[`get_value_axes`](@ref).
 """
 struct Deterministic{T, N} <: AbstractDeterministic{T}
     "user-defined name"
@@ -63,6 +64,7 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
         value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
     ) where {T, N}
         validate_time_series_data_for_backend(data)
+        value_axes = _copy_value_axes(value_axes)
         _check_value_axes(value_axes, _window_value_dims(data))
         return new{T, N}(
             String(name),
@@ -302,7 +304,8 @@ Get [`Deterministic`](@ref) `interval`.
 get_interval(value::Deterministic) = value.interval
 
 """
-Get [`Deterministic`](@ref) `value_axes`.
+Get [`Deterministic`](@ref) `value_axes`: one [`TimeSeriesAxis`](@ref) per non-time
+dimension of a window, or `nothing`.
 """
 get_value_axes(value::Deterministic) = value.value_axes
 

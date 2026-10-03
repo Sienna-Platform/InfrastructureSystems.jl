@@ -1,4 +1,6 @@
 """
+$(TYPEDEF)
+
     TimeSeriesAxis(name, labels)
 
 Names one non-time dimension of a time series value and labels each of its entries,
@@ -31,6 +33,10 @@ Return the labeled non-time axes of a time series' values, in dimension order, o
 `nothing` when the values are unlabeled.
 """
 function get_value_axes end
+
+# Stored as a copy, so a later push! on the caller's vector cannot desync the series.
+_copy_value_axes(::Nothing) = nothing
+_copy_value_axes(value_axes::Vector{TimeSeriesAxis}) = copy(value_axes)
 
 # Each non-time dimension of a value gets exactly one axis, sized to that dimension.
 _check_value_axes(::Nothing, _value_dims::Tuple) = nothing
@@ -87,7 +93,7 @@ function _value_axes_from_application_data(application_data::AbstractString)
         e isa ArgumentError || rethrow()
         return nothing
     end
-    return _value_axes_from_parsed(parsed)
+    return _value_axes_from_parsed(parsed)::Union{Nothing, Vector{TimeSeriesAxis}}
 end
 
 # Valid JSON that is not IS's object belongs to another client and carries no axes.
