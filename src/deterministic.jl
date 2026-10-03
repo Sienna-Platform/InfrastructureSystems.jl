@@ -333,5 +333,5 @@ function make_time_array(forecast::Deterministic)
         length = get_horizon_count(forecast),
     )
     data = first(values(get_data(forecast)))
-    return TimeSeries.TimeArray(timestamps, data)
+    return _window_time_array(timestamps, data)
 end

@@ -312,3 +312,24 @@ end
     )
     @test IS.get_value_axes(md) == cube_axes
 end
+
+@testset "Test value_axes get_window rejects N-D windows" begin
+    @test_throws ArgumentError IS.get_window(_va_nd_det("d"), _VA_T0)
+    vector_det = IS.Deterministic(
+        "v",
+        SortedDict{Dates.DateTime, Vector{Float64}}(_VA_T0 => collect(1.0:4)),
+        Dates.Hour(1),
+    )
+    @test IS.TimeSeries.values(IS.get_window(vector_det, _VA_T0; len = 2)) == [1.0, 2.0]
+
+    sys, (owner,) = _va_system()
+    IS.add_time_series!(sys, owner, _va_nd_det("d"))
+    @test_throws ArgumentError IS.get_time_series_array(
+        IS.Deterministic, owner, "d"; start_time = _VA_T0,
+    )
+    @test_throws ArgumentError IS.get_time_series_values(
+        IS.Deterministic, owner, "d"; start_time = _VA_T0,
+    )
+
+    @test_throws ArgumentError IS.make_time_array(_va_nd_det("d"; count = 1))
+end
