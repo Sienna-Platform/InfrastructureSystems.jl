@@ -248,6 +248,23 @@ end
         @test IS.get_data(short)[k] == w[1:2, :, :]
     end
     @test IS.get_value_axes(short) == axes
+    # A stored Deterministic row's element_shape leads with the count axis.
+    md = only(IS.list_time_series_metadata(owner; time_series_type = IS.Deterministic))
+    @test IS.get_value_axes(md) == axes
+    IS.add_time_series!(sys, owner, _va_nd_det("plain"; dims = ()))
+    plain_md = only(
+        IS.list_time_series_metadata(
+            owner; time_series_type = IS.Deterministic, name = "plain",
+        ),
+    )
+    @test IS.get_value_axes(plain_md) === nothing
+
+    reader = IS.build_forecast_reader(
+        sys, IS.Deterministic; resolution = Dates.Hour(1), name = "d",
+    )
+    IS.read_forecast_window!(reader, _VA_T0 + Dates.Hour(4))
+    @test only(IS.get_forecast_window(reader, i) for i in 1:length(reader)) ==
+          IS.get_data(det)[_VA_T0 + Dates.Hour(4)]
 end
 
 @testset "Test value_axes DST over N-D SingleTimeSeries" begin

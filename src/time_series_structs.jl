@@ -309,9 +309,14 @@ For readers that hand back raw arrays, such as the forecast reader.
 """
 function get_value_axes(md::TimeSeriesMetadata)
     value_axes = _value_axes_from_application_data(md.application_data)
-    _check_value_axes(value_axes, Tuple(md.element_shape))
+    _check_value_axes(value_axes, _row_value_dims(md))
     return value_axes
 end
+
+# Per-step value shape of a row. A stored Deterministic's array is (horizon, count, *E),
+# so its element_shape leads with the count axis; DST and static rows report *E alone.
+_row_value_dims(md::TimeSeriesMetadata) = md.element_shape
+_row_value_dims(md::TimeSeriesMetadata{<:Deterministic}) = Base.tail(md.element_shape)
 
 """
 The 64-char lowercase hex content hash of the stored array this row's series

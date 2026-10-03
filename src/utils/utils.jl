@@ -61,6 +61,7 @@ end
 
 # Windows of rank >= 2 carry a per-step value shape: plain numbers only, one shape for all.
 _check_window_shapes(::Type, ::Val{1}, _data) = nothing
+# Resolves the ambiguity between the (::Type, ::Val{1}) and (::Type{<:Real}, ::Val{N}) methods.
 _check_window_shapes(::Type{<:Real}, ::Val{1}, _data) = nothing
 
 function _check_window_shapes(::Type{<:Real}, ::Val{N}, data) where {N}

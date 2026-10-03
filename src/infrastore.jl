@@ -1375,19 +1375,16 @@ end
 # A `Deterministic`'s decoded values are `(horizon_count, count, *E)`: plain-dtype
 # values may carry any per-step shape E. A composite element type that read back with
 # extra axes did not decode; slicing it would return the wrong numbers, so it is named.
-const _PLAIN_STORE_DTYPES =
-    ("f64", "f32", "i64", "i32", "i16", "i8", "u64", "u32", "u16", "u8", "bool")
-
 _check_deterministic_window_shape(::AbstractMatrix, ::String, _element_type) = nothing
 
 function _check_deterministic_window_shape(data::AbstractArray, name::String, element_type)
-    something(element_type, "f64") in _PLAIN_STORE_DTYPES && return nothing
+    InfraStore.is_composite_element_type(element_type) || return nothing
     throw(
         ArgumentError(
             "Deterministic '$name' read back as a $(ndims(data))-dimensional array " *
-            "with element type $(something(element_type, "f64")); a Deterministic's " *
-            "windows are the columns of a (horizon_count, count) matrix. Its stored " *
-            "element type does not describe the values it holds.",
+            "with element type $element_type; a composite element type must decode " *
+            "to a (horizon_count, count) matrix. Its stored element type does not " *
+            "describe the values it holds.",
         ),
     )
 end
