@@ -165,3 +165,24 @@ page cache, as they would be in production; these are not cold-media numbers.
 `baseline.csv` was measured 2026-08-22 on an Apple M2 Pro (32 GB, macOS 26.6.2),
 Julia 1.12.7, infrastore @ `82a3e70`. Absolute numbers are machine-specific —
 compare a run against a baseline taken on the same machine.
+
+## Matrix-valued distribution factors
+
+`matrix_bench.jl` compares load-zone distribution factors stored one series per bus with one matrix series, for reads and for both serialization paths.
+It runs each representation in a fresh process, so each `maxrss` row belongs to one case.
+
+```sh
+julia --project=test benchmark/matrix_bench.jl > matrix.csv
+```
+
+| case | what is stored |
+|---|---|
+| `B0-Det` | one scalar `Deterministic` per bus, owned by its zone, with feature `"bus"` |
+| `B0-DST` | one scalar `SingleTimeSeries` per bus, then `transform_single_time_series!` |
+| `M1` | one `SingleTimeSeries{Float64, 2}` per zone, `[steps, members]`, bus labels in `value_axes` |
+| `M2` | one `[steps, zones, buses]` array owned by every zone, 0 for non-members |
+| `M2-DST` | `M2` plus `transform_single_time_series!` |
+
+Sizes come from `MATRIX_BUSES` (50000), `MATRIX_ZONES` (8) and `MATRIX_STEPS` (24).
+Read ops repeat `MATRIX_READ_REPEATS` (3) times; take the median of their rows.
+Every `check_*` row compares the factors read back with the generated ones and must be `ok`.
