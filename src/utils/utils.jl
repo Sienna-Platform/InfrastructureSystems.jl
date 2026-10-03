@@ -29,18 +29,18 @@ is_array_type_supported(::Type{T}) where {T} = false
 
 """
 Validate that data in a SortedDict has element types the time series store can
-encode. Throws an ArgumentError if any vector has an unsupported element type.
+encode, and that windows of rank >= 2 share one shape. Throws an ArgumentError otherwise.
 """
 function validate_time_series_data_for_backend(
-    ::SortedDict{Dates.DateTime, Vector{T}},
-) where {T}
+    data::SortedDict{Dates.DateTime, Array{T, N}},
+) where {T, N}
     if !is_array_type_supported(T)
         supported = join(DETERMINISTIC_SUPPORTED_ELTYPES, ", ")
         if !isconcretetype(T)
             throw(
                 ArgumentError(
                     "Cannot create time series with non-concrete element type. " *
-                    "The data has value type Vector{$T} where $T is not concrete. " *
+                    "The data has value type Array{$T, $N} where $T is not concrete. " *
                     "Please ensure your time series data has a concrete element type like Float64. " *
                     "Supported types: $supported.",
                 ),
@@ -55,17 +55,37 @@ function validate_time_series_data_for_backend(
             )
         end
     end
+    _check_window_shapes(T, Val(N), data)
     return nothing
 end
 
+# Windows of rank >= 2 carry a per-step value shape: plain numbers only, one shape for all.
+_check_window_shapes(::Type, ::Val{1}, _data) = nothing
+_check_window_shapes(::Type{<:Real}, ::Val{1}, _data) = nothing
+
+function _check_window_shapes(::Type{<:Real}, ::Val{N}, data) where {N}
+    sizes = unique(size(w) for w in values(data))
+    length(sizes) <= 1 || throw(
+        ArgumentError("every Deterministic window must have the same size; got $sizes"),
+    )
+    return nothing
+end
+
+_check_window_shapes(::Type{T}, ::Val{N}, _data) where {T, N} = throw(
+    ArgumentError(
+        "Deterministic windows of rank $N need a plain numeric element type " *
+        "(Float64, Int, ...); got $T",
+    ),
+)
+
 # Fallback for other SortedDict types - throw error since Deterministic only supports
-# SortedDict{Dates.DateTime, Vector{T}} where T is a supported type
+# SortedDict{Dates.DateTime, Array{T, N}} where T is a supported type
 function validate_time_series_data_for_backend(data::SortedDict)
     supported = join(DETERMINISTIC_SUPPORTED_ELTYPES, ", ")
     throw(
         ArgumentError(
             "Cannot create time series with this data structure. " *
-            "Deterministic only supports SortedDict{Dates.DateTime, Vector{T}} " *
+            "Deterministic only supports SortedDict{Dates.DateTime, Array{T, N}} " *
             "where T is a supported element type. " *
             "Supported types: $supported.",
         ),

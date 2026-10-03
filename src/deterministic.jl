@@ -7,6 +7,7 @@
         units::Union{Nothing, String}
         quantity_kind::Union{Nothing, String}
         unit_system::Union{Nothing, AbstractUnitSystem}
+        value_axes::Union{Nothing, Vector{TimeSeriesAxis}}
         internal::InfrastructureSystemsInternal
     end
 
@@ -24,6 +25,8 @@ A deterministic forecast for a particular data field in a Component.
     quantity the values measure (e.g. `"ActivePower"`)
   - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
     the values are already expressed in (`NU`, `CU`, or `SU`)
+  - `value_axes::Union{Nothing, Vector{TimeSeriesAxis}}`: optional labels for each
+    non-time dimension of the values, e.g. `[TimeSeriesAxis("bus", bus_numbers)]`
   - `internal::InfrastructureSystemsInternal`
 
 See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref).
@@ -43,6 +46,8 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
     quantity_kind::Union{Nothing, String}
     "unit system the values are already expressed in (`NU`/`CU`/`SU`), or `nothing`"
     unit_system::Union{Nothing, AbstractUnitSystem}
+    "labeled non-time axes of the window values (see [`TimeSeriesAxis`](@ref)), or `nothing`"
+    value_axes::Union{Nothing, Vector{TimeSeriesAxis}}
 
     # Inner constructor validates store-encodability on every construction (including
     # the inferring outer constructor below), so unsupported element types are
@@ -55,8 +60,10 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
         units::Union{Nothing, AbstractString} = nothing,
         quantity_kind::Union{Nothing, AbstractString} = nothing,
         unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+        value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
     ) where {T, N}
         validate_time_series_data_for_backend(data)
+        _check_value_axes(value_axes, _window_value_dims(data))
         return new{T, N}(
             String(name),
             data,
@@ -65,6 +72,7 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
             _maybe_string(units),
             _maybe_string(quantity_kind),
             unit_system,
+            value_axes,
         )
     end
 end
@@ -79,6 +87,7 @@ function Deterministic(
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+    value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
 )
     sorted = _ensure_sorted_dict(data)
     return Deterministic{_window_eltype(sorted), _window_ndims(sorted)}(
@@ -89,6 +98,7 @@ function Deterministic(
         units,
         quantity_kind,
         unit_system,
+        value_axes,
     )
 end
 
@@ -101,6 +111,7 @@ function Deterministic(;
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+    value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
 )
     if isnothing(interval)
         interval = get_interval_from_initial_times(get_sorted_keys(data))
@@ -115,6 +126,7 @@ function Deterministic(;
         units = units,
         quantity_kind = quantity_kind,
         unit_system = unit_system,
+        value_axes = value_axes,
     )
 end
 
@@ -127,6 +139,7 @@ function Deterministic(
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+    value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
 )
     return Deterministic(;
         name = name,
@@ -137,6 +150,7 @@ function Deterministic(
         units = units,
         quantity_kind = quantity_kind,
         unit_system = unit_system,
+        value_axes = value_axes,
     )
 end
 
@@ -201,6 +215,7 @@ function Deterministic(forecast::Deterministic, data)
         units = get_units(forecast),
         quantity_kind = get_quantity_kind(forecast),
         unit_system = get_unit_system(forecast),
+        value_axes = get_value_axes(forecast),
     )
 end
 
@@ -244,6 +259,7 @@ function Deterministic(
         units = src.units,
         quantity_kind = src.quantity_kind,
         unit_system = src.unit_system,
+        value_axes = src.value_axes,
     )
 end
 
@@ -259,8 +275,8 @@ convert_data(data::AbstractDict{<:Any, Any}) =
     SortedDict{Dates.DateTime, Vector{CONSTANT}}(data)
 
 # If values are more specific, don't assume CONSTANT but do upgrade some types
-convert_data(data::AbstractDict{<:Any, Vector{T}}) where {T} =
-    SortedDict{Dates.DateTime, Vector{T}}(data)
+convert_data(data::AbstractDict{<:Any, Array{T, N}}) where {T, N} =
+    SortedDict{Dates.DateTime, Array{T, N}}(data)
 
 # If everything is fully specified, pass through
 convert_data(data::SortedDict{Dates.DateTime, Vector}) = data
@@ -284,6 +300,11 @@ get_resolution(value::Deterministic) = value.resolution
 Get [`Deterministic`](@ref) `interval`.
 """
 get_interval(value::Deterministic) = value.interval
+
+"""
+Get [`Deterministic`](@ref) `value_axes`.
+"""
+get_value_axes(value::Deterministic) = value.value_axes
 
 get_initial_times(forecast::Deterministic) = get_initial_times_common(forecast)
 get_initial_timestamp(forecast::Deterministic) = get_initial_timestamp_common(forecast)

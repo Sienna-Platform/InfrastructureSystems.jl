@@ -1133,9 +1133,8 @@ function _infrastore_build_forecast(
         unit_system = _to_store_unit_system(get_unit_system(ts)))
 end
 
-# (horizon_count, count) for scalars; (horizon_count, count, k) tagged with the
-# element type for FunctionData and NTuple windows — a composite element type is
-# packed across a further axis by the store.
+# Windows are stacked along a new second axis: (horizon_count, count, *E). A composite
+# element type is then packed across a further axis by the store.
 function _infrastore_build_forecast(
     ts::Deterministic,
     initial,
@@ -1146,10 +1145,11 @@ function _infrastore_build_forecast(
 )
     windows = collect(values(get_data(ts)))
     return InfraStore.Deterministic(initial, resolution, horizon, interval,
-        length(windows), reduce(hcat, windows), name;
+        length(windows), stack(windows; dims = 2), name;
         units = get_units(ts),
         quantity_kind = get_quantity_kind(ts),
-        unit_system = _to_store_unit_system(get_unit_system(ts)))
+        unit_system = _to_store_unit_system(get_unit_system(ts)),
+        application_data = _value_axes_application_data(get_value_axes(ts)))
 end
 
 function _infrastore_build_forecast(
@@ -1319,10 +1319,9 @@ function _infrastore_get_forecast(
 end
 
 # `len`, when given, truncates a window to its first `len` horizon steps (the
-# horizon is the leading axis of a window vector or matrix).
+# horizon is the leading axis of a window of any rank).
 _truncate_window(w, ::Nothing) = w
-_truncate_window(w::AbstractVector, len::Int) = w[1:len]
-_truncate_window(w::AbstractMatrix, len::Int) = w[1:len, :]
+_truncate_window(w::AbstractArray, len::Int) = collect(selectdim(w, 1, 1:len))
 
 # A Probabilistic/Scenarios window is stored `(member, horizon)` and transposed to the
 # `(horizon, member)` matrix IS hands users.
@@ -1373,15 +1372,16 @@ function _check_forecast_len(raw, len::Int)
     return nothing
 end
 
-# A `Deterministic`'s decoded values are the `(horizon_count, count)` matrix whose
-# columns are its windows. A read hands back a higher-rank array when the row's
-# `element_type` did not decode to the values it was packed from — the packing
-# axis is still there, and slicing a column off it would either fail or, worse,
-# hand back the wrong numbers. That is a storage inconsistency, so it is named
-# here rather than left to surface as a bare `BoundsError` from the slice.
+# A `Deterministic`'s decoded values are `(horizon_count, count, *E)`: plain-dtype
+# values may carry any per-step shape E. A composite element type that read back with
+# extra axes did not decode; slicing it would return the wrong numbers, so it is named.
+const _PLAIN_STORE_DTYPES =
+    ("f64", "f32", "i64", "i32", "i16", "i8", "u64", "u32", "u16", "u8", "bool")
+
 _check_deterministic_window_shape(::AbstractMatrix, ::String, _element_type) = nothing
 
-_check_deterministic_window_shape(data::AbstractArray, name::String, element_type) =
+function _check_deterministic_window_shape(data::AbstractArray, name::String, element_type)
+    something(element_type, "f64") in _PLAIN_STORE_DTYPES && return nothing
     throw(
         ArgumentError(
             "Deterministic '$name' read back as a $(ndims(data))-dimensional array " *
@@ -1390,6 +1390,7 @@ _check_deterministic_window_shape(data::AbstractArray, name::String, element_typ
             "element type does not describe the values it holds.",
         ),
     )
+end
 
 # A DeterministicSingleTimeSeries is an internal storage optimization: it shares
 # the underlying SingleTimeSeries array instead of materializing the overlapping
@@ -1404,17 +1405,15 @@ _check_deterministic_window_shape(data::AbstractArray, name::String, element_typ
 function _forecast_from_store(d::InfraStore.Deterministic, name::String, len)
     _check_forecast_len(d, len)
     _check_deterministic_window_shape(d.data, name, d.element_type)
-    # Resolved once per read: the tag is the same for every window.
-    # `d.data` is `(horizon_count, count)` of values, decoded by the read, so a
-    # window is a column of it. Materialized, not a view: the window becomes the
-    # `Vector` a `Deterministic`'s SortedDict holds, and a `SubArray` there would
-    # keep the whole forecast array alive behind every window.
-    window(i) = _truncate_window(d.data[:, i], len)
+    # Window i is d.data[:, i, ...], materialized: a view would keep the whole
+    # forecast array alive behind every window.
+    window(i) = _truncate_window(copy(selectdim(d.data, 2, i)), len)
     data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
     return Deterministic(; name = name, data = data,
         resolution = d.resolution, interval = d.interval, units = d.units,
         quantity_kind = d.quantity_kind,
-        unit_system = _from_store_unit_system(d.unit_system))
+        unit_system = _from_store_unit_system(d.unit_system),
+        value_axes = _value_axes_from_application_data(d.application_data))
 end
 
 # `.data` is the canonical (percentile_count, horizon_count, count) array.

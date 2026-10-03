@@ -195,3 +195,103 @@ end
     _va_add_raw!(sys, owner, "bad", rand(24, 3), bad)
     @test_throws ArgumentError IS.get_time_series(IS.SingleTimeSeries, owner, "bad")
 end
+
+function _va_nd_det(name; count = 2, horizon = 4, dims = (2, 3), value_axes = nothing)
+    data = SortedDict{Dates.DateTime, Array{Float64, length(dims) + 1}}(
+        _VA_T0 + Dates.Hour(horizon) * (k - 1) => rand(horizon, dims...) for k in 1:count
+    )
+    return IS.Deterministic(
+        name, data, Dates.Hour(1);
+        interval = Dates.Hour(horizon), value_axes = value_axes,
+    )
+end
+
+function _va_same_windows(a, b)
+    da, db = IS.get_data(a), IS.get_data(b)
+    return collect(keys(da)) == collect(keys(db)) &&
+           all(da[k] == db[k] for k in keys(da))
+end
+
+@testset "Test value_axes N-D Deterministic construction" begin
+    axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), _va_bus_axis(3)]
+    det = _va_nd_det("d"; value_axes = axes)
+    @test det isa IS.Deterministic{Float64, 3}
+    @test IS.get_value_axes(det) == axes
+    @test IS.get_value_axes(IS.Deterministic(det, "e")) == axes
+    @test_throws ArgumentError _va_nd_det("d"; value_axes = [_va_bus_axis(3)])
+    ragged = SortedDict{Dates.DateTime, Array{Float64, 3}}(
+        _VA_T0 => rand(4, 2, 3),
+        _VA_T0 + Dates.Hour(4) => rand(4, 2, 2),
+    )
+    @test_throws ArgumentError IS.Deterministic(
+        "r", ragged, Dates.Hour(1); interval = Dates.Hour(4),
+    )
+    composite = SortedDict{Dates.DateTime, Matrix{IS.LinearFunctionData}}(
+        _VA_T0 => fill(IS.LinearFunctionData(1.0, 0.0), 4, 2),
+    )
+    @test_throws ArgumentError IS.Deterministic(
+        "c", composite, Dates.Hour(1); interval = Dates.Hour(4),
+    )
+end
+
+@testset "Test value_axes N-D Deterministic round-trip through the store" begin
+    sys, (owner,) = _va_system()
+    axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), _va_bus_axis(3)]
+    det = _va_nd_det("d"; value_axes = axes)
+    IS.add_time_series!(sys, owner, det)
+    back = IS.get_time_series(IS.Deterministic, owner, "d")
+    @test back isa IS.Deterministic{Float64, 3}
+    @test _va_same_windows(back, det)
+    @test IS.get_value_axes(back) == axes
+    short = IS.get_time_series(IS.Deterministic, owner, "d"; len = 2)
+    for (k, w) in IS.get_data(det)
+        @test IS.get_data(short)[k] == w[1:2, :, :]
+    end
+    @test IS.get_value_axes(short) == axes
+end
+
+@testset "Test value_axes DST over N-D SingleTimeSeries" begin
+    sys, owners = _va_system(2)
+    cube = rand(24, 2, 3)
+    cube_axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), _va_bus_axis(3)]
+    mat = rand(24, 3)
+    IS.add_time_series!(sys, owners, _va_sts("f", cube; value_axes = cube_axes))
+    IS.add_time_series!(sys, owners[1], _va_sts("g", mat; value_axes = [_va_bus_axis(3)]))
+    IS.transform_single_time_series!(
+        sys, IS.DeterministicSingleTimeSeries, Dates.Hour(6), Dates.Hour(6),
+    )
+    for owner in owners
+        det = IS.get_time_series(IS.Deterministic, owner, "f")
+        @test IS.get_count(det) == 4
+        for (i, w) in enumerate(values(IS.get_data(det)))
+            @test w == cube[(6 * (i - 1) + 1):(6 * i), :, :]
+        end
+        @test IS.get_value_axes(det) == cube_axes
+        # Review focus: a narrower window keeps its shape and its axes.
+        short = IS.get_time_series(
+            IS.Deterministic, owner, "f";
+            start_time = _VA_T0 + Dates.Hour(6), len = 3, count = 1,
+        )
+        @test only(values(IS.get_data(short))) == cube[7:9, :, :]
+        @test IS.get_value_axes(short) == cube_axes
+    end
+    matrix_det = IS.get_time_series(IS.Deterministic, owners[1], "g")
+    @test first(values(IS.get_data(matrix_det))) == mat[1:6, :]
+    @test IS.get_value_axes(matrix_det) == [_va_bus_axis(3)]
+
+    # The forecast reader reads the shared array once and hands back raw [H, *E] windows.
+    reader = IS.build_forecast_reader(
+        sys, IS.Deterministic; resolution = Dates.Hour(1), name = "f",
+    )
+    @test IS.get_num_forecast_slots(reader) == 1
+    IS.read_forecast_window!(reader, _VA_T0 + Dates.Hour(12))
+    for i in 1:length(reader)
+        @test IS.get_forecast_window(reader, i) == cube[13:18, :, :]
+    end
+    md = only(
+        IS.list_time_series_metadata(
+            owners[1]; time_series_type = IS.DeterministicSingleTimeSeries, name = "f",
+        ),
+    )
+    @test IS.get_value_axes(md) == cube_axes
+end

@@ -72,6 +72,10 @@ end
 _window_eltype(data::AbstractDict) = eltype(valtype(data))
 _window_ndims(data::AbstractDict) = ndims(valtype(data))
 
+# The shape of one step's value: a window's size without its leading horizon axis.
+_window_value_dims(data::AbstractDict) =
+    isempty(data) ? () : Base.tail(size(first(values(data))))
+
 # Normalize a window dict to a `SortedDict`; copy-free when it already is one.
 _ensure_sorted_dict(data::SortedDict) = data
 _ensure_sorted_dict(data::AbstractDict) = SortedDict(data)
