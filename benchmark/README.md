@@ -184,18 +184,24 @@ julia --project=test benchmark/matrix_bench.jl > matrix.csv
 | `M2-DST` | `M2` plus `transform_single_time_series!` |
 
 Sizes come from `MATRIX_BUSES` (50000), `MATRIX_ZONES` (8) and `MATRIX_STEPS` (24).
-Read ops repeat `MATRIX_READ_REPEATS` (3) times; take the median of their rows.
+Every timed op repeats `MATRIX_REPEATS` (3) times; take the median of its rows.
+Each write repeat builds a fresh system and payload outside the timer, and the last system serves the reads and serializations.
+Each serialization repeat writes to a fresh directory and its deserialization reads from that directory.
 Every `check_*` row compares the factors read back with the generated ones and must be `ok`.
 
 How to read the rows:
 
 - `legacy_bytes.*` and `openapi_bytes.*` are the data-size rows: arrays, catalog and document for each serialization path.
 - `store_bytes.h5` is the live arrays file only, without the catalog (the live catalog is in memory, so there is no `store_bytes.sqlite`).
-  It is padded when one timestep block (zones x buses x 8 B) is under 1 MiB: a packed pool's chunk is one timestep row across all columns, capped at 1 MiB, so small fixtures give a file near 24 MiB whatever the data size.
+  It is padded when one timestep block (zones x buses x 8 B) is under 1 MiB: a packed pool's chunk is one timestep row across all columns, capped at 1 MiB but never below one column, so small fixtures give a file near 24 MiB whatever the data size.
+  One column of M2 at full size is a 3.2 MB chunk.
   At 8 zones x 50,000 buses it is within 0.02% of the raw array.
 - `bytes` on timed rows is Julia allocation only; Rust/FFI work, such as per-owner hashing on M2's multi-owner write, is not counted.
 - `maxrss` is the peak over the whole case process (fixture, payload, warmup, reads, serialization), so compare it across cases at the same size only.
 - The HDF5 chunk cache is 64 MiB per file.
   At 50,000 buses B0's roughly 9.6 MB stays resident after the first read, while M2's roughly 77 MB (24 chunks of 3.2 MB) cannot.
-  The first `read_zone` or `read_all_once` repeat is therefore the cold read and later repeats are warm, and the cache favours B0 on warm reads.
+  The first `read_zone` or `read_all_once` repeat is the cold read for every case.
+  Later B0 repeats hit the chunk cache; M2 and M2-DST repeats cannot, so they read from the OS page cache every time, and the cache favours B0 after the first repeat.
+- `de_legacy` and `de_openapi` are not like for like: `de_legacy` copies the store's `.h5` and `.sqlite` and loads the finished catalog, while `de_openapi` opens the arrays file in place and replays every association row from the JSON document.
+  Neither reads an array.
 - A check that throws is reported as an `error: <op>: <message>` row, so the case still reaches its `maxrss` row.

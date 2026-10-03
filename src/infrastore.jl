@@ -1318,14 +1318,18 @@ function _infrastore_get_forecast(
     )
 end
 
-# `len`, when given, truncates a window to its first `len` horizon steps (the
-# horizon is the leading axis of a window of any rank).
-_truncate_window(w, ::Nothing) = w
-_truncate_window(w::AbstractArray, len::Int) = collect(selectdim(w, 1, 1:len))
+# Window i of a `(horizon, count, *E)` array, cut to its first `len` steps when given
+# and copied once: a view would keep the whole forecast array alive behind every window.
+_window_copy(data::AbstractArray, i, ::Nothing) = copy(selectdim(data, 2, i))
+_window_copy(data::AbstractArray, i, len::Int) =
+    copy(selectdim(selectdim(data, 2, i), 1, 1:len))
 
 # A Probabilistic/Scenarios window is stored `(member, horizon)` and transposed to the
-# `(horizon, member)` matrix IS hands users.
-_member_window(data::AbstractArray{<:Any, 3}, i) = permutedims(@view data[:, :, i])
+# `(horizon, member)` matrix IS hands users, cut to `len` steps when given.
+_member_window(data::AbstractArray{<:Any, 3}, i, ::Nothing) =
+    permutedims(@view data[:, :, i])
+_member_window(data::AbstractArray{<:Any, 3}, i, len::Int) =
+    permutedims(@view data[:, 1:len, i])
 
 # `Probabilistic` and `Scenarios` windows are per-member scalars: the stored array is
 # handed back in its own element type (any scalar dtype), but an encoded element type
@@ -1402,9 +1406,7 @@ end
 function _forecast_from_store(d::InfraStore.Deterministic, name::String, len)
     _check_forecast_len(d, len)
     _check_deterministic_window_shape(d.data, name, d.element_type)
-    # Window i is d.data[:, i, ...], materialized: a view would keep the whole
-    # forecast array alive behind every window.
-    window(i) = _truncate_window(copy(selectdim(d.data, 2, i)), len)
+    window(i) = _window_copy(d.data, i, len)
     data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
     return Deterministic(; name = name, data = data,
         resolution = d.resolution, interval = d.interval, units = d.units,
@@ -1417,7 +1419,7 @@ end
 function _forecast_from_store(p::InfraStore.Probabilistic, name::String, len)
     _check_forecast_len(p, len)
     _check_member_window_type(Probabilistic, name, p.element_type)
-    window(i) = _truncate_window(_member_window(p.data, i), len)
+    window(i) = _member_window(p.data, i, len)
     data = _assemble_forecast_windows(p.initial_timestamp, p.interval, p.count, window)
     # The positional constructor infers `{T, N}` from the windows; the keyword form pins
     # `Matrix{Float64}`.
@@ -1432,7 +1434,7 @@ end
 function _forecast_from_store(s_ts::InfraStore.Scenarios, name::String, len)
     _check_forecast_len(s_ts, len)
     _check_member_window_type(Scenarios, name, s_ts.element_type)
-    window(i) = _truncate_window(_member_window(s_ts.data, i), len)
+    window(i) = _member_window(s_ts.data, i, len)
     data = _assemble_forecast_windows(
         s_ts.initial_timestamp, s_ts.interval, s_ts.count, window,
     )

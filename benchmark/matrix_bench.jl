@@ -8,7 +8,7 @@ include(joinpath(@__DIR__, "bench.jl"))  # helpers only; its own run is guarded
 
 const TS_NAME = "distribution_factor"
 const CASES = ("B0-Det", "B0-DST", "M1", "M2", "M2-DST")
-const READ_REPEATS = parse(Int, get(ENV, "MATRIX_READ_REPEATS", "3"))
+const REPEATS = parse(Int, get(ENV, "MATRIX_REPEATS", "3"))
 
 struct Fixture
     nzone::Int
@@ -174,20 +174,25 @@ function read_all_m2(fx, zones)
     end
 end
 
-# The forecast reader reads a shared array once per window; labels come from the row.
+# The forecast reader reads a shared array once per window; labels come from the row,
+# decoded once per shared array (reader slot) as read_all_m2 does.
 function read_all_m2_dst(sys, zones)
     reader =
         IS.build_forecast_reader(sys, IS.Deterministic; resolution = RES, name = TS_NAME)
     IS.read_forecast_window!(reader, T0)
     entries = IS.get_forecast_reader_entries(reader)
+    axes_by_slot = Dict{Int, Vector{IS.TimeSeriesAxis}}()
     return map(zones) do zone
         i = findfirst(e -> e.owner === zone, entries)
-        md = only(
-            IS.list_time_series_metadata(
-                zone; time_series_type = IS.Deterministic, name = TS_NAME,
-            ),
-        )
-        zone_slice(IS.get_forecast_window(reader, i), IS.get_value_axes(md), zone)
+        value_axes = get!(axes_by_slot, entries[i].slot) do
+            md = only(
+                IS.list_time_series_metadata(
+                    zone; time_series_type = IS.Deterministic, name = TS_NAME,
+                ),
+            )
+            IS.get_value_axes(md)
+        end
+        zone_slice(IS.get_forecast_window(reader, i), value_axes, zone)
     end
 end
 
@@ -285,50 +290,67 @@ end
 
 # ---- one case ------------------------------------------------------------------
 
-function run_case(case, fx)
+# A fresh system and payload per write repeat, both built outside the timer.
+function timed_write(case, fx)
     sys, zones, dir = build_system(fx.nzone)
-    n = fx.nbus
     items = make_payload(case, fx, zones)
-    timed_op(case, "float64", "write", n, () -> write_case!(case, sys, zones, items, fx))
-    items = nothing
+    timed_op(case, "float64", "write", fx.nbus,
+        () -> write_case!(case, sys, zones, items, fx))
+    return sys, zones, dir
+end
+
+function check_de_legacy(case, fx, zones, sys2)
+    check(case, "de_legacy", fx) do
+        zones2 = [IS.get_component(IS.TestComponent, sys2, IS.get_name(z)) for z in zones]
+        [read_zone(case, fx, zone, z) for (z, zone) in enumerate(zones2)]
+    end
+end
+
+# Every op repeats REPEATS times and the report takes each op's median. Writes go to
+# fresh systems (the last one serves the rest); serializations go to fresh directories.
+function run_case(case, fx)
+    n = fx.nbus
+    for _ in 2:REPEATS
+        timed_write(case, fx)
+    end
+    sys, zones, dir = timed_write(case, fx)
     report_files(case, "store", dir)
 
-    # Reads leave the store as it was, so they repeat; the report takes each op's median.
+    # Reads leave the store as it was, so they repeat on one system.
     got = Ref{Any}(nothing)
-    for _ in 1:READ_REPEATS
+    for _ in 1:REPEATS
         timed_op(case, "float64", "read_zone", n,
             () -> got[] = [read_zone(case, fx, zone, z) for (z, zone) in enumerate(zones)])
     end
     check(() -> got[], case, "read_zone", fx)
     if case in ("M2", "M2-DST")
         got[] = nothing
-        for _ in 1:READ_REPEATS
+        for _ in 1:REPEATS
             timed_op(case, "float64", "read_all_once", n,
                 () -> got[] = read_all(case, fx, sys, zones))
         end
         check(() -> got[], case, "read_all_once", fx)
     end
 
-    legacy_dir = mktempdir()
-    path = Ref{String}()
-    timed_op(case, "float64", "ser_legacy", n, () -> path[] = ser_legacy(sys, legacy_dir))
-    report_files(case, "legacy", legacy_dir)
-    sys2 = Ref{Any}(nothing)
-    timed_op(case, "float64", "de_legacy", n, () -> sys2[] = de_legacy(path[]))
-    if !isnothing(sys2[])
-        check(case, "de_legacy", fx) do
-            zones2 =
-                [IS.get_component(IS.TestComponent, sys2[], IS.get_name(z)) for z in zones]
-            [read_zone(case, fx, zone, z) for (z, zone) in enumerate(zones2)]
-        end
+    for r in 1:REPEATS
+        legacy_dir = mktempdir()
+        path = Ref{String}()
+        timed_op(case, "float64", "ser_legacy", n,
+            () -> path[] = ser_legacy(sys, legacy_dir))
+        r == 1 && report_files(case, "legacy", legacy_dir)
+        sys2 = Ref{Any}(nothing)
+        timed_op(case, "float64", "de_legacy", n, () -> sys2[] = de_legacy(path[]))
+        isnothing(sys2[]) || check_de_legacy(case, fx, zones, sys2[])
     end
 
-    api_dir = mktempdir()
-    timed_op(case, "float64", "ser_openapi", n, () -> ser_openapi(sys, api_dir))
-    report_files(case, "openapi", api_dir)
-    store2 = Ref{Any}(nothing)
-    timed_op(case, "float64", "de_openapi", n, () -> store2[] = de_openapi(api_dir))
-    isnothing(store2[]) || check_store(case, sys, zones, store2[])
+    for r in 1:REPEATS
+        api_dir = mktempdir()
+        timed_op(case, "float64", "ser_openapi", n, () -> ser_openapi(sys, api_dir))
+        r == 1 && report_files(case, "openapi", api_dir)
+        store2 = Ref{Any}(nothing)
+        timed_op(case, "float64", "de_openapi", n, () -> store2[] = de_openapi(api_dir))
+        isnothing(store2[]) || check_store(case, sys, zones, store2[])
+    end
 
     report_maxrss(case, "float64")
     return
