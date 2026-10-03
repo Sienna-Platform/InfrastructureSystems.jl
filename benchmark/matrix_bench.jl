@@ -232,13 +232,25 @@ end
 
 # ---- checks and sizes ----------------------------------------------------------
 
-function check(case, op, fx, got)
-    ok = !isnothing(got) && all(1:(fx.nzone)) do z
-        buses, values = got[z]
-        buses == fx.members[z] && values == fx.factors[z]
+# One check row; an exception in `passes()` is a row too, so the case still reaches maxrss.
+function report_check(passes, case, op, failure)
+    status = try
+        passes() ? "ok" : "error: $op: $failure"
+    catch e
+        "error: $op: " * chopprefix(error_status(e), "error: ")
     end
-    status = ok ? "ok" : "error: factors differ from the fixture"
     report(case, "float64", "check_" * op, 1, 0.0, 0, status)
+end
+
+# `read_back()` returns, per zone, (bus numbers, factors) as the op under test read them.
+function check(read_back, case, op, fx)
+    report_check(case, op, "factors differ from the fixture") do
+        got = read_back()
+        !isnothing(got) && all(1:(fx.nzone)) do z
+            buses, values = got[z]
+            buses == fx.members[z] && values == fx.factors[z]
+        end
+    end
 end
 
 series_values(ts::IS.SingleTimeSeries) = IS.get_array(ts)
@@ -247,23 +259,16 @@ series_values(ts::IS.Deterministic) = collect(values(IS.get_data(ts)))
 # Association ids survive the OpenAPI path, so every original key must read the same.
 function check_store(case, sys, zones, store)
     original = IS.get_data_store(sys)
-    ok = all(zones) do zone
-        all(IS.list_time_series_metadata(zone; name = TS_NAME)) do md
-            key = IS.get_time_series_key(md)
-            a, b = IS.get_time_series(store, key), IS.get_time_series(original, key)
-            series_values(a) == series_values(b) &&
-                IS.get_value_axes(a) == IS.get_value_axes(b)
+    report_check(case, "de_openapi", "store differs") do
+        all(zones) do zone
+            all(IS.list_time_series_metadata(zone; name = TS_NAME)) do md
+                key = IS.get_time_series_key(md)
+                a, b = IS.get_time_series(store, key), IS.get_time_series(original, key)
+                series_values(a) == series_values(b) &&
+                    IS.get_value_axes(a) == IS.get_value_axes(b)
+            end
         end
     end
-    report(
-        case,
-        "float64",
-        "check_de_openapi",
-        1,
-        0.0,
-        0,
-        ok ? "ok" : "error: store differs",
-    )
 end
 
 # Bytes per file extension (.h5, .sqlite, .json) under `dir`.
@@ -294,14 +299,14 @@ function run_case(case, fx)
         timed_op(case, "float64", "read_zone", n,
             () -> got[] = [read_zone(case, fx, zone, z) for (z, zone) in enumerate(zones)])
     end
-    check(case, "read_zone", fx, got[])
+    check(() -> got[], case, "read_zone", fx)
     if case in ("M2", "M2-DST")
         got[] = nothing
         for _ in 1:READ_REPEATS
             timed_op(case, "float64", "read_all_once", n,
                 () -> got[] = read_all(case, fx, sys, zones))
         end
-        check(case, "read_all_once", fx, got[])
+        check(() -> got[], case, "read_all_once", fx)
     end
 
     legacy_dir = mktempdir()
@@ -311,13 +316,11 @@ function run_case(case, fx)
     sys2 = Ref{Any}(nothing)
     timed_op(case, "float64", "de_legacy", n, () -> sys2[] = de_legacy(path[]))
     if !isnothing(sys2[])
-        zones2 = [IS.get_component(IS.TestComponent, sys2[], IS.get_name(z)) for z in zones]
-        check(
-            case,
-            "de_legacy",
-            fx,
-            [read_zone(case, fx, zone, z) for (z, zone) in enumerate(zones2)],
-        )
+        check(case, "de_legacy", fx) do
+            zones2 =
+                [IS.get_component(IS.TestComponent, sys2[], IS.get_name(z)) for z in zones]
+            [read_zone(case, fx, zone, z) for (z, zone) in enumerate(zones2)]
+        end
     end
 
     api_dir = mktempdir()
@@ -334,11 +337,6 @@ end
 # ---- driver --------------------------------------------------------------------
 
 function main(args)
-    fx = Fixture(
-        parse(Int, get(ENV, "MATRIX_ZONES", "8")),
-        parse(Int, get(ENV, "MATRIX_BUSES", "50000")),
-        parse(Int, get(ENV, "MATRIX_STEPS", "24")),
-    )
     if isempty(args)
         println("kind,eltype,op,n,total_s,us_per_op,bytes,status")
         flush(stdout)  # children write to the same fd; keep the header first
@@ -351,6 +349,11 @@ function main(args)
         println("DONE")
         return
     end
+    fx = Fixture(
+        parse(Int, get(ENV, "MATRIX_ZONES", "8")),
+        parse(Int, get(ENV, "MATRIX_BUSES", "50000")),
+        parse(Int, get(ENV, "MATRIX_STEPS", "24")),
+    )
     case = only(args)
     case in CASES || error("unknown case $case; expected one of $(join(CASES, ", "))")
     # JIT warmup on a small fixture, so the timed rows measure the run, not compilation.
