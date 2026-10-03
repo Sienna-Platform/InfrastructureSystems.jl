@@ -180,8 +180,12 @@ julia --project=test benchmark/matrix_bench.jl > matrix.csv
 | `B0-Det` | one scalar `Deterministic` per bus, owned by its zone, with feature `"bus"` |
 | `B0-DST` | one scalar `SingleTimeSeries` per bus, then `transform_single_time_series!` |
 | `M1` | one `SingleTimeSeries{Float64, 2}` per zone, `[steps, members]`, bus labels in `value_axes` |
+| `M1-DST` | `M1` plus `transform_single_time_series!`, read as `Deterministic` windows |
+| `M1-Det` | the same matrices stored directly as one-window `Deterministic` forecasts |
 | `M2` | one `[steps, zones, buses]` array owned by every zone, 0 for non-members |
 | `M2-DST` | `M2` plus `transform_single_time_series!` |
+
+`read_all_once` reads every zone in one pass: grouped by array hash for `M2`, through `build_forecast_reader` for the forecast cases.
 
 Sizes come from `MATRIX_BUSES` (50000), `MATRIX_ZONES` (8) and `MATRIX_STEPS` (24).
 Zones are disjoint by default; `MATRIX_MEMBERS=18000:22000` draws each zone's size from that range instead, so a bus can sit in several zones (every bus is in at least one).

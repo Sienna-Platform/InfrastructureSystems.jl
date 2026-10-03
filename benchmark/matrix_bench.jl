@@ -8,7 +8,7 @@
 include(joinpath(@__DIR__, "bench.jl"))  # helpers only; its own run is guarded
 
 const TS_NAME = "distribution_factor"
-const CASES = ("B0-Det", "B0-DST", "M1", "M2", "M2-DST")
+const CASES = ("B0-Det", "B0-DST", "M1", "M1-DST", "M1-Det", "M2", "M2-DST")
 const REPEATS = parse(Int, get(ENV, "MATRIX_REPEATS", "3"))
 
 struct Fixture
@@ -65,6 +65,13 @@ per_bus(fx, make) =
         (j, b) in enumerate(fx.members[z])
     ]
 
+# M1-Det: the same matrices stored directly as one-window forecasts.
+m1_det_payload(fx) = [
+    IS.Deterministic(TS_NAME, SortedDict(T0 => fx.factors[z]), RES;
+        value_axes = [IS.TimeSeriesAxis("bus", fx.members[z])])
+    for z in 1:(fx.nzone)
+]
+
 m1_payload(fx) = [
     IS.SingleTimeSeries(TS_NAME, T0, RES, fx.factors[z];
         value_axes = [IS.TimeSeriesAxis("bus", fx.members[z])])
@@ -88,7 +95,8 @@ function make_payload(case, fx, zones)
     case == "B0-Det" &&
         return per_bus(fx, v -> IS.Deterministic(TS_NAME, SortedDict(T0 => v), RES))
     case == "B0-DST" && return per_bus(fx, v -> IS.SingleTimeSeries(TS_NAME, T0, RES, v))
-    case == "M1" && return m1_payload(fx)
+    case in ("M1", "M1-DST") && return m1_payload(fx)
+    case == "M1-Det" && return m1_det_payload(fx)
     return m2_payload(fx, zones)
 end
 
@@ -106,7 +114,7 @@ function write_case!(case, sys, zones, items, fx)
                 )
             end
         end
-    elseif case == "M1"
+    elseif case in ("M1", "M1-DST", "M1-Det")
         IS.time_series_transaction(sys) do txn
             for (zone, ts) in zip(zones, items)
                 IS.add_time_series!(txn, zone, ts)
@@ -115,7 +123,7 @@ function write_case!(case, sys, zones, items, fx)
     else
         IS.add_time_series!(sys, zones, items)  # one array, one row per zone
     end
-    case in ("B0-DST", "M2-DST") && IS.transform_single_time_series!(
+    case in ("B0-DST", "M1-DST", "M2-DST") && IS.transform_single_time_series!(
         sys, IS.DeterministicSingleTimeSeries, Hour(fx.steps), Hour(fx.steps),
     )
     return
@@ -151,6 +159,13 @@ function read_zone_m1(fx, zone)
     return only(IS.get_value_axes(ts)).labels, IS.get_array(ts)
 end
 
+# M1-DST and M1-Det: the zone's one forecast window, columns labeled by bus.
+function read_zone_m1_forecast(fx, zone)
+    det =
+        IS.get_time_series(IS.Deterministic, zone, TS_NAME; start_time = T0, len = fx.steps)
+    return only(IS.get_value_axes(det)).labels, only(values(IS.get_data(det)))
+end
+
 # A zone's slice of a (steps, zone, bus) array: its buses are the nonzero columns.
 function zone_slice(values, value_axes, zone)
     zone_axis, bus_axis = value_axes
@@ -180,6 +195,7 @@ function read_zone(case, fx, zone, z)
     case in ("B0-Det", "B0-DST") && return read_zone_per_bus(fx, zone, z)
     case == "M1" && return read_zone_m1(fx, zone)
     case == "M2" && return read_zone_m2(fx, zone)
+    case in ("M1-DST", "M1-Det") && return read_zone_m1_forecast(fx, zone)
     return read_zone_m2_dst(fx, zone)
 end
 
@@ -224,8 +240,28 @@ function read_all_m2_dst(sys, zones)
     end
 end
 
-read_all(case, fx, sys, zones) =
-    case == "M2" ? read_all_m2(fx, zones) : read_all_m2_dst(sys, zones)
+# M1-DST and M1-Det: every zone's window in one reader pass; each zone owns its array.
+function read_all_m1_forecast(sys, zones)
+    reader =
+        IS.build_forecast_reader(sys, IS.Deterministic; resolution = RES, name = TS_NAME)
+    IS.read_forecast_window!(reader, T0)
+    entries = IS.get_forecast_reader_entries(reader)
+    return map(zones) do zone
+        i = findfirst(e -> e.owner === zone, entries)
+        md = only(
+            IS.list_time_series_metadata(
+                zone; time_series_type = IS.Deterministic, name = TS_NAME,
+            ),
+        )
+        only(IS.get_value_axes(md)).labels, IS.get_forecast_window(reader, i)
+    end
+end
+
+function read_all(case, fx, sys, zones)
+    case == "M2" && return read_all_m2(fx, zones)
+    case in ("M1-DST", "M1-Det") && return read_all_m1_forecast(sys, zones)
+    return read_all_m2_dst(sys, zones)
+end
 
 # ---- serialization -------------------------------------------------------------
 
@@ -351,7 +387,7 @@ function run_case(case, fx)
             () -> got[] = [read_zone(case, fx, zone, z) for (z, zone) in enumerate(zones)])
     end
     check(() -> got[], case, "read_zone", fx)
-    if case in ("M2", "M2-DST")
+    if case in ("M1-DST", "M1-Det", "M2", "M2-DST")
         got[] = nothing
         for _ in 1:REPEATS
             timed_op(case, "float64", "read_all_once", n,
