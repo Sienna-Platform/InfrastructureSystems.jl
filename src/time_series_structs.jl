@@ -304,6 +304,16 @@ get_time_reference(md::TimeSeriesMetadata) = md.time_reference
 get_application_data(md::TimeSeriesMetadata) = md.application_data
 
 """
+Decode the value axes IS stored on this catalog row, or `nothing` when the row has none.
+For readers that hand back raw arrays, such as the forecast reader.
+"""
+function get_value_axes(md::TimeSeriesMetadata)
+    value_axes = _value_axes_from_application_data(md.application_data)
+    _check_value_axes(value_axes, Tuple(md.element_shape))
+    return value_axes
+end
+
+"""
 The 64-char lowercase hex content hash of the stored array this row's series
 resolves to — the spelling every IS hash accessor uses. Two rows sharing it name
 the same array.

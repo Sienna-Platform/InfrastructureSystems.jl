@@ -92,3 +92,106 @@ end
         "{\"value_axes\": [{\"name\": \"b\", \"label_type\": \"int\", \"labels\": [99999999999999999999]}]}",
     )
 end
+
+function _va_system(n_owners = 1)
+    sys = IS.SystemData()
+    owners = [IS.TestComponent("va$i", i) for i in 1:n_owners]
+    foreach(owner -> IS.add_component!(sys, owner), owners)
+    return sys, owners
+end
+
+_va_sts(name, data; value_axes = nothing) =
+    IS.SingleTimeSeries(name, _VA_T0, Dates.Hour(1), data; value_axes = value_axes)
+
+# Writes a row straight to the store with an `application_data` the test chooses, as
+# another client of the same store would.
+function _va_add_raw!(sys, owner, name, data, application_data)
+    store = IS.get_data_store(sys)
+    owner_id, owner_type, category = IS._infrastore_owner_args(owner)
+    raw = IS.InfraStore.SingleTimeSeries(
+        _VA_T0, Dates.Hour(1), data, name; application_data = application_data,
+    )
+    batch = IS.InfraStore.AddBatch()
+    IS.InfraStore.add_time_series!(batch, owner_id, owner_type, category, raw)
+    IS.InfraStore.add_time_series_bulk!(store.inner, batch)
+    IS.flush!(store)
+    return
+end
+
+@testset "Test value_axes on SingleTimeSeries construction" begin
+    data = rand(24, 3)
+    ts = _va_sts("f", data; value_axes = [_va_bus_axis(3)])
+    @test IS.get_value_axes(ts) == [_va_bus_axis(3)]
+    @test IS.get_value_axes(_va_sts("f", data)) === nothing
+    @test_throws ArgumentError _va_sts("f", data; value_axes = [_va_bus_axis(4)])
+    @test_throws ArgumentError _va_sts("f", rand(24); value_axes = [_va_bus_axis(1)])
+    @test IS.get_value_axes(IS.SingleTimeSeries(ts, "g")) == [_va_bus_axis(3)]
+    kw = IS.SingleTimeSeries(;
+        name = "k",
+        data = data,
+        initial_timestamp = _VA_T0,
+        resolution = Dates.Hour(1),
+        value_axes = [_va_bus_axis(3)],
+    )
+    @test IS.get_value_axes(kw) == [_va_bus_axis(3)]
+    # Review focus: time slicing keeps the value axes.
+    @test IS.get_value_axes(IS.head(ts, 5)) == [_va_bus_axis(3)]
+    @test IS.get_value_axes(IS.tail(ts, 5)) == [_va_bus_axis(3)]
+end
+
+@testset "Test value_axes round-trip through the store" begin
+    sys, (owner,) = _va_system()
+    data = rand(24, 2, 3)
+    axes = [IS.TimeSeriesAxis("zone", ["LZ1", "LZ2"]), _va_bus_axis(3)]
+    IS.add_time_series!(sys, owner, _va_sts("f", data; value_axes = axes))
+    back = IS.get_time_series(IS.SingleTimeSeries, owner, "f")
+    @test IS.get_array(back) == data
+    @test IS.get_value_axes(back) == axes
+    sliced = IS.get_time_series(
+        IS.SingleTimeSeries, owner, "f"; start_time = _VA_T0 + Dates.Hour(2), len = 5,
+    )
+    @test IS.get_array(sliced) == data[3:7, :, :]
+    @test IS.get_value_axes(sliced) == axes
+    @test IS.get_value_axes(only(IS.list_time_series_metadata(owner))) == axes
+end
+
+@testset "Test value_axes with one array shared by several owners" begin
+    sys, owners = _va_system(3)
+    data = rand(24, 3)
+    IS.add_time_series!(
+        sys,
+        owners[1:2],
+        _va_sts("f", data; value_axes = [_va_bus_axis(3)]),
+    )
+    for owner in owners[1:2]
+        back = IS.get_time_series(IS.SingleTimeSeries, owner, "f")
+        @test IS.get_value_axes(back) == [_va_bus_axis(3)]
+    end
+    # Review focus: labels live on each row, so one array can carry different labels.
+    other = IS.TimeSeriesAxis("bus", [7, 8, 9])
+    IS.add_time_series!(sys, owners[3], _va_sts("f", data; value_axes = [other]))
+    @test IS.get_value_axes(IS.get_time_series(IS.SingleTimeSeries, owners[3], "f")) ==
+          [other]
+    hashes = IS.get_time_series_hashes(owners, IS.SingleTimeSeries, "f")
+    @test length(unique(values(hashes))) == 1
+    # Review focus: copying a row keeps its labels.
+    copy_owner = IS.TestComponent("va_copy", 9)
+    IS.add_component!(sys, copy_owner)
+    IS.copy_time_series!(copy_owner, owners[1])
+    @test IS.get_value_axes(IS.get_time_series(IS.SingleTimeSeries, copy_owner, "f")) ==
+          [_va_bus_axis(3)]
+end
+
+@testset "Test value_axes leaves another client's application_data alone" begin
+    sys, (owner,) = _va_system()
+    _va_add_raw!(sys, owner, "foreign", rand(24, 3), "not json {")
+    _va_add_raw!(sys, owner, "other_json", rand(24, 3), "{\"other\": 1}")
+    for name in ("foreign", "other_json")
+        back = IS.get_time_series(IS.SingleTimeSeries, owner, name)
+        @test IS.get_value_axes(back) === nothing
+    end
+    # IS's own key disagreeing with the stored shape is a storage inconsistency.
+    bad = IS._value_axes_application_data([_va_bus_axis(4)])
+    _va_add_raw!(sys, owner, "bad", rand(24, 3), bad)
+    @test_throws ArgumentError IS.get_time_series(IS.SingleTimeSeries, owner, "bad")
+end

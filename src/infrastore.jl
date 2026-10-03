@@ -367,6 +367,7 @@ function serialize_single!(
         units = units,
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system),
+        application_data = _value_axes_application_data(get_value_axes(sts)),
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features)
@@ -955,6 +956,7 @@ _single_from_store(sts, name::AbstractString) = SingleTimeSeries(
     String(name), sts.initial_timestamp, sts.resolution, sts.data;
     units = sts.units, quantity_kind = sts.quantity_kind,
     unit_system = _from_store_unit_system(sts.unit_system),
+    value_axes = _value_axes_from_application_data(sts.application_data),
 )
 
 # Key-addressed SingleTimeSeries read: one store call, whether or not it slices
