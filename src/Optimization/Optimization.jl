@@ -35,9 +35,7 @@ export AuxVariableType
 export ParameterType
 export InitialConditionType
 export ExpressionType
-export RightHandSideParameter
 export ObjectiveFunctionParameter
-export LeftHandSideParameter
 export TimeSeriesParameter
 export ConstructStage
 export ArgumentConstructStage

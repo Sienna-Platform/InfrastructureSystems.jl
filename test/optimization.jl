@@ -35,14 +35,13 @@ IS.Optimization.should_write_resulting_value(::Type{MockExpression2}) = false
     @test MockStoreParams <: IS.Optimization.AbstractModelStoreParams
 end
 
-@testset "LeftHandSideParameter is a ParameterType sibling" begin
-    @test IS.Optimization.LeftHandSideParameter <: IS.Optimization.ParameterType
-    @test !(IS.Optimization.LeftHandSideParameter <: IS.Optimization.RightHandSideParameter)
-    @test !(
-        IS.Optimization.LeftHandSideParameter <: IS.Optimization.ObjectiveFunctionParameter
-    )
-    @test isdefined(IS.Optimization, :LeftHandSideParameter) &&
-          :LeftHandSideParameter in names(IS.Optimization)
+@testset "Parameter types are organized by value source" begin
+    @test IS.Optimization.TimeSeriesParameter <: IS.Optimization.ParameterType
+    @test supertype(IS.Optimization.TimeSeriesParameter) === IS.Optimization.ParameterType
+    @test supertype(IS.Optimization.ObjectiveFunctionParameter) ===
+          IS.Optimization.ParameterType
+    @test !isdefined(IS.Optimization, :RightHandSideParameter)
+    @test !isdefined(IS.Optimization, :LeftHandSideParameter)
 end
 
 @testset "IS.Optimization utility functions" begin
