@@ -144,7 +144,8 @@ end
     IS.add_component!(sys, component)
     @test_throws ArgumentError IS.Deterministic(name, data_ts_two_cols)
 
-    invalid_horizon_count = SortedDict(initial_time => rand(1), other_time => rand(1))
+    invalid_horizon_count =
+        SortedDict(initial_time => Float64[], other_time => Float64[])
     forecast = IS.Deterministic(;
         data = invalid_horizon_count,
         name = name,
@@ -181,7 +182,7 @@ end
 
     resolution = Dates.Hour(1)
     initial_time = Dates.DateTime("2020-01-01")
-    horizon_count = 1
+    horizon_count = 0
 
     name = "test1"
     data = SortedDict(
@@ -4192,6 +4193,68 @@ end
     @test collect(keys(IS.get_data(t_other)))[1] == other_time
 end
 
+@testset "Test forecasts with one-period windows" begin
+    # A forecast declares its resolution, so a window of a single period is complete: a
+    # one-hour horizon at hourly resolution, stepped every hour.
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    resolution = Dates.Hour(1)
+    initial_times = [Dates.DateTime("2020-09-01") + Dates.Hour(h) for h in 0:2]
+
+    one_dim = SortedDict(t => [Float64(i)] for (i, t) in enumerate(initial_times))
+    two_dim = SortedDict(t => fill(Float64(i), 1, 3) for (i, t) in enumerate(initial_times))
+    forecasts = (
+        IS.Deterministic("deterministic", one_dim, resolution),
+        IS.Probabilistic("probabilistic", two_dim, [0.1, 0.5, 0.9], resolution),
+        IS.Scenarios("scenarios", two_dim, resolution),
+    )
+    for forecast in forecasts
+        IS.add_time_series!(sys, component, forecast)
+    end
+    for forecast in forecasts
+        T = typeof(forecast)
+        name = IS.get_name(forecast)
+        stored = IS.get_time_series(T, component, name)
+        @test IS.get_horizon_count(stored) == 1
+        @test IS.get_horizon(stored) == resolution
+        @test IS.get_interval(stored) == resolution
+        @test collect(IS.get_initial_times(stored)) == initial_times
+        for (i, t) in enumerate(initial_times)
+            values = IS.get_time_series_values(T, component, name; start_time = t)
+            @test size(values, 1) == 1
+            @test all(==(Float64(i)), values)
+        end
+    end
+end
+
+@testset "Test transform to one-period windows" begin
+    sys = IS.SystemData()
+    component = IS.TestComponent("Component1", 5)
+    IS.add_component!(sys, component)
+    resolution = Dates.Hour(1)
+    dates = collect(
+        range(Dates.DateTime("2020-09-01"); step = resolution, length = 24),
+    )
+    ta = TimeSeries.TimeArray(dates, collect(1.0:24.0), [IS.get_name(component)])
+    IS.add_time_series!(sys, component, IS.SingleTimeSeries("val", ta))
+    IS.transform_single_time_series!(
+        sys,
+        IS.DeterministicSingleTimeSeries,
+        resolution,
+        resolution,
+    )
+    forecast = IS.get_time_series(IS.DeterministicSingleTimeSeries, component, "val")
+    @test IS.get_horizon_count(forecast) == 1
+    @test length(collect(IS.get_initial_times(forecast))) == 24
+    @test IS.get_time_series_values(
+        IS.DeterministicSingleTimeSeries,
+        component,
+        "val";
+        start_time = dates[20],
+    ) == [20.0]
+end
+
 @testset "Test conflicting time series parameters" begin
     sys = IS.SystemData()
     name = "Component1"
@@ -4204,10 +4267,10 @@ end
     name = "test"
     horizon_count = 24
 
-    # Horizon must be greater than 1.
+    # A window must hold at least one period.
     bad_data = SortedDict{Dates.DateTime, Vector{Float64}}(
-        initial_time => ones(1),
-        second_time => ones(1),
+        initial_time => Float64[],
+        second_time => Float64[],
     )
     forecast = IS.Deterministic(; data = bad_data, name = name, resolution = resolution)
     @test_throws ArgumentError IS.add_time_series!(sys, component, forecast)
@@ -4828,14 +4891,22 @@ end
     )
     @test_throws DimensionMismatch IS.check_time_series_data(mismatched)
 
-    # A single-step horizon is too short even though the window holds five values.
-    too_short = IS.Probabilistic(;
+    # A single-step horizon of five members is valid; a zero-step horizon is not.
+    single_step = IS.Probabilistic(;
         name = "test",
         data = SortedDict(t1 => zeros(1, 5), t2 => zeros(1, 5)),
         percentiles = [0.1, 0.2, 0.3, 0.4, 0.5],
         resolution = resolution,
     )
-    @test_throws ArgumentError IS.check_time_series_data(too_short)
+    IS.check_time_series_data(single_step)
+    @test IS.get_horizon_count(single_step) == 1
+    no_steps = IS.Probabilistic(;
+        name = "test",
+        data = SortedDict(t1 => zeros(0, 5), t2 => zeros(0, 5)),
+        percentiles = [0.1, 0.2, 0.3, 0.4, 0.5],
+        resolution = resolution,
+    )
+    @test_throws ArgumentError IS.check_time_series_data(no_steps)
 
     # 2.8: an empty forecast dict is an ArgumentError, not a destructuring MethodError.
     @test_throws ArgumentError IS.Deterministic(;
