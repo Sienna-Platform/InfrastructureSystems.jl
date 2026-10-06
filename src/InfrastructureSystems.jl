@@ -172,7 +172,6 @@ using .RelativeUnits:
     ComponentBaseUnit,
     SystemBaseUnit,
     NaturalUnit,
-    RelativeQuantity,
     CU,
     SU,
     NU,
@@ -181,7 +180,10 @@ using .RelativeUnits:
     display_string
 # Names not exported from the submodule are pulled in explicitly so the
 # `IS._strip_units(...)` / `IS.convert_cost_coefficient(...)` call sites work.
-using .RelativeUnits: _strip_units, convert_cost_coefficient
+using .RelativeUnits:
+    _strip_units, convert_cost_coefficient, display_base_label, display_value
+include("per_unit.jl")
+using .PerUnit: resolve_per_unit
 include("random_seed.jl")
 include("utils/timers.jl")
 include("utils/assert_op.jl")
