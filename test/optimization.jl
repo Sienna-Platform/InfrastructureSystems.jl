@@ -35,6 +35,15 @@ IS.Optimization.should_write_resulting_value(::Type{MockExpression2}) = false
     @test MockStoreParams <: IS.Optimization.AbstractModelStoreParams
 end
 
+@testset "Parameter types are organized by value source" begin
+    @test IS.Optimization.TimeSeriesParameter <: IS.Optimization.ParameterType
+    @test supertype(IS.Optimization.TimeSeriesParameter) === IS.Optimization.ParameterType
+    @test supertype(IS.Optimization.ObjectiveFunctionParameter) ===
+          IS.Optimization.ParameterType
+    @test !isdefined(IS.Optimization, :RightHandSideParameter)
+    @test !isdefined(IS.Optimization, :LeftHandSideParameter)
+end
+
 @testset "IS.Optimization utility functions" begin
     # Test default values
     @test IS.Optimization.convert_output_to_natural_units(MockVariable) == false

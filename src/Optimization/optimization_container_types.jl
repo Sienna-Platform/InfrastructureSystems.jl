@@ -31,10 +31,10 @@ should_write_resulting_value(::Type{<:InitialConditionType}) = throw(
 # TODO: Piecewise linear parameter are broken to write
 should_write_resulting_value(::Type{<:ParameterType}) = false
 
-abstract type RightHandSideParameter <: ParameterType end
 abstract type ObjectiveFunctionParameter <: ParameterType end
 
-abstract type TimeSeriesParameter <: RightHandSideParameter end
+"Parameter whose values are read from a time series."
+abstract type TimeSeriesParameter <: ParameterType end
 
 """
 Optimization Container construction stage
