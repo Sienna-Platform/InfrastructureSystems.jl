@@ -36,10 +36,6 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 ZipArchives = "49080126-0e18-4c2a-b176-c102e4b3760c"
 
-[sources]
-InfrastructureCoreOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "InfrastructureCoreOpenAPIModels.jl"}
-InfrastructureTimeSeriesOpenAPIModels = {url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git", rev = "main", subdir = "InfrastructureTimeSeriesOpenAPIModels.jl"}
-
 [compat]
 DataFrames = "^1.7"
 DataStructures = "^0.18, ^0.19"
@@ -48,8 +44,8 @@ DocStringExtensions = "0.8, 0.9"
 EnumX = "1"
 GeoJSON = "0.8.4"
 InfraStore = "0.14"
-InfrastructureCoreOpenAPIModels = "0.1"
-InfrastructureTimeSeriesOpenAPIModels = "0.1"
+InfrastructureCoreOpenAPIModels = "0.2"
+InfrastructureTimeSeriesOpenAPIModels = "0.2"
 InteractiveUtils = "1"
 JSON = "^1.5"
 LinearAlgebra = "1"

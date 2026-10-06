@@ -26,17 +26,8 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
+[sources]
+InfrastructureSystems = {path = ".."}
+
 [compat]
 InfraStore = "0.14"
-# `[sources]` applies ONLY to the top-level project, so the package's own entries are NOT
-# inherited by this environment. InfrastructureCoreOpenAPIModels and
-# InfrastructureTimeSeriesOpenAPIModels are unregistered, so without repeating them here the
-# test env cannot resolve them at all ("expected package InfrastructureCoreOpenAPIModels to be
-# registered"). Keep these in step with the revs in ../Project.toml.
-# IS itself has no self-pin here (unlike sibling repos' test/Project.toml): `dev` it
-# explicitly when instantiating this env.
-[sources]
-InfrastructureCoreOpenAPIModels = {rev = "main", subdir = "InfrastructureCoreOpenAPIModels.jl", url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git"}
-InfrastructureSystems = {path = ".."}
-InfrastructureTimeSeriesOpenAPIModels = {rev = "main", subdir = "InfrastructureTimeSeriesOpenAPIModels.jl", url = "https://github.com/Sienna-Platform/PowerOpenAPIModels.git"}
-
