@@ -10,7 +10,7 @@ guidance on common problems in our existing documentation.
   - If you have not read [Diataxis](https://diataxis.fr/), first read it in its entirety.
   - Refer back to the Diataxis [Reference](https://diataxis.fr/reference/) section while
     working.
-  - Read and follow Julia's guidance on [Writing Documentation](@extref),
+  - Read and follow Julia's guidance on [Writing Documentation](@extref Julia :doc:`manual/documentation`),
     which mainly applies to docstrings
   - Read the sections on `Documenter.jl`'s [`@docs` block](@extref) and
     [`@autodocs` block](@extref), and follow the guidance below on using `@autodocs`
