@@ -23,6 +23,16 @@ get_count(ts::StaticTimeSeries) = 1
 # quadratic.
 Base.length(ts::StaticTimeSeries) = size(get_array(ts), 1)
 
+# A `TimeArray` holds at most a (time, column) matrix; N-D values are read with `get_array`.
+_static_time_array(timestamps, data::AbstractVecOrMat) =
+    TimeSeries.TimeArray(timestamps, data)
+_static_time_array(_timestamps, data::AbstractArray) = throw(
+    ArgumentError(
+        "get_time_array is only defined for 1- or 2-D values (got N = $(ndims(data))); " *
+        "use get_array",
+    ),
+)
+
 Base.getindex(ts::StaticTimeSeries, args...) = getindex(get_array(ts), args...)
 
 Base.firstindex(ts::StaticTimeSeries) = firstindex(get_array(ts))

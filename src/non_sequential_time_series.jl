@@ -273,14 +273,8 @@ Build a fresh `TimeSeries.TimeArray` from a [`NonSequentialTimeSeries`](@ref)'s
 Defined for `N in (1, 2)` (a `TimeArray` is at most matrix-valued); for `N > 2` it
 throws and callers should use [`get_array`](@ref).
 """
-function get_time_array(value::NonSequentialTimeSeries{T, N}) where {T, N}
-    N <= 2 || throw(
-        ArgumentError(
-            "get_time_array is only defined for 1- or 2-D values (got N = $N); use get_array",
-        ),
-    )
-    return TimeSeries.TimeArray(value.timestamps, value.data)
-end
+get_time_array(value::NonSequentialTimeSeries) =
+    _static_time_array(value.timestamps, value.data)
 
 """
 Get [`NonSequentialTimeSeries`](@ref) `data` as a `TimeArray`.
@@ -324,5 +318,5 @@ function make_time_array(
     )
     colons = ntuple(_ -> Colon(), ndims(time_series.data) - 1)
     sub = time_series.data[start_index:end_index, colons...]
-    return TimeSeries.TimeArray(timestamps[start_index:end_index], sub)
+    return _static_time_array(timestamps[start_index:end_index], sub)
 end

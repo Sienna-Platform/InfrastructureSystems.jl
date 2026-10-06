@@ -73,6 +73,10 @@ end
 _window_eltype(data::AbstractDict) = eltype(valtype(data))
 _window_ndims(data::AbstractDict) = ndims(valtype(data))
 
+# The shape of one step's value: a window's size without its leading horizon axis.
+_window_value_dims(data::AbstractDict) =
+    isempty(data) ? () : Base.tail(size(first(values(data))))
+
 # Normalize a window dict to a `SortedDict`; copy-free when it already is one.
 _ensure_sorted_dict(data::SortedDict) = data
 _ensure_sorted_dict(data::AbstractDict) = SortedDict(data)
@@ -229,16 +233,19 @@ function get_window_common(
             ),
         )
     end
-    if ndims(data) == 2
-        # A Probabilistic / Scenarios window is a (horizon, member) matrix; the time
-        # axis is the first dimension either way.
-        data = @view data[1:len, :]
-    else
-        data = @view data[1:len]
-    end
-
-    return TimeSeries.TimeArray(make_timestamps(forecast, initial_time, len), data)
+    data = selectdim(data, 1, 1:len)
+    return _window_time_array(make_timestamps(forecast, initial_time, len), data)
 end
+
+# A `TimeArray` holds at most a (time, column) matrix.
+_window_time_array(timestamps, data::AbstractVecOrMat) =
+    TimeSeries.TimeArray(timestamps, data)
+_window_time_array(_timestamps, data::AbstractArray) = throw(
+    ArgumentError(
+        "get_window returns a TimeArray, which holds at most 2 dimensions, but this " *
+        "window has $(ndims(data)); read N-D windows with get_data(forecast)[initial_time]",
+    ),
+)
 
 """
 Convert a Dict of TimeSeries.TimeArray to a SortedDict of Arrays.

@@ -165,3 +165,67 @@ page cache, as they would be in production; these are not cold-media numbers.
 `baseline.csv` was measured 2026-08-22 on an Apple M2 Pro (32 GB, macOS 26.6.2),
 Julia 1.12.7, infrastore @ `82a3e70`. Absolute numbers are machine-specific —
 compare a run against a baseline taken on the same machine.
+
+## Matrix-valued distribution factors
+
+`matrix_bench.jl` compares load-zone distribution factors stored one series per bus with one matrix series, for reads and for both serialization paths.
+It runs each representation in a fresh process, so each `maxrss` row belongs to one case.
+
+```sh
+julia --project=test benchmark/matrix_bench.jl > matrix.csv
+```
+
+| case | what is stored |
+|---|---|
+| `B0-Det` | one scalar `Deterministic` per bus, owned by its zone, with feature `"bus"` |
+| `B0-DST` | one scalar `SingleTimeSeries` per bus, then `transform_single_time_series!` |
+| `M1` | one `SingleTimeSeries{Float64, 2}` per zone, `[steps, members]`, bus labels in `value_axes` |
+| `M1-DST` | `M1` plus `transform_single_time_series!`, read as `Deterministic` windows |
+| `M1-Det` | the same matrices stored directly as one-window `Deterministic` forecasts |
+| `M2` | one `[steps, zones, buses]` array owned by every zone, 0 for non-members |
+| `M2-DST` | `M2` plus `transform_single_time_series!` |
+
+`read_all_once` reads every zone in one pass: grouped by array hash for `M2`, through `build_forecast_reader` for the forecast cases.
+
+Sizes come from `MATRIX_BUSES` (50000), `MATRIX_ZONES` (8) and `MATRIX_STEPS` (24).
+Zones are disjoint by default; `MATRIX_MEMBERS=18000:22000` draws each zone's size from that range instead, so a bus can sit in several zones (every bus is in at least one).
+Every timed op repeats `MATRIX_REPEATS` (3) times; take the median of its rows.
+Each write repeat builds a fresh system and payload outside the timer, and the last system serves the reads and serializations.
+Each serialization repeat writes to a fresh directory and its deserialization reads from that directory.
+Every `check_*` row compares the factors read back with the generated ones and must be `ok`.
+
+How to read the rows:
+
+- `legacy_bytes.*` and `openapi_bytes.*` are the data-size rows: arrays, catalog and document for each serialization path.
+- `store_bytes.h5` is the live arrays file only, without the catalog (the live catalog is in memory, so there is no `store_bytes.sqlite`).
+  It is padded when one timestep block (zones x buses x 8 B) is under 1 MiB: a packed pool's chunk is one timestep row across all columns, capped at 1 MiB but never below one column, so small fixtures give a file near 24 MiB whatever the data size.
+  One column of M2 at full size is a 3.2 MB chunk.
+  At 8 zones x 50,000 buses it is within 0.02% of the raw array.
+- `bytes` on timed rows is Julia allocation only; Rust/FFI work, such as per-owner hashing on M2's multi-owner write, is not counted.
+- `maxrss` is the peak over the whole case process (fixture, payload, warmup, reads, serialization), so compare it across cases at the same size only.
+- The HDF5 chunk cache is 64 MiB per file.
+  At 50,000 buses B0's roughly 9.6 MB stays resident after the first read, while M2's roughly 77 MB (24 chunks of 3.2 MB) cannot.
+  The first `read_zone` or `read_all_once` repeat is the cold read for every case.
+  Later B0 repeats hit the chunk cache; M2 and M2-DST repeats cannot, so they read from the OS page cache every time, and the cache favours B0 after the first repeat.
+- `de_legacy` and `de_openapi` are not like for like: `de_legacy` copies the store's `.h5` and `.sqlite` and loads the finished catalog, while `de_openapi` opens the arrays file in place and replays every association row from the JSON document.
+  Neither reads an array.
+- A check that throws is reported as an `error: <op>: <message>` row, so the case still reaches its `maxrss` row.
+
+## Linked reserve offers
+
+`reserves_bench.jl` stores one `Int64` link matrix per device: each hour a (blocks x products) matrix whose entry is the step a shared block became in that product's offer curve, or 0.
+It reuses `matrix_bench.jl`'s serialization and reporting helpers and runs each case in a fresh process.
+
+```sh
+julia --project=test benchmark/reserves_bench.jl > reserves.csv
+```
+
+| case | what is stored |
+|---|---|
+| `R-dev` | `SingleTimeSeries{Int64, 3}` per device, rows padded to that device's busiest hour, `value_axes = [block, product]` |
+| `R-fixed` | the same, with every device padded to `RESERVE_MAX_BLOCKS` rows, so all devices share one element shape |
+| `R-tuple` | one `Float64` tuple per hour (column-major blocks x products), the form IS stored before `value_axes`; no labels |
+
+Every case is transformed to `DeterministicSingleTimeSeries` and read back as forecast windows two ways: `read_each` (one window read per device) and `reader_window` (every device at one timestamp through `build_forecast_reader`; `reader_build` times building it).
+Sizes come from `RESERVE_DEVICES` (4500), `RESERVE_STEPS` (24) and `RESERVE_MAX_BLOCKS` (10); repeats come from `MATRIX_REPEATS`.
+The size and memory rows read as in the section above.
