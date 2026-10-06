@@ -130,7 +130,11 @@ end
 _shared_label(::Tuple{}) = nothing
 function _shared_label(labels::Tuple)
     label = first(labels)
-    return !isnothing(label) && all(==(label), labels) ? label : nothing
+    if !isnothing(label) && all(==(label), labels)
+        return label
+    else
+        return nothing
+    end
 end
 
 """
