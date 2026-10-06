@@ -7343,6 +7343,68 @@ end
     @test window == TimeSeries.values(IS.get_window(full, t0))
 end
 
+@testset "Test ForecastReader group accessors" begin
+    sys, comps = _create_reader_system(3)
+    t0, res = READER_T0, READER_RES
+    # Two element types, so two groups: three scalar forecasts (c1 and c2 sharing
+    # one array) and one of curves.
+    expected = Dict{IS.TimeSeriesKey, Any}()
+    val_keys = IS.TimeSeriesKey[]
+    for (i, c) in enumerate(comps)
+        base = i == 3 ? 100.0 : 0.0
+        data =
+            SortedDict(t0 => [base + 1.0, base + 2.0], t0 + res => [base + 3.0, base + 4.0])
+        key = IS.add_time_series!(sys, c,
+            IS.Deterministic(; data = data, name = "val", resolution = res))
+        expected[key] = data
+        push!(val_keys, key)
+    end
+    fds = SortedDict(
+        t0 => [IS.LinearFunctionData(1.0, 0.0), IS.LinearFunctionData(2.0, 0.0)],
+        t0 + res => [IS.LinearFunctionData(3.0, 0.0), IS.LinearFunctionData(4.0, 0.0)],
+    )
+    key = IS.add_time_series!(sys, comps[1],
+        IS.Deterministic(; data = fds, name = "cost", resolution = res))
+    expected[key] = fds
+
+    reader = IS.build_forecast_reader(sys, IS.Deterministic; resolution = res)
+    ngroups = IS.get_num_forecast_groups(reader)
+    @test ngroups == 2
+    @test IS.get_num_forecast_slots(reader) == 3
+
+    entries = IS.get_forecast_reader_entries(reader)
+    grouped = [IS.get_forecast_group_entries(reader, g) for g in 1:ngroups]
+    # The group views partition the reader's entries.
+    @test sum(length, grouped) == length(reader)
+    @test Set(e.key for g in grouped for e in g) == Set(e.key for e in entries)
+
+    # Reading a group before any read is an error, as it is per entry.
+    @test_throws ArgumentError IS.get_forecast_group_windows(reader, 1)
+
+    by_key = Dict(e.key => i for (i, e) in enumerate(entries))
+    for t in (t0, t0 + res)
+        IS.read_forecast_window!(reader, t)
+        for g in 1:ngroups
+            windows = IS.get_forecast_group_windows(reader, g)
+            # One concrete window type per group: what makes the barrier pay.
+            @test isconcretetype(eltype(windows))
+            ents = grouped[g]
+            @test length(windows) == length(ents)
+            for (i, e) in enumerate(ents)
+                @test e.group == g
+                @test e.position == i
+                @test windows[i] == expected[e.key][t]
+                # ... and the group path agrees with the per-entry one.
+                @test windows[i] === IS.get_forecast_window(reader, by_key[e.key])
+            end
+        end
+    end
+    # Entries sharing a slot (c1 and c2) share one decoded array.
+    i1, i2 = by_key[val_keys[1]], by_key[val_keys[2]]
+    @test entries[i1].slot == entries[i2].slot
+    @test IS.get_forecast_window(reader, i1) === IS.get_forecast_window(reader, i2)
+end
+
 @testset "Test StaticTimeSeriesReader" begin
     sys, comps = _create_reader_system(3)
     t0, res = READER_T0, READER_RES
