@@ -36,10 +36,11 @@ function _check_forecast_data(forecast::Forecast)
     data = get_data(forecast)
     isempty(data) && throw(ArgumentError("Forecast data cannot be empty"))
     # Dimension 1 is time for every window shape; `length` would count the members of a
-    # (horizon, member) Probabilistic/Scenarios matrix instead of its horizon.
+    # (horizon, member) Probabilistic/Scenarios matrix instead of its horizon. A forecast
+    # carries its resolution explicitly, so a window of a single period is complete.
     required_horizon = size(first(values(data)), 1)
-    required_horizon < 2 &&
-        throw(ArgumentError("Forecast arrays must have a length of at least 2."))
+    required_horizon < 1 &&
+        throw(ArgumentError("Forecast windows must hold at least one period."))
     horizons = Set((size(x, 1) for x in values(data)))
     length(horizons) != 1 &&
         throw(DimensionMismatch("All forecast windows must have the same horizon"))
