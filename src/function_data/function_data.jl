@@ -226,7 +226,7 @@ end
 Structure to represent a step function as a series of endpoint x-coordinates and segment
 y-coordinates: two x-coordinates and one y-coordinate defines a single segment, three
 x-coordinates and two y-coordinates define two segments, etc. This can be useful to
-represent the derivative of a [PiecewiseLinearData](@ref), where the y-coordinates of this
+represent the derivative of a [`PiecewiseLinearData`](@ref), where the y-coordinates of this
 step function represent the slopes of that piecewise linear function, so there is also an
 optional field `c` that can be used to store the initial y-value of that piecewise linear
 function. Principally used for the representation of cost functions where the points store

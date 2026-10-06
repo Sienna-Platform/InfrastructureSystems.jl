@@ -69,7 +69,7 @@ yourself if you are compensating for a lack of information in the API's.
 !!! tip "Do"
     
     Move how-to guides with a single function to being Examples in that
-    function's docstring. See [Writing Documentation](@extref).
+    function's docstring. See [Writing Documentation](@extref Julia :doc:`manual/documentation`).
 
 ### Remove Other Reference Material
 
