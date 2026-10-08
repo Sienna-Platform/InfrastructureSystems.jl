@@ -90,15 +90,11 @@ $(TYPEDSIGNATURES)
 
 Extract the Sienna archive at `path` into `directory` and return it.
 
-`directory` defaults to a fresh temporary directory, which persists until the Julia session
-ends. A caller passes its own when the extraction must not land in `/tmp` — an archive whose
-HDF5 member is larger than `/tmp` (HPC), or one whose sidecar is opened in place and so has
-to outlive this call.
+The caller owns `directory` and its lifetime. Supply a specific location when the
+extraction must not land in `/tmp` — an archive whose HDF5 member is larger than `/tmp`
+(HPC), or one whose sidecar is opened in place and so has to outlive this call.
 """
-function extract_sienna_archive(
-    path::AbstractString;
-    directory::AbstractString = mktempdir(),
-)
+function extract_sienna_archive(path::AbstractString; directory::AbstractString)
     if !isfile(path)
         throw(DataFormatError("$path does not exist"))
     end
@@ -108,8 +104,9 @@ function extract_sienna_archive(
         archive = ZipArchives.ZipReader(bytes)
         for i in 1:ZipArchives.zip_nentries(archive)
             name = ZipArchives.zip_name(archive, i)
+            _check_archive_member_name(name)
             ZipArchives.zip_openentry(archive, i) do member
-                open(joinpath(dir, name), "w") do io
+                open(joinpath(directory, name), "w") do io
                     write(io, member)
                 end
             end
@@ -120,5 +117,17 @@ function extract_sienna_archive(
         # Julia 1.14 has munmap from JuliaLang/julia#60955
         finalize(bytes.ref.mem)
     end
-    return dir
+    return directory
+end
+
+function _check_archive_member_name(name::AbstractString)
+    if isempty(name) || name in (".", "..") || name != basename(name)
+        throw(
+            DataFormatError(
+                "archive member name $(repr(name)) is not a flat filename; " *
+                "Sienna archives contain only top-level members",
+            ),
+        )
+    end
+    return nothing
 end
