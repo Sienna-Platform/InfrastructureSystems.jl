@@ -14,6 +14,9 @@ struct InvalidValue <: Exception
     msg::AbstractString
 end
 
+"""
+Raised when inputs conflict with each other or with data already stored.
+"""
 struct ConflictingInputsError <: Exception
     msg::AbstractString
 end

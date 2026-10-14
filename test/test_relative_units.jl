@@ -56,7 +56,8 @@ end
     for units in (u"CU", u"SU/hr", u"NU", u"hr")
         code, return_type = only(code_typed(g, (typeof(units),)))
         @test isconcretetype(return_type)
-        @test length(code.code) == 1  # `return <constant>`
+        # `return <constant>`; coverage instrumentation adds statements, so skip under it.
+        Base.JLOptions().code_coverage == 0 && @test length(code.code) == 1
         g(units)
         @test (@allocated g(units)) == 0
     end
