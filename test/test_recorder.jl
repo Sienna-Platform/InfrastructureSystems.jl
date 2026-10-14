@@ -109,3 +109,49 @@ end
         isfile(filename) && rm(filename)
     end
 end
+
+@testset "Test recorder flushes each event" begin
+    filename = "test.log"
+    try
+        IS.register_recorder!(:test)
+        IS.@record :test TestEvent("a", 1, 2.0)
+        @test filesize(filename) > 0
+        IS.@record :test TestEvent2(5)
+        @test length(readlines(filename)) == 2
+    finally
+        IS.unregister_recorder!(:test)
+        isfile(filename) && rm(filename)
+    end
+end
+
+@testset "Test recorder round trip with NaN, vectors, and symbols" begin
+    filename = "test.log"
+    try
+        IS.register_recorder!(:test)
+        IS.@record :test TestEvent3(:UC, NaN, ["gen1", "gen2"], [1.5, NaN])
+        IS.@record :test TestEvent3(:ED, 2.0, String[], [-Inf])
+        IS.unregister_recorder!(:test)
+
+        lines = readlines(filename)
+        data = JSON.parse(lines[1]; dicttype = Dict{String, Any})
+        @test data["model_name"] == "UC"
+        @test data["value"] === nothing
+        @test data["values"] == [1.5, nothing]
+
+        events = IS.list_recorder_events(TestEvent3, filename)
+        @test length(events) == 2
+        @test events[1].model_name == :UC
+        @test isnan(events[1].value)
+        @test events[1].names == ["gen1", "gen2"]
+        @test events[1].values[1] == 1.5
+        @test isnan(events[1].values[2])
+        @test events[2].value == 2.0
+        @test isempty(events[2].names)
+        @test events[2].values == [-Inf]
+        @test IS.get_timestamp(events[1]) <= IS.get_timestamp(events[2])
+        @test IS.to_json(events[2]) == lines[2]
+    finally
+        IS.unregister_recorder!(:test)
+        isfile(filename) && rm(filename)
+    end
+end
