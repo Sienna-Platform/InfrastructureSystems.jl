@@ -35,29 +35,7 @@ function serialize(event::T) where {T <: AbstractRecorderEvent}
 end
 
 # JSON has no NaN; a NaN is written as null and read back as NaN.
-function _write_json_value(io::IO, x::Float64)
-    if isnan(x)
-        write(io, "null")
-    else
-        JSON.json(io, x)
-    end
-    return
-end
-
-function _write_json_value(io::IO, x::AbstractVector{Float64})
-    write(io, '[')
-    for (i, val) in enumerate(x)
-        i > 1 && write(io, ',')
-        _write_json_value(io, val)
-    end
-    write(io, ']')
-    return
-end
-
-function _write_json_value(io::IO, x)
-    JSON.json(io, x)
-    return
-end
+_write_json_value(io::IO, x) = JSON.json(io, x; allownan = true, nan = "null")
 
 _read_json_value(::Type{T}, x) where {T} = T(x)
 _read_json_value(::Type{Float64}, ::Nothing) = NaN
@@ -89,7 +67,7 @@ end
 
 to_json(event::AbstractRecorderEvent) = String(rstrip(sprint(write_event, event)))
 from_json(::Type{T}, text::AbstractString) where {T <: AbstractRecorderEvent} =
-    deserialize(T, JSON.parse(text; dicttype = Dict{String, Any}))
+    deserialize(T, JSON.parse(text; dicttype = Dict{String, Any}, allownan = true))
 
 function deserialize(::Type{T}, data::Dict) where {T <: AbstractRecorderEvent}
     name = pop!(data, "name")

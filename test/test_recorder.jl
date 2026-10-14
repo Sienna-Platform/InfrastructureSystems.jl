@@ -129,7 +129,7 @@ end
     try
         IS.register_recorder!(:test)
         IS.@record :test TestEvent3(:UC, NaN, ["gen1", "gen2"], [1.5, NaN])
-        IS.@record :test TestEvent3(:ED, 2.0, String[], Float64[])
+        IS.@record :test TestEvent3(:ED, 2.0, String[], [-Inf])
         IS.unregister_recorder!(:test)
 
         lines = readlines(filename)
@@ -147,7 +147,7 @@ end
         @test isnan(events[1].values[2])
         @test events[2].value == 2.0
         @test isempty(events[2].names)
-        @test isempty(events[2].values)
+        @test events[2].values == [-Inf]
         @test IS.get_timestamp(events[1]) <= IS.get_timestamp(events[2])
         @test IS.to_json(events[2]) == lines[2]
     finally
