@@ -39,7 +39,7 @@ Use when your data directly gives total output vs. input: e.g., total \$/h at ea
 or total MBTU/h from a heat rate curve fit. The y-axis is an absolute quantity, not a rate.
 
 - In a [`CostCurve`](@ref): x = MW, y = \$/h
-- In a [`FuelCurve`](@ref): x = MW, y = MBTU/h (or other fuel units)
+- In a [`FuelCurve`](@ref): x = MW, y = MMBtu/h (or other `fuel_units`)
 
 Use [`IncrementalCurve`](@ref) if your data is in marginal-rate form (e.g., a bid stack).
 """
@@ -79,7 +79,7 @@ has a constant \$/MWh price. This is the native format for market offers and inc
 heat rate data.
 
 - In a [`CostCurve`](@ref): x = MW, y = \$/MWh (marginal cost)
-- In a [`FuelCurve`](@ref): x = MW, y = MBTU/MWh (incremental heat rate)
+- In a [`FuelCurve`](@ref): x = MW, y = MMBtu/MWh (incremental heat rate)
 
 `initial_input` stores the **total cost at the minimum production point** `x_coords[1]`.
 It is not part of the curve itself — it anchors the absolute cost level and is required to
@@ -113,7 +113,7 @@ which is common in generator heat rate tables that report MBTU/MWh as a function
 (not the incremental/marginal rate, but the average over the whole output).
 
 - In a [`CostCurve`](@ref): x = MW, y = \$/MWh (average, not marginal)
-- In a [`FuelCurve`](@ref): x = MW, y = MBTU/MWh (average heat rate)
+- In a [`FuelCurve`](@ref): x = MW, y = MMBtu/MWh (average heat rate)
 
 `initial_input` stores the **total cost at the minimum production point** `x_coords[1]`,
 required to convert this curve to an [`InputOutputCurve`](@ref).
