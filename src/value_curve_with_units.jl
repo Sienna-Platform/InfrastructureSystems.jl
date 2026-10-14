@@ -1,29 +1,46 @@
 """
-Supertype for curve representations that carry their own unit system.
+Supertype for curve representations that carry their own units.
 
-Parameterized by a [`ValueCurve`](@ref) type `T` and an
-[`AbstractUnitSystem`](@ref) type `U`: the unit system in which this curve's *power axes*
-are expressed. The x-axis is always power, so `U` always governs it. Whether `U` also
-governs the y-axis depends on the family and is given by the
-[`y_axis_power_dimension`](@ref) trait: the y-axis of a [`CostCurve`](@ref) or
-[`FuelCurve`](@ref) is currency or fuel and carries no power units, while the y-axis of a
-[`LossCurve`](@ref) is power in the same base as x.
+Parameterized by a [`ValueCurve`](@ref) type `T`, an [`AbstractUnitSystem`](@ref) type `U`,
+and the natural units `X` and `Y` of the curve's two axes (`Unitful.Units` types). `U` is
+the *basis* the curve is stored on (natural, component base, or system base); `X` and `Y`
+say *what* each axis is, and so how each one moves under a change of basis. An axis whose
+natural unit is power-free, like a cost curve's \$/h, is untouched by any basis.
+
+| Family                         | `X`   | `Y`                 |
+|:-------------------------------|:------|:--------------------|
+| [`CostCurve`](@ref)            | `MW`  | `USD/h`             |
+| [`FuelCurve`](@ref)            | `MW`  | fuel per hour, free |
+| [`LossCurve`](@ref)            | free  | `MW`                |
 
 Subtypes are [`ProductionVariableCostCurve`](@ref) (costs) and
 [`LossCurve`](@ref) (losses). Methods common to both belong here; methods that
 require a `vom_cost` belong on `ProductionVariableCostCurve`.
 """
-abstract type ValueCurveWithUnits{T <: ValueCurve, U <: AbstractUnitSystem} end
+abstract type ValueCurveWithUnits{
+    T <: ValueCurve,
+    U <: AbstractUnitSystem,
+    X <: Unitful.Units,
+    Y <: Unitful.Units,
+} end
+
+# Axis units fixed by a family, as type parameters.
+const _MW = typeof(Unitful.MW)
+const _USD_PER_HOUR = typeof(CommodityUnits.USD / Unitful.hr)
 
 "Get the underlying `ValueCurve` representation of this curve"
 get_value_curve(curve::ValueCurveWithUnits) = curve.value_curve
 """
-Get the units marker for the power axes of the curve as an instance of the
-second type parameter (e.g. `NaturalUnit()`, `SystemBaseUnit()`,
-`ComponentBaseUnit()`). Always the units of the x-axis; also the units of the y-axis when
-[`y_axis_power_dimension`](@ref) is nonzero, as it is for a [`LossCurve`](@ref).
+Get the basis the curve is stored on, as an instance of the second type parameter
+(e.g. `NaturalUnit()`, `SystemBaseUnit()`, `ComponentBaseUnit()`). It governs every axis
+whose natural unit has a per-unit base; see [`get_x_units`](@ref) and
+[`get_y_units`](@ref) for what those axes are.
 """
 get_power_units(::ValueCurveWithUnits{T, U}) where {T, U} = U()
+"Get the natural units of the curve's x-axis (e.g. `u\"MW\"`)"
+get_x_units(::ValueCurveWithUnits{T, U, X}) where {T, U, X} = X()
+"Get the natural units of the curve's y-axis (e.g. `u\"USD/hr\"`)"
+get_y_units(::ValueCurveWithUnits{T, U, X, Y}) where {T, U, X, Y} = Y()
 "Get the `FunctionData` representation of this curve's `ValueCurve`"
 get_function_data(curve::ValueCurveWithUnits) = get_function_data(get_value_curve(curve))
 "Get the `initial_input` field of this curve's `ValueCurve` (not defined for input-output data)"
@@ -71,42 +88,11 @@ Base.isequal(a::T, b::T) where {T <: ValueCurveWithUnits} = isequal_from_fields(
 
 Base.hash(a::ValueCurveWithUnits, h::UInt) = hash_from_fields(a, h)
 
-# ── Units of the y-axis, and conversion between bases ─────────────────────────
+# ── Conversion between bases ──────────────────────────────────────────────────
 
-"""
-    y_axis_power_dimension(::Type{<:ValueCurveWithUnits}) -> Val
-
-How many powers of the unit base the y-axis of a curve family carries. `Val(0)` for
-[`CostCurve`](@ref) and [`FuelCurve`](@ref), whose y-axes are currency or fuel and are
-untouched by a change of power base; `Val(1)` for [`LossCurve`](@ref), whose y-axis is
-power in the same base as its x-axis.
-
-This one number is the whole difference between the families under a change of base. With
-`ρ` the ratio between the two bases, the converted curve represents
-
-    f_to(x) = f_from(ρ * x) / ρ^p
-
-where `p` is this dimension: `ρ^0 = 1` recovers the x-only rescaling of a cost curve.
-
-Returned as a `Val` rather than an `Int` so the exponent is part of the type: the
-conversion below dispatches on it, so the branch is resolved at compile time and the
-arithmetic folds to a multiply or a divide, never a call to `^`.
-"""
-function y_axis_power_dimension end
-
-# `f_to(x) = f_from(ρ * x) / ρ^p`, one method per `p`, so `^` never appears.
-@inline _convert_curve_axes(vc::ValueCurve, ratio::Real, ::Val{0}) = scale_x(vc, ratio)
-@inline _convert_curve_axes(vc::ValueCurve, ratio::Real, ::Val{1}) =
-    inv(ratio) * scale_x(vc, ratio)
-
-"""
-Rescale the value curve of `curve` by `ratio`, applying the change of base to whichever
-axes the family's units govern. `ratio` is the x-axis ratio between the two bases
-(`x_from = ratio * x_to`), resolved by the caller — `InfrastructureSystems` has no
-component or base power to derive it from.
-"""
-@inline _convert_value_curve(curve::C, ratio::Real) where {C <: ValueCurveWithUnits} =
-    _convert_curve_axes(get_value_curve(curve), ratio, y_axis_power_dimension(C))
+# `f_to(x) = f_from(x_ratio * x) / y_ratio`. For a power-free y-axis `y_ratio` is 1.
+_convert_value_curve(curve::ValueCurveWithUnits, x_ratio::Real, y_ratio::Real) =
+    inv(y_ratio) * scale_x(get_value_curve(curve), x_ratio)
 
 # ── Serialization ─────────────────────────────────────────────────────────────
 # `U` has no corresponding field, so it is serialized under a "power_units" key.
@@ -122,8 +108,23 @@ end
 function serialize(val::ValueCurveWithUnits)
     data = serialize_struct(val)
     data["power_units"] = string(nameof(typeof(get_power_units(val))))
+    for (key, units) in pairs(_free_axis_units(val))
+        data[string(key)] = _units_string(units)
+    end
     return data
 end
+
+# The axis units a family leaves free, keyed by its constructor keyword. Fixed ones are
+# implied by the type and not serialized.
+_free_axis_units(::ValueCurveWithUnits) = (;)
+
+# Plain exponents (`m^3`, not `m³`) so `Unitful.uparse` reads it back.
+_units_string(units::Unitful.Units) =
+    sprint(show, units; context = :fancy_exponent => false)
+_parse_units(raw::AbstractString) = Unitful.uparse(
+    replace(raw, " " => "*");
+    unit_context = [Unitful, CommodityUnits],
+)
 
 # Per-field deserializers, keyed on the serialized field name. A key with no method here
 # fails loudly rather than being silently dropped.
@@ -150,4 +151,7 @@ function _show_expanded(io::IO, ::MIME"text/plain", curve::ValueCurveWithUnits)
         print(io, "\n  $(field_name): $val_printout")
     end
     print(io, "\n  power_units: $(get_power_units(curve))")
+    for (key, units) in pairs(_free_axis_units(curve))
+        print(io, "\n  $key: $units")
+    end
 end

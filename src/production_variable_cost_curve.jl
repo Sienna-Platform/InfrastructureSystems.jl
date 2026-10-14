@@ -5,14 +5,14 @@ A [`ValueCurveWithUnits`](@ref) that additionally carries a `vom_cost`.
 
 Concrete subtypes are [`CostCurve`](@ref) and [`FuelCurve`](@ref).
 """
-abstract type ProductionVariableCostCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
-              ValueCurveWithUnits{T, U} end
+abstract type ProductionVariableCostCurve{
+    T <: ValueCurve,
+    U <: AbstractUnitSystem,
+    Y <: Unitful.Units,
+} <: ValueCurveWithUnits{T, U, _MW, Y} end
 
 "Get the variable operation and maintenance cost in currency/(power_units h)"
 get_vom_cost(cost::ProductionVariableCostCurve) = cost.vom_cost
-
-# y is currency or fuel, which no change of power base touches; only x moves.
-y_axis_power_dimension(::Type{<:ProductionVariableCostCurve}) = Val(0)
 
 """
 $(TYPEDEF)
@@ -26,11 +26,12 @@ $(TYPEDFIELDS)
 
 Direct representation of the variable operation cost of a power plant in currency. Composed
 of a [`ValueCurve`](@ref) that may represent input-output, incremental, or average rate
-data. The x-axis units are encoded as the second type parameter `U <: AbstractUnitSystem`;
-`power_units` at construction is the singleton instance `U()` (default `NaturalUnit()`).
+data. The x-axis is power, in `MW`, stored on the basis given by the second type parameter
+`U <: AbstractUnitSystem`; `power_units` at construction is the singleton instance `U()`
+(default `NaturalUnit()`). The y-axis is `USD/h`.
 """
 struct CostCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
-       ProductionVariableCostCurve{T, U}
+       ProductionVariableCostCurve{T, U, _USD_PER_HOUR}
     "The underlying `ValueCurve` representation of this `ProductionVariableCostCurve`"
     value_curve::T
     "(default of 0) Additional proportional Variable Operation and Maintenance Cost in
@@ -87,22 +88,26 @@ const AnyCostCurve{T} = CostCurve{T, U} where {U <: AbstractUnitSystem}
 $(TYPEDEF)
 $(TYPEDFIELDS)
 
-    FuelCurve(value_curve, fuel_cost)
-    FuelCurve(value_curve, fuel_cost_time_series)
-    FuelCurve(value_curve, fuel_cost, startup_fuel_offtake, vom_cost)
-    FuelCurve(value_curve, power_units, fuel_cost)
-    FuelCurve(value_curve, power_units, fuel_cost, startup_fuel_offtake, vom_cost)
-    FuelCurve(; value_curve, power_units, fuel_cost, fuel_cost_time_series, startup_fuel_offtake, vom_cost)
+    FuelCurve(value_curve, fuel_units, fuel_cost)
+    FuelCurve(value_curve, fuel_units, fuel_cost_time_series)
+    FuelCurve(value_curve, fuel_units, fuel_cost, startup_fuel_offtake, vom_cost)
+    FuelCurve(value_curve, power_units, fuel_units, fuel_cost)
+    FuelCurve(value_curve, power_units, fuel_units, fuel_cost, startup_fuel_offtake, vom_cost)
+    FuelCurve(; value_curve, power_units, fuel_units, fuel_cost, fuel_cost_time_series, startup_fuel_offtake, vom_cost)
 
-Representation of the variable operation cost of a power plant in terms of fuel (MBTU,
-liters, m^3, etc.), coupled with a conversion factor between fuel and currency. Composed of
-a [`ValueCurve`](@ref) that may represent input-output, incremental, or average rate data.
-The x-axis units are encoded as the second type parameter `U <: AbstractUnitSystem`;
-`power_units` at construction is the singleton instance `U()` (default `NaturalUnit()`).
+Representation of the variable operation cost of a power plant in terms of fuel, coupled
+with a conversion factor between fuel and currency. Composed of a [`ValueCurve`](@ref) that
+may represent input-output, incremental, or average rate data.
+
+The x-axis is power, in `MW`, stored on the basis given by the second type parameter
+`U <: AbstractUnitSystem`; `power_units` at construction is the singleton instance `U()`
+(default `NaturalUnit()`). The y-axis is fuel per hour: `fuel_units` names the fuel
+quantity (`u"MMBtu"`, `u"GJ"`, `u"L"`, ...) and has no default, since an unstated fuel unit
+is ambiguous. `fuel_cost` is currency per `fuel_units`.
 Exactly one of `fuel_cost` or `fuel_cost_time_series` must be provided.
 """
-struct FuelCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
-       ProductionVariableCostCurve{T, U}
+struct FuelCurve{T <: ValueCurve, U <: AbstractUnitSystem, Y <: Unitful.Units} <:
+       ProductionVariableCostCurve{T, U, Y}
     "The underlying `ValueCurve` representation of this `ProductionVariableCostCurve`"
     value_curve::T
     "A fixed value for fuel cost; mutually exclusive with `fuel_cost_time_series`"
@@ -116,13 +121,13 @@ struct FuelCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
     represented as a [`LinearCurve`](@ref)"
     vom_cost::LinearCurve
 
-    function FuelCurve{T, U}(
+    function FuelCurve{T, U, Y}(
         value_curve::T,
         fuel_cost::Union{Nothing, Float64},
         fuel_cost_time_series::Union{Nothing, TimeSeriesKey},
         startup_fuel_offtake::LinearCurve,
         vom_cost::LinearCurve,
-    ) where {T, U}
+    ) where {T, U, Y}
         if isnothing(fuel_cost) == isnothing(fuel_cost_time_series)
             throw(
                 ArgumentError(
@@ -132,20 +137,23 @@ struct FuelCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
                 ),
             )
         end
-        return new{T, U}(value_curve, fuel_cost, fuel_cost_time_series,
+        return new{T, U, Y}(value_curve, fuel_cost, fuel_cost_time_series,
             startup_fuel_offtake, vom_cost)
     end
 end
 
-FuelCurve{T, U}(;
+FuelCurve{T, U, Y}(;
     value_curve::T,
     fuel_cost::Union{Nothing, Float64} = nothing,
     fuel_cost_time_series::Union{Nothing, TimeSeriesKey} = nothing,
     startup_fuel_offtake::LinearCurve = LinearCurve(0.0),
     vom_cost::LinearCurve = LinearCurve(0.0),
-) where {T, U} =
-    FuelCurve{T, U}(value_curve, fuel_cost, fuel_cost_time_series,
+) where {T, U, Y} =
+    FuelCurve{T, U, Y}(value_curve, fuel_cost, fuel_cost_time_series,
         startup_fuel_offtake, vom_cost)
+
+# The y-axis is fuel per hour; callers name the fuel quantity.
+_fuel_rate_type(fuel_units::Unitful.Units) = typeof(fuel_units / Unitful.hr)
 
 _normalize_fuel_cost(::Nothing) = nothing
 _normalize_fuel_cost(x::Real) = Float64(x)
@@ -158,54 +166,59 @@ _fuel_cost_kwargs(fuel_cost::TimeSeriesKey) = (; fuel_cost_time_series = fuel_co
 # Outer constructors — mirror the CostCurve style
 FuelCurve(
     value_curve::T,
+    fuel_units::Unitful.Units,
     fuel_cost::Union{Real, TimeSeriesKey},
-) where {T <: ValueCurve} =
-    FuelCurve{T, NaturalUnit}(; value_curve, _fuel_cost_kwargs(fuel_cost)...)
+) where {T <: ValueCurve} = FuelCurve(value_curve, NaturalUnit(), fuel_units, fuel_cost)
 
 FuelCurve(
     value_curve::T,
+    fuel_units::Unitful.Units,
     fuel_cost::Union{Real, TimeSeriesKey},
     startup_fuel_offtake::LinearCurve,
     vom_cost::LinearCurve,
-) where {T <: ValueCurve} = FuelCurve{T, NaturalUnit}(;
-    value_curve,
-    _fuel_cost_kwargs(fuel_cost)...,
-    startup_fuel_offtake,
-    vom_cost,
-)
+) where {T <: ValueCurve} = FuelCurve(
+    value_curve, NaturalUnit(), fuel_units, fuel_cost, startup_fuel_offtake, vom_cost)
 
 FuelCurve(
     value_curve::T,
-    power_units::U,
+    ::U,
+    fuel_units::Unitful.Units,
     fuel_cost::Union{Real, TimeSeriesKey},
-) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
-    value_curve,
-    _fuel_cost_kwargs(fuel_cost)...,
-)
+) where {T <: ValueCurve, U <: AbstractUnitSystem} =
+    FuelCurve{T, U, _fuel_rate_type(fuel_units)}(;
+        value_curve,
+        _fuel_cost_kwargs(fuel_cost)...,
+    )
 
 FuelCurve(
     value_curve::T,
-    power_units::U,
+    ::U,
+    fuel_units::Unitful.Units,
     fuel_cost::Union{Real, TimeSeriesKey},
     startup_fuel_offtake::LinearCurve,
     vom_cost::LinearCurve,
-) where {T <: ValueCurve, U <: AbstractUnitSystem} = FuelCurve{T, U}(;
-    value_curve,
-    _fuel_cost_kwargs(fuel_cost)...,
-    startup_fuel_offtake,
-    vom_cost,
-)
+) where {T <: ValueCurve, U <: AbstractUnitSystem} =
+    FuelCurve{T, U, _fuel_rate_type(fuel_units)}(;
+        value_curve,
+        _fuel_cost_kwargs(fuel_cost)...,
+        startup_fuel_offtake,
+        vom_cost,
+    )
 
-# Keyword-based constructor exposing `power_units`.
 function FuelCurve(;
     value_curve,
     power_units::AbstractUnitSystem = NaturalUnit(),
+    fuel_units::Unitful.Units,
     fuel_cost::Union{Nothing, Real} = nothing,
     fuel_cost_time_series::Union{Nothing, TimeSeriesKey} = nothing,
     startup_fuel_offtake::LinearCurve = LinearCurve(0.0),
     vom_cost::LinearCurve = LinearCurve(0.0),
 )
-    return FuelCurve{typeof(value_curve), typeof(power_units)}(;
+    return FuelCurve{
+        typeof(value_curve),
+        typeof(power_units),
+        _fuel_rate_type(fuel_units),
+    }(;
         value_curve,
         fuel_cost = _normalize_fuel_cost(fuel_cost),
         fuel_cost_time_series,
@@ -214,10 +227,16 @@ function FuelCurve(;
     )
 end
 
-"Get a `FuelCurve` representing zero fuel usage and zero fuel cost (NaturalUnit)"
-Base.zero(::Type{FuelCurve}) = FuelCurve(zero(ValueCurve), 0.0)
-"Get a `FuelCurve` representing zero fuel usage and zero fuel cost, preserving the unit system of `c`"
-Base.zero(::FuelCurve{T, U}) where {T, U} = FuelCurve(zero(ValueCurve), U(), 0.0)
+# There is no `zero(::Type{FuelCurve})`: it would have to pick a fuel unit.
+"Get a `FuelCurve` representing zero fuel usage and zero fuel cost, preserving the units of `c`"
+Base.zero(c::FuelCurve{T, U}) where {T, U} =
+    FuelCurve(zero(ValueCurve), U(), get_fuel_units(c), 0.0)
+
+"Get the units of the fuel quantity, e.g. `u\"MMBtu\"`; `fuel_cost` is currency per one of these"
+get_fuel_units(c::FuelCurve) = get_y_units(c) * Unitful.hr
+
+_free_axis_units(curve::FuelCurve) = (; fuel_units = get_fuel_units(curve))
+_deserialize_curve_field(::Val{:fuel_units}, raw::AbstractString) = _parse_units(raw)
 
 "Get the fixed fuel cost, or `nothing` if it is time-series-backed"
 get_fuel_cost(cost::FuelCurve) = cost.fuel_cost
@@ -255,19 +274,10 @@ get_time_series_key(::FuelCurve{<:ValueCurve{<:TimeSeriesFunctionData}}) =
     _fuel_curve_no_ts_key()
 
 # ── Unit conversion ───────────────────────────────────────────────────────────
-# A change of power units rescales the x-axis: if `ρ` is the ratio such that
-# `x_from = ρ * x_to`, the converted curve represents `f_to(x_to) = f_from(ρ * x_to)`,
-# which is exactly `scale_x(curve, ρ)`. `ρ` is supplied by the caller: resolving it needs
-# base powers, which belong to the domain package that owns components.
-#
-# For these families only the x-axis moves — their y-axes are absolute currency or fuel
-# rates (\$/h, MBTU/h) that carry no power units — which is what
-# `y_axis_power_dimension == Val(0)` records, and why `_convert_value_curve` reduces to a
-# bare `scale_x` here. (A `LossCurve`, whose y-axis is power, picks up the y-scaling.)
-# Note that `scale_x` still changes the stored y *data* of an
-# `IncrementalCurve`/`AverageRateCurve` — those y-axes are rates per unit of x (\$/MWh),
-# so x's units sit in the denominator and must convert with it. That factor is the chain
-# rule inside `scale_x`, not a y-scaling of the curve.
+# These families' y-axes (\$/h, MMBtu/h) have no per-unit base, so `y_ratio` is 1 and only
+# x moves. `scale_x` still changes the stored y *data* of an
+# `IncrementalCurve`/`AverageRateCurve`: those y-axes are rates per unit of x (\$/MWh), so
+# that factor is the chain rule inside `scale_x`, not a y-scaling.
 
 """
 $(TYPEDSIGNATURES)
@@ -275,11 +285,13 @@ $(TYPEDSIGNATURES)
 Convert `curve` to the `to` unit system, returning a curve of the same outer type whose
 `U` parameter is `typeof(to)`.
 
-`ratio` is the x-axis ratio between the two bases: `x_from = ratio * x_to`. It is passed
-in rather than derived here because `InfrastructureSystems` has no notion of a component
-or a base power to derive it from — the base arithmetic belongs to the domain package that
-owns the bases (in the Sienna stack, `PowerSystems`, which resolves it per component and
-physical category and provides the component-aware accessors on top of this).
+`x_ratio` and `y_ratio` are the ratios between the two bases on each axis:
+`x_from = x_ratio * x_to`, likewise for y. They are passed in rather than derived here
+because `InfrastructureSystems` has no notion of a component or a base power to derive them
+from -- the base arithmetic belongs to the domain package that owns the bases (in the
+Sienna stack, `PowerSystems`, which resolves them per component from [`get_x_units`](@ref)
+and [`get_y_units`](@ref) and provides the component-aware accessors on top of this). An
+axis with no per-unit base, like this family's y-axis, has a ratio of 1.
 
 The `fuel_cost` of a [`FuelCurve`](@ref) is in currency per unit of fuel and is left
 alone. Time-series-backed value curves cannot be rescaled and raise an `ArgumentError`.
@@ -287,12 +299,13 @@ alone. Time-series-backed value curves cannot be rescaled and raise an `Argument
 convert_power_units(
     curve::CostCurve{T, U},
     to::V,
-    ratio::Real,
+    x_ratio::Real,
+    y_ratio::Real,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem} =
     CostCurve(
-        _convert_value_curve(curve, ratio),
+        _convert_value_curve(curve, x_ratio, y_ratio),
         to,
-        scale_x(get_vom_cost(curve), ratio),
+        inv(y_ratio) * scale_x(get_vom_cost(curve), x_ratio),
     )
 
 """
@@ -307,22 +320,24 @@ change of power units touches neither. Both carry over unchanged, as does a
 time-series-backed `fuel_cost_time_series`.
 """
 function convert_power_units(
-    curve::FuelCurve{T, U},
+    curve::FuelCurve{T, U, Y},
     to::V,
-    ratio::Real,
-) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem}
+    x_ratio::Real,
+    y_ratio::Real,
+) where {T <: ValueCurve, U <: AbstractUnitSystem, Y, V <: AbstractUnitSystem}
     # `startup_fuel_offtake` is fuel vs. downtime — neither axis is in power units.
-    value_curve = _convert_value_curve(curve, ratio)
+    value_curve = _convert_value_curve(curve, x_ratio, y_ratio)
     # `fuel_cost` and `fuel_cost_time_series` are mutually exclusive, and neither is in
     # power units. Forward both by keyword: the positional constructor takes only the
     # fixed `fuel_cost`, so a time-series-backed curve would either fail to construct
     # (`fuel_cost` is `nothing`) or silently lose its fuel-cost series.
-    return FuelCurve{typeof(value_curve), V}(;
+    return FuelCurve{typeof(value_curve), V, Y}(;
         value_curve = value_curve,
         fuel_cost = get_fuel_cost(curve),
         fuel_cost_time_series = get_fuel_cost_time_series(curve),
         startup_fuel_offtake = get_startup_fuel_offtake(curve),
-        vom_cost = scale_x(get_vom_cost(curve), ratio),
+        # `vom_cost` is currency, so the fuel axis's `y_ratio` doesn't apply.
+        vom_cost = scale_x(get_vom_cost(curve), x_ratio),
     )
 end
 
@@ -332,10 +347,12 @@ convert_power_units(
     curve::CostCurve{T, U},
     ::U,
     ::Real,
+    ::Real,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = curve
 convert_power_units(
     curve::FuelCurve{T, U},
     ::U,
+    ::Real,
     ::Real,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = curve
 
@@ -427,7 +444,7 @@ end
 function _show_compact(io::IO, ::MIME"text/plain", curve::FuelCurve)
     print(
         io,
-        "$(nameof(typeof(curve))) with power_units $(get_power_units(curve)), fuel_cost $(curve.fuel_cost), fuel_cost_time_series $(curve.fuel_cost_time_series), startup_fuel_offtake $(curve.startup_fuel_offtake), vom_cost $(curve.vom_cost), and value_curve:\n  ",
+        "$(nameof(typeof(curve))) with power_units $(get_power_units(curve)), fuel_units $(get_fuel_units(curve)), fuel_cost $(curve.fuel_cost), fuel_cost_time_series $(curve.fuel_cost_time_series), startup_fuel_offtake $(curve.startup_fuel_offtake), vom_cost $(curve.vom_cost), and value_curve:\n  ",
     )
     vc_printout = sprint(show, "text/plain", curve.value_curve; context = io)
     print(io, replace(vc_printout, "\n" => "\n  "))
