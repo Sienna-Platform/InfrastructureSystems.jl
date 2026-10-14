@@ -2,16 +2,19 @@
 Supertype for curve representations that carry their own units.
 
 Parameterized by a [`ValueCurve`](@ref) type `T`, an [`AbstractUnitSystem`](@ref) type `U`,
-and the natural units `X` and `Y` of the curve's two axes (`Unitful.Units` types). `U` is
-the *basis* the curve is stored on (natural, component base, or system base); `X` and `Y`
-say *what* each axis is, and so how each one moves under a change of basis. An axis whose
-natural unit is power-free, like a cost curve's \$/h, is untouched by any basis.
+and two `Unitful.Units` types `X` and `Y`. `U` is the *basis* the curve is stored on
+(natural, component base, or system base). `X` and `Y` say *which quantity* is on each axis
+-- power, current, currency per hour -- by naming that quantity's natural unit. They do not
+mean the curve is stored in natural units: a curve with `X = MW` on `U = SystemBaseUnit` has
+system-base per-unit power on its x-axis. The quantity is what decides how an axis moves
+under a change of basis; one whose natural unit has no per-unit base, like \$/h, does not
+move at all.
 
-| Family                         | `X`   | `Y`                 |
-|:-------------------------------|:------|:--------------------|
-| [`CostCurve`](@ref)            | `MW`  | `USD/h`             |
-| [`FuelCurve`](@ref)            | `MW`  | fuel per hour, free |
-| [`LossCurve`](@ref)            | free  | `MW`                |
+| Family              | `X` (x-axis quantity)        | `Y` (y-axis quantity)           |
+|:--------------------|:-----------------------------|:--------------------------------|
+| [`CostCurve`](@ref) | power (`MW`)                 | cost rate (`USD/h`)             |
+| [`FuelCurve`](@ref) | power (`MW`)                 | fuel rate, free (e.g. `MMBtu/h`) |
+| [`LossCurve`](@ref) | free: power (`MW`) or current (`kA`) | power (`MW`)            |
 
 Subtypes are [`ProductionVariableCostCurve`](@ref) (costs) and
 [`LossCurve`](@ref) (losses). Methods common to both belong here; methods that
@@ -37,9 +40,9 @@ whose natural unit has a per-unit base; see [`get_x_units`](@ref) and
 [`get_y_units`](@ref) for what those axes are.
 """
 get_power_units(::ValueCurveWithUnits{T, U}) where {T, U} = U()
-"Get the natural units of the curve's x-axis (e.g. `u\"MW\"`)"
+"Get the natural unit of the quantity on the curve's x-axis (e.g. `u\"MW\"` for power), whatever basis the curve is stored on"
 get_x_units(::ValueCurveWithUnits{T, U, X}) where {T, U, X} = X()
-"Get the natural units of the curve's y-axis (e.g. `u\"USD/hr\"`)"
+"Get the natural unit of the quantity on the curve's y-axis (e.g. `u\"USD/hr\"`), whatever basis the curve is stored on"
 get_y_units(::ValueCurveWithUnits{T, U, X, Y}) where {T, U, X, Y} = Y()
 "Get the `FunctionData` representation of this curve's `ValueCurve`"
 get_function_data(curve::ValueCurveWithUnits) = get_function_data(get_value_curve(curve))

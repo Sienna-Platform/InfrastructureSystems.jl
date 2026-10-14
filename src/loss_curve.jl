@@ -10,10 +10,10 @@ Representation of the losses of a component as a function of its flow or current
 of a [`ValueCurve`](@ref) that may represent input-output, incremental, or average rate
 data.
 
-The y-axis is the loss, in `MW`. The x-axis is whatever drives the loss, with natural units
-given by the third type parameter `X`: `MW` (the default) for a loss that is a function of
-power flow, `kA` for one that is a function of converter current. Both axes are stored on
-the basis `U <: AbstractUnitSystem`.
+The y-axis is the loss, a power. The x-axis is whatever drives the loss, named by the
+natural unit of its quantity in the third type parameter `X`: `MW` (the default) for a loss
+that is a function of power flow, `kA` for one that is a function of converter current.
+Both axes are stored on the basis `U <: AbstractUnitSystem`, which may be per-unit.
 
 `power_units` has deliberately **no default**: an unstated base is ambiguous.
 """
@@ -69,9 +69,7 @@ $(TYPEDSIGNATURES)
 
 Convert `curve` to the `to` unit system. `x_ratio` and `y_ratio` are the ratios between the
 two bases on each axis (`x_from = x_ratio * x_to`, likewise for y): the result represents
-`f_to(x) = f_from(x_ratio * x) / y_ratio`. For a power-axis curve the two are equal; for a
-current-axis one they differ by the base voltage, unless the conversion is between two
-per-unit bases on the same voltage.
+`f_to(x) = f_from(x_ratio * x) / y_ratio`.
 
 See [`convert_power_units(::CostCurve, ::Any, ::Real, ::Real)`](@ref) on where the ratios
 come from.

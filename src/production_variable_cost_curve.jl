@@ -26,9 +26,9 @@ $(TYPEDFIELDS)
 
 Direct representation of the variable operation cost of a power plant in currency. Composed
 of a [`ValueCurve`](@ref) that may represent input-output, incremental, or average rate
-data. The x-axis is power, in `MW`, stored on the basis given by the second type parameter
+data. The x-axis is power, stored on the basis given by the second type parameter
 `U <: AbstractUnitSystem`; `power_units` at construction is the singleton instance `U()`
-(default `NaturalUnit()`). The y-axis is `USD/h`.
+(default `NaturalUnit()`). The y-axis is currency per hour (`USD/h`), which has no basis.
 """
 struct CostCurve{T <: ValueCurve, U <: AbstractUnitSystem} <:
        ProductionVariableCostCurve{T, U, _USD_PER_HOUR}
@@ -99,9 +99,9 @@ Representation of the variable operation cost of a power plant in terms of fuel,
 with a conversion factor between fuel and currency. Composed of a [`ValueCurve`](@ref) that
 may represent input-output, incremental, or average rate data.
 
-The x-axis is power, in `MW`, stored on the basis given by the second type parameter
+The x-axis is power, stored on the basis given by the second type parameter
 `U <: AbstractUnitSystem`; `power_units` at construction is the singleton instance `U()`
-(default `NaturalUnit()`). The y-axis is fuel per hour: `fuel_units` names the fuel
+(default `NaturalUnit()`). The y-axis is fuel per hour, which has no basis: `fuel_units` names the fuel
 quantity (`u"MMBtu"`, `u"GJ"`, `u"L"`, ...) and has no default, since an unstated fuel unit
 is ambiguous. `fuel_cost` is currency per `fuel_units`.
 Exactly one of `fuel_cost` or `fuel_cost_time_series` must be provided.

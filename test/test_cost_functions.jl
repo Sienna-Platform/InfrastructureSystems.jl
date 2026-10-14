@@ -640,6 +640,9 @@ end
     @test IS.deserialize(IS.LossCurve, IS.serialize(lc_i)) == lc_i
     # An unstated fuel unit is ambiguous
     @test_throws UndefKeywordError IS.FuelCurve(; value_curve = vc, fuel_cost = 1.0)
+    # Axis units derived from an argument's value still infer to a concrete type
+    @inferred IS.FuelCurve(vc, IS.NU, MMBtu, 1.0)
+    @inferred IS.LossCurve(vc, IS.NU, kA)
 end
 
 # `PowerSystems` derives the axis ratios per component; these tests spell them out.
