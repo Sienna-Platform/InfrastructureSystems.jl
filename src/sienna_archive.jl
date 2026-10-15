@@ -94,7 +94,10 @@ The caller owns `directory` and its lifetime. Supply a specific location when th
 extraction must not land in `/tmp` — an archive whose HDF5 member is larger than `/tmp`
 (HPC), or one whose sidecar is opened in place and so has to outlive this call.
 """
-function extract_sienna_archive(path::AbstractString; directory::AbstractString)
+function extract_sienna_archive(
+    path::AbstractString; 
+    directory::AbstractString = mktempdir(),
+)
     if !isfile(path)
         throw(DataFormatError("$path does not exist"))
     end
