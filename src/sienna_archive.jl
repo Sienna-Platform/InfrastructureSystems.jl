@@ -95,7 +95,7 @@ extraction must not land in `/tmp` — an archive whose HDF5 member is larger th
 (HPC), or one whose sidecar is opened in place and so has to outlive this call.
 """
 function extract_sienna_archive(
-    path::AbstractString; 
+    path::AbstractString;
     directory::AbstractString = mktempdir(),
 )
     if !isfile(path)
