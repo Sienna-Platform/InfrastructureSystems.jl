@@ -109,7 +109,7 @@ function extract_sienna_archive(
             name = ZipArchives.zip_name(archive, i)
             _check_archive_member_name(name)
             ZipArchives.zip_openentry(archive, i) do member
-                open(joinpath(directory, name), "w") do io
+                open(joinpath(dir, name), "w") do io
                     write(io, member)
                 end
             end
@@ -120,7 +120,7 @@ function extract_sienna_archive(
         # Julia 1.14 has munmap from JuliaLang/julia#60955
         finalize(bytes.ref.mem)
     end
-    return directory
+    return dir
 end
 
 function _check_archive_member_name(name::AbstractString)
