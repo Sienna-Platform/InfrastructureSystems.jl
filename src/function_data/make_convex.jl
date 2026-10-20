@@ -443,7 +443,7 @@ end
 """
     increasing_curve_convex_approximation(cost::FuelCurve; kwargs...)
 
-Delegates to underlying ValueCurve. Preserves `power_units`, `fuel_cost`, `startup_fuel_offtake`, `vom_cost`.
+Delegates to underlying ValueCurve. Preserves `power_units`, `fuel_units`, `fuel_cost`, `startup_fuel_offtake`, `vom_cost`.
 """
 function increasing_curve_convex_approximation(
     cost::FuelCurve;
@@ -464,6 +464,7 @@ function increasing_curve_convex_approximation(
     return FuelCurve(;
         value_curve = convex_vc,
         power_units = get_power_units(cost),
+        fuel_units = get_fuel_units(cost),
         fuel_cost = cost.fuel_cost,
         fuel_cost_time_series = cost.fuel_cost_time_series,
         startup_fuel_offtake = cost.startup_fuel_offtake,

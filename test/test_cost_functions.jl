@@ -266,7 +266,11 @@ end
 
 @testset "Test IS.CostCurve and IS.FuelCurve" begin
     cc = IS.CostCurve(IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3)))
-    fc = IS.FuelCurve(IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3)), 4.0)
+    fc = IS.FuelCurve(
+        IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3)),
+        IS.CommodityUnits.MMBtu,
+        4.0,
+    )
     # TODO also test fuel curves with time series
 
     @test IS.get_value_curve(cc) == IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3))
@@ -283,7 +287,7 @@ end
     # `TimeSeriesKey` and crashed in `fieldnames`).
     sys, (fuel_key,) = create_forecast_key_fixture("fuel_price")
     fc_ts = IS.FuelCurve(
-        IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3)),
+        IS.InputOutputCurve(IS.QuadraticFunctionData(1, 2, 3)), IS.CommodityUnits.MMBtu,
         fuel_key,
     )
     @test IS.serialize(fc_ts)["fuel_cost_time_series"] == IS.serialize(fuel_key)
@@ -294,9 +298,13 @@ end
     @test zero(IS.CostCurve) ==
           IS.CostCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)))
     @test zero(fc) ==
-          IS.FuelCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)), 0.0)
-    @test zero(IS.FuelCurve) ==
-          IS.FuelCurve(IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)), 0.0)
+          IS.FuelCurve(
+        IS.InputOutputCurve(IS.LinearFunctionData(0.0, 0.0)),
+        IS.CommodityUnits.MMBtu,
+        0.0,
+    )
+    # No fuel unit to pick for a zero built from the bare type
+    @test_throws MethodError zero(IS.FuelCurve)
 
     # repr and sprint(show, ...) must agree; the type parameter may or may not
     # be module-qualified depending on what's in scope, so check key content.
@@ -313,11 +321,11 @@ end
           "CostCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  vom_cost: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  power_units: NU"
     @test sprint(show, "text/plain", fc) ==
           sprint(show, "text/plain", fc; context = :compact => false) ==
-          "FuelCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  fuel_cost: 4.0\n  fuel_cost_time_series: nothing\n  startup_fuel_offtake: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  vom_cost: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  power_units: NU"
+          "FuelCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  fuel_cost: 4.0\n  fuel_cost_time_series: nothing\n  startup_fuel_offtake: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  vom_cost: LinearCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 0.0 x + 0.0\n  power_units: NU\n  fuel_units: MMBtu"
     @test sprint(show, "text/plain", cc; context = :compact => true) ==
           "CostCurve with power_units NU, vom_cost LinearCurve(0.0, 0.0), and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
     @test sprint(show, "text/plain", fc; context = :compact => true) ==
-          "FuelCurve with power_units NU, fuel_cost 4.0, fuel_cost_time_series nothing, startup_fuel_offtake LinearCurve(0.0, 0.0), vom_cost LinearCurve(0.0, 0.0), and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
+          "FuelCurve with power_units NU, fuel_units MMBtu, fuel_cost 4.0, fuel_cost_time_series nothing, startup_fuel_offtake LinearCurve(0.0, 0.0), vom_cost LinearCurve(0.0, 0.0), and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
 
     @test IS.get_power_units(cc) == IS.NaturalUnit()
     @test IS.get_power_units(fc) == IS.NaturalUnit()
@@ -325,7 +333,12 @@ end
         IS.CostCurve(zero(IS.InputOutputCurve), IS.SystemBaseUnit()),
     ) == IS.SystemBaseUnit()
     @test IS.get_power_units(
-        IS.FuelCurve(zero(IS.InputOutputCurve), IS.ComponentBaseUnit(), 1.0),
+        IS.FuelCurve(
+            zero(IS.InputOutputCurve),
+            IS.ComponentBaseUnit(),
+            IS.CommodityUnits.MMBtu,
+            1.0,
+        ),
     ) == IS.ComponentBaseUnit()
 
     @test IS.get_vom_cost(cc) == IS.LinearCurve(0.0)
@@ -336,7 +349,7 @@ end
           IS.LinearCurve(1.0, 2.0)
     @test IS.get_vom_cost(
         IS.FuelCurve(
-            zero(IS.InputOutputCurve),
+            zero(IS.InputOutputCurve), IS.CommodityUnits.MMBtu,
             1.0,
             IS.LinearCurve(10.0, 7.0),
             IS.LinearCurve(3.0, 4.0),
@@ -345,7 +358,7 @@ end
           IS.LinearCurve(3.0, 4.0)
     @test IS.get_startup_fuel_offtake(
         IS.FuelCurve(
-            zero(IS.InputOutputCurve),
+            zero(IS.InputOutputCurve), IS.CommodityUnits.MMBtu,
             1.0,
             IS.LinearCurve(10.0, 7.0),
             IS.LinearCurve(3.0, 4.0),
@@ -373,10 +386,16 @@ end
     @test IS.is_time_series_backed(IS.CostCurve(ts_vc)) == true
 
     # FuelCurve 2x2: fuel_cost ∈ {Float64, TimeSeriesKey} × value_curve ∈ {static, time-varying}
-    @test IS.is_time_series_backed(IS.FuelCurve(static_vc, 4.0)) == false
-    @test IS.is_time_series_backed(IS.FuelCurve(ts_vc, 4.0)) == true
-    @test IS.is_time_series_backed(IS.FuelCurve(static_vc, forecast_key)) == true
-    @test IS.is_time_series_backed(IS.FuelCurve(ts_vc, forecast_key)) == true
+    @test IS.is_time_series_backed(IS.FuelCurve(static_vc, IS.CommodityUnits.MMBtu, 4.0)) ==
+          false
+    @test IS.is_time_series_backed(IS.FuelCurve(ts_vc, IS.CommodityUnits.MMBtu, 4.0)) ==
+          true
+    @test IS.is_time_series_backed(
+        IS.FuelCurve(static_vc, IS.CommodityUnits.MMBtu, forecast_key),
+    ) == true
+    @test IS.is_time_series_backed(
+        IS.FuelCurve(ts_vc, IS.CommodityUnits.MMBtu, forecast_key),
+    ) == true
 
     # CostCurve with TS value curve → returns the value-curve key
     @test IS.get_time_series_key(IS.CostCurve(ts_vc)) ===
@@ -386,11 +405,15 @@ end
     # fuel_cost are independently TS-backed). Callers resolve explicitly via
     # get_time_series_key(get_value_curve(c)) or get_fuel_cost(c); the accessor itself
     # throws an ArgumentError for every FuelCurve combination.
-    @test_throws ArgumentError IS.get_time_series_key(IS.FuelCurve(ts_vc, 4.0))
     @test_throws ArgumentError IS.get_time_series_key(
-        IS.FuelCurve(static_vc, forecast_key),
+        IS.FuelCurve(ts_vc, IS.CommodityUnits.MMBtu, 4.0),
     )
-    @test_throws ArgumentError IS.get_time_series_key(IS.FuelCurve(ts_vc, forecast_key))
+    @test_throws ArgumentError IS.get_time_series_key(
+        IS.FuelCurve(static_vc, IS.CommodityUnits.MMBtu, forecast_key),
+    )
+    @test_throws ArgumentError IS.get_time_series_key(
+        IS.FuelCurve(ts_vc, IS.CommodityUnits.MMBtu, forecast_key),
+    )
 end
 
 @testset "get_time_series_key fallback for non-TS-backed curves (PVC-E)" begin
@@ -398,7 +421,7 @@ end
     @test_throws ArgumentError IS.get_time_series_key(IS.CostCurve(IS.LinearCurve(5.0)))
     # FuelCurve static value_curve + Float64 fuel_cost — previously also a MethodError
     @test_throws ArgumentError IS.get_time_series_key(
-        IS.FuelCurve(IS.LinearCurve(5.0), 4.0),
+        IS.FuelCurve(IS.LinearCurve(5.0), IS.CommodityUnits.MMBtu, 4.0),
     )
 end
 
@@ -407,19 +430,19 @@ end
     sys, (key,) = create_forecast_key_fixture("fuel_price")
 
     # Float form
-    fc_float = IS.FuelCurve(vc, 3.0)
+    fc_float = IS.FuelCurve(vc, IS.CommodityUnits.MMBtu, 3.0)
     @test IS.get_fuel_cost(fc_float) == 3.0
     @test IS.get_fuel_cost_time_series(fc_float) === nothing
     @test IS.is_time_series_backed(fc_float) == false
 
     # Time-series form
-    fc_ts = IS.FuelCurve(vc, key)
+    fc_ts = IS.FuelCurve(vc, IS.CommodityUnits.MMBtu, key)
     @test IS.get_fuel_cost(fc_ts) === nothing
     @test IS.get_fuel_cost_time_series(fc_ts) == key
     @test IS.is_time_series_backed(fc_ts) == true
 
     # Both set: rejected by the inner constructor
-    @test_throws ArgumentError IS.FuelCurve(;
+    @test_throws ArgumentError IS.FuelCurve(; fuel_units = IS.CommodityUnits.MMBtu,
         value_curve = vc,
         fuel_cost = 3.0,
         fuel_cost_time_series = key,
@@ -435,7 +458,7 @@ end
         IS.TimeSeriesKey{IS.SingleTimeSeries{IS.PiecewiseStepData}}(1),
     )
         err = try
-            IS.FuelCurve(vc, wrong)
+            IS.FuelCurve(vc, IS.CommodityUnits.MMBtu, wrong)
             nothing
         catch e
             e
@@ -446,7 +469,10 @@ end
     @test isconcretetype(typeof(IS.get_fuel_cost_time_series(fc_ts)))
 
     # Neither set: rejected by the inner constructor
-    @test_throws ArgumentError IS.FuelCurve(; value_curve = vc)
+    @test_throws ArgumentError IS.FuelCurve(;
+        fuel_units = IS.CommodityUnits.MMBtu,
+        value_curve = vc,
+    )
 
     # Serialization round-trip of the float form
     @test IS.deserialize(IS.FuelCurve, IS.serialize(fc_float)) == fc_float
@@ -476,7 +502,7 @@ end
         @test cc_rt == cc
         @test IS.get_power_units(cc_rt) == U
 
-        fc = IS.FuelCurve(vc, U, 5.0)
+        fc = IS.FuelCurve(vc, U, IS.CommodityUnits.MMBtu, 5.0)
         fc_rt = IS.deserialize(IS.FuelCurve, IS.serialize(fc))
         @test fc_rt == fc
         @test IS.get_power_units(fc_rt) == U
@@ -499,12 +525,14 @@ end
     for U in (IS.NaturalUnit(), IS.SystemBaseUnit(), IS.ComponentBaseUnit())
         c = IS.CostCurve(vc, U)
         @test IS.get_power_units(zero(c)) == U
-        f = IS.FuelCurve(vc, U, 3.0)
+        f = IS.FuelCurve(vc, U, IS.CommodityUnits.MMBtu, 3.0)
         @test IS.get_power_units(zero(f)) == U
     end
     # Type-form behavior unchanged: always NaturalUnit
     @test IS.get_power_units(zero(IS.CostCurve)) == IS.NaturalUnit()
-    @test IS.get_power_units(zero(IS.FuelCurve)) == IS.NaturalUnit()
+    # zero keeps the fuel unit too
+    @test IS.get_fuel_units(zero(IS.FuelCurve(vc, IS.CommodityUnits.MMBtu, 3.0))) ==
+          IS.CommodityUnits.MMBtu
 end
 
 @testset "hash distinguishes unit systems and curve types" begin
@@ -525,7 +553,8 @@ end
         @test hash(a) == hash(b)
     end
     # Distinct types with identical fields must not collide either
-    @test hash(IS.CostCurve(vc, IS.NaturalUnit())) != hash(IS.FuelCurve(vc, 1.0))
+    @test hash(IS.CostCurve(vc, IS.NaturalUnit())) !=
+          hash(IS.FuelCurve(vc, IS.CommodityUnits.MMBtu, 1.0))
     @test hash(IS.IncrementalCurve(IS.LinearFunctionData(1.0, 1.0), 1.0)) !=
           hash(IS.AverageRateCurve(IS.LinearFunctionData(1.0, 1.0), 1.0))
 end
@@ -549,9 +578,9 @@ end
           IS.LossCurve(; value_curve = vc, power_units = IS.SystemBaseUnit())
 
     @test sprint(show, "text/plain", lc) ==
-          "LossCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  power_units: NU"
+          "LossCurve:\n  value_curve: QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0\n  power_units: NU\n  x_units: MW"
     @test sprint(show, "text/plain", lc; context = :compact => true) ==
-          "LossCurve with power_units NU, and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
+          "LossCurve with power_units NU, x_units MW, and value_curve:\n  QuadraticCurve (a type of InfrastructureSystems.InputOutputCurve) where function is: f(x) = 1.0 x^2 + 2.0 x + 3.0"
 end
 
 @testset "LossCurve requires explicit power_units" begin
@@ -579,25 +608,55 @@ end
     end
 end
 
-@testset "y_axis_power_dimension trait" begin
-    # The whole difference between the families under a change of base, as one number.
-    @test IS.y_axis_power_dimension(IS.CostCurve{IS.LinearCurve, IS.NaturalUnit}) == Val(0)
-    @test IS.y_axis_power_dimension(IS.FuelCurve{IS.LinearCurve, IS.NaturalUnit}) == Val(0)
-    @test IS.y_axis_power_dimension(IS.LossCurve{IS.LinearCurve, IS.NaturalUnit}) == Val(1)
+@testset "axis units" begin
+    vc = IS.LinearCurve(1.0, 1.0)
+    MW, kA, MMBtu = Unitful.MW, Unitful.kA, IS.CommodityUnits.MMBtu
+    cc = IS.CostCurve(vc, IS.NU)
+    @test IS.get_x_units(cc) == MW
+    @test IS.get_y_units(cc) == IS.CommodityUnits.USD / Unitful.hr
+    fc = IS.FuelCurve(vc, IS.NU, MMBtu, 1.0)
+    @test IS.get_x_units(fc) == MW
+    @test IS.get_y_units(fc) == MMBtu / Unitful.hr
+    @test IS.get_fuel_units(fc) == MMBtu
+    # The loss is power; what drives it defaults to power flow
+    lc = IS.LossCurve(vc, IS.NU)
+    @test (IS.get_x_units(lc), IS.get_y_units(lc)) == (MW, MW)
+    lc_i = IS.LossCurve(vc, IS.NU, kA)
+    @test (IS.get_x_units(lc_i), IS.get_y_units(lc_i)) == (kA, MW)
+    @test lc_i == IS.LossCurve(; value_curve = vc, power_units = IS.NU, x_units = kA)
+    # The axes are type parameters, so curves differing only in them are distinct
+    @test lc_i != lc
+    @test hash(lc_i) != hash(lc)
+    @test IS.FuelCurve(vc, IS.NU, Unitful.GJ, 1.0) != fc
+    # ...but still `isa` the family and its `Any*` alias
+    @test lc_i isa IS.LossCurve{IS.LinearCurve, IS.NaturalUnit}
+    @test lc_i isa IS.AnyLossCurve{IS.LinearCurve}
+    # The fuel unit names a quantity; any Unitful unit works, and round-trips
+    for fuel in (MMBtu, Unitful.GJ, Unitful.L, Unitful.m^3)
+        f = IS.FuelCurve(vc, IS.NU, fuel, 1.0)
+        @test IS.deserialize(IS.FuelCurve, IS.serialize(f)) == f
+    end
+    @test IS.serialize(lc_i)["x_units"] == "kA"
+    @test IS.deserialize(IS.LossCurve, IS.serialize(lc_i)) == lc_i
+    # An unstated fuel unit is ambiguous
+    @test_throws UndefKeywordError IS.FuelCurve(; value_curve = vc, fuel_cost = 1.0)
+    # Axis units derived from an argument's value still infer to a concrete type
+    @inferred IS.FuelCurve(vc, IS.NU, MMBtu, 1.0)
+    @inferred IS.LossCurve(vc, IS.NU, kA)
 end
 
-# `convert_power_units` takes the x-axis ratio between two bases; `PowerSystems` derives it
-# per component, so these tests spell it out. Writing `x_U = P / base_U` (with `base_NU`
-# = 1, i.e. P already in MW) gives `x_from = (base_to / base_from) * x_to`.
+# `PowerSystems` derives the axis ratios per component; these tests spell them out.
+# `x_U = P / base_U` gives `x_from = (base_to / base_from) * x_to`. A MW y-axis shares the
+# x ratio; a currency or fuel y-axis has none.
 _x_base(::IS.NaturalUnit, _, _) = 1.0
 _x_base(::IS.SystemBaseUnit, sb, _) = sb
 _x_base(::IS.ComponentBaseUnit, _, db) = db
 
-_convert(curve, to, sb, db) = IS.convert_power_units(
-    curve,
-    to,
-    _x_base(to, sb, db) / _x_base(IS.get_power_units(curve), sb, db),
-)
+function _convert(curve, to, sb, db)
+    x_ratio = _x_base(to, sb, db) / _x_base(IS.get_power_units(curve), sb, db)
+    y_ratio = IS.get_y_units(curve) == Unitful.MW ? x_ratio : 1.0
+    return IS.convert_power_units(curve, to, x_ratio, y_ratio)
+end
 
 @testset "LossCurve convert_power_units" begin
     sys_base, dev_base = 100.0, 50.0
@@ -606,7 +665,7 @@ _convert(curve, to, sb, db) = IS.convert_power_units(
     lc = IS.LossCurve(IS.LinearCurve(0.05, 2.0), IS.NaturalUnit())
 
     su = _convert(lc, IS.SystemBaseUnit(), sys_base, dev_base)
-    @test su isa IS.LossCurve{IS.LinearCurve, IS.SystemBaseUnit}
+    @test su isa IS.LossCurve{IS.LinearCurve, IS.SystemBaseUnit, typeof(Unitful.MW)}
     # Both axes are power, so the proportional term is dimensionless and does not move;
     # only the constant term, which is a bare power, rescales.
     @test IS.get_function_data(su) == IS.LinearFunctionData(0.05, 2.0 / sys_base)
@@ -659,31 +718,59 @@ _convert(curve, to, sb, db) = IS.convert_power_units(
         IS.LossCurve(ts_vc, IS.NaturalUnit()), IS.SystemBaseUnit(), sys_base, dev_base)
 end
 
+@testset "LossCurve convert_power_units, current x-axis" begin
+    # loss(I) = 0.01 I^2 + 0.05 I + 2.0 MW, I in kA. On a 100 MVA, 10 kV base one per-unit
+    # of current is 10 kA, so the two axes have different ratios between NU and SU.
+    s_base, v_base = 100.0, 10.0
+    i_base = s_base / v_base
+    lc = IS.LossCurve(IS.QuadraticCurve(0.01, 0.05, 2.0), IS.NU, Unitful.kA)
+    su = IS.convert_power_units(lc, IS.SU, i_base, s_base)
+    @test IS.get_x_units(su) == Unitful.kA
+    fd = IS.get_function_data(su)
+    @test IS.get_quadratic_term(fd) ≈ 0.01 * i_base^2 / s_base
+    @test IS.get_proportional_term(fd) ≈ 0.05 * i_base / s_base
+    @test IS.get_constant_term(fd) ≈ 2.0 / s_base
+    # Same physical loss at the same physical current
+    for i_ka in (0.0, 1.0, 7.5)
+        @test IS.get_value_curve(su)(i_ka / i_base) ≈ IS.get_value_curve(lc)(i_ka) / s_base
+    end
+    back = IS.get_function_data(IS.convert_power_units(su, IS.NU, 1 / i_base, 1 / s_base))
+    @test IS.get_quadratic_term(back) ≈ 0.01
+    @test IS.get_proportional_term(back) ≈ 0.05
+    @test IS.get_constant_term(back) ≈ 2.0
+end
+
 @testset "convert_power_units resolves at compile time" begin
-    # The design requirement: the y-axis dimension is a `Val`, so the branch between the
-    # families is dispatched, not tested at run time, and the arithmetic folds to
-    # multiplies and divides -- never a call to `^`.
+    # The design requirement: every family converts with the same two multiplies, so
+    # nothing is branched on at run time and the arithmetic never calls `^`.
     sys_base, dev_base = 100.0, 50.0
     curves = (
         IS.LossCurve(IS.LinearCurve(0.05, 2.0), IS.NaturalUnit()),
         IS.LossCurve(IS.QuadraticCurve(0.01, 0.05, 2.0), IS.NaturalUnit()),
         IS.CostCurve(IS.LinearCurve(30.0, 100.0), IS.NaturalUnit()),
-        IS.FuelCurve(IS.LinearCurve(10.0, 5.0), IS.NaturalUnit(), 2.5),
+        IS.FuelCurve(
+            IS.LinearCurve(10.0, 5.0),
+            IS.NaturalUnit(),
+            IS.CommodityUnits.MMBtu,
+            2.5,
+        ),
+        IS.LossCurve(IS.LinearCurve(0.05, 2.0), IS.NaturalUnit(), Unitful.kA),
     )
     for curve in curves
         T = typeof(curve)
         # Fully inferred, to a concrete type carrying the target unit system
         @test isconcretetype(
-            Base.promote_op(IS.convert_power_units, T, IS.SystemBaseUnit, Float64),
+            Base.promote_op(
+                IS.convert_power_units, T, IS.SystemBaseUnit, Float64, Float64),
         )
         @test (@inferred IS.convert_power_units(
-            curve, IS.SystemBaseUnit(), 2.0,
+            curve, IS.SystemBaseUnit(), 2.0, 1.0,
         )) isa Union{IS.LossCurve, IS.ProductionVariableCostCurve}
 
         # No runtime power call and no dynamic dispatch survive optimization
         src, _ = only(
             code_typed(
-                IS.convert_power_units, (T, IS.SystemBaseUnit, Float64);
+                IS.convert_power_units, (T, IS.SystemBaseUnit, Float64, Float64);
                 optimize = true,
             ),
         )
@@ -694,7 +781,11 @@ end
 end
 
 @testset "FuelCurve deserialize garbage fuel_cost (PVC-003)" begin
-    fc_example = IS.FuelCurve(IS.InputOutputCurve(IS.LinearFunctionData(1.0, 0.0)), 2.5)
+    fc_example = IS.FuelCurve(
+        IS.InputOutputCurve(IS.LinearFunctionData(1.0, 0.0)),
+        IS.CommodityUnits.MMBtu,
+        2.5,
+    )
     bad_dict = merge(IS.serialize(fc_example), Dict("fuel_cost" => "oops"))
     @test_throws ArgumentError IS.deserialize(IS.FuelCurve, bad_dict)
 end
@@ -830,7 +921,7 @@ end
     # FuelCurve: fuel_cost is currency per unit of fuel and is unit-system agnostic
     fc = IS.FuelCurve(
         IS.QuadraticCurve(2.0, 3.0, 4.0),
-        IS.NU,
+        IS.NU, IS.CommodityUnits.MMBtu,
         12.5,
         IS.LinearCurve(3.0),
         IS.LinearCurve(7.0),
@@ -857,7 +948,7 @@ end
     # time-series-backed value curve is not
     fc_ts_cost = IS.FuelCurve(
         IS.LinearCurve(5.0),
-        IS.NU,
+        IS.NU, IS.CommodityUnits.MMBtu,
         # `fuel_cost_time_series` is a scalar field -- one Float64 per timestep -- so it
         # takes a Float64-element key, unlike the function-data keys the value curves use.
         IS.TimeSeriesKey{IS.Deterministic{Float64}}(1),
@@ -870,8 +961,10 @@ end
 
 @testset "CostCurve from FuelCurve" begin
     # Multiplying through by a scalar fuel cost gives the equivalent CostCurve
-    fc = IS.FuelCurve(IS.QuadraticCurve(2.0, 3.0, 4.0), IS.NU, 12.5, IS.LinearCurve(0.0),
-        IS.LinearCurve(7.0))
+    fc =
+        IS.FuelCurve(IS.QuadraticCurve(2.0, 3.0, 4.0), IS.NU, IS.CommodityUnits.MMBtu, 12.5,
+            IS.LinearCurve(0.0),
+            IS.LinearCurve(7.0))
     cc = IS.CostCurve(fc)
     @test cc isa IS.CostCurve
     @test IS.get_power_units(cc) == IS.NU
@@ -884,24 +977,28 @@ end
     # The unit system is preserved
     for units in (IS.NU, IS.SU, IS.CU)
         @test IS.get_power_units(
-            IS.CostCurve(IS.FuelCurve(IS.LinearCurve(5.0), units, 2.0)),
+            IS.CostCurve(
+                IS.FuelCurve(IS.LinearCurve(5.0), units, IS.CommodityUnits.MMBtu, 2.0),
+            ),
         ) == units
     end
 
     # Incremental representation: initial_input scales with the rest of the curve
     inc = IS.FuelCurve(IS.PiecewiseIncrementalCurve(1.0, [1.0, 2.0, 4.0], [10.0, 20.0]),
-        IS.NU, 3.0)
+        IS.NU, IS.CommodityUnits.MMBtu, 3.0)
     inc_cc = IS.CostCurve(inc)
     @test IS.get_initial_input(inc_cc) == 3.0
     @test IS.get_y_coords(IS.get_function_data(inc_cc)) == [30.0, 60.0]
 
     # Nonzero startup_fuel_offtake cannot be represented and must not vanish silently
     @test_throws ArgumentError IS.CostCurve(
-        IS.FuelCurve(IS.LinearCurve(5.0), IS.NU, 2.0, IS.LinearCurve(1.0),
+        IS.FuelCurve(IS.LinearCurve(5.0), IS.NU, IS.CommodityUnits.MMBtu, 2.0,
+            IS.LinearCurve(1.0),
             IS.LinearCurve(0.0)),
     )
     @test_throws ArgumentError IS.CostCurve(
-        IS.FuelCurve(IS.LinearCurve(5.0), IS.NU, 2.0, IS.LinearCurve(0.0, 1.0),
+        IS.FuelCurve(IS.LinearCurve(5.0), IS.NU, IS.CommodityUnits.MMBtu, 2.0,
+            IS.LinearCurve(0.0, 1.0),
             IS.LinearCurve(0.0)),
     )
 
@@ -909,7 +1006,7 @@ end
     @test_throws ArgumentError IS.CostCurve(
         IS.FuelCurve(
             IS.LinearCurve(5.0),
-            IS.NU,
+            IS.NU, IS.CommodityUnits.MMBtu,
             IS.get_time_series_key(ts_input_output_curve()),
         ),
     )
