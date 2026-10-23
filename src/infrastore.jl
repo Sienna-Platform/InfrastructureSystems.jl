@@ -1686,17 +1686,29 @@ get_forecast_group_entries(reader::ForecastReader, group_index::Integer) =
 # One group's windows for the current timestamp. The comprehension collects to the
 # windows' shared concrete type, which is what the grouping guarantees. Entries
 # sharing a slot share one decoded array.
+#
+# Every entry in a group shares one element type, so whether its windows need decoding
+# is settled once per group. Asking per slot re-derived the same answer from the same
+# tag string, a regex probe included, once per slot per read.
 function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) where {T}
     tag = reader.group_element_types[group]
+    decode = _decodes_forecast_window(T, tag)
     by_slot = Dict{Int, Any}()
     return [
         get!(by_slot, reader.entries[i].slot) do
-            _decode_forecast_reader_window(
-                T, InfraStore.forecast_values(reader.inner, i), tag)
+            raw = InfraStore.forecast_values(reader.inner, i)
+            decode ? _decode_forecast_reader_window(T, raw, tag) : raw
         end
         for i in reader.group_members[group]
     ]
 end
+
+# A deterministic window is already its value unless its element type is composite
+# (a plain dtype decodes to the array it was read into); other forecast types are
+# always reoriented.
+_decodes_forecast_window(::Type{<:Forecast}, _element_type) = true
+_decodes_forecast_window(::Type{<:AbstractDeterministic}, element_type) =
+    InfraStore.is_composite_element_type(element_type)
 
 # ---- StaticTimeSeriesReader ------------------------------------------------
 # The static counterpart of the ForecastReader. The InfraStore reader packs matching
