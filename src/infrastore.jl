@@ -1527,6 +1527,8 @@ mutable struct ForecastReader{T <: Forecast}
     materialized, `nothing` before; reset on each read.
     """
     group_windows::Vector{Any}
+    "Whether undecoded windows are `PermutedDimsArray`s over the stored values; see `build_forecast_reader`."
+    lazy::Bool
     has_read::Bool
 end
 
@@ -1549,6 +1551,7 @@ function infrastore_build_forecast_reader(
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
     features::Union{Nothing, Dict} = nothing,
+    lazy::Bool = false,
 ) where {T <: Forecast}
     inner = InfraStore.build_forecast_reader(store.inner, _tss_forecast_type(T);
         resolution = resolution, name = name, features = features)
@@ -1576,7 +1579,7 @@ function infrastore_build_forecast_reader(
     group_windows = Vector{Any}(nothing, length(group_members))
     return ForecastReader{T}(
         inner, store, entries, group_element_types, group_members, group_windows,
-        false,
+        lazy, false,
     )
 end
 
@@ -1690,13 +1693,17 @@ get_forecast_group_entries(reader::ForecastReader, group_index::Integer) =
 # Every entry in a group shares one element type, so whether its windows need decoding
 # is settled once per group. Asking per slot re-derived the same answer from the same
 # tag string, a regex probe included, once per slot per read.
+#
+# A lazy reader asks for undecoded windows as views over the stored values. A decoded
+# window is built fresh by its decoder, so it keeps the plain read.
 function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) where {T}
     tag = reader.group_element_types[group]
     decode = _decodes_forecast_window(T, tag)
+    lazy = reader.lazy && !decode
     by_slot = Dict{Int, Any}()
     return [
         get!(by_slot, reader.entries[i].slot) do
-            raw = InfraStore.forecast_values(reader.inner, i)
+            raw = InfraStore.forecast_values(reader.inner, i; lazy = lazy)
             decode ? _decode_forecast_reader_window(T, raw, tag) : raw
         end
         for i in reader.group_members[group]
@@ -1766,6 +1773,8 @@ mutable struct StaticTimeSeriesReader
     group_ranges::Vector{UnitRange{Int}}
     "Per-group values cache, decoded where `group_element_types` says so; reset on each read."
     values::Vector{Any}
+    "Whether undecoded group values are `PermutedDimsArray`s over the stored values; see `build_static_time_series_reader`."
+    lazy::Bool
     has_read::Bool
 end
 
@@ -1778,6 +1787,7 @@ function infrastore_build_static_time_series_reader(
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
     features::Union{Nothing, Dict} = nothing,
+    lazy::Bool = false,
 )
     inner = InfraStore.build_static_reader(store.inner;
         resolution = resolution, name = name, features = features)
@@ -1816,7 +1826,7 @@ function infrastore_build_static_time_series_reader(
     values = Vector{Any}(nothing, length(groups))
     return StaticTimeSeriesReader(
         inner, store, entries, element_types, group_element_types, group_ranges,
-        values, false,
+        values, lazy, false,
     )
 end
 
@@ -1987,8 +1997,10 @@ get_static_time_series_group_entries(
 # bargain the values cache already makes — the `.h5` read above it is whole-group
 # too — and it is the access pattern the reader exists for.
 function _materialize_static_group(reader::StaticTimeSeriesReader, group::Integer)
-    vals = InfraStore.static_values(reader.inner, group)
     tag = reader.group_element_types[group]
+    # As for a forecast group, only values handed back undecoded are read lazily.
+    vals =
+        InfraStore.static_values(reader.inner, group; lazy = reader.lazy && isnothing(tag))
     isnothing(tag) && return vals
     return InfraStore.decode_element_values(vals, tag; types = _IS_ELEMENT_TYPES)
 end

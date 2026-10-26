@@ -324,6 +324,51 @@ end
     @test IS.get_value_axes(md) == cube_axes
 end
 
+@testset "Test value_axes lazy readers index like copying readers" begin
+    cube_axes = [IS.TimeSeriesAxis("zone", ["a", "b"]), _va_bus_axis(3)]
+    det_sys, (det_owner,) = _va_system()
+    IS.add_time_series!(det_sys, det_owner, _va_nd_det("d"; value_axes = cube_axes))
+    sys, owners = _va_system(2)
+    IS.add_time_series!(sys, owners, _va_sts("f", rand(24, 2, 3); value_axes = cube_axes))
+    IS.add_time_series!(sys, owners[1], _va_sts("s", rand(24)))
+    IS.transform_single_time_series!(
+        sys, IS.DeterministicSingleTimeSeries, Dates.Hour(6), Dates.Hour(6),
+    )
+
+    for (data, T, name) in (
+        (det_sys, IS.Deterministic, "d"),
+        (sys, IS.DeterministicSingleTimeSeries, "f"),
+    )
+        copying = IS.build_forecast_reader(data, T; resolution = Dates.Hour(1), name = name)
+        lazy = IS.build_forecast_reader(
+            data, T; resolution = Dates.Hour(1), name = name, lazy = true,
+        )
+        t = IS.get_forecast_reader_timeline(lazy).initial_timestamp
+        IS.read_forecast_window!(copying, t)
+        IS.read_forecast_window!(lazy, t)
+        for i in 1:length(lazy)
+            window = IS.get_forecast_window(lazy, i)
+            @test window isa PermutedDimsArray
+            @test window == IS.get_forecast_window(copying, i)
+        end
+    end
+
+    copying = IS.build_static_time_series_reader(sys; resolution = Dates.Hour(1))
+    lazy = IS.build_static_time_series_reader(sys; resolution = Dates.Hour(1), lazy = true)
+    IS.read_static_time_series_values!(copying, _VA_T0 + Dates.Hour(3))
+    IS.read_static_time_series_values!(lazy, _VA_T0 + Dates.Hour(3))
+    for g in 1:IS.get_num_static_time_series_groups(lazy)
+        values = IS.get_static_time_series_group_values(lazy, g)
+        # A group without an element shape is a plain vector either way.
+        @test values isa (ndims(values) == 1 ? Vector : PermutedDimsArray)
+        @test values == IS.get_static_time_series_group_values(copying, g)
+    end
+    @test all(
+        IS.get_static_time_series_value(lazy, i) ==
+        IS.get_static_time_series_value(copying, i) for i in 1:length(lazy)
+    )
+end
+
 @testset "Test value_axes get_window rejects N-D windows" begin
     @test_throws "ArgumentError: get_window returns a TimeArray, which holds at most 2 dimensions, but this window has 3" IS.get_window(
         _va_nd_det("d"),

@@ -1369,6 +1369,12 @@ entry with [`get_forecast_window`](@ref). Forecasts that share an underlying arr
 (deduplicated data, or a `DeterministicSingleTimeSeries` over its
 `SingleTimeSeries`) are read from disk once per timestamp regardless of how many
 components reference them — see [`get_time_series_array_groups`](@ref).
+
+Windows of more than one dimension are stored row-major and handed back in IS's
+column-major layout, time first. By default each is a reordered copy (an `Array`).
+With `lazy = true`, a window that needs no element decoding is instead a
+`PermutedDimsArray` over the stored values: it indexes the same, skips the copy on
+every read, and keeps each time step's values together in memory.
 """
 function build_forecast_reader(
     data::SystemData,
@@ -1376,6 +1382,7 @@ function build_forecast_reader(
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
     features::Union{Nothing, Dict} = nothing,
+    lazy::Bool = false,
 ) where {T <: Forecast}
     store = get_data_store(data)
     id_to_owner = _make_id_to_owner(data)
@@ -1386,6 +1393,7 @@ function build_forecast_reader(
         resolution = resolution,
         name = name,
         features = features,
+        lazy = lazy,
     )
 end
 
@@ -1408,12 +1416,17 @@ instead, with [`get_static_time_series_group_values`](@ref) and
 one value at a time out of a container the reader cannot type, so it dispatches
 dynamically and boxes each value; the group path costs neither and stays flat as
 the reader grows.
+
+`lazy = true` hands back a group with an element shape as a `PermutedDimsArray`
+over the stored values rather than a reordered copy, as for
+[`build_forecast_reader`](@ref); groups that need element decoding are unaffected.
 """
 function build_static_time_series_reader(
     data::SystemData;
     resolution::Dates.Period,
     name::Union{Nothing, AbstractString} = nothing,
     features::Union{Nothing, Dict} = nothing,
+    lazy::Bool = false,
 )
     store = get_data_store(data)
     id_to_owner = _make_id_to_owner(data)
@@ -1423,6 +1436,7 @@ function build_static_time_series_reader(
         resolution = resolution,
         name = name,
         features = features,
+        lazy = lazy,
     )
 end
 
