@@ -1692,15 +1692,45 @@ get_forecast_group_entries(reader::ForecastReader, group_index::Integer) =
 # tag string, a regex probe included, once per slot per read.
 function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) where {T}
     tag = reader.group_element_types[group]
-    decode = _decodes_forecast_window(T, tag)
-    by_slot = Dict{Int, Any}()
-    return [
-        get!(by_slot, reader.entries[i].slot) do
-            raw = InfraStore.forecast_values(reader.inner, i)
-            decode ? _decode_forecast_reader_window(T, raw, tag) : raw
+    members = reader.group_members[group]
+    # One raw window per distinct slot, in first-seen order.
+    slot_index = Dict{Int, Int}()
+    raws = []
+    for i in members
+        get!(slot_index, reader.entries[i].slot) do
+            push!(raws, InfraStore.forecast_values(reader.inner, i))
+            length(raws)
         end
-        for i in reader.group_members[group]
-    ]
+    end
+    windows = if _decodes_forecast_window(T, tag)
+        _decode_forecast_group(T, map(identity, raws), tag)
+    else
+        raws
+    end
+    return [windows[slot_index[reader.entries[i].slot]] for i in members]
+end
+
+# A decode call parses its tag and resolves the decoder before touching a row, a fixed
+# cost that outweighs decoding one short window. A deterministic group's windows share
+# one tag and, when their element widths agree, stack into one
+# `(horizon, window, width)` array that decodes in a single call.
+_decode_forecast_group(::Type{T}, raws, tag) where {T <: Forecast} =
+    [_decode_forecast_reader_window(T, raw, tag) for raw in raws]
+
+function _decode_forecast_group(
+    ::Type{T},
+    raws::Vector{<:AbstractMatrix},
+    tag,
+) where {T <: AbstractDeterministic}
+    shape = size(first(raws))
+    all(r -> size(r) == shape, raws) ||
+        return [_decode_forecast_reader_window(T, raw, tag) for raw in raws]
+    stacked = similar(first(raws), shape[1], length(raws), shape[2])
+    for (k, raw) in enumerate(raws)
+        stacked[:, k, :] = raw
+    end
+    decoded = InfraStore.decode_element_values(stacked, tag; types = _IS_ELEMENT_TYPES)
+    return [decoded[:, k] for k in axes(decoded, 2)]
 end
 
 # A deterministic window is already its value unless its element type is composite
