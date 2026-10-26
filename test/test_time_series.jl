@@ -7341,6 +7341,19 @@ end
     @test window == w0
     full = IS.get_time_series(IS.Probabilistic, c, "load")
     @test window == TimeSeries.values(IS.get_window(full, t0))
+    # The orientation is free, so the window is a plain matrix over the read's values.
+    @test window isa Matrix{Float64}
+    IS.read_forecast_window!(reader, t0 + res)
+    @test IS.get_forecast_window(reader, 1) == w0 .+ 100
+
+    scenario_sys, (sc,) = _create_reader_system(1)
+    scenarios = SortedDict(t0 => w0, t0 + res => w0 .+ 100)
+    IS.add_time_series!(scenario_sys, sc, IS.Scenarios("load", scenarios, res))
+    scenario_reader = IS.build_forecast_reader(scenario_sys, IS.Scenarios; resolution = res)
+    IS.read_forecast_window!(scenario_reader, t0 + res)
+    scenario_window = IS.get_forecast_window(scenario_reader, 1)
+    @test scenario_window isa Matrix{Float64}
+    @test scenario_window == w0 .+ 100
 end
 
 @testset "Test ForecastReader group accessors" begin

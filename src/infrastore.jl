@@ -1475,6 +1475,21 @@ _decode_forecast_reader_window(::Type{<:Probabilistic}, raw, _element_type) =
 
 _decode_forecast_reader_window(::Type{<:Scenarios}, raw, _element_type) = permutedims(raw)
 
+# A member window is stored row-major as (member, time), which the free reshape under a
+# lazy read already lays out as IS's (time, member). Reordering it to (member, time) and
+# back would copy it twice, so take the reshaped values as they are.
+_decode_forecast_reader_window(
+    ::Type{<:Probabilistic},
+    raw::PermutedDimsArray{<:Any, 2, (2, 1)},
+    _element_type,
+) = parent(raw)
+
+_decode_forecast_reader_window(
+    ::Type{<:Scenarios},
+    raw::PermutedDimsArray{<:Any, 2, (2, 1)},
+    _element_type,
+) = parent(raw)
+
 _decode_forecast_reader_window(::Type{<:AbstractDeterministic}, raw, element_type) =
     InfraStore.decode_element_values(
         raw, something(element_type, "f64"); types = _IS_ELEMENT_TYPES,
@@ -1699,7 +1714,7 @@ get_forecast_group_entries(reader::ForecastReader, group_index::Integer) =
 function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) where {T}
     tag = reader.group_element_types[group]
     decode = _decodes_forecast_window(T, tag)
-    lazy = reader.lazy && !decode
+    lazy = _reads_lazily(T, reader.lazy, decode)
     by_slot = Dict{Int, Any}()
     return [
         get!(by_slot, reader.entries[i].slot) do
@@ -1709,6 +1724,11 @@ function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) 
         for i in reader.group_members[group]
     ]
 end
+
+# Whether a group's windows are read as views over the stored values. Member windows
+# always are, since their decode is only the reorientation a lazy read makes free.
+_reads_lazily(::Type{<:Forecast}, lazy, decode) = lazy && !decode
+_reads_lazily(::Type{<:Union{Probabilistic, Scenarios}}, _lazy, _decode) = true
 
 # A deterministic window is already its value unless its element type is composite
 # (a plain dtype decodes to the array it was read into); other forecast types are
