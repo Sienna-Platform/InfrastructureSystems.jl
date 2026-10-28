@@ -1695,8 +1695,8 @@ function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) 
     members = reader.group_members[group]
     # One raw window per distinct slot, in first-seen order. The slots are found
     # first so the windows land in one concretely typed vector.
-    slot_index = sizehint!(Dict{Int, Int}(), length(members))
-    firsts = sizehint!(Int[], length(members))
+    slot_index = Dict{Int, Int}()
+    firsts = Int[]
     for i in members
         get!(slot_index, reader.entries[i].slot) do
             push!(firsts, i)
