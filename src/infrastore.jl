@@ -1693,20 +1693,18 @@ get_forecast_group_entries(reader::ForecastReader, group_index::Integer) =
 function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) where {T}
     tag = reader.group_element_types[group]
     members = reader.group_members[group]
-    # One raw window per distinct slot, in first-seen order.
-    slot_index = Dict{Int, Int}()
-    raws = []
+    # One raw window per distinct slot, in first-seen order. The slots are found
+    # first so the windows land in one concretely typed vector.
+    slot_index = sizehint!(Dict{Int, Int}(), length(members))
+    firsts = sizehint!(Int[], length(members))
     for i in members
         get!(slot_index, reader.entries[i].slot) do
-            push!(raws, InfraStore.forecast_values(reader.inner, i))
-            length(raws)
+            push!(firsts, i)
+            length(firsts)
         end
     end
-    windows = if _decodes_forecast_window(T, tag)
-        _decode_forecast_group(T, map(identity, raws), tag)
-    else
-        raws
-    end
+    raws = [InfraStore.forecast_values(reader.inner, i) for i in firsts]
+    windows = _decodes_forecast_window(T, tag) ? _decode_forecast_group(T, raws, tag) : raws
     return [windows[slot_index[reader.entries[i].slot]] for i in members]
 end
 
