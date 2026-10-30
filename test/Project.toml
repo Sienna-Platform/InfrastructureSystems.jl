@@ -28,6 +28,7 @@ YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
 [sources]
 InfrastructureSystems = {path = ".."}
+InfraStore = {url = "https://github.com/NatLabRockies/infrastore.git", rev = "lk/lazy-permute-reader-values", subdir = "julia/InfraStore.jl"}
 
 [compat]
 InfraStore = "0.15"
