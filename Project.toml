@@ -38,7 +38,7 @@ ZipArchives = "49080126-0e18-4c2a-b176-c102e4b3760c"
 
 [sources]
 # Until InfraStore releases the readers' `lazy` option.
-InfraStore = {url = "https://github.com/NatLabRockies/infrastore.git", rev = "lk/lazy-permute-reader-values", subdir = "julia/InfraStore.jl"}
+InfraStore = {url = "https://github.com/NatLabRockies/infrastore.git", rev = "main", subdir = "julia/InfraStore.jl"}
 
 [compat]
 DataFrames = "^1.7"
