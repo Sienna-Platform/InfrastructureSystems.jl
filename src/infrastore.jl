@@ -1715,14 +1715,43 @@ function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) 
     tag = reader.group_element_types[group]
     decode = _decodes_forecast_window(T, tag)
     lazy = _reads_lazily(T, reader.lazy, decode)
-    by_slot = Dict{Int, Any}()
-    return [
-        get!(by_slot, reader.entries[i].slot) do
-            raw = InfraStore.forecast_values(reader.inner, i; lazy = lazy)
-            decode ? _decode_forecast_reader_window(T, raw, tag) : raw
+    members = reader.group_members[group]
+    # One raw window per distinct slot, in first-seen order. The slots are found
+    # first so the windows land in one concretely typed vector.
+    slot_index = Dict{Int, Int}()
+    firsts = Int[]
+    for i in members
+        get!(slot_index, reader.entries[i].slot) do
+            push!(firsts, i)
+            length(firsts)
         end
-        for i in reader.group_members[group]
-    ]
+    end
+    raws = [InfraStore.forecast_values(reader.inner, i; lazy = lazy) for i in firsts]
+    windows = decode ? _decode_forecast_group(T, raws, tag) : raws
+    return [windows[slot_index[reader.entries[i].slot]] for i in members]
+end
+
+# A decode call parses its tag and resolves the decoder before touching a row, a fixed
+# cost that outweighs decoding one short window. A deterministic group's windows share
+# one tag and, when their element widths agree, stack into one
+# `(horizon, window, width)` array that decodes in a single call.
+_decode_forecast_group(::Type{T}, raws, tag) where {T <: Forecast} =
+    [_decode_forecast_reader_window(T, raw, tag) for raw in raws]
+
+function _decode_forecast_group(
+    ::Type{T},
+    raws::Vector{<:AbstractMatrix},
+    tag,
+) where {T <: AbstractDeterministic}
+    shape = size(first(raws))
+    all(r -> size(r) == shape, raws) ||
+        return [_decode_forecast_reader_window(T, raw, tag) for raw in raws]
+    stacked = similar(first(raws), shape[1], length(raws), shape[2])
+    for (k, raw) in enumerate(raws)
+        stacked[:, k, :] = raw
+    end
+    decoded = InfraStore.decode_element_values(stacked, tag; types = _IS_ELEMENT_TYPES)
+    return [decoded[:, k] for k in axes(decoded, 2)]
 end
 
 # Whether a group's windows are read as views over the stored values. Member windows

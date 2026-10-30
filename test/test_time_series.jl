@@ -7418,6 +7418,39 @@ end
     @test IS.get_forecast_window(reader, i1) === IS.get_forecast_window(reader, i2)
 end
 
+@testset "Test ForecastReader decodes a composite group in one call" begin
+    sys, comps = _create_reader_system(3)
+    t0, res = READER_T0, READER_RES
+    step(n, v) = IS.PiecewiseStepData(collect(0.0:n), fill(v, n))
+    # "even" has one width across its windows, so they decode stacked; "ragged" mixes
+    # widths, so it falls back to one decode per window.
+    for (name, segments) in (("even", (2, 2, 2)), ("ragged", (2, 3, 2)))
+        expected = Dict{IS.TimeSeriesKey, Any}()
+        for (i, c) in enumerate(comps)
+            data = SortedDict(
+                t0 => [step(segments[i], 10i + 1.0), step(segments[i], 10i + 2.0)],
+                t0 + res =>
+                    [step(segments[i], 10i + 3.0), step(segments[i], 10i + 4.0)],
+            )
+            key = IS.add_time_series!(sys, c,
+                IS.Deterministic(; data = data, name = name, resolution = res))
+            expected[key] = data
+        end
+        reader = IS.build_forecast_reader(sys, IS.Deterministic; resolution = res,
+            name = name)
+        for t in (t0, t0 + res)
+            IS.read_forecast_window!(reader, t)
+            for g in 1:IS.get_num_forecast_groups(reader)
+                windows = IS.get_forecast_group_windows(reader, g)
+                @test isconcretetype(eltype(windows))
+                for (w, e) in zip(windows, IS.get_forecast_group_entries(reader, g))
+                    @test w == expected[e.key][t]
+                end
+            end
+        end
+    end
+end
+
 @testset "Test StaticTimeSeriesReader" begin
     sys, comps = _create_reader_system(3)
     t0, res = READER_T0, READER_RES
