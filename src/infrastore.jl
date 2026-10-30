@@ -214,6 +214,41 @@ function InfraStore.write_element_row!(row, fd::PiecewiseStepData)
     return
 end
 
+# A value curve is its function's row with the curve's scalars in front, `NaN` for
+# an absent one. The pairings the store accepts are exactly the ones IS's type
+# parameter bounds already allow.
+_curve_tag(::AbstractVector{<:InputOutputCurve}) = "input_output"
+_curve_tag(::AbstractVector{<:IncrementalCurve}) = "incremental"
+_curve_tag(::AbstractVector{<:AverageRateCurve}) = "average_rate"
+
+_curve_header_width(::AbstractVector{<:InputOutputCurve}) = 1
+_curve_header_width(::AbstractVector{<:Union{IncrementalCurve, AverageRateCurve}}) = 2
+
+_curve_header(c::InputOutputCurve) = (get_input_at_zero(c),)
+_curve_header(c::Union{IncrementalCurve, AverageRateCurve}) =
+    (get_initial_input(c), get_input_at_zero(c))
+
+const _StoredValueCurve = Union{InputOutputCurve, IncrementalCurve, AverageRateCurve}
+
+InfraStore.element_type_tag(values::AbstractVector{<:_StoredValueCurve}) =
+    "$(_curve_tag(values))($(InfraStore.element_type_tag(get_function_data.(values))))"
+InfraStore.element_row_width(values::AbstractVector{<:_StoredValueCurve}) =
+    _curve_header_width(values) + InfraStore.element_row_width(get_function_data.(values))
+function InfraStore.write_element_row!(row, c::_StoredValueCurve)
+    header = _curve_header(c)
+    for (j, x) in enumerate(header)
+        # `NaN` is the absent marker, so a stored `NaN` would read back as `nothing`.
+        x !== nothing && isnan(x) &&
+            throw(ArgumentError("$(typeof(c)) has a NaN scalar; use `nothing` instead"))
+        row[j] = something(x, NaN)
+    end
+    InfraStore.write_element_row!(
+        @view(row[(length(header) + 1):end]),
+        get_function_data(c),
+    )
+    return
+end
+
 """
 The IS types a store read decodes composite element values into.
 
@@ -225,6 +260,9 @@ const _IS_ELEMENT_TYPES = (
     quadratic_function = QuadraticFunctionData,
     piecewise_linear = PiecewiseLinearData,
     piecewise_step = PiecewiseStepData,
+    input_output = InputOutputCurve,
+    incremental = IncrementalCurve,
+    average_rate = AverageRateCurve,
 )
 
 # Densify a Probabilistic/Scenarios forecast — a SortedDict of
