@@ -328,7 +328,7 @@ end
         @test IS.is_time_series_backed(cc) == true
         @test IS.get_time_series_key(cc) == forecast_key(IS.LinearFunctionData)
 
-        fc = IS.FuelCurve(ts_io, 1.0)
+        fc = IS.FuelCurve(ts_io, IS.CommodityUnits.MMBtu, 1.0)
         @test IS.is_time_series_backed(fc) == true
         # get_time_series_key is undefined for FuelCurve — resolve through the value
         # curve (or get_fuel_cost) explicitly.
@@ -401,7 +401,7 @@ end
         @test IS.get_power_units(cc) == IS.SystemBaseUnit()
 
         # FuelCurve preserves fuel_cost
-        fc = IS.FuelCurve(ts_io, 5.0)
+        fc = IS.FuelCurve(ts_io, IS.CommodityUnits.MMBtu, 5.0)
         @test IS.get_fuel_cost(fc) == 5.0
     end
 end

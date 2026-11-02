@@ -254,7 +254,7 @@
         ])
         ioc_convex = IS.InputOutputCurve(pld_convex)
         vom_cost = IS.LinearCurve(0.5)
-        fuel_curve_convex = IS.FuelCurve(;
+        fuel_curve_convex = IS.FuelCurve(; fuel_units = IS.CommodityUnits.MMBtu,
             value_curve = ioc_convex,
             power_units = IS.NaturalUnit(),
             fuel_cost = 25.0,
@@ -276,7 +276,7 @@
         ])
         ioc_concave = IS.InputOutputCurve(pld_concave)
         vom_cost_2 = IS.LinearCurve(1.0)
-        fuel_curve_concave = IS.FuelCurve(;
+        fuel_curve_concave = IS.FuelCurve(; fuel_units = IS.CommodityUnits.MMBtu,
             value_curve = ioc_concave,
             power_units = IS.SystemBaseUnit(),
             fuel_cost = 30.0,
@@ -293,7 +293,7 @@
         # FuelCurve with IncrementalCurve (PiecewiseStepData)
         psd_convex = IS.PiecewiseStepData([0.0, 1.0, 2.0], [1.0, 2.0])
         inc_convex = IS.IncrementalCurve(psd_convex, 0.0)
-        fuel_curve_inc = IS.FuelCurve(;
+        fuel_curve_inc = IS.FuelCurve(; fuel_units = IS.CommodityUnits.MMBtu,
             value_curve = inc_convex,
             power_units = IS.NaturalUnit(),
             fuel_cost = 20.0,
@@ -313,7 +313,7 @@
                 (x = 2.0, y = 8.0),
             ])
             ioc_invalid = IS.InputOutputCurve(pld_invalid)
-            fuel_curve_invalid = IS.FuelCurve(;
+            fuel_curve_invalid = IS.FuelCurve(; fuel_units = IS.CommodityUnits.MMBtu,
                 value_curve = ioc_invalid,
                 power_units = IS.NaturalUnit(),
                 fuel_cost = 25.0,

@@ -3,83 +3,97 @@ $(TYPEDEF)
 $(TYPEDFIELDS)
 
     LossCurve(value_curve, power_units)
-    LossCurve(; value_curve, power_units)
+    LossCurve(value_curve, power_units, x_units)
+    LossCurve(; value_curve, power_units, x_units = u"MW")
 
 Representation of the losses of a component as a function of its flow or current, composed
 of a [`ValueCurve`](@ref) that may represent input-output, incremental, or average rate
 data.
 
-**Both** axes of a `LossCurve` are power, and both are in the unit system given 
-by the second type parameter`U <: AbstractUnitSystem`: x is the flow through the component
-and y is the loss incurred at that flow, in the same base. See [`y_axis_power_dimension`](@ref).
+The y-axis is the loss, a power. The x-axis is whatever drives the loss, named by the
+natural unit of its quantity in the third type parameter `X`: `MW` (the default) for a loss
+that is a function of power flow, `kA` for one that is a function of converter current.
+Both axes are stored on the basis `U <: AbstractUnitSystem`, which may be per-unit.
 
 `power_units` has deliberately **no default**: an unstated base is ambiguous.
 """
-struct LossCurve{T <: ValueCurve, U <: AbstractUnitSystem} <: ValueCurveWithUnits{T, U}
+struct LossCurve{T <: ValueCurve, U <: AbstractUnitSystem, X <: Unitful.Units} <:
+       ValueCurveWithUnits{T, U, X, _MW}
     "The underlying `ValueCurve` representation of this `LossCurve`"
     value_curve::T
 
-    LossCurve{T, U}(value_curve::T) where {T, U} = new{T, U}(value_curve)
+    LossCurve{T, U, X}(value_curve::T) where {T, U, X} = new{T, U, X}(value_curve)
 end
 
-LossCurve{T, U}(; value_curve::T) where {T, U} = LossCurve{T, U}(value_curve)
+LossCurve{T, U, X}(; value_curve::T) where {T, U, X} = LossCurve{T, U, X}(value_curve)
 
 LossCurve(
     value_curve::T,
     ::U,
-) where {T <: ValueCurve, U <: AbstractUnitSystem} = LossCurve{T, U}(value_curve)
+    x_units::Unitful.Units = Unitful.MW,
+) where {T <: ValueCurve, U <: AbstractUnitSystem} =
+    LossCurve{T, U, typeof(x_units)}(value_curve)
 
-# `power_units` keeps its name here: a keyword argument is addressed by name, and
-# `deserialize` reconstructs through `LossCurve(; value_curve, power_units)`.
+# `deserialize` reconstructs through this keyword form.
 LossCurve(;
-    value_curve::T,
-    power_units::U,
-) where {T <: ValueCurve, U <: AbstractUnitSystem} = LossCurve{T, U}(value_curve)
+    value_curve::ValueCurve,
+    power_units::AbstractUnitSystem,
+    x_units::Unitful.Units = Unitful.MW,
+) = LossCurve(value_curve, power_units, x_units)
 
 """
-`LossCurve{T}` with any unit system. Equivalent to `LossCurve{T, U} where U`;
-use at `isa` sites where the unit-system parameter doesn't matter.
+`LossCurve{T}` with any unit system and x-axis. Equivalent to `LossCurve{T, U, X} where {U, X}`;
+use at `isa` sites where those parameters don't matter.
 """
-const AnyLossCurve{T} = LossCurve{T, U} where {U <: AbstractUnitSystem}
+const AnyLossCurve{T} =
+    LossCurve{T, U, X} where {U <: AbstractUnitSystem, X <: Unitful.Units}
+
+"""
+`LossCurve{T}` with any unit system and a converter-current x-axis in `kA`. Use as a field
+type where the loss is a function of current, so a power-axis curve can't be stored there.
+"""
+const CurrentLossCurve{T} =
+    LossCurve{T, U, typeof(Unitful.kA)} where {U <: AbstractUnitSystem}
 
 # There is no `zero(::Type{LossCurve})`: a bare `LossCurve` has no unit system to give the
 # result, and picking one silently is the ambiguity this type exists to remove. Callers
 # who want a zero curve name the base, as they do at every other construction site.
-"Get a `LossCurve` representing zero loss, preserving the unit system of `c`"
-Base.zero(::LossCurve{T, U}) where {T, U} = LossCurve(zero(ValueCurve), U())
+"Get a `LossCurve` representing zero loss, preserving the units of `c`"
+Base.zero(::LossCurve{T, U, X}) where {T, U, X} = LossCurve(zero(ValueCurve), U(), X())
 
-# Both axes are power in base `U`, so y carries one power of the base.
-y_axis_power_dimension(::Type{<:LossCurve}) = Val(1)
+_free_axis_units(curve::LossCurve) = (; x_units = get_x_units(curve))
+_deserialize_curve_field(::Val{:x_units}, raw::AbstractString) = _parse_units(raw)
 
 """
 $(TYPEDSIGNATURES)
 
-Convert `curve` to the `to` unit system, given the x-axis `ratio` between the two bases
-(`x_from = ratio * x_to`). Both axes are power, so the y-axis rescales along with the
-x-axis: the result represents `f_to(x) = f_from(ratio * x) / ratio`.
+Convert `curve` to the `to` unit system. `x_ratio` and `y_ratio` are the ratios between the
+two bases on each axis (`x_from = x_ratio * x_to`, likewise for y): the result represents
+`f_to(x) = f_from(x_ratio * x) / y_ratio`.
 
-See [`convert_power_units(::CostCurve, ::Any, ::Real)`](@ref) on where `ratio` comes from.
+See [`convert_power_units(::CostCurve, ::Any, ::Real, ::Real)`](@ref) on where the ratios
+come from.
 """
 convert_power_units(
-    curve::LossCurve{T, U},
+    curve::LossCurve{T, U, X},
     to::V,
-    ratio::Real,
-) where {T <: ValueCurve, U <: AbstractUnitSystem, V <: AbstractUnitSystem} =
-    LossCurve(_convert_value_curve(curve, ratio), to)
+    x_ratio::Real,
+    y_ratio::Real,
+) where {T <: ValueCurve, U <: AbstractUnitSystem, X, V <: AbstractUnitSystem} =
+    LossCurve(_convert_value_curve(curve, x_ratio, y_ratio), to, X())
 
-# Converting to the unit system the curve already carries is the identity, dispatched
-# rather than branched -- and it needs no ratio, so a caller that would have to resolve
-# bases to compute one can skip that work entirely.
+# Converting to the curve's own unit system is the identity, and needs no ratios.
 convert_power_units(
     curve::LossCurve{T, U},
     ::U,
+    ::Real,
     ::Real,
 ) where {T <: ValueCurve, U <: AbstractUnitSystem} = curve
 
 function _show_compact(io::IO, ::MIME"text/plain", curve::LossCurve)
     print(
         io,
-        "$(nameof(typeof(curve))) with power_units $(get_power_units(curve)), and value_curve:\n  ",
+        "$(nameof(typeof(curve))) with power_units $(get_power_units(curve)), x_units $(get_x_units(curve)), and value_curve:\n  ",
     )
     vc_printout = sprint(show, "text/plain", curve.value_curve; context = io)
     print(io, replace(vc_printout, "\n" => "\n  "))

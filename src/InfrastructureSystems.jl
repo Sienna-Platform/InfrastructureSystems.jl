@@ -59,6 +59,7 @@ import Mmap
 import ZipArchives
 import TimerOutputs
 import TOML
+import Unitful
 using DataStructures: OrderedDict, SortedDict
 using LinearAlgebra: norm, dot
 
@@ -184,6 +185,7 @@ using .RelativeUnits:
     _strip_units, convert_cost_coefficient, display_base_label, display_value
 include("per_unit.jl")
 using .PerUnit: resolve_per_unit
+include("commodity_units.jl")
 include("random_seed.jl")
 include("utils/timers.jl")
 include("utils/assert_op.jl")
