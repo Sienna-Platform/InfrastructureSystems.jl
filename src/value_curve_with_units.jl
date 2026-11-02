@@ -139,7 +139,11 @@ function deserialize(::Type{T}, data::Dict) where {T <: ValueCurveWithUnits}
         Symbol(k) => _deserialize_curve_field(Val(Symbol(k)), v)
         for (k, v) in data if k != METADATA_KEY && k != "power_units"
     )
-    return T(; vals..., power_units = _unit_system_instance(data["power_units"]))
+    # `T` may carry parameters (`typeof(curve)`, a `CurrentLossCurve` field), which have no
+    # keyword constructor; build through the family's and check the result against `T`.
+    family = Base.typename(T).wrapper
+    curve = family(; vals..., power_units = _unit_system_instance(data["power_units"]))
+    return curve::T
 end
 
 Base.show(io::IO, m::MIME"text/plain", curve::ValueCurveWithUnits) =

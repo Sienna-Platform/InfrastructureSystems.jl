@@ -638,6 +638,15 @@ end
     end
     @test IS.serialize(lc_i)["x_units"] == "kA"
     @test IS.deserialize(IS.LossCurve, IS.serialize(lc_i)) == lc_i
+    # A parameterized target type, as from `typeof` or a field type, works too
+    for c in (cc, fc, lc_i)
+        @test IS.deserialize(typeof(c), IS.serialize(c)) == c
+    end
+    @test IS.deserialize(IS.CurrentLossCurve{IS.LinearCurve}, IS.serialize(lc_i)) == lc_i
+    @test_throws TypeError IS.deserialize(
+        IS.CurrentLossCurve{IS.LinearCurve},
+        IS.serialize(lc),
+    )
     # An unstated fuel unit is ambiguous
     @test_throws UndefKeywordError IS.FuelCurve(; value_curve = vc, fuel_cost = 1.0)
     # Axis units derived from an argument's value still infer to a concrete type
