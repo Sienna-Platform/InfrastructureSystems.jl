@@ -215,6 +215,15 @@ end
     IS.add_time_series!(sys, component, nts)
     @test descriptors(IS.get_time_series(IS.NonSequentialTimeSeries, component, "nts")) ==
           ("Energy", IS.NU, nothing)
+    nts_cu = IS.NonSequentialTimeSeries(
+        "nts_cu", stamps, rand(3);
+        quantity_kind = "Energy", unit_system = IS.CU, per_unit_of = "storage_capacity",
+    )
+    IS.add_time_series!(sys, component, nts_cu)
+    @test descriptors(
+        IS.get_time_series(IS.NonSequentialTimeSeries, component, "nts_cu"),
+    ) ==
+          ("Energy", IS.CU, "storage_capacity")
 
     one_dim = SortedDict(
         initial_time => rand(horizon_count),
@@ -239,6 +248,13 @@ end
     IS.add_time_series!(sys, component, prob)
     @test descriptors(IS.get_time_series(IS.Probabilistic, component, "prob")) ==
           ("ActivePower", IS.NU, nothing)
+    prob_cu = IS.Probabilistic(
+        "prob_cu", two_dim, [0.1, 0.5, 0.9], resolution;
+        quantity_kind = "ActivePower", unit_system = IS.CU, per_unit_of = "base_power",
+    )
+    IS.add_time_series!(sys, component, prob_cu)
+    @test descriptors(IS.get_time_series(IS.Probabilistic, component, "prob_cu")) ==
+          ("ActivePower", IS.CU, "base_power")
 
     scen = IS.Scenarios(
         "scen", two_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
