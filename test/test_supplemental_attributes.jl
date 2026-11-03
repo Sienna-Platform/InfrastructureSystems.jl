@@ -500,6 +500,34 @@ end
     @test IS.get_num_supplemental_attributes(data) == 0
 end
 
+@testset "DataSource OpenAPI timestamps are UTC" begin
+    ds = IS.DataSource(;
+        organization = "U.S. EIA",
+        retrieved_at = Dates.DateTime("2026-06-20T14:03:00"),
+        fields = ["rating"],
+        published_at = Dates.DateTime("2024-09-01T00:00:00"),
+    )
+    po = IS.to_openapi(ds, 1)
+    @test po.retrieved_at ==
+          IS.TimeZones.ZonedDateTime(2026, 6, 20, 14, 3, IS.TimeZones.TimeZone("UTC"))
+    @test po.published_at ==
+          IS.TimeZones.ZonedDateTime(2024, 9, 1, IS.TimeZones.TimeZone("UTC"))
+    back = IS.from_openapi(po)
+    @test IS.get_retrieved_at(back) == IS.get_retrieved_at(ds)
+    @test IS.get_published_at(back) == IS.get_published_at(ds)
+
+    shifted = InfrastructureCoreOpenAPIModels.DataSource(;
+        id = 1,
+        fields = ["rating"],
+        retrieved_at = IS.TimeZones.ZonedDateTime(
+            2026, 6, 20, 16, 3, IS.TimeZones.TimeZone("Europe/Berlin"),
+        ),
+    )
+    @test IS.get_retrieved_at(IS.from_openapi(shifted)) ==
+          Dates.DateTime("2026-06-20T14:03:00")
+    @test !IS.has_published_at(IS.from_openapi(shifted))
+end
+
 @testset "DataSource serialization round-trip" begin
     ds = IS.DataSource(;
         organization = "U.S. EIA",

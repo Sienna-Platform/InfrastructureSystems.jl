@@ -39,9 +39,8 @@ to_openapi(geo::GeographicInfo, id::Int) =
 
 # ── DataSource ──────────────────────────────────────────────────────────────────
 #
-# Both timestamps are plain `Dates.DateTime` on both sides (IS treats them as UTC wall
-# clocks; the document carries no offset), so `retrieved_at`/`published_at` pass straight
-# through with no zone conversion.
+# IS stores both timestamps as plain `Dates.DateTime`, which it treats as UTC wall clocks.
+# The document requires an offset, so export attaches UTC and import converts back to UTC.
 #
 # `extra` widens `Dict{String, String}` to the `Dict{String, Any}` the field declares; on the
 # way out, values are stringified, since the schema types that map as strings.
@@ -58,12 +57,20 @@ _datasource_required_string(::OpenAPI.Runtime.Absent) = ""
 _datasource_nullable(x) = x
 _datasource_nullable(::OpenAPI.Runtime.Absent) = nothing
 
+_datasource_to_utc(zdt::TimeZones.ZonedDateTime) =
+    Dates.DateTime(TimeZones.astimezone(zdt, TimeZones.tz"UTC"))
+_datasource_published_from(::Nothing) = nothing
+_datasource_published_from(::OpenAPI.Runtime.Absent) = nothing
+_datasource_published_from(zdt::TimeZones.ZonedDateTime) = _datasource_to_utc(zdt)
+
+_datasource_from_utc(dt::Dates.DateTime) = TimeZones.ZonedDateTime(dt, TimeZones.tz"UTC")
+
 # `published_at`/`recorded_by` are absence-by-predicate, not absence-by-`nothing`: their
 # accessors error rather than return a sentinel, so the export path asks first. An absent
 # field is written as `null`, which the schema marks optional.
 function _datasource_published_at(ds::DataSource)
     has_published_at(ds) || return nothing
-    return get_published_at(ds)
+    return _datasource_from_utc(get_published_at(ds))
 end
 
 function _datasource_recorded_by(ds::DataSource)
@@ -82,11 +89,11 @@ _datasource_extra(d::InfrastructureCoreOpenAPIModels.DataSourceExtra) =
 function from_openapi(po::InfrastructureCoreOpenAPIModels.DataSource)
     return DataSource(;
         organization = _datasource_required_string(po.organization),
-        retrieved_at = po.retrieved_at,
+        retrieved_at = _datasource_to_utc(po.retrieved_at),
         dataset = _datasource_required_string(po.dataset),
         url = _datasource_required_string(po.url),
         version = _datasource_required_string(po.version),
-        published_at = _datasource_nullable(po.published_at),
+        published_at = _datasource_published_from(po.published_at),
         confidence = _datasource_required_string(po.confidence),
         recorded_by = _datasource_nullable(po.recorded_by),
         fields = _datasource_fields(po.fields),
@@ -98,7 +105,7 @@ function to_openapi(ds::DataSource, id::Int)
     return InfrastructureCoreOpenAPIModels.DataSource(;
         id = id,
         organization = get_organization(ds),
-        retrieved_at = get_retrieved_at(ds),
+        retrieved_at = _datasource_from_utc(get_retrieved_at(ds)),
         dataset = get_dataset(ds),
         url = get_url(ds),
         version = get_version(ds),
