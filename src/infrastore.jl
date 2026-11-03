@@ -335,7 +335,8 @@ _serialize_static!(batch, owner_id, owner_type, category, name,
 """
     serialize_single!(batch, owner_id, owner_type, owner_category, name, sts;
                       features=nothing, units=get_units(sts),
-                      quantity_kind=get_quantity_kind(sts), unit_system=get_unit_system(sts))
+                      quantity_kind=get_quantity_kind(sts), unit_system=get_unit_system(sts),
+                      per_unit_of=get_per_unit_of(sts))
 
 Stage a `SingleTimeSeries` (data + metadata) onto a `InfraStore.AddBatch` for a
 bulk commit (a direct add is a one-item batch). The array is content-addressed;
@@ -353,6 +354,7 @@ function serialize_single!(
     units::Union{Nothing, AbstractString} = get_units(sts),
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(sts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(sts),
+    per_unit_of::Union{Nothing, AbstractString} = get_per_unit_of(sts),
 )
     # `get_array` returns the raw `Array{T, N}` (no TimeArray allocation). The
     # store names the element type from the values and packs them itself.
@@ -367,6 +369,7 @@ function serialize_single!(
         units = units,
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system),
+        per_unit_of = per_unit_of,
         application_data = _value_axes_application_data(get_value_axes(sts)),
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
@@ -378,7 +381,8 @@ end
     serialize_non_sequential!(batch, owner_id, owner_type, owner_category, name, nts;
                               features=nothing, units=get_units(nts),
                               quantity_kind=get_quantity_kind(nts),
-                              unit_system=get_unit_system(nts))
+                              unit_system=get_unit_system(nts),
+                              per_unit_of=get_per_unit_of(nts))
 
 Stage a `NonSequentialTimeSeries` (irregular timestamps + data) onto a
 `InfraStore.AddBatch` for a bulk commit (a direct add is a one-item batch). The
@@ -397,6 +401,7 @@ function serialize_non_sequential!(
     units::Union{Nothing, AbstractString} = get_units(nts),
     quantity_kind::Union{Nothing, AbstractString} = get_quantity_kind(nts),
     unit_system::Union{Nothing, AbstractUnitSystem} = get_unit_system(nts),
+    per_unit_of::Union{Nothing, AbstractString} = get_per_unit_of(nts),
 )
     values = get_array(nts)
     tss_ts = InfraStore.NonSequentialTimeSeries(
@@ -406,6 +411,7 @@ function serialize_non_sequential!(
         units = units,
         quantity_kind = quantity_kind,
         unit_system = _to_store_unit_system(unit_system),
+        per_unit_of = per_unit_of,
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
         owner_category, tss_ts; features = features)
@@ -418,6 +424,7 @@ _non_sequential_from_store(nts, name::AbstractString) = NonSequentialTimeSeries(
     String(name), nts.timestamps, nts.data;
     units = nts.units, quantity_kind = nts.quantity_kind,
     unit_system = _from_store_unit_system(nts.unit_system),
+    per_unit_of = nts.per_unit_of,
 )
 
 function get_num_time_series(store::Store)
@@ -956,6 +963,7 @@ _single_from_store(sts, name::AbstractString) = SingleTimeSeries(
     String(name), sts.initial_timestamp, sts.resolution, sts.data;
     units = sts.units, quantity_kind = sts.quantity_kind,
     unit_system = _from_store_unit_system(sts.unit_system),
+    per_unit_of = sts.per_unit_of,
     value_axes = _value_axes_from_application_data(sts.application_data),
 )
 
@@ -1130,7 +1138,8 @@ function _infrastore_build_forecast(
         _dense_forecast_array(ts, length(get_percentiles(ts))), name;
         units = get_units(ts),
         quantity_kind = get_quantity_kind(ts),
-        unit_system = _to_store_unit_system(get_unit_system(ts)))
+        unit_system = _to_store_unit_system(get_unit_system(ts)),
+        per_unit_of = get_per_unit_of(ts))
 end
 
 # Windows are stacked along a new second axis: (horizon_count, count, *E). A composite
@@ -1149,6 +1158,7 @@ function _infrastore_build_forecast(
         units = get_units(ts),
         quantity_kind = get_quantity_kind(ts),
         unit_system = _to_store_unit_system(get_unit_system(ts)),
+        per_unit_of = get_per_unit_of(ts),
         application_data = _value_axes_application_data(get_value_axes(ts)))
 end
 
@@ -1163,7 +1173,8 @@ function _infrastore_build_forecast(
     return InfraStore.Scenarios(initial, resolution, horizon, interval,
         get_count(ts), _dense_forecast_array(ts, get_scenario_count(ts)), name;
         units = get_units(ts), quantity_kind = get_quantity_kind(ts),
-        unit_system = _to_store_unit_system(get_unit_system(ts)))
+        unit_system = _to_store_unit_system(get_unit_system(ts)),
+        per_unit_of = get_per_unit_of(ts))
 end
 
 # Validation, owner marshalling, and the add around `_infrastore_build_forecast`;
@@ -1412,6 +1423,7 @@ function _forecast_from_store(d::InfraStore.Deterministic, name::String, len)
         resolution = d.resolution, interval = d.interval, units = d.units,
         quantity_kind = d.quantity_kind,
         unit_system = _from_store_unit_system(d.unit_system),
+        per_unit_of = d.per_unit_of,
         value_axes = _value_axes_from_application_data(d.application_data))
 end
 
@@ -1427,6 +1439,7 @@ function _forecast_from_store(p::InfraStore.Probabilistic, name::String, len)
         name, data, p.percentiles, p.resolution, p.interval;
         units = p.units, quantity_kind = p.quantity_kind,
         unit_system = _from_store_unit_system(p.unit_system),
+        per_unit_of = p.per_unit_of,
     )
 end
 
@@ -1442,6 +1455,7 @@ function _forecast_from_store(s_ts::InfraStore.Scenarios, name::String, len)
         name, data, s_ts.scenario_count, s_ts.resolution, s_ts.interval;
         units = s_ts.units, quantity_kind = s_ts.quantity_kind,
         unit_system = _from_store_unit_system(s_ts.unit_system),
+        per_unit_of = s_ts.per_unit_of,
     )
 end
 
@@ -2354,6 +2368,7 @@ function _metadata_from_row(row)
         row.quantity_kind,
         _from_store_unit_system(row.unit_system),
         row.component_field,
+        row.per_unit_of,
         Dims(row.element_shape),
         row.time_reference,
         row.application_data,

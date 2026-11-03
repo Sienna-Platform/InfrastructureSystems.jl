@@ -6,6 +6,7 @@
         units::Union{Nothing, String}
         quantity_kind::Union{Nothing, String}
         unit_system::Union{Nothing, AbstractUnitSystem}
+        per_unit_of::Union{Nothing, String}
     end
 
 A single column of static time series data recorded at explicit, irregular
@@ -35,8 +36,12 @@ scalar-per-step case, `N >= 2` is multidimensional per-step values).
     quantity the values measure (e.g. `"ActivePower"`)
   - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
     the values are already expressed in (`NU`, `CU`, or `SU`)
+  - `per_unit_of::Union{Nothing, String}`: optional name of the field on the owning
+    component the values are a fraction of when `unit_system` is `CU`
+    (e.g. `"base_power"`)
 
-See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref).
+See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref),
+[`get_per_unit_of`](@ref).
 """
 struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
     "user-defined name"
@@ -51,6 +56,8 @@ struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
     quantity_kind::Union{Nothing, String}
     "unit system the values are already expressed in (`NU`/`CU`/`SU`), or `nothing`"
     unit_system::Union{Nothing, AbstractUnitSystem}
+    "field on the owning component the values are a fraction of under `CU` (e.g. `\"base_power\"`), or `nothing`"
+    per_unit_of::Union{Nothing, String}
 
     # An explicit inner constructor (validating the timestamp/value count) suppresses
     # Julia's auto-generated default constructor, so every construction path funnels
@@ -62,6 +69,7 @@ struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
         units::Union{Nothing, AbstractString} = nothing,
         quantity_kind::Union{Nothing, AbstractString} = nothing,
         unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+        per_unit_of::Union{Nothing, AbstractString} = nothing,
     ) where {T, N}
         length(timestamps) == size(data, 1) || throw(
             ConflictingInputsError(
@@ -75,6 +83,7 @@ struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
             _maybe_string(units),
             _maybe_string(quantity_kind),
             unit_system,
+            _maybe_string(per_unit_of),
         )
     end
 end
@@ -88,6 +97,7 @@ function NonSequentialTimeSeries(
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+    per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     arr = _ensure_array(data)
     return NonSequentialTimeSeries{eltype(arr), ndims(arr)}(
@@ -97,6 +107,7 @@ function NonSequentialTimeSeries(
         units,
         quantity_kind,
         unit_system,
+        _maybe_string(per_unit_of),
     )
 end
 
@@ -123,11 +134,13 @@ function NonSequentialTimeSeries(;
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+    per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     timestamps, vals = _non_sequential_args(data, normalization_factor)
     return NonSequentialTimeSeries(
         name, timestamps, vals;
         units = units, quantity_kind = quantity_kind, unit_system = unit_system,
+        per_unit_of = per_unit_of,
     )
 end
 
@@ -149,6 +162,7 @@ function NonSequentialTimeSeries(
     return NonSequentialTimeSeries(
         name, src.timestamps, src.data;
         units = src.units, quantity_kind = src.quantity_kind, unit_system = src.unit_system,
+        per_unit_of = src.per_unit_of,
     )
 end
 
@@ -173,6 +187,7 @@ function NonSequentialTimeSeries(
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+    per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     # TimeArray's table integration returns a Matrix even for a single column; slice
     # to the lone column to obtain the appropriate Vector value (mirrors SingleTimeSeries).
@@ -186,6 +201,7 @@ function NonSequentialTimeSeries(
         units = units,
         quantity_kind = quantity_kind,
         unit_system = unit_system,
+        per_unit_of = per_unit_of,
     )
 end
 
@@ -201,6 +217,7 @@ function NonSequentialTimeSeries(
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
     unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
+    per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     return NonSequentialTimeSeries(
         name,
@@ -210,6 +227,7 @@ function NonSequentialTimeSeries(
         units = units,
         quantity_kind = quantity_kind,
         unit_system = unit_system,
+        per_unit_of = per_unit_of,
     )
 end
 
@@ -227,6 +245,7 @@ function NonSequentialTimeSeries(
         units = get_units(time_series),
         quantity_kind = get_quantity_kind(time_series),
         unit_system = get_unit_system(time_series),
+        per_unit_of = get_per_unit_of(time_series),
     )
 end
 

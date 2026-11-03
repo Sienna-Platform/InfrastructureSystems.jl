@@ -184,23 +184,28 @@ end
     resolution = Dates.Hour(1)
     other_time = initial_time + resolution
     horizon_count = 24
-    descriptors(x) = (IS.get_quantity_kind(x), IS.get_unit_system(x))
+    descriptors(x) = (IS.get_quantity_kind(x), IS.get_unit_system(x), IS.get_per_unit_of(x))
 
     sts = IS.SingleTimeSeries(
         "sts", initial_time, resolution, rand(24);
         units = "MW", quantity_kind = "ActivePower", unit_system = IS.CU,
+        per_unit_of = "base_power",
     )
-    @test descriptors(sts) == ("ActivePower", IS.CU)
+    @test descriptors(sts) == ("ActivePower", IS.CU, "base_power")
     IS.add_time_series!(sys, component, sts)
     @test descriptors(IS.get_time_series(IS.SingleTimeSeries, component, "sts")) ==
-          ("ActivePower", IS.CU)
+          ("ActivePower", IS.CU, "base_power")
 
-    # A sliced read describes the same values, so it keeps both.
+    # The catalog row carries it too.
+    md = only(filter(m -> IS.get_name(m) == "sts", IS.list_time_series_metadata(component)))
+    @test IS.get_per_unit_of(md) == "base_power"
+
+    # A sliced read describes the same values, so it keeps them.
     sliced = IS.get_time_series(
         IS.SingleTimeSeries, component, "sts";
         start_time = initial_time + Dates.Hour(2), len = 4,
     )
-    @test descriptors(sliced) == ("ActivePower", IS.CU)
+    @test descriptors(sliced) == ("ActivePower", IS.CU, "base_power")
 
     stamps = [initial_time, initial_time + Dates.Hour(1), initial_time + Dates.Hour(4)]
     nts = IS.NonSequentialTimeSeries(
@@ -209,7 +214,7 @@ end
     )
     IS.add_time_series!(sys, component, nts)
     @test descriptors(IS.get_time_series(IS.NonSequentialTimeSeries, component, "nts")) ==
-          ("Energy", IS.NU)
+          ("Energy", IS.NU, nothing)
 
     one_dim = SortedDict(
         initial_time => rand(horizon_count),
@@ -217,10 +222,11 @@ end
     )
     det = IS.Deterministic(
         "det", one_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        per_unit_of = "base_power",
     )
     IS.add_time_series!(sys, component, det)
     @test descriptors(IS.get_time_series(IS.Deterministic, component, "det")) ==
-          ("ActivePower", IS.CU)
+          ("ActivePower", IS.CU, "base_power")
 
     two_dim = SortedDict(
         initial_time => rand(horizon_count, 3),
@@ -232,14 +238,15 @@ end
     )
     IS.add_time_series!(sys, component, prob)
     @test descriptors(IS.get_time_series(IS.Probabilistic, component, "prob")) ==
-          ("ActivePower", IS.NU)
+          ("ActivePower", IS.NU, nothing)
 
     scen = IS.Scenarios(
         "scen", two_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        per_unit_of = "base_power",
     )
     IS.add_time_series!(sys, component, scen)
     @test descriptors(IS.get_time_series(IS.Scenarios, component, "scen")) ==
-          ("ActivePower", IS.CU)
+          ("ActivePower", IS.CU, "base_power")
 end
 
 @testset "Test unset unit_system stays unspecified rather than NaturalUnit" begin
@@ -260,10 +267,12 @@ end
     @test IS.get_quantity_kind(stored) === nothing
     @test IS.get_unit_system(stored) === nothing
     @test IS.get_unit_system(stored) !== IS.NU
+    @test IS.get_per_unit_of(stored) === nothing
 
     # Both are immutable, like the units label.
     @test !isdefined(IS, :set_quantity_kind!)
     @test !isdefined(IS, :set_unit_system!)
+    @test !isdefined(IS, :set_per_unit_of!)
 end
 
 @testset "Test quantity_kind and unit_system are carried by data-sharing constructors" begin
@@ -271,19 +280,21 @@ end
     resolution = Dates.Hour(1)
     other_time = initial_time + resolution
     horizon_count = 24
-    descriptors(x) = (IS.get_quantity_kind(x), IS.get_unit_system(x))
+    descriptors(x) = (IS.get_quantity_kind(x), IS.get_unit_system(x), IS.get_per_unit_of(x))
 
     sts = IS.SingleTimeSeries(
         "sts", initial_time, resolution, rand(24);
-        quantity_kind = "ActivePower", unit_system = IS.CU,
+        quantity_kind = "ActivePower", unit_system = IS.CU, per_unit_of = "base_power",
     )
-    @test descriptors(IS.SingleTimeSeries(sts, "other_name")) == ("ActivePower", IS.CU)
+    @test descriptors(IS.SingleTimeSeries(sts, "other_name")) ==
+          ("ActivePower", IS.CU, "base_power")
 
     stamps = [initial_time, initial_time + Dates.Hour(1), initial_time + Dates.Hour(4)]
     nts = IS.NonSequentialTimeSeries(
         "nts", stamps, rand(3); quantity_kind = "Energy", unit_system = IS.NU,
     )
-    @test descriptors(IS.NonSequentialTimeSeries(nts, "other_name")) == ("Energy", IS.NU)
+    @test descriptors(IS.NonSequentialTimeSeries(nts, "other_name")) ==
+          ("Energy", IS.NU, nothing)
 
     one_dim = SortedDict(
         initial_time => rand(horizon_count),
@@ -291,9 +302,12 @@ end
     )
     det = IS.Deterministic(
         "det", one_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        per_unit_of = "base_power",
     )
-    @test descriptors(IS.Deterministic(det, "other_name")) == ("ActivePower", IS.CU)
-    @test descriptors(IS.Deterministic(det, one_dim)) == ("ActivePower", IS.CU)
+    @test descriptors(IS.Deterministic(det, "other_name")) ==
+          ("ActivePower", IS.CU, "base_power")
+    @test descriptors(IS.Deterministic(det, one_dim)) ==
+          ("ActivePower", IS.CU, "base_power")
 
     two_dim = SortedDict(
         initial_time => rand(horizon_count, 3),
@@ -301,14 +315,17 @@ end
     )
     prob = IS.Probabilistic(
         "prob", two_dim, [0.1, 0.5, 0.9], resolution;
-        quantity_kind = "ActivePower", unit_system = IS.CU,
+        quantity_kind = "ActivePower", unit_system = IS.CU, per_unit_of = "base_power",
     )
-    @test descriptors(IS.Probabilistic(prob, "other_name")) == ("ActivePower", IS.CU)
+    @test descriptors(IS.Probabilistic(prob, "other_name")) ==
+          ("ActivePower", IS.CU, "base_power")
 
     scen = IS.Scenarios(
         "scen", two_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        per_unit_of = "base_power",
     )
-    @test descriptors(IS.Scenarios(scen, "other_name")) == ("ActivePower", IS.CU)
+    @test descriptors(IS.Scenarios(scen, "other_name")) ==
+          ("ActivePower", IS.CU, "base_power")
 end
 
 @testset "Test SystemBaseUnit is rejected by the store rather than downgraded" begin
