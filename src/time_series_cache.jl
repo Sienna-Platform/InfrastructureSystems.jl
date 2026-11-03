@@ -271,6 +271,7 @@ function ForecastCache(
         name;
         start_time = start_time,
         len = get_horizon_count(ts_metadata),
+        count = 1,
         resolution = resolution,
         interval = interval,
     )
@@ -290,6 +291,10 @@ function ForecastCache(
     end
 
     window_size = row_size * horizon_count
+    if window_size > cache_size_bytes
+        @warn "Increasing cache size to $window_size in order to accommodate" window_size
+        cache_size_bytes = window_size
+    end
     in_memory_count = minimum((cache_size_bytes ÷ window_size, count))
     @debug "ForecastCache" _group = LOG_GROUP_TIME_SERIES row_size window_size in_memory_count
 
@@ -465,12 +470,14 @@ end
 
 function _get_row_size(vals)
     dims = ndims(vals)
+    # sizeof is shallow for non-isbits elements, so use the deep size there.
+    measure = isbitstype(eltype(vals)) ? sizeof : Base.summarysize
     if dims == 1
-        row_size = sizeof(vals[1])
+        row_size = measure(vals[1])
     elseif dims == 2
-        row_size = sizeof(vals[1, :])
+        row_size = measure(vals[1, :])
     elseif dims == 3
-        row_size = sizeof(vals[1, :, :])
+        row_size = measure(vals[1, :, :])
     else
         error("dims=$dims is not supported")
     end
