@@ -51,9 +51,29 @@ end
 The store backing a system's time series data and its component /
 supplemental-attribute associations. A thin wrapper over `InfraStore.Store` that lets IS
 own its `deepcopy`/`isempty`/serialization semantics; the operations live in `infrastore.jl`.
+
+`scratch_dir` is set when IS chose the store's location (a system's working store, a
+writable copy of a deserialized one, a `deepcopy`): a directory from
+`mktempdir(; cleanup = true)` holding only this store. It is removed when the store is
+closed or finalized, and at process exit otherwise. A store opened from a caller's path has
+no `scratch_dir`, and IS never deletes it.
 """
 mutable struct Store
     inner::InfraStore.Store
+    scratch_dir::Union{Nothing, String}
+    function Store(inner::InfraStore.Store, scratch_dir = nothing)
+        store = new(inner, scratch_dir)
+        isnothing(scratch_dir) || finalizer(close!, store)
+        return store
+    end
+end
+
+# A fresh `.h5` path in its own directory under `parent`, deleted at process exit
+# (`.sqlite` and any other sidecar included). Returns `(scratch_dir, path)`.
+function _scratch_store_path(parent::AbstractString)
+    mkpath(parent)
+    dir = mktempdir(parent; prefix = "sienna_time_series_", cleanup = true)
+    return dir, joinpath(dir, "time_series.h5")
 end
 
 """
@@ -71,12 +91,16 @@ commit is durable, while `:memory` holds it in RAM so it reaches disk only throu
 `serialize`/`persist!`. Arrays stream to the `.h5` either way, so `:memory` does not
 require the data to fit in memory. `nothing` (the default) lets InfraStore match the
 backend. A system's working store uses `:memory` — see [`TimeSeriesManager`](@ref).
+
+`scratch_dir`, if given, is a directory holding only this store, deleted when it is closed
+or finalized (see [`Store`](@ref)).
 """
 function Store(;
     in_memory::Bool = false,
     path = nothing,
     compression::CompressionSettings = CompressionSettings(),
     catalog = nothing,
+    scratch_dir = nothing,
 )
     kwargs = _infrastore_compression_kwargs(compression)
     # `catalog = nothing` is InfraStore's own default, so it needs no special case.
@@ -90,7 +114,7 @@ function Store(;
             kwargs...,
         )
     end
-    return Store(inner)
+    return Store(inner, scratch_dir)
 end
 
 # Translate a `CompressionSettings` into the keyword arguments accepted by

@@ -86,19 +86,32 @@ function open_deserialized_infrastore_store(
     else
         String(directory)
     end
-    mkpath(dir)
-    dst = joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
+    scratch_dir, dst = _scratch_store_path(dir)
     cp(source, dst; force = true)
     if !has_catalog
-        return deserialize_arrays(dst)
+        return Store(deserialize_arrays(dst).inner, scratch_dir)
     end
     # The `.sqlite` is copied so the open below has a catalog to read into memory; it
     # is ignored from then on, and `serialize` writes a fresh pair.
     cp(source * ".sqlite", dst * ".sqlite"; force = true)
-    return open_infrastore_store(dst; read_only = false, catalog = :memory)
+    store = open_infrastore_store(dst; read_only = false, catalog = :memory)
+    return Store(store.inner, scratch_dir)
 end
 
-close!(store::Store) = InfraStore.close!(store.inner)
+function close!(store::Store)
+    InfraStore.close!(store.inner)
+    dir = store.scratch_dir
+    if !isnothing(dir)
+        store.scratch_dir = nothing
+        # Also runs as a finalizer, which must not throw or yield. Whatever is left (e.g.
+        # Windows refusing a file still open elsewhere) is removed at process exit.
+        try
+            rm(dir; recursive = true, force = true)
+        catch
+        end
+    end
+    return
+end
 
 # The store is an opaque handle onto its backing artifacts, so the default field-wise
 # `deepcopy` would hand the copy the SAME handle: mutating the copy (e.g.
@@ -109,17 +122,21 @@ function Base.deepcopy_internal(store::Store, dict::IdDict)
 
     # `persist!` copies an on-disk store's artifacts and materializes an in-memory one.
     # An in-memory store has no path, so its copy lands in `tempdir()` and is therefore
-    # disk-backed: the backend gives us no way to clone in-memory state in place.
+    # disk-backed: the backend gives us no way to clone in-memory state in place. The
+    # copy is scratch either way, beside the original's own scratch directory if it has
+    # one.
     path = get_file_path(store)
-    directory = if isnothing(path)
+    parent = if !isnothing(store.scratch_dir)
+        dirname(store.scratch_dir)
+    elseif isnothing(path)
         tempdir()
     else
         dirname(path)
     end
-    dst = joinpath(directory, string(UUIDs.uuid4()) * "_time_series.h5")
+    scratch_dir, dst = _scratch_store_path(parent)
     InfraStore.persist!(store.inner, dst)
-    new_store =
-        open_infrastore_store(dst; read_only = false, catalog = catalog_mode(store))
+    opened = open_infrastore_store(dst; read_only = false, catalog = catalog_mode(store))
+    new_store = Store(opened.inner, scratch_dir)
     dict[store] = new_store
     return new_store
 end

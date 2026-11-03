@@ -4515,6 +4515,33 @@ end
     end
 end
 
+@testset "Test scratch time series stores are deleted (#670)" begin
+    mktempdir() do parent
+        store_of(sys) = sys.time_series_manager.data_store
+        sys = IS.SystemData(; time_series_in_memory = false, time_series_directory = parent)
+        scratch = store_of(sys).scratch_dir
+        @test dirname(scratch) == parent
+        @test dirname(IS.get_file_path(store_of(sys))) == scratch
+
+        # A deepcopy gets its own scratch directory beside the original's.
+        copy = deepcopy(sys)
+        copy_scratch = store_of(copy).scratch_dir
+        @test copy_scratch != scratch
+        @test dirname(copy_scratch) == parent
+
+        # Closing removes the directory, sidecars included.
+        IS.close!(store_of(sys))
+        @test !ispath(scratch)
+        @test isdir(copy_scratch)
+
+        # So does garbage collection.
+        copy = nothing
+        GC.gc(true)
+        GC.gc(true)
+        @test isempty(readdir(parent))
+    end
+end
+
 @testset "Test time series counts" begin
     sys = create_system_data_shared_time_series(; time_series_in_memory = true)
     counts = IS.get_time_series_counts(sys)
