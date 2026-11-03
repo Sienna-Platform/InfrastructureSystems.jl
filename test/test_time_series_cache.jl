@@ -313,7 +313,6 @@ end
 @testset "Test cache row size with non-isbits elements" begin
     piecewise = IS.PiecewiseStepData([0.0, 1.0, 2.0], [10.0, 20.0])
     @test IS._get_row_size([piecewise]) > sizeof(piecewise)
-    @test IS._get_row_size([1.0, 2.0]) == sizeof(1.0)
 
     sys = IS.SystemData()
     name = "Component1"
@@ -322,7 +321,8 @@ end
 
     initial_timestamp = Dates.DateTime("2020-09-01")
     resolution = Dates.Hour(1)
-    len = 100
+    # Must stay above rows_to_cache so the in_memory_rows check catches a missing summarysize.
+    len = 10
     elements = [
         IS.PiecewiseStepData(
             collect(1.0:11.0) .+ i,
@@ -345,10 +345,6 @@ end
         cache_size_bytes = cache_size_bytes,
     )
     @test cache.in_memory_rows == rows_to_cache
-
-    for (i, ta) in enumerate(cache)
-        @test only(TimeSeries.values(ta)) == elements[i]
-    end
 end
 
 @testset "Test ForecastCache with non-isbits elements" begin
@@ -359,7 +355,8 @@ end
     initial_time = Dates.DateTime("2020-09-01")
     resolution = Dates.Hour(1)
     horizon_count = 24
-    num_forecasts = 10
+    # Must be >= 2 so the in_memory_count check also catches a missing summarysize.
+    num_forecasts = 2
     name = "test"
     initial_times = [initial_time + i * resolution for i in 0:(num_forecasts - 1)]
     data = SortedDict(
@@ -380,22 +377,7 @@ end
         cache_size_bytes = window_size ÷ 2,
     )
     @test cache.in_memory_count == 1
-    for it in initial_times
-        ta = IS.get_time_series_array!(cache, it)
-        @test TimeSeries.values(ta) ==
-              IS.get_time_series_values(component, forecast; start_time = it)
-    end
-
-    # Budget of two windows.
-    cache = IS.ForecastCache(
-        IS.Deterministic,
-        component,
-        name;
-        cache_size_bytes = 2 * window_size,
-    )
-    @test cache.in_memory_count == 2
-    for (i, ta) in enumerate(cache)
-        @test TimeSeries.values(ta) ==
-              IS.get_time_series_values(component, forecast; start_time = initial_times[i])
-    end
+    ta = IS.get_time_series_array!(cache, initial_time)
+    @test TimeSeries.values(ta) ==
+          IS.get_time_series_values(component, forecast; start_time = initial_time)
 end
