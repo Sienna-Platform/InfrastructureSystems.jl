@@ -86,14 +86,15 @@ function _remove_store_files(path::String)
     return
 end
 
-# Run `open` to create a store at the scratch `path` and make IS its owner. If `open`
-# throws, whatever it left at `path` is removed. The cleanup finalizer is attached to the
-# InfraStore handle, not the IS wrapper: code routinely pulls `store.inner` out and calls
-# into the backend with it, and the wrapper can be collected mid-call.
-function _open_scratch_store(open, path::String)
+# Run `open_fn` to create a store at the scratch `path` and make IS its owner. If
+# `open_fn` throws, whatever it left at `path` is removed. The cleanup finalizer is
+# attached to the InfraStore handle, not the IS wrapper: code routinely pulls
+# `store.inner` out and calls into the backend with it, and the wrapper can be collected
+# mid-call.
+function _open_scratch_store(open_fn, path::String)
     path = abspath(path)  # so cleanup still finds the files after a `cd`
     store = try
-        open()
+        open_fn()
     catch
         _remove_store_files(path)
         rethrow()
