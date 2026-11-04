@@ -111,16 +111,13 @@ function Base.deepcopy_internal(store::Store, dict::IdDict)
     # An in-memory store has no path, so its copy is disk-backed: the backend gives us no
     # way to clone in-memory state in place. The copy is scratch either way, so it goes
     # beside the original only if that is scratch too; a caller's directory (e.g. a
-    # read-only cache) is never written to.
+    # read-only cache) is never written to. Like every scratch store, the copy holds its
+    # catalog in memory, whatever the original's catalog mode.
     path = store.scratch_path
     dst = _scratch_store_path(isnothing(path) ? nothing : dirname(path))
     new_store = _open_scratch_store(dst) do
         InfraStore.persist!(store.inner, dst)
-        return open_infrastore_store(
-            dst;
-            read_only = false,
-            catalog = catalog_mode(store),
-        )
+        return open_infrastore_store(dst; read_only = false, catalog = :memory)
     end
     dict[store] = new_store
     return new_store

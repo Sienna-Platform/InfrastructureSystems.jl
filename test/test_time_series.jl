@@ -4560,6 +4560,7 @@ end
         before = readdir(dir)  # after the open, which adds SQLite's `-wal`/`-shm`
         @test isnothing(opened.scratch_path)
         copied = deepcopy(opened)
+        @test IS.catalog_mode(copied) == :memory
         @test dirname(copied.scratch_path) == abspath(tempdir())
         @test readdir(dir) == before
         IS.close!(copied)

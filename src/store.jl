@@ -71,8 +71,9 @@ function _scratch_store_path(directory::Union{Nothing, AbstractString})
     return joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
 end
 
-const _STORE_SIDECAR_SUFFIXES =
-    ("", ".sqlite", ".sqlite-wal", ".sqlite-shm", ".sqlite-journal")
+# The catalogs are in WAL mode, so SQLite never writes a `-journal`; `-wal`/`-shm` are
+# deleted by a clean close and are listed only in case the close failed.
+const _STORE_SIDECAR_SUFFIXES = ("", ".sqlite", ".sqlite-wal", ".sqlite-shm")
 
 # Must not throw or yield: it also runs as a finalizer. A file the OS refuses to delete
 # (e.g. still open on Windows) is left behind.
