@@ -96,7 +96,6 @@ end
 # now and deregisters it, so it never runs a second time.
 function close!(store::Store)
     isnothing(store.scratch_path) ? InfraStore.close!(store.inner) : finalize(store.inner)
-    store.scratch_path = nothing
     return
 end
 

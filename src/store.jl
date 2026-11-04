@@ -64,11 +64,12 @@ end
 
 Store(inner::InfraStore.Store) = Store(inner, nothing)
 
-# A fresh `<directory>/<uuid>_time_series.h5` path; `directory` defaults to `tempdir()`.
+# A fresh absolute `<directory>/<uuid>_time_series.h5` path, so cleanup still finds the
+# files after a `cd`; `directory` defaults to `tempdir()`.
 function _scratch_store_path(directory::Union{Nothing, AbstractString})
     dir = isnothing(directory) ? tempdir() : String(directory)
     mkpath(dir)
-    return joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
+    return abspath(joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5"))
 end
 
 # The catalogs are in WAL mode, so SQLite never writes a `-journal`; `-wal`/`-shm` are
@@ -93,7 +94,6 @@ end
 # `store.inner` out and calls into the backend with it, and the wrapper can be collected
 # mid-call.
 function _open_scratch_store(open_fn, path::String)
-    path = abspath(path)  # so cleanup still finds the files after a `cd`
     store = try
         open_fn()
     catch
