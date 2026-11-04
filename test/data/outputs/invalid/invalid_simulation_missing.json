@@ -1,0 +1,214 @@
+{
+  "schema_version": "0.1.0",
+  "kind": "simulation",
+  "producer": {
+    "package": "PowerSimulations",
+    "version": "0.38.3",
+    "julia": "1.11.4"
+  },
+  "created_at": "2026-11-03T18:00:00Z",
+  "status": "SUCCESSFULLY_FINALIZED",
+  "systems": {
+    "6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11": "system-6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11"
+  },
+  "models": {
+    "model": {
+      "model_type": "decision",
+      "system_uuid": "6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11",
+      "base_power": 100.0,
+      "settings": {
+        "horizon": "P2D",
+        "interval": "P1D",
+        "resolution": "PT1H",
+        "optimizer": "HiGHS"
+      },
+      "axes": {
+        "execution": {
+          "kind": "execution",
+          "initial_timestamp": "2024-01-01T00:00:00",
+          "interval": "P1D",
+          "count": 7,
+          "group": "/model/axes/execution"
+        },
+        "horizon": {
+          "kind": "horizon",
+          "resolution": "PT1H",
+          "horizon_count": 48
+        },
+        "ThermalStandard": {
+          "kind": "component",
+          "columns": [
+            {
+              "component_type": "ThermalStandard",
+              "has_ids": true
+            }
+          ],
+          "length": 76,
+          "group": "/model/axes/ThermalStandard"
+        },
+        "VariableReserve__ThermalStandard": {
+          "kind": "component",
+          "columns": [
+            {
+              "component_type": "VariableReserve",
+              "has_ids": true
+            },
+            {
+              "component_type": "ThermalStandard",
+              "has_ids": true
+            }
+          ],
+          "length": 152,
+          "group": "/model/axes/VariableReserve__ThermalStandard"
+        }
+      },
+      "datasets": [
+        {
+          "container": "variables",
+          "entry_type": "ActivePowerVariable",
+          "component_type": "ThermalStandard",
+          "meta": "",
+          "quantity_kind": "ActivePower",
+          "units": "pu",
+          "unit_system": "COMPONENT_BASE",
+          "base_reference": "system",
+          "axes": [
+            "execution",
+            "ThermalStandard",
+            "horizon"
+          ],
+          "dtype": "f64",
+          "fill_value": "NaN",
+          "layout": {
+            "chunks": [
+              1,
+              76,
+              48
+            ],
+            "filters": [
+              "shuffle",
+              "deflate:3"
+            ]
+          },
+          "path": "/model/datasets/ActivePowerVariable__ThermalStandard"
+        },
+        {
+          "container": "variables",
+          "entry_type": "OnVariable",
+          "component_type": "ThermalStandard",
+          "meta": "",
+          "quantity_kind": "Dimensionless",
+          "units": "1",
+          "unit_system": "NATURAL_UNITS",
+          "axes": [
+            "execution",
+            "ThermalStandard",
+            "horizon"
+          ],
+          "dtype": "f64",
+          "fill_value": "NaN",
+          "layout": {
+            "chunks": [
+              1,
+              76,
+              48
+            ],
+            "filters": [
+              "shuffle",
+              "deflate:3"
+            ]
+          },
+          "path": "/model/datasets/OnVariable__ThermalStandard"
+        },
+        {
+          "container": "variables",
+          "entry_type": "ActivePowerReserveVariable",
+          "component_type": "VariableReserve",
+          "meta": "Reserve_Up",
+          "quantity_kind": "ActivePower",
+          "units": "pu",
+          "unit_system": "COMPONENT_BASE",
+          "base_reference": "system",
+          "axes": [
+            "execution",
+            "VariableReserve__ThermalStandard",
+            "horizon"
+          ],
+          "dtype": "f64",
+          "fill_value": "NaN",
+          "layout": {
+            "chunks": [
+              1,
+              152,
+              48
+            ],
+            "filters": [
+              "shuffle",
+              "deflate:3"
+            ]
+          },
+          "path": "/model/datasets/ActivePowerReserveVariable__VariableReserve__Reserve_Up"
+        },
+        {
+          "container": "expressions",
+          "entry_type": "ProductionCostExpression",
+          "component_type": "ThermalStandard",
+          "meta": "",
+          "quantity_kind": "Money",
+          "units": "USD",
+          "unit_system": "NATURAL_UNITS",
+          "axes": [
+            "execution",
+            "ThermalStandard",
+            "horizon"
+          ],
+          "dtype": "f64",
+          "fill_value": "NaN",
+          "layout": {
+            "chunks": [
+              1,
+              76,
+              48
+            ],
+            "filters": [
+              "shuffle",
+              "deflate:3"
+            ]
+          },
+          "path": "/model/datasets/ProductionCostExpression__ThermalStandard"
+        }
+      ],
+      "tables": [
+        {
+          "name": "optimizer_stats",
+          "group": "/model/tables/optimizer_stats",
+          "length": 7,
+          "columns": [
+            {
+              "name": "execution",
+              "dtype": "i64"
+            },
+            {
+              "name": "objective_value",
+              "dtype": "f64",
+              "quantity_kind": "Money",
+              "units": "USD",
+              "unit_system": "NATURAL_UNITS"
+            },
+            {
+              "name": "termination_status",
+              "dtype": "i64"
+            },
+            {
+              "name": "solve_time",
+              "dtype": "f64",
+              "quantity_kind": "Duration",
+              "units": "s",
+              "unit_system": "NATURAL_UNITS"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -35,6 +35,8 @@ Aqua.test_all(
 const BASE_DIR =
     abspath(joinpath(dirname(Base.find_package("InfrastructureSystems")), ".."))
 
+const DATA_DIR = joinpath(BASE_DIR, "test", "data")
+
 const LOG_FILE = "infrastructure-systems.log"
 
 include("common.jl")

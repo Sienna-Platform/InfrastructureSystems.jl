@@ -1,5 +1,5 @@
 """
-Units for the non-power axes of [`CostCurve`](@ref) and [`FuelCurve`](@ref): `USD`, and
+Units for the non-power axes of [`InfrastructureSystems.CostCurve`](@ref) and [`InfrastructureSystems.FuelCurve`](@ref): `USD`, and
 `MMBtu` (Unitful has `btu` but no prefixed forms of it).
 
 Unitful's `u"..."` macro only searches unit modules bound by name in the calling module,
