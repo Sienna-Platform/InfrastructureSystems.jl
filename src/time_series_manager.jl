@@ -23,15 +23,8 @@ function TimeSeriesManager(;
     end
 
     if isnothing(data_store)
-        # The InfraStore store unifies data + metadata. On-disk artifacts live at
-        # `<dir>/<uuid>_time_series.h5` (+ sidecar `.sqlite`), where `dir` is the
-        # `directory` kwarg, the SIENNA_TIME_SERIES_DIRECTORY env var, or `tempdir()`.
-        # They are scratch, deleted when the store is closed or finalized (#670).
-        #
-        # The catalog is `:memory`: the artifacts sit in a temp directory and the system
-        # they back lives in memory, so a crash loses both. Journaling the catalog on
-        # every commit would buy durability nobody can consume; it is written out when
-        # the system is serialized.
+        # A scratch store (see `Store`). The catalog is `:memory` because a crash loses the
+        # in-memory system anyway; it is written out when the system is serialized.
         data_store = if in_memory
             Store(; in_memory = true, compression = compression, catalog = :memory)
         else

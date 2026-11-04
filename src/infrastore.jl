@@ -92,13 +92,11 @@ function open_deserialized_infrastore_store(
     end
 end
 
+# A scratch store's finalizer closes the handle and removes its files; `finalize` runs it
+# now and deregisters it, so it never runs a second time.
 function close!(store::Store)
-    InfraStore.close!(store.inner)
-    path = store.scratch_path
-    if !isnothing(path)
-        store.scratch_path = nothing
-        _remove_store_files(path)
-    end
+    isnothing(store.scratch_path) ? InfraStore.close!(store.inner) : finalize(store.inner)
+    store.scratch_path = nothing
     return
 end
 
