@@ -184,23 +184,28 @@ end
     resolution = Dates.Hour(1)
     other_time = initial_time + resolution
     horizon_count = 24
-    descriptors(x) = (IS.get_quantity_kind(x), IS.get_unit_system(x))
+    descriptors(x) = (IS.get_quantity_kind(x), IS.get_unit_system(x), IS.get_per_unit_of(x))
 
     sts = IS.SingleTimeSeries(
         "sts", initial_time, resolution, rand(24);
         units = "MW", quantity_kind = "ActivePower", unit_system = IS.CU,
+        per_unit_of = "base_power",
     )
-    @test descriptors(sts) == ("ActivePower", IS.CU)
+    @test descriptors(sts) == ("ActivePower", IS.CU, "base_power")
     IS.add_time_series!(sys, component, sts)
     @test descriptors(IS.get_time_series(IS.SingleTimeSeries, component, "sts")) ==
-          ("ActivePower", IS.CU)
+          ("ActivePower", IS.CU, "base_power")
 
-    # A sliced read describes the same values, so it keeps both.
+    # The catalog row carries it too.
+    md = only(filter(m -> IS.get_name(m) == "sts", IS.list_time_series_metadata(component)))
+    @test IS.get_per_unit_of(md) == "base_power"
+
+    # A sliced read describes the same values, so it keeps them.
     sliced = IS.get_time_series(
         IS.SingleTimeSeries, component, "sts";
         start_time = initial_time + Dates.Hour(2), len = 4,
     )
-    @test descriptors(sliced) == ("ActivePower", IS.CU)
+    @test descriptors(sliced) == ("ActivePower", IS.CU, "base_power")
 
     stamps = [initial_time, initial_time + Dates.Hour(1), initial_time + Dates.Hour(4)]
     nts = IS.NonSequentialTimeSeries(
@@ -209,7 +214,16 @@ end
     )
     IS.add_time_series!(sys, component, nts)
     @test descriptors(IS.get_time_series(IS.NonSequentialTimeSeries, component, "nts")) ==
-          ("Energy", IS.NU)
+          ("Energy", IS.NU, nothing)
+    nts_cu = IS.NonSequentialTimeSeries(
+        "nts_cu", stamps, rand(3);
+        quantity_kind = "Energy", unit_system = IS.CU, per_unit_of = "storage_capacity",
+    )
+    IS.add_time_series!(sys, component, nts_cu)
+    @test descriptors(
+        IS.get_time_series(IS.NonSequentialTimeSeries, component, "nts_cu"),
+    ) ==
+          ("Energy", IS.CU, "storage_capacity")
 
     one_dim = SortedDict(
         initial_time => rand(horizon_count),
@@ -217,10 +231,11 @@ end
     )
     det = IS.Deterministic(
         "det", one_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        per_unit_of = "base_power",
     )
     IS.add_time_series!(sys, component, det)
     @test descriptors(IS.get_time_series(IS.Deterministic, component, "det")) ==
-          ("ActivePower", IS.CU)
+          ("ActivePower", IS.CU, "base_power")
 
     two_dim = SortedDict(
         initial_time => rand(horizon_count, 3),
@@ -232,14 +247,22 @@ end
     )
     IS.add_time_series!(sys, component, prob)
     @test descriptors(IS.get_time_series(IS.Probabilistic, component, "prob")) ==
-          ("ActivePower", IS.NU)
+          ("ActivePower", IS.NU, nothing)
+    prob_cu = IS.Probabilistic(
+        "prob_cu", two_dim, [0.1, 0.5, 0.9], resolution;
+        quantity_kind = "ActivePower", unit_system = IS.CU, per_unit_of = "base_power",
+    )
+    IS.add_time_series!(sys, component, prob_cu)
+    @test descriptors(IS.get_time_series(IS.Probabilistic, component, "prob_cu")) ==
+          ("ActivePower", IS.CU, "base_power")
 
     scen = IS.Scenarios(
         "scen", two_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        per_unit_of = "base_power",
     )
     IS.add_time_series!(sys, component, scen)
     @test descriptors(IS.get_time_series(IS.Scenarios, component, "scen")) ==
-          ("ActivePower", IS.CU)
+          ("ActivePower", IS.CU, "base_power")
 end
 
 @testset "Test unset unit_system stays unspecified rather than NaturalUnit" begin
@@ -260,10 +283,12 @@ end
     @test IS.get_quantity_kind(stored) === nothing
     @test IS.get_unit_system(stored) === nothing
     @test IS.get_unit_system(stored) !== IS.NU
+    @test IS.get_per_unit_of(stored) === nothing
 
     # Both are immutable, like the units label.
     @test !isdefined(IS, :set_quantity_kind!)
     @test !isdefined(IS, :set_unit_system!)
+    @test !isdefined(IS, :set_per_unit_of!)
 end
 
 @testset "Test quantity_kind and unit_system are carried by data-sharing constructors" begin
@@ -271,19 +296,21 @@ end
     resolution = Dates.Hour(1)
     other_time = initial_time + resolution
     horizon_count = 24
-    descriptors(x) = (IS.get_quantity_kind(x), IS.get_unit_system(x))
+    descriptors(x) = (IS.get_quantity_kind(x), IS.get_unit_system(x), IS.get_per_unit_of(x))
 
     sts = IS.SingleTimeSeries(
         "sts", initial_time, resolution, rand(24);
-        quantity_kind = "ActivePower", unit_system = IS.CU,
+        quantity_kind = "ActivePower", unit_system = IS.CU, per_unit_of = "base_power",
     )
-    @test descriptors(IS.SingleTimeSeries(sts, "other_name")) == ("ActivePower", IS.CU)
+    @test descriptors(IS.SingleTimeSeries(sts, "other_name")) ==
+          ("ActivePower", IS.CU, "base_power")
 
     stamps = [initial_time, initial_time + Dates.Hour(1), initial_time + Dates.Hour(4)]
     nts = IS.NonSequentialTimeSeries(
         "nts", stamps, rand(3); quantity_kind = "Energy", unit_system = IS.NU,
     )
-    @test descriptors(IS.NonSequentialTimeSeries(nts, "other_name")) == ("Energy", IS.NU)
+    @test descriptors(IS.NonSequentialTimeSeries(nts, "other_name")) ==
+          ("Energy", IS.NU, nothing)
 
     one_dim = SortedDict(
         initial_time => rand(horizon_count),
@@ -291,9 +318,12 @@ end
     )
     det = IS.Deterministic(
         "det", one_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        per_unit_of = "base_power",
     )
-    @test descriptors(IS.Deterministic(det, "other_name")) == ("ActivePower", IS.CU)
-    @test descriptors(IS.Deterministic(det, one_dim)) == ("ActivePower", IS.CU)
+    @test descriptors(IS.Deterministic(det, "other_name")) ==
+          ("ActivePower", IS.CU, "base_power")
+    @test descriptors(IS.Deterministic(det, one_dim)) ==
+          ("ActivePower", IS.CU, "base_power")
 
     two_dim = SortedDict(
         initial_time => rand(horizon_count, 3),
@@ -301,14 +331,17 @@ end
     )
     prob = IS.Probabilistic(
         "prob", two_dim, [0.1, 0.5, 0.9], resolution;
-        quantity_kind = "ActivePower", unit_system = IS.CU,
+        quantity_kind = "ActivePower", unit_system = IS.CU, per_unit_of = "base_power",
     )
-    @test descriptors(IS.Probabilistic(prob, "other_name")) == ("ActivePower", IS.CU)
+    @test descriptors(IS.Probabilistic(prob, "other_name")) ==
+          ("ActivePower", IS.CU, "base_power")
 
     scen = IS.Scenarios(
         "scen", two_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        per_unit_of = "base_power",
     )
-    @test descriptors(IS.Scenarios(scen, "other_name")) == ("ActivePower", IS.CU)
+    @test descriptors(IS.Scenarios(scen, "other_name")) ==
+          ("ActivePower", IS.CU, "base_power")
 end
 
 @testset "Test SystemBaseUnit is rejected by the store rather than downgraded" begin
@@ -338,4 +371,39 @@ end
             IS.get_time_series(IS.SingleTimeSeries, component, name),
         ) === marker
     end
+end
+
+# A package validates series against their owners through this hook. Scoped to one name so
+# the method doesn't affect other tests.
+IS.check_time_series_owner(
+    ::IS.TestComponent,
+    labels::Union{IS.SingleTimeSeries, IS.TimeSeriesMetadata},
+) = IS.get_name(labels) == "refused" && throw(ArgumentError("refused"))
+
+@testset "Test check_time_series_owner runs on every add" begin
+    sys = create_system_data()
+    component = IS.get_component(IS.TestComponent, sys, "Component1")
+    others = collect(IS.get_components(IS.TestComponent, sys))
+    series(name) = IS.SingleTimeSeries(name, Dates.DateTime("2020-09-01"), Dates.Hour(1),
+        rand(24))
+
+    @test_throws ArgumentError IS.add_time_series!(sys, component, series("refused"))
+    @test_throws ArgumentError IS.add_time_series!(sys, others, series("refused"))
+    @test_throws ArgumentError IS.time_series_transaction(sys) do txn
+        IS.add_time_series!(txn, component, series("refused"))
+    end
+    @test !IS.has_time_series(component)
+    IS.add_time_series!(sys, component, series("accepted"))
+    @test IS.has_time_series(component)
+
+    # A copy is checked under the name it is copied to, and a refusal copies nothing.
+    other = IS.TestComponent("Component2", 6)
+    IS.add_component!(sys, other)
+    IS.add_time_series!(sys, component, series("also_accepted"))
+    @test_throws ArgumentError IS.copy_time_series!(other, component;
+        name_mapping = Dict(("Component1", "accepted") => "refused",
+            ("Component1", "also_accepted") => "also_accepted"))
+    @test !IS.has_time_series(other)
+    IS.copy_time_series!(other, component)
+    @test length(IS.list_time_series_metadata(other)) == 2
 end
