@@ -372,3 +372,25 @@ end
         ) === marker
     end
 end
+
+# A package validates series against their owners through this hook. Scoped to one name so
+# the method doesn't affect other tests.
+IS.check_time_series_owner(::IS.TestComponent, ts::IS.SingleTimeSeries) =
+    IS.get_name(ts) == "refused" && throw(ArgumentError("refused"))
+
+@testset "Test check_time_series_owner runs on every add" begin
+    sys = create_system_data()
+    component = IS.get_component(IS.TestComponent, sys, "Component1")
+    others = collect(IS.get_components(IS.TestComponent, sys))
+    series(name) = IS.SingleTimeSeries(name, Dates.DateTime("2020-09-01"), Dates.Hour(1),
+        rand(24))
+
+    @test_throws ArgumentError IS.add_time_series!(sys, component, series("refused"))
+    @test_throws ArgumentError IS.add_time_series!(sys, others, series("refused"))
+    @test_throws ArgumentError IS.time_series_transaction(sys) do txn
+        IS.add_time_series!(txn, component, series("refused"))
+    end
+    @test !IS.has_time_series(component)
+    IS.add_time_series!(sys, component, series("accepted"))
+    @test IS.has_time_series(component)
+end
