@@ -23,27 +23,23 @@ function TimeSeriesManager(;
     end
 
     if isnothing(data_store)
-        # The InfraStore store unifies data + metadata. An on-disk store is scratch: it
-        # gets its own `mktempdir` under `directory` (the kwarg, the
-        # SIENNA_TIME_SERIES_DIRECTORY env var, or `tempdir()`), removed when the store is
-        # closed or finalized and at process exit otherwise (#670).
-        scratch_dir, path = if in_memory
-            nothing, nothing
+        # The InfraStore store unifies data + metadata. On-disk artifacts live at
+        # `<dir>/<uuid>_time_series.h5` (+ sidecar `.sqlite`), where `dir` is the
+        # `directory` kwarg, the SIENNA_TIME_SERIES_DIRECTORY env var, or `tempdir()`.
+        # They are scratch, deleted when the store is closed or finalized (#670).
+        #
+        # The catalog is `:memory`: the artifacts sit in a temp directory and the system
+        # they back lives in memory, so a crash loses both. Journaling the catalog on
+        # every commit would buy durability nobody can consume; it is written out when
+        # the system is serialized.
+        data_store = if in_memory
+            Store(; in_memory = true, compression = compression, catalog = :memory)
         else
-            _scratch_store_path(isnothing(directory) ? tempdir() : directory)
+            path = _scratch_store_path(directory)
+            _open_scratch_store(path) do
+                Store(; path = path, compression = compression, catalog = :memory)
+            end
         end
-        data_store =
-            Store(;
-                in_memory = in_memory,
-                path = path,
-                compression = compression,
-                # A system's working store is scratch: the artifacts sit in a temp
-                # directory and the system they back lives in memory, so a crash loses
-                # both. Journaling the catalog on every commit would buy durability
-                # nobody can consume; it is written out when the system is serialized.
-                catalog = :memory,
-                scratch_dir = scratch_dir,
-            )
     end
     return TimeSeriesManager(data_store, read_only)
 end

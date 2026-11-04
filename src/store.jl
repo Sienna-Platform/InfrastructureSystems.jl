@@ -52,28 +52,58 @@ The store backing a system's time series data and its component /
 supplemental-attribute associations. A thin wrapper over `InfraStore.Store` that lets IS
 own its `deepcopy`/`isempty`/serialization semantics; the operations live in `infrastore.jl`.
 
-`scratch_dir` is set when IS chose the store's location (a system's working store, a
-writable copy of a deserialized one, a `deepcopy`): a directory from
-`mktempdir(; cleanup = true)` holding only this store. It is removed when the store is
-closed or finalized, and at process exit otherwise. A store opened from a caller's path has
-no `scratch_dir`, and IS never deletes it.
+`scratch_path` is set when IS chose the store's location (a system's working store, a
+writable copy of a deserialized one, a `deepcopy`): the `.h5` path, whose files are deleted
+when the store is closed or its handle is finalized, which Julia also does at exit. A store
+opened from a caller's path has no `scratch_path`, and IS never deletes it.
 """
 mutable struct Store
     inner::InfraStore.Store
-    scratch_dir::Union{Nothing, String}
-    function Store(inner::InfraStore.Store, scratch_dir = nothing)
-        store = new(inner, scratch_dir)
-        isnothing(scratch_dir) || finalizer(close!, store)
-        return store
-    end
+    scratch_path::Union{Nothing, String}
 end
 
-# A fresh `.h5` path in its own directory under `parent`, deleted at process exit
-# (`.sqlite` and any other sidecar included). Returns `(scratch_dir, path)`.
-function _scratch_store_path(parent::AbstractString)
-    mkpath(parent)
-    dir = mktempdir(parent; prefix = "sienna_time_series_", cleanup = true)
-    return dir, joinpath(dir, "time_series.h5")
+Store(inner::InfraStore.Store) = Store(inner, nothing)
+
+# A fresh `<directory>/<uuid>_time_series.h5` path; `directory` defaults to `tempdir()`.
+function _scratch_store_path(directory::Union{Nothing, AbstractString})
+    dir = isnothing(directory) ? tempdir() : String(directory)
+    mkpath(dir)
+    return joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
+end
+
+const _STORE_SIDECAR_SUFFIXES =
+    ("", ".sqlite", ".sqlite-wal", ".sqlite-shm", ".sqlite-journal")
+
+# Must not throw or yield: it also runs as a finalizer. A file the OS refuses to delete
+# (e.g. still open on Windows) is left behind.
+function _remove_store_files(path::String)
+    for suffix in _STORE_SIDECAR_SUFFIXES
+        try
+            rm(path * suffix; force = true)
+        catch
+        end
+    end
+    return
+end
+
+# Run `open` to create a store at the scratch `path` and make IS its owner. If `open`
+# throws, whatever it left at `path` is removed. The cleanup finalizer is attached to the
+# InfraStore handle, not the IS wrapper: code routinely pulls `store.inner` out and calls
+# into the backend with it, and the wrapper can be collected mid-call.
+function _open_scratch_store(open, path::String)
+    path = abspath(path)  # so cleanup still finds the files after a `cd`
+    store = try
+        open()
+    catch
+        _remove_store_files(path)
+        rethrow()
+    end
+    store.scratch_path = path
+    finalizer(store.inner) do inner
+        InfraStore.close!(inner)
+        _remove_store_files(path)
+    end
+    return store
 end
 
 """
@@ -91,16 +121,12 @@ commit is durable, while `:memory` holds it in RAM so it reaches disk only throu
 `serialize`/`persist!`. Arrays stream to the `.h5` either way, so `:memory` does not
 require the data to fit in memory. `nothing` (the default) lets InfraStore match the
 backend. A system's working store uses `:memory` — see [`TimeSeriesManager`](@ref).
-
-`scratch_dir`, if given, is a directory holding only this store, deleted when it is closed
-or finalized (see [`Store`](@ref)).
 """
 function Store(;
     in_memory::Bool = false,
     path = nothing,
     compression::CompressionSettings = CompressionSettings(),
     catalog = nothing,
-    scratch_dir = nothing,
 )
     kwargs = _infrastore_compression_kwargs(compression)
     # `catalog = nothing` is InfraStore's own default, so it needs no special case.
@@ -114,7 +140,7 @@ function Store(;
             kwargs...,
         )
     end
-    return Store(inner, scratch_dir)
+    return Store(inner)
 end
 
 # Translate a `CompressionSettings` into the keyword arguments accepted by
