@@ -81,24 +81,23 @@ function open_deserialized_infrastore_store(
 )
     has_catalog = isfile(source * ".sqlite")
     read_only && has_catalog && return open_infrastore_store(source; read_only = true)
-    dir = if isnothing(directory)
-        tempdir()
-    else
-        String(directory)
+    dst = _scratch_store_path(directory)
+    return _open_scratch_store(dst) do
+        cp(source, dst; force = true)
+        has_catalog || return deserialize_arrays(dst)
+        # The `.sqlite` is copied so the open below has a catalog to read into memory;
+        # it is ignored from then on, and `serialize` writes a fresh pair.
+        cp(source * ".sqlite", dst * ".sqlite"; force = true)
+        return open_infrastore_store(dst; read_only = false, catalog = :memory)
     end
-    mkpath(dir)
-    dst = joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5")
-    cp(source, dst; force = true)
-    if !has_catalog
-        return deserialize_arrays(dst)
-    end
-    # The `.sqlite` is copied so the open below has a catalog to read into memory; it
-    # is ignored from then on, and `serialize` writes a fresh pair.
-    cp(source * ".sqlite", dst * ".sqlite"; force = true)
-    return open_infrastore_store(dst; read_only = false, catalog = :memory)
 end
 
-close!(store::Store) = InfraStore.close!(store.inner)
+# A scratch store's finalizer closes the handle and removes its files; `finalize` runs it
+# now and deregisters it, so it never runs a second time.
+function close!(store::Store)
+    isnothing(store.scratch_path) ? InfraStore.close!(store.inner) : finalize(store.inner)
+    return
+end
 
 # The store is an opaque handle onto its backing artifacts, so the default field-wise
 # `deepcopy` would hand the copy the SAME handle: mutating the copy (e.g.
@@ -108,18 +107,17 @@ function Base.deepcopy_internal(store::Store, dict::IdDict)
     haskey(dict, store) && return dict[store]
 
     # `persist!` copies an on-disk store's artifacts and materializes an in-memory one.
-    # An in-memory store has no path, so its copy lands in `tempdir()` and is therefore
-    # disk-backed: the backend gives us no way to clone in-memory state in place.
-    path = get_file_path(store)
-    directory = if isnothing(path)
-        tempdir()
-    else
-        dirname(path)
+    # An in-memory store has no path, so its copy is disk-backed: the backend gives us no
+    # way to clone in-memory state in place. The copy is scratch either way, so it goes
+    # beside the original only if that is scratch too; a caller's directory (e.g. a
+    # read-only cache) is never written to. Like every scratch store, the copy holds its
+    # catalog in memory, whatever the original's catalog mode.
+    path = store.scratch_path
+    dst = _scratch_store_path(isnothing(path) ? nothing : dirname(path))
+    new_store = _open_scratch_store(dst) do
+        InfraStore.persist!(store.inner, dst)
+        return open_infrastore_store(dst; read_only = false, catalog = :memory)
     end
-    dst = joinpath(directory, string(UUIDs.uuid4()) * "_time_series.h5")
-    InfraStore.persist!(store.inner, dst)
-    new_store =
-        open_infrastore_store(dst; read_only = false, catalog = catalog_mode(store))
     dict[store] = new_store
     return new_store
 end

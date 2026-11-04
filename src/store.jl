@@ -51,9 +51,61 @@ end
 The store backing a system's time series data and its component /
 supplemental-attribute associations. A thin wrapper over `InfraStore.Store` that lets IS
 own its `deepcopy`/`isempty`/serialization semantics; the operations live in `infrastore.jl`.
+
+`scratch_path` is set when IS chose the store's location (a system's working store, a
+writable copy of a deserialized one, a `deepcopy`): the `.h5` path, whose files are deleted
+when the store is closed or its handle is finalized, which Julia also does at exit. A store
+opened from a caller's path has no `scratch_path`, and IS never deletes it.
 """
 mutable struct Store
     inner::InfraStore.Store
+    scratch_path::Union{Nothing, String}
+end
+
+Store(inner::InfraStore.Store) = Store(inner, nothing)
+
+# A fresh absolute `<directory>/<uuid>_time_series.h5` path, so cleanup still finds the
+# files after a `cd`; `directory` defaults to `tempdir()`.
+function _scratch_store_path(directory::Union{Nothing, AbstractString})
+    dir = isnothing(directory) ? tempdir() : String(directory)
+    mkpath(dir)
+    return abspath(joinpath(dir, string(UUIDs.uuid4()) * "_time_series.h5"))
+end
+
+# The catalogs are in WAL mode, so SQLite never writes a `-journal`; `-wal`/`-shm` are
+# deleted by a clean close and are listed only in case the close failed.
+const _STORE_SIDECAR_SUFFIXES = ("", ".sqlite", ".sqlite-wal", ".sqlite-shm")
+
+# Must not throw or yield: it also runs as a finalizer. A file the OS refuses to delete
+# (e.g. still open on Windows) is left behind.
+function _remove_store_files(path::String)
+    for suffix in _STORE_SIDECAR_SUFFIXES
+        try
+            rm(path * suffix; force = true)
+        catch
+        end
+    end
+    return
+end
+
+# Run `open_fn` to create a store at the scratch `path` and make IS its owner. If
+# `open_fn` throws, whatever it left at `path` is removed. The cleanup finalizer is
+# attached to the InfraStore handle, not the IS wrapper: code routinely pulls
+# `store.inner` out and calls into the backend with it, and the wrapper can be collected
+# mid-call.
+function _open_scratch_store(open_fn, path::String)
+    store = try
+        open_fn()
+    catch
+        _remove_store_files(path)
+        rethrow()
+    end
+    store.scratch_path = path
+    finalizer(store.inner) do inner
+        InfraStore.close!(inner)
+        _remove_store_files(path)
+    end
+    return store
 end
 
 """
