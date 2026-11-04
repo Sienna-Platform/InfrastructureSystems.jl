@@ -1223,8 +1223,8 @@ _with_name(md::TimeSeriesMetadata, name::String) =
         md
     else
         typeof(md)(
-        (f === :name ? name : getfield(md, f) for f in fieldnames(typeof(md)))...,
-    )
+            (f === :name ? name : getfield(md, f) for f in fieldnames(typeof(md)))...,
+        )
     end
 
 """
