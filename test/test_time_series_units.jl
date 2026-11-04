@@ -375,8 +375,10 @@ end
 
 # A package validates series against their owners through this hook. Scoped to one name so
 # the method doesn't affect other tests.
-IS.check_time_series_owner(::IS.TestComponent, ts::IS.SingleTimeSeries) =
-    IS.get_name(ts) == "refused" && throw(ArgumentError("refused"))
+IS.check_time_series_owner(
+    ::IS.TestComponent,
+    labels::Union{IS.SingleTimeSeries, IS.TimeSeriesMetadata},
+) = IS.get_name(labels) == "refused" && throw(ArgumentError("refused"))
 
 @testset "Test check_time_series_owner runs on every add" begin
     sys = create_system_data()
@@ -393,4 +395,15 @@ IS.check_time_series_owner(::IS.TestComponent, ts::IS.SingleTimeSeries) =
     @test !IS.has_time_series(component)
     IS.add_time_series!(sys, component, series("accepted"))
     @test IS.has_time_series(component)
+
+    # A copy is checked under the name it is copied to, and a refusal copies nothing.
+    other = IS.TestComponent("Component2", 6)
+    IS.add_component!(sys, other)
+    IS.add_time_series!(sys, component, series("also_accepted"))
+    @test_throws ArgumentError IS.copy_time_series!(other, component;
+        name_mapping = Dict(("Component1", "accepted") => "refused",
+            ("Component1", "also_accepted") => "also_accepted"))
+    @test !IS.has_time_series(other)
+    IS.copy_time_series!(other, component)
+    @test length(IS.list_time_series_metadata(other)) == 2
 end
