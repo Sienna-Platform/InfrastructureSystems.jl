@@ -159,6 +159,16 @@ function _run_transaction(func::Function, context::TimeSeriesContext)
 end
 
 """
+    check_time_series_owner(owner, time_series)
+
+Extension point called before every single add of `time_series` to `owner`, direct or
+through a transaction, so bulk adds reach it too. Throw to refuse the series. The default
+accepts everything; a package defines a method for its own owner types to validate a series
+against its owner (for example its units labels).
+"""
+check_time_series_owner(::TimeSeriesOwners, ::TimeSeriesData) = nothing
+
+"""
 Add a time series directly to the store, outside any transaction, and return its
 [`TimeSeriesKey`](@ref). A single add is atomic on its own; to add many, open
 [`time_series_transaction`](@ref) and call `add_time_series!` on the yielded
@@ -172,6 +182,7 @@ function add_time_series!(
     features::Union{Nothing, Dict} = nothing,
 )
     _throw_if_read_only(mgr)
+    check_time_series_owner(owner, time_series)
     return infrastore_add_time_series!(mgr, owner, time_series; features = features)
 end
 
@@ -191,6 +202,7 @@ function add_time_series!(
 )
     _throw_if_closed(context)
     context.owner_validator(owner)
+    check_time_series_owner(owner, time_series)
     return infrastore_add_time_series!(
         context.mgr,
         owner,
