@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "container",
+    "entry_type",
+    "meta",
+    "axes",
+    "dtype",
+    "fill_value",
+    "quantity_kind",
+    "unit_system",
+    "units",
+    "layout",
+    "path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "container": {
+      "$ref": "common.json#/$defs/Container"
+    },
+    "entry_type": {
+      "$ref": "common.json#/$defs/TypeName"
+    },
+    "component_type": {
+      "$ref": "common.json#/$defs/TypeName"
+    },
+    "meta": {
+      "$ref": "common.json#/$defs/Meta"
+    },
+    "axes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "dtype": {
+      "$ref": "common.json#/$defs/Dtype"
+    },
+    "fill_value": {
+      "oneOf": [
+        {
+          "const": "NaN"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "description": "Must match dtype: f64 and f32 take a number or \"NaN\"; i64 and i32 take an integer; bool takes a boolean."
+    },
+    "quantity_kind": {
+      "$ref": "common.json#/$defs/QuantityKind"
+    },
+    "unit_system": {
+      "$ref": "common.json#/$defs/UnitSystem"
+    },
+    "base_reference": {
+      "$ref": "common.json#/$defs/BaseReference"
+    },
+    "units": {
+      "type": "string",
+      "minLength": 1
+    },
+    "layout": {
+      "$ref": "#/$defs/DatasetLayout"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/[^/]+/datasets/[^/]+$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "unit_system": {
+            "const": "COMPONENT_BASE"
+          }
+        },
+        "required": [
+          "unit_system"
+        ]
+      },
+      "then": {
+        "required": [
+          "base_reference"
+        ],
+        "properties": {
+          "units": {
+            "const": "pu"
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "required": [
+            "base_reference"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dtype": {
+            "enum": [
+              "f64",
+              "f32"
+            ]
+          }
+        },
+        "required": [
+          "dtype"
+        ]
+      },
+      "then": {
+        "properties": {
+          "fill_value": {
+            "anyOf": [
+              {
+                "const": "NaN"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dtype": {
+            "enum": [
+              "i64",
+              "i32"
+            ]
+          }
+        },
+        "required": [
+          "dtype"
+        ]
+      },
+      "then": {
+        "properties": {
+          "fill_value": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dtype": {
+            "const": "bool"
+          }
+        },
+        "required": [
+          "dtype"
+        ]
+      },
+      "then": {
+        "properties": {
+          "fill_value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "axes": {
+            "contains": {
+              "const": "horizon"
+            }
+          }
+        },
+        "required": [
+          "axes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "axes": {
+            "contains": {
+              "const": "execution"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "DatasetLayout": {
+      "type": "object",
+      "required": [
+        "chunks",
+        "filters"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "chunks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/Filter"
+          }
+        }
+      }
+    }
+  }
+}

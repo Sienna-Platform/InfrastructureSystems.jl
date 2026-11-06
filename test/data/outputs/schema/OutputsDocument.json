@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "producer",
+    "created_at",
+    "status",
+    "systems",
+    "models"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "kind": {
+      "$ref": "common.json#/$defs/Kind"
+    },
+    "producer": {
+      "$ref": "#/$defs/ProducerInfo"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Absolute instant. Requires a trailing Z or a UTC offset."
+    },
+    "status": {
+      "$ref": "common.json#/$defs/RunStatus"
+    },
+    "systems": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "common.json#/$defs/Uuid"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "simulation": {
+      "$ref": "#/$defs/SimulationParams"
+    },
+    "models": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "Model.json"
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "kind": {
+        "const": "simulation"
+      }
+    },
+    "required": [
+      "kind"
+    ]
+  },
+  "then": {
+    "required": [
+      "simulation"
+    ]
+  },
+  "else": {
+    "not": {
+      "required": [
+        "simulation"
+      ]
+    }
+  },
+  "$defs": {
+    "ProducerInfo": {
+      "type": "object",
+      "required": [
+        "package",
+        "version",
+        "julia"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "package": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "julia": {
+          "type": "string"
+        }
+      }
+    },
+    "SimulationParams": {
+      "type": "object",
+      "required": [
+        "initial_time",
+        "step_resolution",
+        "num_steps",
+        "execution_order"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "initial_time": {
+          "$ref": "common.json#/$defs/Timestamp",
+          "description": "Naive local datetime with no zone or offset."
+        },
+        "step_resolution": {
+          "$ref": "common.json#/$defs/Duration"
+        },
+        "num_steps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "execution_order": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

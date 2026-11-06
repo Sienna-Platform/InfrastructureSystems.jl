@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "TimeAxis": {
+      "type": "object",
+      "required": [
+        "kind",
+        "initial_timestamp",
+        "resolution",
+        "length",
+        "group"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "time"
+        },
+        "initial_timestamp": {
+          "$ref": "common.json#/$defs/Timestamp",
+          "description": "Naive local datetime with no zone or offset."
+        },
+        "resolution": {
+          "$ref": "common.json#/$defs/Duration"
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "group": {
+          "type": "string",
+          "pattern": "^/[^/]+/axes/[^/]+$"
+        }
+      }
+    },
+    "ExecutionAxis": {
+      "type": "object",
+      "required": [
+        "kind",
+        "initial_timestamp",
+        "interval",
+        "count",
+        "group"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "execution"
+        },
+        "initial_timestamp": {
+          "$ref": "common.json#/$defs/Timestamp",
+          "description": "Naive local datetime with no zone or offset."
+        },
+        "interval": {
+          "$ref": "common.json#/$defs/Duration"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "group": {
+          "type": "string",
+          "pattern": "^/[^/]+/axes/[^/]+$"
+        }
+      }
+    },
+    "HorizonAxis": {
+      "type": "object",
+      "required": [
+        "kind",
+        "resolution",
+        "horizon_count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "horizon"
+        },
+        "resolution": {
+          "$ref": "common.json#/$defs/Duration"
+        },
+        "horizon_count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "ComponentAxis": {
+      "type": "object",
+      "required": [
+        "kind",
+        "columns",
+        "length",
+        "group"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "component"
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "component_type",
+              "has_ids"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "component_type": {
+                "$ref": "common.json#/$defs/TypeName"
+              },
+              "has_ids": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "group": {
+          "type": "string",
+          "pattern": "^/[^/]+/axes/[^/]+$"
+        },
+        "subset": {
+          "type": "string"
+        }
+      }
+    },
+    "LabelAxis": {
+      "type": "object",
+      "required": [
+        "kind",
+        "labels"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "label"
+        },
+        "labels": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/TimeAxis"
+    },
+    {
+      "$ref": "#/$defs/ExecutionAxis"
+    },
+    {
+      "$ref": "#/$defs/HorizonAxis"
+    },
+    {
+      "$ref": "#/$defs/ComponentAxis"
+    },
+    {
+      "$ref": "#/$defs/LabelAxis"
+    }
+  ],
+  "discriminator": {
+    "propertyName": "kind",
+    "mapping": {
+      "time": "#/$defs/TimeAxis",
+      "execution": "#/$defs/ExecutionAxis",
+      "horizon": "#/$defs/HorizonAxis",
+      "component": "#/$defs/ComponentAxis",
+      "label": "#/$defs/LabelAxis"
+    }
+  }
+}

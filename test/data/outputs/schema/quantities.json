@@ -1,0 +1,38 @@
+{
+  "version": "0.1.0",
+  "entries": {
+    "PowerFlowVoltageMagnitude": {
+      "quantity_kind": "Voltage",
+      "unit_system": "COMPONENT_BASE",
+      "base_reference": "component",
+      "units": "pu",
+      "component_type": "ACBus"
+    },
+    "PowerFlowVoltageAngle": {
+      "quantity_kind": "Angle",
+      "unit_system": "NATURAL_UNITS",
+      "units": "rad",
+      "component_type": "ACBus"
+    },
+    "PowerFlowBranchActivePowerFromTo": {
+      "quantity_kind": "ActivePower",
+      "unit_system": "COMPONENT_BASE",
+      "base_reference": "system",
+      "units": "pu",
+      "component_type": "ACBranch"
+    },
+    "PowerFlowActivePowerInjection": {
+      "quantity_kind": "ActivePower",
+      "unit_system": "COMPONENT_BASE",
+      "base_reference": "system",
+      "units": "pu",
+      "component_type": "ACBus"
+    },
+    "PowerFlowConverged": {
+      "quantity_kind": "Dimensionless",
+      "unit_system": "NATURAL_UNITS",
+      "units": "1",
+      "component_type": "none"
+    }
+  }
+}

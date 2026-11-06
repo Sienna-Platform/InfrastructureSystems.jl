@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "model_type",
+    "system_uuid",
+    "base_power",
+    "settings",
+    "axes",
+    "datasets"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "model_type": {
+      "$ref": "common.json#/$defs/ModelType"
+    },
+    "system_uuid": {
+      "$ref": "common.json#/$defs/Uuid"
+    },
+    "base_power": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "boolean"
+        ]
+      }
+    },
+    "axes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "Axis.json"
+      }
+    },
+    "datasets": {
+      "type": "array",
+      "items": {
+        "$ref": "Dataset.json"
+      }
+    },
+    "tables": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "Table.json"
+      }
+    }
+  }
+}
