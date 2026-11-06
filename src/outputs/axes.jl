@@ -498,6 +498,20 @@ function _check_simulation(m::OutputsMetadata)
     return
 end
 
+const _RUN_OUTCOMES = ("RUNNING", "SUCCESSFULLY_FINALIZED", "FAILED")
+
+function _check_bundle_name(uuid::AbstractString, name::AbstractString)
+    if isempty(name) || name in (".", "..") || isabspath(name) ||
+       occursin('/', name) || occursin('\\', name)
+        throw(
+            ArgumentError(
+                "system $uuid has bundle directory \"$name\", expected a plain relative name",
+            ),
+        )
+    end
+    return
+end
+
 """
 Check the structure of an outputs metadata document against the rules of the outputs JSON
 schema. Throw an `ArgumentError` that names the model and the offending key or dataset on
@@ -519,15 +533,12 @@ function validate_metadata(m::OutputsMetadata)
         _RFC3339_PATTERN,
         "an RFC 3339 date-time",
     )
-    status = Simulation.RunStatus.Value(m.status)
-    if !(
-        status in (
-            Simulation.RunStatus.RUNNING,
-            Simulation.RunStatus.SUCCESSFULLY_FINALIZED,
-            Simulation.RunStatus.FAILED,
+    if !(m.status in _RUN_OUTCOMES)
+        throw(
+            ArgumentError(
+                "metadata: status \"$(m.status)\" is not one of $(join(_RUN_OUTCOMES, ", "))",
+            ),
         )
-    )
-        throw(ArgumentError("metadata: status \"$(m.status)\" is not a run outcome"))
     end
     if isempty(m.systems)
         throw(ArgumentError("metadata: systems is empty"))
@@ -539,11 +550,7 @@ function validate_metadata(m::OutputsMetadata)
         throw(ArgumentError("metadata: models is empty"))
     end
     for (uuid, name) in m.systems
-        if isempty(name)
-            throw(
-                ArgumentError("metadata: system $uuid has an empty bundle directory name"),
-            )
-        end
+        _check_bundle_name(uuid, name)
     end
     _check_simulation(m)
     for (model, entry) in m.models

@@ -4509,9 +4509,63 @@ end
     ENV[IS.TIME_SERIES_DIRECTORY_ENV_VAR] = path
     try
         sys = IS.SystemData(; time_series_in_memory = false)
-        @test splitpath(IS.get_file_path(sys.time_series_manager.data_store))[1] == path
+        @test dirname(IS.get_file_path(sys.time_series_manager.data_store)) == abspath(path)
     finally
         pop!(ENV, IS.TIME_SERIES_DIRECTORY_ENV_VAR)
+    end
+end
+
+# Deep-copies `sys` and drops the copy, returning only its scratch path. A separate
+# function so nothing in the caller's frame roots the copy when it calls `GC.gc`.
+@noinline function _scratch_path_of_dropped_copy(sys)
+    return deepcopy(sys).time_series_manager.data_store.scratch_path
+end
+
+@testset "Test scratch time series stores are deleted (#670)" begin
+    store_of(sys) = sys.time_series_manager.data_store
+    mktempdir() do parent
+        sys = IS.SystemData(; time_series_in_memory = false, time_series_directory = parent)
+        component = IS.TestComponent("a", 1)
+        IS.add_component!(sys, component)
+        data = TimeSeries.TimeArray(
+            range(Dates.DateTime("2020-01-01"); length = 24, step = Dates.Hour(1)),
+            rand(24),
+        )
+        IS.add_time_series!(sys, component, IS.SingleTimeSeries(; name = "ts", data = data))
+        path = store_of(sys).scratch_path
+        # The layout is unchanged: `<directory>/<uuid>_time_series.h5`.
+        @test path == IS.get_file_path(store_of(sys))
+        @test dirname(path) == parent
+        @test endswith(path, "_time_series.h5")
+
+        # A deepcopy is scratch too, beside the original. Garbage collection removes it.
+        copy_path = _scratch_path_of_dropped_copy(sys)
+        @test copy_path != path
+        @test dirname(copy_path) == parent
+        GC.gc(true)
+        GC.gc(true)
+        @test !any(startswith(basename(copy_path)), readdir(parent))
+
+        # Closing removes the files, sidecars included, and nothing else.
+        IS.close!(store_of(sys))
+        @test isempty(readdir(parent))
+    end
+
+    # A deepcopy of a store opened in place from a caller's directory never writes there.
+    mktempdir() do dir
+        sys = IS.SystemData(; time_series_in_memory = false)
+        src = joinpath(dir, "ts.h5")
+        IS.serialize(store_of(sys), src)
+        opened = IS.open_infrastore_store(src; read_only = true)
+        before = readdir(dir)  # after the open, which adds SQLite's `-wal`/`-shm`
+        @test isnothing(opened.scratch_path)
+        copied = deepcopy(opened)
+        @test IS.catalog_mode(copied) == :memory
+        @test dirname(copied.scratch_path) == abspath(tempdir())
+        @test readdir(dir) == before
+        IS.close!(copied)
+        IS.close!(opened)
+        @test isfile(src)
     end
 end
 

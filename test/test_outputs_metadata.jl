@@ -158,7 +158,15 @@ end
         ),
     )
     m = deepcopy(base)
-    @test_throws ArgumentError IS.validate_metadata(IS.with_status(m, "DONE"))
+    @test_throws "\"DONE\" is not one of RUNNING, SUCCESSFULLY_FINALIZED, FAILED" IS.validate_metadata(
+        IS.with_status(m, "DONE"),
+    )
+    uuid = first(keys(m.systems))
+    for bad in ("../x", "/abs", "a/b", "a\\b", ".", "..", "")
+        m2 = deepcopy(m)
+        m2.systems[uuid] = bad
+        @test_throws "plain relative name" IS.validate_metadata(m2)
+    end
     @test_throws ArgumentError IS.validate_metadata(
         with_table_column(IS.OutputColumn("residual", "f16")),
     )

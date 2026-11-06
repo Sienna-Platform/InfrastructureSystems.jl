@@ -91,7 +91,7 @@ _bundle_systems(m) = Dict(uuid => _MockSystem() for uuid in keys(m.systems))
     vals = rand(48, 76, 7)
     IS.write_outputs(dir, m; axis_data = simulation_axis_data(m),
         values = merge(_all_values(m), Dict(("model", _KEY...) => vals)),
-        tables = _all_tables(m))
+        tables = _all_tables(m), systems = _bundle_systems(m))
     @test isfile(joinpath(dir, "outputs.json")) && isfile(joinpath(dir, "outputs.h5"))
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r") do f
         ds = f["/model/datasets/ActivePowerVariable__ThermalStandard"]
@@ -288,6 +288,9 @@ end
     for ((model, name), cols) in _all_tables(m)
         IS.write_table!(w, model, name, cols)
     end
+    for name in values(m.systems)
+        mkpath(joinpath(dir, name))
+    end
     IS.finalize!(w; status = IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED)
     @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status ==
           "SUCCESSFULLY_FINALIZED"
@@ -298,7 +301,7 @@ end
     ad = simulation_axis_data(m)
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = ad, values = _all_values(m),
-        tables = _all_tables(m))
+        tables = _all_tables(m), systems = _bundle_systems(m))
     @test_throws ArgumentError IS.open_outputs_writer(dir, m; axis_data = ad)
     @test_throws joinpath(dir, "outputs.json") IS.open_outputs_writer(
         dir, m; axis_data = ad)
@@ -321,6 +324,9 @@ end
     end
     for ((model, name), cols) in _all_tables(m)
         IS.write_table!(w, model, name, cols)
+    end
+    for name in values(m.systems)
+        mkpath(joinpath(dir, name))
     end
     json = joinpath(dir, "outputs.json")
     if !Sys.iswindows() && !iszero(Libc.getuid())
@@ -368,6 +374,11 @@ end
     @test_throws "dataset ActivePowerVariable__ThermalStandard lacks executions [7]" IS.finalize!(
         w; status = success)
     IS.append!(w, "model", _KEY, fill(1.0, 48, 76), 7)
+    @test_throws "bundle directory" IS.finalize!(w; status = success)
+    @test w.metadata.status == "RUNNING" && isopen(w.file)
+    for name in values(m.systems)
+        mkpath(joinpath(dir, name))
+    end
     IS.finalize!(w; status = success)
     @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status ==
           "SUCCESSFULLY_FINALIZED"

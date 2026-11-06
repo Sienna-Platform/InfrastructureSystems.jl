@@ -60,7 +60,7 @@ end
     dir = mktempdir()
     IS.write_outputs(
         dir, m; axis_data = simulation_axis_data(m), values = _all_values(m),
-        tables = _all_tables(m),
+        tables = _all_tables(m), systems = _bundle_systems(m),
     )
     path = joinpath(dir, "outputs.json")
     write(path, replace(read(path, String), "\"0.1.0\"" => "\"9.9.9\""))

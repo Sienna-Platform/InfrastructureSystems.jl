@@ -305,7 +305,7 @@ end
     _expect_invalid(
         "empty bundle directory name",
         _with(_sim_meta(); systems = Dict(uuid => "")),
-        r"empty bundle directory",
+        r"plain relative name",
     )
     _expect_invalid(
         "no systems",

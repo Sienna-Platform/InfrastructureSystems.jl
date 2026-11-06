@@ -434,7 +434,8 @@ end
 Close the HDF5 file, then rewrite `outputs.json` with `status` and the current time.
 `status` is `SUCCESSFULLY_FINALIZED` or `FAILED`. The writer must have status `RUNNING`.
 `SUCCESSFULLY_FINALIZED` throws `ArgumentError` when a declared dataset or table was never
-written, or an execution of a dataset was never appended. The writer keeps status `RUNNING`
+written, an execution of a dataset was never appended, or a declared system bundle
+directory does not exist. The writer keeps status `RUNNING`
 then, and `finalize!` with `FAILED` stays possible.
 When the JSON write fails, the writer keeps status `RUNNING` and `finalize!` can run again.
 """
@@ -456,6 +457,11 @@ function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
     end
     if status == Simulation.RunStatus.SUCCESSFULLY_FINALIZED
         unwritten = _unwritten(w)
+        for (uuid, name) in w.metadata.systems
+            if !isdir(joinpath(w.dir, name))
+                push!(unwritten, "system $uuid: bundle directory $name does not exist")
+            end
+        end
         if !isempty(unwritten)
             throw(
                 ArgumentError(
@@ -483,15 +489,7 @@ function _check_systems(m::OutputsMetadata, systems::AbstractDict)
         if !haskey(m.systems, uuid)
             throw(ArgumentError("system $uuid is not in the metadata systems"))
         end
-        name = m.systems[uuid]
-        if isempty(name) || name in (".", "..") || isabspath(name) ||
-           occursin('/', name) || occursin('\\', name)
-            throw(
-                ArgumentError(
-                    "system $uuid has bundle directory \"$name\", expected a plain relative name",
-                ),
-            )
-        end
+        _check_bundle_name(uuid, m.systems[uuid])
     end
     return
 end
