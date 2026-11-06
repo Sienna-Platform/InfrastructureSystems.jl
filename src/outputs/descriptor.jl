@@ -5,7 +5,18 @@ function _default_fill(dtype::String)
     return _DTYPES[dtype][2]
 end
 
-function _chunk_shape(axes::Vector{String}, axis_lengths::Vector{Int})
+"Upper bound of the byte size of one dataset chunk."
+const MAX_CHUNK_BYTES = 64 * 1024 * 1024
+
+# Axes that shrink first when a chunk is too large: time and horizon, then the others.
+function _shrink_priority(name::String)
+    if name in ("time", "horizon")
+        return 0
+    end
+    return 1
+end
+
+function _chunk_shape(axes::Vector{String}, axis_lengths::Vector{Int}, itemsize::Int)
     if length(axes) != length(axis_lengths)
         throw(
             ArgumentError(
@@ -19,6 +30,12 @@ function _chunk_shape(axes::Vector{String}, axis_lengths::Vector{Int})
             chunks[i] = 1
         end
     end
+    shrinkable = [i for (i, name) in enumerate(axes) if name != "execution"]
+    sort!(shrinkable; by = i -> (_shrink_priority(axes[i]), i))
+    for i in shrinkable
+        others = prod(chunks) ÷ chunks[i]
+        chunks[i] = clamp(MAX_CHUNK_BYTES ÷ (itemsize * others), 1, chunks[i])
+    end
     return chunks
 end
 
@@ -26,7 +43,8 @@ end
 Build the `OutputDataset` of the key type `T`, the component type `U`, and `meta`.
 The key type traits give the container, quantity kind, and units. `axis_lengths` gives the
 length of each axis in `axes`. The chunk size is 1 on the `execution` axis and at least 1
-on every axis.
+on every axis. A chunk holds at most `MAX_CHUNK_BYTES`: the `time` and `horizon` axes shrink
+first, then the other non-execution axes in order.
 """
 function dataset_descriptor(
     ::Type{T},
@@ -82,7 +100,9 @@ function _dataset_descriptor(
         Optimization.quantity_kind(T),
         unit_system_name,
         output_units(unit_system, T),
-        DatasetLayout(_chunk_shape(axes, axis_lengths), filters),
+        DatasetLayout(
+            _chunk_shape(axes, axis_lengths, sizeof(_DTYPES[dtype][1])), filters,
+        ),
         string("/", model, "/datasets/", name),
         Optimization.container_name(T),
         component_type,

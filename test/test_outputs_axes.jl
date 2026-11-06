@@ -46,15 +46,8 @@ end
     for d in uc.datasets
         replace!(d.axes, "ThermalStandard" => "therm")
     end
-    err = try
-        IS.validate_metadata(m)
-        nothing
-    catch e
-        e
-    end
-    @test err isa ArgumentError
-    @test occursin("UC", err.msg) && occursin("therm", err.msg) &&
-          occursin("ThermalStandard", err.msg)
+    @test_throws ArgumentError IS.validate_metadata(m)
+    @test_throws r"UC.*therm.*ThermalStandard" IS.validate_metadata(m)
 end
 
 @testset "every structural rule has a failing case" begin
@@ -166,7 +159,7 @@ end
     @test IS.validate_metadata(m) === nothing
     bad = IS.OutputsMetadata(
         m.schema_version, "simulation", m.producer, m.created_at, m.status, m.systems,
-        m.models, nothing,
+        m.models, IS.NoSimulation(),
     )
     @test_throws ArgumentError IS.validate_metadata(bad)
 end

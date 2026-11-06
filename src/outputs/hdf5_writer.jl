@@ -22,12 +22,14 @@ end
 
 # Open handle of one dataset with what `append!` and `write_values!` need. `exec_dim` is the
 # execution dimension in Julia order, 0 when absent. `expected` is the size of one
-# execution slice (the whole dataset size when `exec_dim` is 0).
+# execution slice (the whole dataset size when `exec_dim` is 0). `written` has one entry per
+# execution, or one entry when `exec_dim` is 0.
 struct DatasetRecord
     dataset::HDF5.Dataset
-    storage::DataType
+    dtype::String
     exec_dim::Int
-    expected::Tuple{Vararg{Int}}
+    expected::Vector{Int}
+    written::BitVector
 end
 
 "Writer of an outputs directory. Use `open_outputs_writer` to create one."
@@ -36,6 +38,7 @@ mutable struct OutputsWriter
     metadata::OutputsMetadata
     file::HDF5.File
     datasets::Dict{Tuple{String, String, String, String}, DatasetRecord}
+    tables_written::Set{Tuple{String, String}}
 end
 
 "Hook that writes the bundle of a system into `dir`. Packages that own systems implement it."
@@ -48,41 +51,14 @@ function timestamps_epoch_ms(ts::Vector{Dates.DateTime})
     return Int64[Dates.value(t - Dates.DateTime(1970)) for t in ts]
 end
 
-function _fill_value(
-    model::String,
-    key,
-    dtype::String,
-    ::Type{T},
-    v::Union{String, Float64, Int64, Bool},
-) where {T}
-    try
-        return _parse_fill(T, v)
-    catch
-        throw(
-            ArgumentError(
-                "model $model dataset $key: fill_value $v is not valid for dtype $dtype",
-            ),
-        )
-    end
-end
-
-function _make_filters(model::String, key, names::Vector{String})
+# Validated by `_check_filters`: every name is `shuffle` or `deflate:L`.
+function _make_filters(names::Vector{String})
     filters = HDF5.Filters.Filter[]
     for f in names
         if f == "shuffle"
             push!(filters, HDF5.Filters.Shuffle())
-        elseif startswith(f, "deflate:")
-            level = tryparse(Int, f[(length("deflate:") + 1):end])
-            if isnothing(level) || !(1 <= level <= 9)
-                throw(
-                    ArgumentError(
-                        "model $model: dataset $key has invalid filter \"$f\", deflate level must be 1 to 9",
-                    ),
-                )
-            end
-            push!(filters, HDF5.Filters.Deflate(level))
         else
-            throw(ArgumentError("model $model: dataset $key has unknown filter \"$f\""))
+            push!(filters, HDF5.Filters.Deflate(_deflate_level(f)))
         end
     end
     return filters
@@ -193,18 +169,20 @@ function _create_dataset!(f::HDF5.File, model::String, d::OutputDataset, m::Mode
     dims = reverse([axis_length(m.axes[a]) for a in d.axes])
     pos = findfirst(==("execution"), d.axes)
     exec_dim = 0
-    expected = Tuple(dims)
+    expected = dims
+    written = falses(1)
     if !isnothing(pos)
         exec_dim = length(d.axes) - pos + 1
-        expected = Tuple(deleteat!(copy(dims), exec_dim))
+        expected = deleteat!(copy(dims), exec_dim)
+        written = falses(dims[exec_dim])
     end
     ds = HDF5.create_dataset(
         f, d.path, HDF5.datatype(T), HDF5.dataspace(Tuple(dims));
         chunk = Tuple(reverse(d.layout.chunks)),
-        fill_value = _fill_value(model, key, d.dtype, T, d.fill_value),
-        filters = _make_filters(model, key, d.layout.filters),
+        fill_value = _parse_fill(T, d.fill_value),
+        filters = _make_filters(d.layout.filters),
     )
-    return (model, key...) => DatasetRecord(ds, T, exec_dim, expected)
+    return (model, key...) => DatasetRecord(ds, d.dtype, exec_dim, expected, written)
 end
 
 function _create_table!(f::HDF5.File, t::OutputTable)
@@ -280,7 +258,7 @@ function open_outputs_writer(
         running = with_status(m, string(Simulation.RunStatus.RUNNING))
         write_outputs_metadata(json_path, running)
         f, records = _create_h5(h5_path, m, axis_data)
-        return OutputsWriter(String(dir), running, f, records)
+        return OutputsWriter(String(dir), running, f, records, Set{Tuple{String, String}}())
     catch
         rm(h5_path; force = true)
         rm(json_path; force = true)
@@ -346,12 +324,13 @@ function Base.append!(
             ),
         )
     end
-    _check_values_size(model, key, values, r.expected)
+    _check_values_size(model, key, values, Tuple(r.expected))
     idx = ntuple(
         i -> _slice_index(i, r.exec_dim, execution_index),
         ndims(r.dataset),
     )
-    r.dataset[idx...] = _convert_values(r.storage, values)
+    r.dataset[idx...] = _convert_values(_DTYPES[r.dtype][1], values)
+    r.written[execution_index] = true
     return
 end
 
@@ -369,7 +348,8 @@ function write_values!(
     _check_running(w)
     r = _record(w, model, key)
     _check_values_size(model, key, values, size(r.dataset))
-    r.dataset[axes(values)...] = _convert_values(r.storage, values)
+    r.dataset[axes(values)...] = _convert_values(_DTYPES[r.dtype][1], values)
+    fill!(r.written, true)
     return
 end
 
@@ -405,6 +385,7 @@ function write_table!(
         w.file[string(t.group, "/", c.name)][:] =
             _convert_values(_column_storage_type(c.dtype), v)
     end
+    push!(w.tables_written, (String(model), String(table_name)))
     return
 end
 
@@ -417,11 +398,44 @@ function Base.flush(w::OutputsWriter)
     return
 end
 
+# Names of the declared datasets and tables that no write call filled completely.
+function _unwritten(w::OutputsWriter)
+    missing_ = String[]
+    for ((model, entry_type, component_type, meta), r) in w.datasets
+        name = dataset_name(entry_type, component_type, meta)
+        if iszero(r.exec_dim) && !only(r.written)
+            push!(missing_, "model $model: dataset $name was never written")
+        elseif !all(r.written)
+            executions = findall(!, r.written)
+            push!(
+                missing_,
+                "model $model: dataset $name lacks executions $(_summarize(executions))",
+            )
+        end
+    end
+    for (model, entry) in w.metadata.models, t in entry.tables
+        if !((model, t.name) in w.tables_written)
+            push!(missing_, "model $model: table $(t.name) was never written")
+        end
+    end
+    return sort!(missing_)
+end
+
+function _summarize(xs::Vector{Int})
+    if length(xs) <= 5
+        return string(xs)
+    end
+    return string(xs[1:5], " and ", length(xs) - 5, " more")
+end
+
 """
     finalize!(w; status)
 
 Close the HDF5 file, then rewrite `outputs.json` with `status` and the current time.
 `status` is `SUCCESSFULLY_FINALIZED` or `FAILED`. The writer must have status `RUNNING`.
+`SUCCESSFULLY_FINALIZED` throws `ArgumentError` when a declared dataset or table was never
+written, or an execution of a dataset was never appended. The writer keeps status `RUNNING`
+then, and `finalize!` with `FAILED` stays possible.
 When the JSON write fails, the writer keeps status `RUNNING` and `finalize!` can run again.
 """
 function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
@@ -439,6 +453,17 @@ function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
                 "finalize! accepts SUCCESSFULLY_FINALIZED or FAILED, got $status",
             ),
         )
+    end
+    if status == Simulation.RunStatus.SUCCESSFULLY_FINALIZED
+        unwritten = _unwritten(w)
+        if !isempty(unwritten)
+            throw(
+                ArgumentError(
+                    "outputs writer for $(w.dir) cannot finalize as SUCCESSFULLY_FINALIZED:\n" *
+                    join(unwritten, "\n"),
+                ),
+            )
+        end
     end
     for r in values(w.datasets)
         close(r.dataset)
@@ -471,8 +496,13 @@ function _check_systems(m::OutputsMetadata, systems::AbstractDict)
     return
 end
 
-# Mark the run FAILED when possible and always close the file. Never throws.
-function _abort!(w::OutputsWriter)
+"""
+    abort!(w)
+
+Mark the run `FAILED` when possible and always close the file. Never throws. Public: the
+producers of outputs call it when a write fails.
+"""
+function abort!(w::OutputsWriter)
     if w.metadata.status == string(Simulation.RunStatus.RUNNING)
         try
             finalize!(w; status = Simulation.RunStatus.FAILED)
@@ -519,7 +549,7 @@ function write_outputs(
         end
         finalize!(w; status = Simulation.RunStatus.SUCCESSFULLY_FINALIZED)
     catch
-        _abort!(w)
+        abort!(w)
         rethrow()
     end
     return

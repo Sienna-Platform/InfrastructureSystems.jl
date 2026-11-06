@@ -2,7 +2,7 @@
 Handle of an outputs directory. The HDF5 file is opened for each read, never held.
 Use `open_outputs` to create one.
 """
-struct OutputArtifact <: Outputs
+struct OutputArtifact
     dir::String
     metadata::OutputsMetadata
 end
@@ -10,7 +10,9 @@ end
 """
     open_outputs(dir) -> OutputArtifact
 
-Read and validate `outputs.json` in `dir` and check that `outputs.h5` exists.
+Read and validate `outputs.json` in `dir`. Check that `outputs.h5` and the bundle directory
+of every declared system exist. Warn when the status is `RUNNING`: the run is in progress or
+ended without a final status, and datasets can be partly written.
 """
 function open_outputs(dir::AbstractString)
     json = joinpath(dir, "outputs.json")
@@ -21,6 +23,18 @@ function open_outputs(dir::AbstractString)
     validate_metadata(m)
     if !isfile(joinpath(dir, "outputs.h5"))
         throw(ArgumentError("outputs directory $dir has no outputs.h5"))
+    end
+    for (uuid, name) in m.systems
+        if !isdir(joinpath(dir, name))
+            throw(
+                ArgumentError(
+                    "outputs directory $dir has no bundle directory \"$name\" for system $uuid",
+                ),
+            )
+        end
+    end
+    if m.status == string(Simulation.RunStatus.RUNNING)
+        @warn "Outputs in $dir have status RUNNING: the run is not finished or ended without a final status. Datasets can be partly written."
     end
     return OutputArtifact(String(dir), m)
 end
@@ -56,7 +70,7 @@ _h5_path(a::OutputArtifact) = joinpath(a.dir, "outputs.h5")
 
 # Axes without stored data (horizon, label) give empty AxisData.
 function _read_axis_data(
-    ::HDF5.Group,
+    ::HDF5.File,
     ::AbstractString,
     ::AbstractString,
     ::Union{HorizonAxis, LabelAxis},
@@ -65,11 +79,12 @@ function _read_axis_data(
 end
 
 function _read_axis_data(
-    g::HDF5.Group,
+    f::HDF5.File,
     model::AbstractString,
     key::AbstractString,
     ax::ComponentAxis,
 )
+    g = f[ax.group]
     ids = zeros(Int64, 0, 0)
     if haskey(g, "ids")
         ids = read(g["ids"])
@@ -80,12 +95,15 @@ function _read_axis_data(
 end
 
 function _read_axis_data(
-    g::HDF5.Group,
+    f::HDF5.File,
     ::AbstractString,
     ::AbstractString,
-    ::Union{TimeAxis, ExecutionAxis},
+    ax::Union{TimeAxis, ExecutionAxis},
 )
-    ts = [Dates.DateTime(1970) + Dates.Millisecond(ms) for ms in read(g["timestamps"])]
+    ts = [
+        Dates.DateTime(1970) + Dates.Millisecond(ms) for
+        ms in read(f[ax.group]["timestamps"])
+    ]
     return AxisData(ts)
 end
 
@@ -93,7 +111,7 @@ end
 function read_axis_data(a::OutputArtifact, model::AbstractString, key::AbstractString)
     ax = get_axis(a, model, key)
     return HDF5.h5open(_h5_path(a), "r") do f
-        return _read_axis_data(f["/$model/axes/$key"], model, key, ax)
+        return _read_axis_data(f, model, key, ax)
     end
 end
 
@@ -123,6 +141,26 @@ function _decode(dtype::String, v)
         return Bool.(v)
     end
     return v
+end
+
+# Design check 4: the stored shape and element type match the metadata.
+function _check_stored(model, key, d::OutputDataset, ds::HDF5.Dataset, expected::Tuple)
+    if size(ds) != expected
+        throw(
+            ArgumentError(
+                "model $model: dataset $key is stored with size $(size(ds)), the metadata expects $expected",
+            ),
+        )
+    end
+    storage = _DTYPES[d.dtype][1]
+    if eltype(ds) != storage
+        throw(
+            ArgumentError(
+                "model $model: dataset $key is stored as $(eltype(ds)), the metadata dtype $(d.dtype) expects $storage",
+            ),
+        )
+    end
+    return
 end
 
 """
@@ -158,8 +196,13 @@ function read_dataset(
                 axis_length(_model_entry(a.metadata, model).axes["execution"]),
             )
     end
+    expected = Tuple(
+        reverse([axis_length(_model_entry(a.metadata, model).axes[k]) for k in d.axes]),
+    )
     arr = HDF5.h5open(_h5_path(a), "r") do f
-        return f[d.path][idx...]
+        ds = f[d.path]
+        _check_stored(model, key, d, ds, expected)
+        return ds[idx...]
     end
     return _decode(d.dtype, arr), keys_julia[keep]
 end

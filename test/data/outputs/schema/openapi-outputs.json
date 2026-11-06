@@ -1,0 +1,55 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PowerOutputSchemas",
+    "version": "0.1.0",
+    "description": "Schemas for Sienna analysis-tool output artifacts"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Axis": {
+        "$ref": "Axis.json"
+      },
+      "Column": {
+        "$ref": "Table.json#/$defs/Column"
+      },
+      "ComponentAxis": {
+        "$ref": "Axis.json#/$defs/ComponentAxis"
+      },
+      "Dataset": {
+        "$ref": "Dataset.json"
+      },
+      "DatasetLayout": {
+        "$ref": "Dataset.json#/$defs/DatasetLayout"
+      },
+      "ExecutionAxis": {
+        "$ref": "Axis.json#/$defs/ExecutionAxis"
+      },
+      "HorizonAxis": {
+        "$ref": "Axis.json#/$defs/HorizonAxis"
+      },
+      "LabelAxis": {
+        "$ref": "Axis.json#/$defs/LabelAxis"
+      },
+      "Model": {
+        "$ref": "Model.json"
+      },
+      "OutputsDocument": {
+        "$ref": "OutputsDocument.json"
+      },
+      "ProducerInfo": {
+        "$ref": "OutputsDocument.json#/$defs/ProducerInfo"
+      },
+      "SimulationParams": {
+        "$ref": "OutputsDocument.json#/$defs/SimulationParams"
+      },
+      "Table": {
+        "$ref": "Table.json"
+      },
+      "TimeAxis": {
+        "$ref": "Axis.json#/$defs/TimeAxis"
+      }
+    }
+  }
+}

@@ -96,5 +96,35 @@ end
         axis_lengths = [0, 0],
     )
     @test z.layout.chunks == [1, 1]
-    @test IS._chunk_shape(["time", "x"], [0, 3]) == [1, 3]
+    @test IS._chunk_shape(["time", "x"], [0, 3], 8) == [1, 3]
+end
+
+@testset "outputs descriptor: chunk is capped at MAX_CHUNK_BYTES" begin
+    @test IS.MAX_CHUNK_BYTES == 64 * 1024 * 1024
+    bytes(c, size) = prod(c) * size
+    # within the cap: unchanged
+    @test IS._chunk_shape(["execution", "c", "horizon"], [7, 76, 48], 8) == [1, 76, 48]
+    # over the cap: horizon shrinks first, execution stays 1, component keeps its length
+    c = IS._chunk_shape(["execution", "c", "horizon"], [7, 1_000_000, 48], 8)
+    @test c == [1, 1_000_000, 8]
+    @test bytes(c, 8) <= IS.MAX_CHUNK_BYTES
+    # time shrinks before a component axis, whatever the axis order
+    c = IS._chunk_shape(["c", "time"], [1_000_000, 100], 8)
+    @test c == [1_000_000, 8] && bytes(c, 8) <= IS.MAX_CHUNK_BYTES
+    # horizon alone is not enough: the next axis shrinks too
+    c = IS._chunk_shape(["execution", "c", "horizon"], [7, 10_000_000, 48], 8)
+    @test c == [1, 8_388_608, 1] && bytes(c, 8) <= IS.MAX_CHUNK_BYTES
+    # the item size counts
+    @test IS._chunk_shape(["time"], [20_000_000], 1) == [20_000_000]
+    @test IS._chunk_shape(["time"], [20_000_000], 8) == [8_388_608]
+    struct DescBig <: IS.Optimization.VariableType end
+    IS.Optimization.output_unit_system(::Type{DescBig}) = IS.SU
+    IS.Optimization.quantity_kind(::Type{DescBig}) = "ActivePower"
+    d = IS.dataset_descriptor(
+        DescBig, IS.TestComponent, ""; model = "m",
+        axes = ["execution", "TestComponent", "horizon"],
+        axis_lengths = [7, 1_000_000, 48],
+    )
+    @test d.layout.chunks == [1, 1_000_000, 8]
+    @test_throws ArgumentError IS._chunk_shape(["time"], [1, 2], 8)
 end

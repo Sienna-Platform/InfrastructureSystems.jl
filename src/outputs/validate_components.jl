@@ -1,3 +1,37 @@
+"""
+Return the label that an outputs axis stores for a component or supplemental attribute: the
+component name. A supplemental attribute type has no label rule in IS. A package that puts
+attributes on a component axis implements `output_label` for its attribute types.
+"""
+function output_label end
+output_label(c::InfrastructureSystemsComponent) = get_name(c)
+
+function output_label(a::SupplementalAttribute)
+    throw(
+        ArgumentError(
+            "supplemental attribute type $(typeof(a)) has no output label: implement IS.output_label for it",
+        ),
+    )
+end
+
+# Components and supplemental attributes share one id stream, so an id names one object.
+function _has_attribute_id(data::SystemData, id::Int)
+    return any(d -> haskey(d, id), values(data.supplemental_attribute_manager.data))
+end
+
+function _resolve_id(data::SystemData, id::Int, where_::String)
+    if haskey(data.component_ids, id)
+        return get_component(data, id)
+    elseif _has_attribute_id(data, id)
+        return get_supplemental_attribute(data, id)
+    end
+    throw(
+        ArgumentError(
+            "$where_: id $id is neither a component nor a supplemental attribute of the System",
+        ),
+    )
+end
+
 function _check_column(
     model::AbstractString,
     key::AbstractString,
@@ -8,22 +42,12 @@ function _check_column(
 )
     for i in axes(ids, 2)
         id = ids[j, i]
-        name = try
-            get_name(get_component(data, id))
-        catch e
-            if e isa ArgumentError
-                throw(
-                    ArgumentError(
-                        "model $model axis $key column $j: id $id: $(e.msg)",
-                    ),
-                )
-            end
-            rethrow()
-        end
+        where_ = "model $model axis $key column $j"
+        name = output_label(_resolve_id(data, id, where_))
         if name != labels[j, i]
             throw(
                 ArgumentError(
-                    "model $model axis $key column $j: id $id is named $name in the System, label is $(labels[j, i])",
+                    "$where_: id $id is named $name in the System, label is $(labels[j, i])",
                 ),
             )
         end
@@ -48,7 +72,7 @@ function _validate_axis(
     ax::ComponentAxis,
     data::SystemData,
 )
-    ad = _read_axis_data(f["/$model/axes/$key"], model, key, ax)
+    ad = _read_axis_data(f, model, key, ax)
     if !any(c -> c.has_ids, ax.columns)
         return
     end
@@ -69,9 +93,10 @@ end
 
 """
 Check the component axes of `model` against `data`: for every column with ids and every
-row, the name of the component with that id in `data` must equal the stored label.
-Throw `ArgumentError` on the first mismatch or missing id. Return `nothing`.
-The check is by id and name only, not by component type. Type checking belongs to the
+row, the label of the component or supplemental attribute with that id in `data` (see
+`output_label`) must equal the stored label. Throw `ArgumentError` on the first mismatch,
+missing id, or attribute type without a label rule. Return `nothing`.
+The check is by id and label only, not by component type. Type checking belongs to the
 PSY-aware layer.
 """
 function validate_components(

@@ -2,19 +2,89 @@ const StructUtils = JSON.StructUtils
 
 abstract type AbstractAxis end
 
+# Axis and simulation timestamps are naive: `DateTime` parsing alone accepts a `Z` or an
+# offset and converts it. The pattern is the `Timestamp` rule of the outputs schema.
+const _TIMESTAMP_PATTERN = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?$"
+
+function _naive_timestamp(s::AbstractString)
+    if !occursin(_TIMESTAMP_PATTERN, s)
+        throw(
+            ArgumentError(
+                "timestamp \"$s\" is not naive (no offset), expected YYYY-MM-DDTHH:MM:SS[.sss]",
+            ),
+        )
+    end
+    return Dates.DateTime(s)
+end
+
+# Field lowering that drops an empty optional string from the written JSON.
+function _omit_if_empty(s::AbstractString)
+    if isempty(s)
+        return JSON.Omit()
+    end
+    return s
+end
+
+# Mirror of the `QuantityKind` enum of the outputs schema (`common.json`). IS cannot depend
+# on PowerAnalytics, which owns the schema.
+const QUANTITY_KINDS = (
+    "ActivePower",
+    "ReactivePower",
+    "ApparentPower",
+    "ActivePowerChangeRate",
+    "ElectricalEnergy",
+    "FractionPerTime",
+    "Voltage",
+    "CurrentFlow",
+    "Resistance",
+    "Reactance",
+    "Impedance",
+    "Conductance",
+    "Susceptance",
+    "Angle",
+    "Frequency",
+    "PowerPerFrequency",
+    "VoltagePerPower",
+    "Length",
+    "Elevation",
+    "Duration",
+    "OperationalDuration",
+    "CalendarPeriod",
+    "Dimensionless",
+    "Fraction",
+    "PowerFactor",
+    "HeatRate",
+    "StartFuelPerCapacity",
+    "VolumeFlowRate",
+    "HeadRate",
+    "Volume",
+    "Inductance",
+    "Capacitance",
+    "CostPerCapacity",
+    "CostPerEnergy",
+    "CostPerTime",
+    "CO2Emissions",
+    "Mass",
+    "Money",
+    "CostPerVolume",
+    "CostPerLevel",
+    "EmissionRate",
+    "CostPerMass",
+)
+
 "Time axis of a model that runs without an execution loop."
-struct TimeAxis <: AbstractAxis
+JSON.@defaults struct TimeAxis <: AbstractAxis
     kind::String
-    initial_timestamp::Dates.DateTime
+    initial_timestamp::Dates.DateTime & (json = (lift = _naive_timestamp,),)
     resolution::String
     length::Int
     group::String
 end
 
 "Execution axis of a decision model: one entry per solve."
-struct ExecutionAxis <: AbstractAxis
+JSON.@defaults struct ExecutionAxis <: AbstractAxis
     kind::String
-    initial_timestamp::Dates.DateTime
+    initial_timestamp::Dates.DateTime & (json = (lift = _naive_timestamp,),)
     interval::String
     count::Int
     group::String
@@ -39,7 +109,7 @@ JSON.@defaults struct ComponentAxis <: AbstractAxis
     columns::Vector{AxisColumn}
     length::Int
     group::String
-    subset::String = ""
+    subset::String = "" & (json = (lower = _omit_if_empty,),)
 end
 
 "Axis that lists plain labels."
@@ -52,14 +122,6 @@ end
 struct DatasetLayout
     chunks::Vector{Int}
     filters::Vector{String}
-end
-
-# Field lowering that drops an empty optional string from the written JSON.
-function _omit_if_empty(s::AbstractString)
-    if isempty(s)
-        return JSON.Omit()
-    end
-    return s
 end
 
 """
@@ -121,17 +183,29 @@ struct ProducerInfo
     julia::String
 end
 
+"Simulation parameters of an `OutputsMetadata`: `SimulationParams` or `NoSimulation`."
+abstract type AbstractSimulation end
+
 "Simulation-wide parameters. Only present when `kind` is `simulation`."
-struct SimulationParams
-    initial_time::Dates.DateTime
+JSON.@defaults struct SimulationParams <: AbstractSimulation
+    initial_time::Dates.DateTime & (json = (lift = _naive_timestamp,),)
     step_resolution::String
     num_steps::Int
     execution_order::Vector{String}
 end
 
+"The `simulation` value of a file that omits the simulation object."
+struct NoSimulation <: AbstractSimulation end
+
+# Absence in the file is `NoSimulation`; a present object is always `SimulationParams`.
+JSON.@choosetype AbstractSimulation x -> SimulationParams
+
+_omit_if_no_simulation(::NoSimulation) = JSON.Omit()
+_omit_if_no_simulation(p::SimulationParams) = p
+
 """
-Content of the `outputs.json` file. The `simulation` field is `nothing` when the file
-omits it. Use `has_simulation` and `get_simulation` to access it.
+Content of the `outputs.json` file. The `simulation` field is `NoSimulation()` when the
+file omits it. Use `has_simulation` and `get_simulation` to access it.
 """
 JSON.@defaults struct OutputsMetadata
     schema_version::String
@@ -141,10 +215,9 @@ JSON.@defaults struct OutputsMetadata
     status::String
     systems::Dict{String, String}
     models::Dict{String, ModelEntry}
-    simulation::Union{Nothing, SimulationParams} = nothing
+    simulation::AbstractSimulation =
+        NoSimulation() & (json = (lower = _omit_if_no_simulation,),)
 end
-
-JSON.omit_null(::Type{OutputsMetadata}) = true
 
 function _axis_type(kind::AbstractString)
     if kind == "time"
@@ -250,17 +323,23 @@ end
 Return `true` when the metadata has simulation parameters.
 """
 function has_simulation(m::OutputsMetadata)
-    return !isnothing(m.simulation)
+    return has_simulation(m.simulation)
 end
+
+has_simulation(::SimulationParams) = true
+has_simulation(::NoSimulation) = false
 
 """
 Return the `SimulationParams` of the metadata. Throw an error when absent.
 """
 function get_simulation(m::OutputsMetadata)
-    if !has_simulation(m)
-        error("outputs metadata of kind $(m.kind) has no simulation parameters")
-    end
-    return m.simulation
+    return _get_simulation(m.simulation, m.kind)
+end
+
+_get_simulation(s::SimulationParams, ::String) = s
+
+function _get_simulation(::NoSimulation, kind::String)
+    error("outputs metadata of kind $kind has no simulation parameters")
 end
 
 """

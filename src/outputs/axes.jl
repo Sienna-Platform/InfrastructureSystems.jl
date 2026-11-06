@@ -1,11 +1,19 @@
 const OUTPUT_CONTAINERS =
     ("variables", "aux_variables", "parameters", "expressions", "duals")
 const _LABEL_KEY_PATTERN = r"^[a-z][a-z0-9_]*$"
-const _SCHEMA_VERSION = "0.1.0"
+"""
+Schema version string of `outputs.json`. Public: producers set it in `OutputsMetadata`.
+"""
+const OUTPUTS_SCHEMA_VERSION = "0.1.0"
 const _OUTPUT_KINDS = ("single", "simulation", "power_flow", "security_analysis")
 const _MODEL_TYPES = ("decision", "emulation", "power_flow", "security_analysis")
 const _NAME_PATTERN = r"^[A-Z][A-Za-z0-9]*$"
 const _OUTPUT_UNIT_SYSTEMS = ("COMPONENT_BASE", "NATURAL_UNITS")
+const _BASE_REFERENCES = ("system", "component")
+const _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+const _RFC3339_PATTERN =
+    r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])[Tt]([01]\d|2[0-3]):[0-5]\d:([0-5]\d|60)(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$"
+const _FILTER_PATTERN = r"^(shuffle|deflate:[1-9])$"
 
 function _check_member(where_::String, field::String, value::AbstractString, allowed)
     if !(value in allowed)
@@ -112,14 +120,25 @@ end
 _parse_fill(::Type{T}, v::String) where {T <: AbstractFloat} = parse(T, v)
 _parse_fill(::Type{T}, v::Real) where {T <: Real} = T(v)
 
-function _parse_fill(::Type, v::String)
-    throw(ArgumentError("string fill value for an integer dtype"))
+# Fill rules of the schema by dtype: a number or "NaN" for floats, an integer for integer
+# dtypes, a boolean for bool. A Bool never counts as a number.
+_fill_valid(dtype::String, v) = _fill_valid(Val(Symbol(dtype)), v)
+_fill_valid(::Val, ::Any) = false
+_fill_valid(::Union{Val{:f64}, Val{:f32}}, v::String) = v == "NaN"
+_fill_valid(::Union{Val{:f64}, Val{:f32}}, ::Real) = true
+_fill_valid(::Union{Val{:f64}, Val{:f32}}, ::Bool) = false
+_fill_valid(::Val{:i64}, v::Real) = _fits_integer(Int64, v)
+_fill_valid(::Val{:i32}, v::Real) = _fits_integer(Int32, v)
+_fill_valid(::Val{:bool}, ::Bool) = true
+
+_fits_integer(::Type{<:Integer}, ::Bool) = false
+
+function _fits_integer(::Type{T}, v::Real) where {T <: Integer}
+    return isinteger(v) && typemin(T) <= v <= typemax(T)
 end
 
 function _check_fill_value(where_::String, d::OutputDataset)
-    try
-        _parse_fill(_DTYPES[d.dtype][1], d.fill_value)
-    catch
+    if !_fill_valid(d.dtype, d.fill_value)
         throw(
             ArgumentError(
                 "$where_: fill_value $(d.fill_value) is not valid for dtype $(d.dtype)",
@@ -132,22 +151,127 @@ end
 # Filter grammar: `shuffle` or `deflate:L` with L in 1 to 9.
 function _check_filters(where_::String, names::Vector{String})
     for f in names
-        if f == "shuffle"
-            continue
-        end
-        level = nothing
-        if startswith(f, "deflate:")
-            level = tryparse(Int, f[(length("deflate:") + 1):end])
-        end
-        if isnothing(level)
-            throw(ArgumentError("$where_: unknown filter \"$f\""))
-        elseif !(1 <= level <= 9)
+        if !occursin(_FILTER_PATTERN, f)
             throw(
                 ArgumentError(
-                    "$where_: invalid filter \"$f\", deflate level must be 1 to 9"),
+                    "$where_: invalid filter \"$f\", expected shuffle or deflate:1 to deflate:9",
+                ),
             )
         end
     end
+    return
+end
+
+# The deflate level of a filter name that passed `_check_filters`.
+_deflate_level(f::AbstractString) = parse(Int, f[(length("deflate:") + 1):end])
+
+function _check_pattern(
+    where_::String,
+    field::String,
+    value::AbstractString,
+    pattern::Regex,
+    expected::String,
+)
+    if !occursin(pattern, value)
+        throw(ArgumentError("$where_: $field \"$value\" is not $expected"))
+    end
+    return
+end
+
+# Model, axis, and table names form HDF5 paths: one non-empty segment without "/".
+function _check_path_name(where_::String, field::String, name::AbstractString)
+    if isempty(name) || occursin('/', name)
+        throw(ArgumentError("$where_: $field \"$name\" is empty or contains \"/\""))
+    end
+    return
+end
+
+function _check_at_least(where_::String, field::String, value::Real, bound::Real)
+    if !(value >= bound)
+        throw(ArgumentError("$where_: $field is $value, expected at least $bound"))
+    end
+    return
+end
+
+function _check_duration(where_::String, field::String, value::AbstractString)
+    if !is_iso_duration(value)
+        throw(ArgumentError("$where_: $field \"$value\" is not an ISO-8601 duration"))
+    end
+    return
+end
+
+function _check_quantity_kind(where_::String, value::AbstractString)
+    _check_member(where_, "quantity_kind", value, QUANTITY_KINDS)
+    return
+end
+
+function _check_axis_group(model::String, name::String, group::String)
+    expected = "/$model/axes/$name"
+    if group != expected
+        throw(
+            ArgumentError(
+                "model $model: axis \"$name\" has group \"$group\", expected \"$expected\"",
+            ),
+        )
+    end
+    return
+end
+
+# Field rules of each axis type, on top of kind and key.
+function _check_axis_fields(model::String, name::String, a::TimeAxis)
+    where_ = "model $model: axis \"$name\""
+    _check_duration(where_, "resolution", a.resolution)
+    _check_at_least(where_, "length", a.length, 1)
+    _check_axis_group(model, name, a.group)
+    return
+end
+
+function _check_axis_fields(model::String, name::String, a::ExecutionAxis)
+    where_ = "model $model: axis \"$name\""
+    _check_duration(where_, "interval", a.interval)
+    _check_at_least(where_, "count", a.count, 1)
+    _check_axis_group(model, name, a.group)
+    return
+end
+
+function _check_axis_fields(model::String, name::String, a::HorizonAxis)
+    where_ = "model $model: axis \"$name\""
+    _check_duration(where_, "resolution", a.resolution)
+    _check_at_least(where_, "horizon_count", a.horizon_count, 1)
+    return
+end
+
+function _check_axis_fields(model::String, name::String, a::ComponentAxis)
+    where_ = "model $model: axis \"$name\""
+    if isempty(a.columns)
+        throw(ArgumentError("$where_ has no columns"))
+    end
+    for c in a.columns
+        _check_pattern(
+            where_, "column component_type", c.component_type, _NAME_PATTERN, "a type name",
+        )
+    end
+    _check_at_least(where_, "length", a.length, 0)
+    _check_axis_group(model, name, a.group)
+    return
+end
+
+function _check_axis_fields(model::String, name::String, a::LabelAxis)
+    where_ = "model $model: axis \"$name\""
+    if isempty(a.labels)
+        throw(ArgumentError("$where_ has no labels"))
+    end
+    if !allunique(a.labels)
+        throw(ArgumentError("$where_ has duplicate labels"))
+    end
+    return
+end
+
+function _check_axis(model::String, name::String, a::AbstractAxis)
+    _check_path_name("model $model", "axis key", name)
+    _check_axis_kind(model, name, a)
+    _check_axis_fields(model, name, a)
+    _check_axis_key(model, name, a)
     return
 end
 
@@ -172,6 +296,9 @@ function _check_component_type(where_::String, m::ModelEntry, d::OutputDataset)
 end
 
 function _check_names(where_::String, d::OutputDataset)
+    if occursin('/', d.meta)
+        throw(ArgumentError("$where_: meta \"$(d.meta)\" contains \"/\""))
+    end
     if occursin("__", d.meta)
         throw(ArgumentError("$where_: meta \"$(d.meta)\" contains \"__\""))
     end
@@ -190,6 +317,9 @@ end
 function _check_dataset(model::String, m::ModelEntry, d::OutputDataset)
     key = dataset_key(d)
     where_ = "model $model: dataset $key"
+    if isempty(d.axes)
+        throw(ArgumentError("$where_ has no axes"))
+    end
     for name in d.axes
         if !haskey(m.axes, name)
             throw(
@@ -199,6 +329,9 @@ function _check_dataset(model::String, m::ModelEntry, d::OutputDataset)
             )
         end
     end
+    if !allunique(d.axes)
+        throw(ArgumentError("$where_ repeats an axis in $(d.axes)"))
+    end
     if length(d.layout.chunks) != length(d.axes)
         throw(
             ArgumentError(
@@ -206,10 +339,8 @@ function _check_dataset(model::String, m::ModelEntry, d::OutputDataset)
             ),
         )
     end
-    for name in ("execution", "horizon", "time")
-        if count(==(name), d.axes) > 1
-            throw(ArgumentError("$where_ repeats axis \"$name\""))
-        end
+    for c in d.layout.chunks
+        _check_at_least(where_, "chunk", c, 1)
     end
     if "horizon" in d.axes && !("execution" in d.axes)
         throw(ArgumentError("$where_ has a horizon axis without an execution axis"))
@@ -221,6 +352,13 @@ function _check_dataset(model::String, m::ModelEntry, d::OutputDataset)
     _check_names(where_, d)
     _check_component_type(where_, m, d)
     _check_member(where_, "container", d.container, OUTPUT_CONTAINERS)
+    _check_quantity_kind(where_, d.quantity_kind)
+    if !isempty(d.base_reference)
+        _check_member(where_, "base_reference", d.base_reference, _BASE_REFERENCES)
+    end
+    if isempty(d.units)
+        throw(ArgumentError("$where_: units is empty"))
+    end
     _check_unit_fields(where_, d.unit_system, d.base_reference, d.units)
     expected = "/$model/datasets/$(dataset_name(d))"
     if d.path != expected
@@ -231,6 +369,11 @@ end
 
 function _check_table_column(model::String, t::OutputTable, c::OutputColumn)
     where_ = "model $model: table $(t.name) column $(c.name)"
+    if isempty(c.name)
+        throw(
+            ArgumentError("model $model: table $(t.name) has a column with an empty name"),
+        )
+    end
     _check_member(where_, "dtype", c.dtype, _COLUMN_DTYPES)
     has = (!isempty(c.quantity_kind), !isempty(c.unit_system), !isempty(c.units))
     if !(all(has) || !any(has))
@@ -246,12 +389,18 @@ function _check_table_column(model::String, t::OutputTable, c::OutputColumn)
         end
         return
     end
+    _check_quantity_kind(where_, c.quantity_kind)
     _check_member(where_, "unit_system", c.unit_system, _OUTPUT_UNIT_SYSTEMS)
+    if !isempty(c.base_reference)
+        _check_member(where_, "base_reference", c.base_reference, _BASE_REFERENCES)
+    end
     _check_unit_fields(where_, c.unit_system, c.base_reference, c.units)
     return
 end
 
 function _check_table(model::String, t::OutputTable)
+    where_ = "model $model: table \"$(t.name)\""
+    _check_path_name("model $model", "table name", t.name)
     expected = "/$model/tables/$(t.name)"
     if t.group != expected
         throw(
@@ -260,24 +409,116 @@ function _check_table(model::String, t::OutputTable)
             ),
         )
     end
+    _check_at_least(where_, "length", t.length, 0)
+    if isempty(t.columns)
+        throw(ArgumentError("$where_ has no columns"))
+    end
     for c in t.columns
         _check_table_column(model, t, c)
     end
     return
 end
 
-"""
-Check the structure of an outputs metadata document. Throw an `ArgumentError` that names
-the model and the offending key or dataset on the first violation. Return `nothing`.
-"""
-function validate_metadata(m::OutputsMetadata)
-    if m.schema_version != _SCHEMA_VERSION
+# Settings values are scalars: string, number, or boolean.
+_is_scalar_setting(::Union{AbstractString, Real}) = true
+_is_scalar_setting(::Any) = false
+
+function _check_settings(model::String, settings::Dict{String, Any})
+    for (k, v) in settings
+        if !_is_scalar_setting(v)
+            throw(
+                ArgumentError(
+                    "model $model: setting \"$k\" is a $(typeof(v)), expected a string, number, or boolean",
+                ),
+            )
+        end
+    end
+    return
+end
+
+function _check_model_entry(m::OutputsMetadata, model::String, entry::ModelEntry)
+    _check_path_name("metadata", "model name", model)
+    _check_member("model $model", "model_type", entry.model_type, _MODEL_TYPES)
+    _check_pattern(
+        "model $model", "system_uuid", entry.system_uuid, _UUID_PATTERN, "a lowercase UUID",
+    )
+    if !haskey(m.systems, entry.system_uuid)
         throw(
             ArgumentError(
-                "schema_version \"$(m.schema_version)\" is not \"$_SCHEMA_VERSION\""),
+                "model $model: system_uuid \"$(entry.system_uuid)\" is not in systems",
+            ),
+        )
+    end
+    if !(entry.base_power > 0)
+        throw(
+            ArgumentError("model $model: base_power is $(entry.base_power), expected > 0"),
+        )
+    end
+    _check_settings(model, entry.settings)
+    for (name, axis) in entry.axes
+        _check_axis(model, name, axis)
+    end
+    seen = Set{Tuple{String, String, String}}()
+    for d in entry.datasets
+        key = dataset_key(d)
+        if key in seen
+            throw(ArgumentError("model $model: duplicate dataset $key"))
+        end
+        push!(seen, key)
+        _check_dataset(model, entry, d)
+    end
+    for t in entry.tables
+        _check_table(model, t)
+    end
+    return
+end
+
+function _check_simulation(m::OutputsMetadata)
+    if (m.kind == "simulation") != has_simulation(m)
+        throw(
+            ArgumentError(
+                "metadata of kind $(m.kind): simulation parameters must be present exactly when kind is simulation",
+            ),
+        )
+    end
+    if !has_simulation(m)
+        return
+    end
+    sim = get_simulation(m)
+    _check_duration("simulation", "step_resolution", sim.step_resolution)
+    _check_at_least("simulation", "num_steps", sim.num_steps, 1)
+    if isempty(sim.execution_order)
+        throw(ArgumentError("simulation: execution_order is empty"))
+    end
+    for name in sim.execution_order
+        if !haskey(m.models, name)
+            throw(ArgumentError("execution_order entry \"$name\" is not in the models"))
+        end
+    end
+    return
+end
+
+"""
+Check the structure of an outputs metadata document against the rules of the outputs JSON
+schema. Throw an `ArgumentError` that names the model and the offending key or dataset on
+the first violation. Return `nothing`.
+"""
+function validate_metadata(m::OutputsMetadata)
+    if m.schema_version != OUTPUTS_SCHEMA_VERSION
+        throw(
+            ArgumentError(
+                "schema_version \"$(m.schema_version)\" is not \"$OUTPUTS_SCHEMA_VERSION\"",
+            ),
         )
     end
     _check_member("metadata", "kind", m.kind, _OUTPUT_KINDS)
+    _check_pattern(
+        "metadata",
+        "created_at",
+        m.created_at,
+        _RFC3339_PATTERN,
+        "an RFC 3339 date-time",
+    )
     status = Simulation.RunStatus.Value(m.status)
     if !(
         status in (
@@ -288,48 +529,25 @@ function validate_metadata(m::OutputsMetadata)
     )
         throw(ArgumentError("metadata: status \"$(m.status)\" is not a run outcome"))
     end
-    if (m.kind == "simulation") != has_simulation(m)
-        throw(
-            ArgumentError(
-                "metadata of kind $(m.kind): simulation parameters must be present exactly when kind is simulation",
-            ),
-        )
+    if isempty(m.systems)
+        throw(ArgumentError("metadata: systems is empty"))
     end
-    if has_simulation(m)
-        for name in get_simulation(m).execution_order
-            if !haskey(m.models, name)
-                throw(
-                    ArgumentError(
-                        "execution_order entry \"$name\" is not in the models"),
-                )
-            end
-        end
+    for uuid in keys(m.systems)
+        _check_pattern("metadata", "system key", uuid, _UUID_PATTERN, "a lowercase UUID")
     end
-    for (model, entry) in m.models
-        _check_member("model $model", "model_type", entry.model_type, _MODEL_TYPES)
-        if !haskey(m.systems, entry.system_uuid)
+    if isempty(m.models)
+        throw(ArgumentError("metadata: models is empty"))
+    end
+    for (uuid, name) in m.systems
+        if isempty(name)
             throw(
-                ArgumentError(
-                    "model $model: system_uuid \"$(entry.system_uuid)\" is not in systems",
-                ),
+                ArgumentError("metadata: system $uuid has an empty bundle directory name"),
             )
         end
-        for (name, axis) in entry.axes
-            _check_axis_kind(model, name, axis)
-            _check_axis_key(model, name, axis)
-        end
-        seen = Set{Tuple{String, String, String}}()
-        for d in entry.datasets
-            key = dataset_key(d)
-            if key in seen
-                throw(ArgumentError("model $model: duplicate dataset $key"))
-            end
-            push!(seen, key)
-            _check_dataset(model, entry, d)
-        end
-        for t in entry.tables
-            _check_table(model, t)
-        end
+    end
+    _check_simulation(m)
+    for (model, entry) in m.models
+        _check_model_entry(m, model, entry)
     end
     return
 end

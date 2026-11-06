@@ -241,3 +241,25 @@ end
     @test d.component_type == "" && IS.dataset_name(d) == "PowerFlowConverged"
     @test d.path == "/model/datasets/PowerFlowConverged"
 end
+
+@testset "empty subset and absent simulation are omitted from the JSON" begin
+    plain = IS.ComponentAxis(
+        "component", [IS.AxisColumn("ACBranch", true)], 3, "/m/axes/ACBranch", "",
+    )
+    @test !occursin("subset", IS.JSON.json(plain))
+    sub = IS.ComponentAxis(
+        "component", [IS.AxisColumn("ACBranch", true)], 3, "/m/axes/ACBranch__mon",
+        "mon",
+    )
+    @test occursin("\"subset\":\"mon\"", IS.JSON.json(sub))
+    @test IS.JSON.parse(IS.JSON.json(plain), IS.ComponentAxis) == plain
+    @test IS.JSON.parse(IS.JSON.json(sub), IS.ComponentAxis) == sub
+    single =
+        IS.read_outputs_metadata(joinpath(DATA_DIR, "outputs", "single", "outputs.json"))
+    @test single.simulation === IS.NoSimulation() && !IS.has_simulation(single)
+    @test !occursin("simulation", IS.JSON.json(single))
+    sim = IS.read_outputs_metadata(
+        joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
+    )
+    @test occursin("\"simulation\":{", IS.JSON.json(sim))
+end
