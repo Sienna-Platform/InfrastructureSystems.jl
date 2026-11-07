@@ -464,6 +464,29 @@ end
     @test IS.get_value_axes(flat) === nothing
 end
 
+@testset "Test concatenating SingleTimeSeries checks units labels" begin
+    part(t; kwargs...) = IS.SingleTimeSeries(
+        "f", _VA_T0 + Dates.Hour(t), Dates.Hour(1), [1.0, 2.0]; kwargs...,
+    )
+    labels = (units = "MW", quantity_kind = "ActivePower", unit_system = IS.CU)
+    joined = IS.SingleTimeSeries([part(0; labels...), part(2; labels...)])
+    @test IS.get_units(joined) == "MW"
+    @test IS.get_quantity_kind(joined) == "ActivePower"
+    @test IS.get_unit_system(joined) == IS.CU
+    @test_throws "different units: \"MW\" and \"kW\"" IS.SingleTimeSeries(
+        [part(0; labels...), part(2; labels..., units = "kW")],
+    )
+    @test_throws "different quantity_kind: \"ActivePower\" and \"Energy\"" IS.SingleTimeSeries(
+        [part(0; labels...), part(2; labels..., quantity_kind = "Energy")],
+    )
+    @test_throws "different unit_system" IS.SingleTimeSeries(
+        [part(0; labels...), part(2; labels..., unit_system = IS.NU)],
+    )
+    @test_throws "different units: \"MW\" and nothing" IS.SingleTimeSeries(
+        [part(0; labels...), part(2; quantity_kind = "ActivePower", unit_system = IS.CU)],
+    )
+end
+
 @testset "Test value_axes TimeArray accessors reject N-D static series" begin
     msg = "ArgumentError: get_time_array is only defined for 1- or 2-D values (got N = 3)"
     sys, (owner,) = _va_system()
