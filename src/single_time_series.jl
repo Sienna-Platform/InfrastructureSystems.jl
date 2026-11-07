@@ -308,6 +308,22 @@ function SingleTimeSeries(time_series::AbstractVector{<:SingleTimeSeries})
             "cannot concatenate SingleTimeSeries with different value_axes",
         ),
     )
+    for (label, getter) in (
+        ("units", get_units),
+        ("quantity_kind", get_quantity_kind),
+        ("unit_system", get_unit_system),
+    )
+        expected = getter(src)
+        for x in time_series
+            actual = getter(x)
+            actual == expected || throw(
+                ArgumentError(
+                    "cannot concatenate SingleTimeSeries with different $label: " *
+                    "$(repr(expected)) and $(repr(actual))",
+                ),
+            )
+        end
+    end
     concatenated = SingleTimeSeries(
         get_name(src),
         get_initial_timestamp(src),
