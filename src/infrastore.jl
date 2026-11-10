@@ -1535,6 +1535,10 @@ mutable struct ForecastReader{T <: Forecast}
     group_element_types::Vector{Union{Nothing, String}}
     "Each group's entry indices, in `position` order."
     group_members::Vector{Vector{Int}}
+    "Each group's first entry index per distinct slot, in first-seen order."
+    group_slot_firsts::Vector{Vector{Int}}
+    "Each group's index into its slot windows, one per member, in `position` order."
+    group_window_index::Vector{Vector{Int}}
     """
     Per-group window cache: one concrete `Vector` of windows per group once
     materialized, `nothing` before; reset on each read.
@@ -1577,22 +1581,33 @@ function infrastore_build_forecast_reader(
     group_of = Dict{Tuple{DataType, Int, Union{Nothing, String}}, Int}()
     group_element_types = Union{Nothing, String}[]
     group_members = Vector{Int}[]
+    group_slot_firsts = Vector{Int}[]
+    group_window_index = Vector{Int}[]
+    # Entries sharing a slot share one window. Resolve that here, not on each read.
+    window_of = Dict{Tuple{Int, Int}, Int}()
     for (i, (e, fmeta)) in enumerate(zip(tss_entries, metas))
         owner = id_to_owner(Int(fmeta.owner_id), fmeta.owner_category)
         g = get!(group_of, (e.dtype, length(e.window_shape), fmeta.element_type)) do
             push!(group_element_types, fmeta.element_type)
             push!(group_members, Int[])
+            push!(group_slot_firsts, Int[])
+            push!(group_window_index, Int[])
             length(group_members)
         end
         push!(group_members[g], i)
+        w = get!(window_of, (g, e.slot)) do
+            push!(group_slot_firsts[g], i)
+            length(group_slot_firsts[g])
+        end
+        push!(group_window_index[g], w)
         # `e.slot` is 0-based in the InfraStore store; carry it 1-based for Julia.
         entries[i] = ForecastReaderEntry(
             owner, _key_from_row(fmeta), e.slot + 1, g, length(group_members[g]))
     end
     group_windows = Vector{Any}(nothing, length(group_members))
     return ForecastReader{T}(
-        inner, store, entries, group_element_types, group_members, group_windows,
-        lazy, false,
+        inner, store, entries, group_element_types, group_members, group_slot_firsts,
+        group_window_index, group_windows, lazy, false,
     )
 end
 
@@ -1701,7 +1716,7 @@ get_forecast_group_entries(reader::ForecastReader, group_index::Integer) =
 
 # One group's windows for the current timestamp. The comprehension collects to the
 # windows' shared concrete type, which is what the grouping guarantees. Entries
-# sharing a slot share one decoded array.
+# sharing a slot share one decoded array; the build resolves which.
 #
 # Every entry in a group shares one element type, so whether its windows need decoding
 # is settled once per group. Asking per slot re-derived the same answer from the same
@@ -1713,20 +1728,12 @@ function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) 
     tag = reader.group_element_types[group]
     decode = _decodes_forecast_window(T, tag)
     lazy = _reads_lazily(T, reader.lazy, decode)
-    members = reader.group_members[group]
-    # One raw window per distinct slot, in first-seen order. The slots are found
-    # first so the windows land in one concretely typed vector.
-    slot_index = Dict{Int, Int}()
-    firsts = Int[]
-    for i in members
-        get!(slot_index, reader.entries[i].slot) do
-            push!(firsts, i)
-            length(firsts)
-        end
-    end
-    raws = [InfraStore.forecast_values(reader.inner, i; lazy = lazy) for i in firsts]
+    raws = [
+        InfraStore.forecast_values(reader.inner, i; lazy = lazy) for
+        i in reader.group_slot_firsts[group]
+    ]
     windows = decode ? _decode_forecast_group(T, raws, tag) : raws
-    return [windows[slot_index[reader.entries[i].slot]] for i in members]
+    return [windows[k] for k in reader.group_window_index[group]]
 end
 
 # A decode call parses its tag and resolves the decoder before touching a row, a fixed
