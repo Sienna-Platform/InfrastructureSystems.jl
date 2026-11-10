@@ -6,7 +6,6 @@
         data::Array{T, N}
         units::Union{Nothing, String}
         quantity_kind::Union{Nothing, String}
-        unit_system::Union{Nothing, AbstractUnitSystem}
         per_unit_of::Union{Nothing, String}
         value_axes::Union{Nothing, Vector{TimeSeriesAxis}}
     end
@@ -36,10 +35,8 @@ scalar-per-step case, `N >= 2` is multidimensional per-step values).
     (e.g. `"MW"`)
   - `quantity_kind::Union{Nothing, String}`: optional label for the kind of physical
     quantity the values measure (e.g. `"ActivePower"`)
-  - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
-    the values are already expressed in (`NU`, `CU`, or `SU`)
   - `per_unit_of::Union{Nothing, String}`: optional name of the field on the owning
-    component the values are a fraction of when `unit_system` is `CU`
+    component the values are a fraction of; setting it makes the series `CU`
     (e.g. `"base_power"`)
   - `value_axes::Union{Nothing, Vector{TimeSeriesAxis}}`: optional labels for each
     non-time dimension of the values, e.g. `[TimeSeriesAxis("bus", bus_numbers)]`
@@ -60,8 +57,6 @@ struct SingleTimeSeries{T, N} <: StaticTimeSeries{T}
     units::Union{Nothing, String}
     "kind of physical quantity the values measure (e.g. `\"ActivePower\"`), or `nothing`"
     quantity_kind::Union{Nothing, String}
-    "unit system the values are already expressed in (`NU`/`CU`/`SU`), or `nothing`"
-    unit_system::Union{Nothing, AbstractUnitSystem}
     "field on the owning component the values are a fraction of under `CU` (e.g. `\"base_power\"`), or `nothing`"
     per_unit_of::Union{Nothing, String}
     "labeled non-time axes of the values (see [`TimeSeriesAxis`](@ref)), or `nothing`"
@@ -100,7 +95,6 @@ function SingleTimeSeries(
     data::AbstractArray;
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
     value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
 )
@@ -114,7 +108,6 @@ function SingleTimeSeries(
         arr,
         _maybe_string(units),
         _maybe_string(quantity_kind),
-        unit_system,
         _maybe_string(per_unit_of),
         value_axes,
     )
@@ -163,7 +156,6 @@ function SingleTimeSeries(;
     normalization_factor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
     value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
 )
@@ -175,7 +167,7 @@ function SingleTimeSeries(;
     )
     return SingleTimeSeries(
         name, first_timestamp, res, arr;
-        units = units, quantity_kind = quantity_kind, unit_system = unit_system,
+        units = units, quantity_kind = quantity_kind,
         per_unit_of = per_unit_of,
         value_axes = value_axes,
     )
@@ -205,7 +197,6 @@ function SingleTimeSeries(
         src.data;
         units = src.units,
         quantity_kind = src.quantity_kind,
-        unit_system = src.unit_system,
         per_unit_of = src.per_unit_of,
         value_axes = src.value_axes,
     )
@@ -235,7 +226,6 @@ function SingleTimeSeries(
     resolution::Union{Nothing, Dates.Period} = nothing,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     # TimeArray's table integration (correctly) returns a Matrix as values, even if size in column dimension is 1 (julia +1.13)
@@ -250,7 +240,6 @@ function SingleTimeSeries(
         normalization_factor = normalization_factor,
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
     )
 end
@@ -266,7 +255,6 @@ function SingleTimeSeries(
     resolution::Union{Nothing, Dates.Period} = nothing,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     return SingleTimeSeries(
@@ -277,7 +265,6 @@ function SingleTimeSeries(
         resolution = resolution,
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
     )
 end
@@ -293,12 +280,11 @@ function SingleTimeSeries(
     time_steps::Int;
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     return SingleTimeSeries(
         name, initial_time, resolution, ones(time_steps);
-        units = units, quantity_kind = quantity_kind, unit_system = unit_system,
+        units = units, quantity_kind = quantity_kind,
         per_unit_of = per_unit_of,
     )
 end
@@ -348,7 +334,6 @@ function SingleTimeSeries(time_series::AbstractVector{<:SingleTimeSeries})
         reduce(vcat, [get_array(x) for x in time_series]);
         units = get_units(src),
         quantity_kind = get_quantity_kind(src),
-        unit_system = get_unit_system(src),
         per_unit_of = get_per_unit_of(src),
         value_axes = get_value_axes(src),
     )
@@ -416,7 +401,6 @@ function SingleTimeSeries(time_series::SingleTimeSeries, data::TimeSeries.TimeAr
         TimeSeries.values(data);
         units = get_units(time_series),
         quantity_kind = get_quantity_kind(time_series),
-        unit_system = get_unit_system(time_series),
         per_unit_of = get_per_unit_of(time_series),
         value_axes = get_value_axes(time_series),
     )
@@ -444,7 +428,6 @@ function when(ts::SingleTimeSeries, period::Function, t::Integer)
         TimeSeries.values(subset);
         units = get_units(ts),
         quantity_kind = get_quantity_kind(ts),
-        unit_system = get_unit_system(ts),
         per_unit_of = get_per_unit_of(ts),
     )
 end

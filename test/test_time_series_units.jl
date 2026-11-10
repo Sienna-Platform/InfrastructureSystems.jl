@@ -188,7 +188,7 @@ end
 
     sts = IS.SingleTimeSeries(
         "sts", initial_time, resolution, rand(24);
-        units = "MW", quantity_kind = "ActivePower", unit_system = IS.CU,
+        units = "MW", quantity_kind = "ActivePower",
         per_unit_of = "base_power",
     )
     @test descriptors(sts) == ("ActivePower", IS.CU, "base_power")
@@ -210,14 +210,14 @@ end
     stamps = [initial_time, initial_time + Dates.Hour(1), initial_time + Dates.Hour(4)]
     nts = IS.NonSequentialTimeSeries(
         "nts", stamps, rand(3);
-        quantity_kind = "Energy", unit_system = IS.NU,
+        units = "MWh", quantity_kind = "Energy",
     )
     IS.add_time_series!(sys, component, nts)
     @test descriptors(IS.get_time_series(IS.NonSequentialTimeSeries, component, "nts")) ==
           ("Energy", IS.NU, nothing)
     nts_cu = IS.NonSequentialTimeSeries(
         "nts_cu", stamps, rand(3);
-        quantity_kind = "Energy", unit_system = IS.CU, per_unit_of = "storage_capacity",
+        quantity_kind = "Energy", per_unit_of = "storage_capacity",
     )
     IS.add_time_series!(sys, component, nts_cu)
     @test descriptors(
@@ -230,7 +230,7 @@ end
         other_time => rand(horizon_count),
     )
     det = IS.Deterministic(
-        "det", one_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        "det", one_dim, resolution; quantity_kind = "ActivePower",
         per_unit_of = "base_power",
     )
     IS.add_time_series!(sys, component, det)
@@ -243,21 +243,21 @@ end
     )
     prob = IS.Probabilistic(
         "prob", two_dim, [0.1, 0.5, 0.9], resolution;
-        quantity_kind = "ActivePower", unit_system = IS.NU,
+        units = "MW", quantity_kind = "ActivePower",
     )
     IS.add_time_series!(sys, component, prob)
     @test descriptors(IS.get_time_series(IS.Probabilistic, component, "prob")) ==
           ("ActivePower", IS.NU, nothing)
     prob_cu = IS.Probabilistic(
         "prob_cu", two_dim, [0.1, 0.5, 0.9], resolution;
-        quantity_kind = "ActivePower", unit_system = IS.CU, per_unit_of = "base_power",
+        quantity_kind = "ActivePower", per_unit_of = "base_power",
     )
     IS.add_time_series!(sys, component, prob_cu)
     @test descriptors(IS.get_time_series(IS.Probabilistic, component, "prob_cu")) ==
           ("ActivePower", IS.CU, "base_power")
 
     scen = IS.Scenarios(
-        "scen", two_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        "scen", two_dim, resolution; quantity_kind = "ActivePower",
         per_unit_of = "base_power",
     )
     IS.add_time_series!(sys, component, scen)
@@ -300,14 +300,14 @@ end
 
     sts = IS.SingleTimeSeries(
         "sts", initial_time, resolution, rand(24);
-        quantity_kind = "ActivePower", unit_system = IS.CU, per_unit_of = "base_power",
+        quantity_kind = "ActivePower", per_unit_of = "base_power",
     )
     @test descriptors(IS.SingleTimeSeries(sts, "other_name")) ==
           ("ActivePower", IS.CU, "base_power")
 
     stamps = [initial_time, initial_time + Dates.Hour(1), initial_time + Dates.Hour(4)]
     nts = IS.NonSequentialTimeSeries(
-        "nts", stamps, rand(3); quantity_kind = "Energy", unit_system = IS.NU,
+        "nts", stamps, rand(3); units = "MWh", quantity_kind = "Energy",
     )
     @test descriptors(IS.NonSequentialTimeSeries(nts, "other_name")) ==
           ("Energy", IS.NU, nothing)
@@ -317,7 +317,7 @@ end
         other_time => rand(horizon_count),
     )
     det = IS.Deterministic(
-        "det", one_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        "det", one_dim, resolution; quantity_kind = "ActivePower",
         per_unit_of = "base_power",
     )
     @test descriptors(IS.Deterministic(det, "other_name")) ==
@@ -331,46 +331,35 @@ end
     )
     prob = IS.Probabilistic(
         "prob", two_dim, [0.1, 0.5, 0.9], resolution;
-        quantity_kind = "ActivePower", unit_system = IS.CU, per_unit_of = "base_power",
+        quantity_kind = "ActivePower", per_unit_of = "base_power",
     )
     @test descriptors(IS.Probabilistic(prob, "other_name")) ==
           ("ActivePower", IS.CU, "base_power")
 
     scen = IS.Scenarios(
-        "scen", two_dim, resolution; quantity_kind = "ActivePower", unit_system = IS.CU,
+        "scen", two_dim, resolution; quantity_kind = "ActivePower",
         per_unit_of = "base_power",
     )
     @test descriptors(IS.Scenarios(scen, "other_name")) ==
           ("ActivePower", IS.CU, "base_power")
 end
 
-@testset "Test SystemBaseUnit is rejected by the store rather than downgraded" begin
-    sys = create_system_data()
-    component = IS.get_component(IS.TestComponent, sys, "Component1")
+@testset "Test unit_system is derived from per_unit_of and units" begin
+    t0 = Dates.DateTime("2020-09-01")
+    res = Dates.Hour(1)
+    sts(; kw...) = IS.SingleTimeSeries("s", t0, res, rand(3); kw...)
+    @test IS.get_unit_system(sts(; per_unit_of = "base_power")) === IS.CU
+    @test IS.get_unit_system(sts(; units = "CU", per_unit_of = "base_power")) === IS.CU
+    @test IS.get_unit_system(sts(; units = "MW")) === IS.NU
+    @test IS.get_unit_system(sts()) === nothing
+    @test_throws MethodError sts(; unit_system = IS.CU)
 
-    initial_time = Dates.DateTime("2020-09-01")
-    resolution = Dates.Hour(1)
-
-    # IS names three bases; the store represents two. A system-base series is
-    # refused at the boundary instead of being written as component base or dropped
-    # to unspecified -- either would misreport the basis of every value to the
-    # next reader, unrecoverably.
-    ts = IS.SingleTimeSeries(
-        "su", initial_time, resolution, rand(24); unit_system = IS.SU,
-    )
-    @test IS.get_unit_system(ts) === IS.SU
-    @test_throws ArgumentError IS.add_time_series!(sys, component, ts)
-
-    # The two the store does represent go through.
-    for (name, marker) in (("cu", IS.CU), ("nu", IS.NU))
-        ok = IS.SingleTimeSeries(
-            name, initial_time, resolution, rand(24); unit_system = marker,
-        )
-        IS.add_time_series!(sys, component, ok)
-        @test IS.get_unit_system(
-            IS.get_time_series(IS.SingleTimeSeries, component, name),
-        ) === marker
-    end
+    # A recorded unit system must agree with the labels; an absent one is derived.
+    @test IS.check_unit_system(nothing, "MW", nothing, "s") === IS.NU
+    @test IS.check_unit_system(IS.CU, nothing, "base_power", "s") === IS.CU
+    @test_throws IS.DataFormatError IS.check_unit_system(IS.CU, "MW", nothing, "s")
+    @test_throws IS.DataFormatError IS.check_unit_system(IS.NU, nothing, "base_power", "s")
+    @test_throws IS.DataFormatError IS.check_unit_system(IS.NU, nothing, nothing, "s")
 end
 
 # A package validates series against their owners through this hook. Scoped to one name so

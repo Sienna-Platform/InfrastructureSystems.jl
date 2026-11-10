@@ -5,7 +5,6 @@
         data::Array{T, N}
         units::Union{Nothing, String}
         quantity_kind::Union{Nothing, String}
-        unit_system::Union{Nothing, AbstractUnitSystem}
         per_unit_of::Union{Nothing, String}
     end
 
@@ -34,10 +33,8 @@ scalar-per-step case, `N >= 2` is multidimensional per-step values).
     (e.g. `"MW"`)
   - `quantity_kind::Union{Nothing, String}`: optional label for the kind of physical
     quantity the values measure (e.g. `"ActivePower"`)
-  - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
-    the values are already expressed in (`NU`, `CU`, or `SU`)
   - `per_unit_of::Union{Nothing, String}`: optional name of the field on the owning
-    component the values are a fraction of when `unit_system` is `CU`
+    component the values are a fraction of; setting it makes the series `CU`
     (e.g. `"base_power"`)
 
 See [`get_units`](@ref), [`get_quantity_kind`](@ref), [`get_unit_system`](@ref),
@@ -54,8 +51,6 @@ struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
     units::Union{Nothing, String}
     "kind of physical quantity the values measure (e.g. `\"ActivePower\"`), or `nothing`"
     quantity_kind::Union{Nothing, String}
-    "unit system the values are already expressed in (`NU`/`CU`/`SU`), or `nothing`"
-    unit_system::Union{Nothing, AbstractUnitSystem}
     "field on the owning component the values are a fraction of under `CU` (e.g. `\"base_power\"`), or `nothing`"
     per_unit_of::Union{Nothing, String}
 
@@ -68,7 +63,6 @@ struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
         data::Array{T, N},
         units::Union{Nothing, AbstractString} = nothing,
         quantity_kind::Union{Nothing, AbstractString} = nothing,
-        unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
         per_unit_of::Union{Nothing, AbstractString} = nothing,
     ) where {T, N}
         length(timestamps) == size(data, 1) || throw(
@@ -82,7 +76,6 @@ struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
             data,
             _maybe_string(units),
             _maybe_string(quantity_kind),
-            unit_system,
             _maybe_string(per_unit_of),
         )
     end
@@ -96,7 +89,6 @@ function NonSequentialTimeSeries(
     data::AbstractArray;
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     arr = _ensure_array(data)
@@ -106,7 +98,6 @@ function NonSequentialTimeSeries(
         arr,
         units,
         quantity_kind,
-        unit_system,
         _maybe_string(per_unit_of),
     )
 end
@@ -133,13 +124,12 @@ function NonSequentialTimeSeries(;
     normalization_factor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     timestamps, vals = _non_sequential_args(data, normalization_factor)
     return NonSequentialTimeSeries(
         name, timestamps, vals;
-        units = units, quantity_kind = quantity_kind, unit_system = unit_system,
+        units = units, quantity_kind = quantity_kind,
         per_unit_of = per_unit_of,
     )
 end
@@ -161,7 +151,7 @@ function NonSequentialTimeSeries(
 )
     return NonSequentialTimeSeries(
         name, src.timestamps, src.data;
-        units = src.units, quantity_kind = src.quantity_kind, unit_system = src.unit_system,
+        units = src.units, quantity_kind = src.quantity_kind,
         per_unit_of = src.per_unit_of,
     )
 end
@@ -186,7 +176,6 @@ function NonSequentialTimeSeries(
     timestamp::Symbol = :timestamp,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     # TimeArray's table integration returns a Matrix even for a single column; slice
@@ -200,7 +189,6 @@ function NonSequentialTimeSeries(
         normalization_factor = normalization_factor,
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
     )
 end
@@ -216,7 +204,6 @@ function NonSequentialTimeSeries(
     timestamp::Symbol = :timestamp,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     return NonSequentialTimeSeries(
@@ -226,7 +213,6 @@ function NonSequentialTimeSeries(
         timestamp = timestamp,
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
     )
 end
@@ -244,7 +230,6 @@ function NonSequentialTimeSeries(
         TimeSeries.values(data);
         units = get_units(time_series),
         quantity_kind = get_quantity_kind(time_series),
-        unit_system = get_unit_system(time_series),
         per_unit_of = get_per_unit_of(time_series),
     )
 end
