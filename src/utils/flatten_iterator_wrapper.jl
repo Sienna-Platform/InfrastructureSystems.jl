@@ -27,3 +27,4 @@ end
 
 Base.eltype(::FlattenIteratorWrapper{T, I}) where {T, I} = T
 Base.length(iter::FlattenIteratorWrapper) = iter.length
+Base.filter(f, iter::FlattenIteratorWrapper{T}) where {T} = T[x for x in iter if f(x)]
