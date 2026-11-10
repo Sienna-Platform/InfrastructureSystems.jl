@@ -7,7 +7,6 @@
         data::SortedDict
         units::Union{Nothing, String}
         quantity_kind::Union{Nothing, String}
-        unit_system::Union{Nothing, AbstractUnitSystem}
         per_unit_of::Union{Nothing, String}
         internal::InfrastructureSystemsInternal
     end
@@ -25,10 +24,8 @@ A Discrete Scenario Based time series for a particular data field in a Component
     (e.g. `"MW"`)
   - `quantity_kind::Union{Nothing, String}`: optional label for the kind of physical
     quantity the values measure (e.g. `"ActivePower"`)
-  - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
-    the values are already expressed in (`NU`, `CU`, or `SU`)
   - `per_unit_of::Union{Nothing, String}`: optional name of the field on the owning
-    component the values are a fraction of when `unit_system` is `CU`
+    component the values are a fraction of; setting it makes the series `CU`
     (e.g. `"base_power"`)
   - `internal::InfrastructureSystemsInternal`
 
@@ -50,8 +47,6 @@ struct Scenarios{T, N} <: Forecast{T}
     units::Union{Nothing, String}
     "kind of physical quantity the values measure (e.g. `\"ActivePower\"`), or `nothing`"
     quantity_kind::Union{Nothing, String}
-    "unit system the values are already expressed in (`NU`/`CU`/`SU`), or `nothing`"
-    unit_system::Union{Nothing, AbstractUnitSystem}
     "field on the owning component the values are a fraction of under `CU` (e.g. `\"base_power\"`), or `nothing`"
     per_unit_of::Union{Nothing, String}
 end
@@ -65,7 +60,6 @@ function Scenarios(
     interval::Dates.Period;
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     sorted = _ensure_sorted_dict(data)
@@ -77,7 +71,6 @@ function Scenarios(
         interval,
         _maybe_string(units),
         _maybe_string(quantity_kind),
-        unit_system,
         _maybe_string(per_unit_of),
     )
 end
@@ -91,7 +84,6 @@ function Scenarios(;
     normalization_factor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     data = handle_normalization_factor(convert_data(data), normalization_factor)
@@ -108,7 +100,6 @@ function Scenarios(;
         interval;
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
     )
 end
@@ -135,7 +126,6 @@ function Scenarios(
     normalization_factor::NormalizationFactor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     return Scenarios(;
@@ -147,7 +137,6 @@ function Scenarios(
         normalization_factor = normalization_factor,
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
     )
 end
@@ -160,7 +149,6 @@ function Scenarios(
     normalization_factor::NormalizationFactor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     return Scenarios(
@@ -171,7 +159,6 @@ function Scenarios(
         normalization_factor = normalization_factor,
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
     )
 end
@@ -202,7 +189,6 @@ function Scenarios(
     normalization_factor::NormalizationFactor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     data, res = convert_forecast_input_time_arrays(input_data; resolution = resolution)
@@ -215,7 +201,6 @@ function Scenarios(
         normalization_factor = normalization_factor,
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
     )
 end
@@ -238,7 +223,6 @@ function Scenarios(
         src.interval;
         units = src.units,
         quantity_kind = src.quantity_kind,
-        unit_system = src.unit_system,
         per_unit_of = src.per_unit_of,
     )
 end

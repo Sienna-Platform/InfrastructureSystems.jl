@@ -6,7 +6,6 @@
         interval::Dates.Period
         units::Union{Nothing, String}
         quantity_kind::Union{Nothing, String}
-        unit_system::Union{Nothing, AbstractUnitSystem}
         per_unit_of::Union{Nothing, String}
         value_axes::Union{Nothing, Vector{TimeSeriesAxis}}
         internal::InfrastructureSystemsInternal
@@ -24,10 +23,8 @@ A deterministic forecast for a particular data field in a Component.
     (e.g. `"MW"`)
   - `quantity_kind::Union{Nothing, String}`: optional label for the kind of physical
     quantity the values measure (e.g. `"ActivePower"`)
-  - `unit_system::Union{Nothing, AbstractUnitSystem}`: optional declaration of the basis
-    the values are already expressed in (`NU`, `CU`, or `SU`)
   - `per_unit_of::Union{Nothing, String}`: optional name of the field on the owning
-    component the values are a fraction of when `unit_system` is `CU`
+    component the values are a fraction of; setting it makes the series `CU`
     (e.g. `"base_power"`)
   - `value_axes::Union{Nothing, Vector{TimeSeriesAxis}}`: optional labels for each
     non-time dimension of the values, e.g. `[TimeSeriesAxis("bus", bus_numbers)]`
@@ -49,8 +46,6 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
     units::Union{Nothing, String}
     "kind of physical quantity the values measure (e.g. `\"ActivePower\"`), or `nothing`"
     quantity_kind::Union{Nothing, String}
-    "unit system the values are already expressed in (`NU`/`CU`/`SU`), or `nothing`"
-    unit_system::Union{Nothing, AbstractUnitSystem}
     "field on the owning component the values are a fraction of under `CU` (e.g. `\"base_power\"`), or `nothing`"
     per_unit_of::Union{Nothing, String}
     "labeled non-time axes of the window values (see [`TimeSeriesAxis`](@ref)), or `nothing`"
@@ -66,7 +61,6 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
         interval::Dates.Period,
         units::Union{Nothing, AbstractString} = nothing,
         quantity_kind::Union{Nothing, AbstractString} = nothing,
-        unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
         per_unit_of::Union{Nothing, AbstractString} = nothing,
         value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
     ) where {T, N}
@@ -80,7 +74,6 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
             interval,
             _maybe_string(units),
             _maybe_string(quantity_kind),
-            unit_system,
             _maybe_string(per_unit_of),
             value_axes,
         )
@@ -96,7 +89,6 @@ function Deterministic(
     interval::Dates.Period;
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
     value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
 )
@@ -108,7 +100,6 @@ function Deterministic(
         interval,
         units,
         quantity_kind,
-        unit_system,
         _maybe_string(per_unit_of),
         value_axes,
     )
@@ -122,7 +113,6 @@ function Deterministic(;
     normalization_factor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
     value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
 )
@@ -138,7 +128,6 @@ function Deterministic(;
         interval;
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
         value_axes = value_axes,
     )
@@ -152,7 +141,6 @@ function Deterministic(
     normalization_factor::NormalizationFactor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
     value_axes::Union{Nothing, Vector{TimeSeriesAxis}} = nothing,
 )
@@ -164,7 +152,6 @@ function Deterministic(
         normalization_factor = normalization_factor,
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
         value_axes = value_axes,
     )
@@ -198,7 +185,6 @@ function Deterministic(
     normalization_factor::NormalizationFactor = 1.0,
     units::Union{Nothing, AbstractString} = nothing,
     quantity_kind::Union{Nothing, AbstractString} = nothing,
-    unit_system::Union{Nothing, AbstractUnitSystem} = nothing,
     per_unit_of::Union{Nothing, AbstractString} = nothing,
 )
     data, res = convert_forecast_input_time_arrays(input_data; resolution = resolution)
@@ -216,7 +202,6 @@ function Deterministic(
         normalization_factor = normalization_factor,
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = unit_system,
         per_unit_of = per_unit_of,
     )
 end
@@ -232,7 +217,6 @@ function Deterministic(forecast::Deterministic, data)
         get_interval(forecast);
         units = get_units(forecast),
         quantity_kind = get_quantity_kind(forecast),
-        unit_system = get_unit_system(forecast),
         per_unit_of = get_per_unit_of(forecast),
         value_axes = get_value_axes(forecast),
     )
@@ -277,7 +261,6 @@ function Deterministic(
         src.interval;
         units = src.units,
         quantity_kind = src.quantity_kind,
-        unit_system = src.unit_system,
         per_unit_of = src.per_unit_of,
         value_axes = src.value_axes,
     )
