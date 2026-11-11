@@ -76,7 +76,7 @@ struct NonSequentialTimeSeries{T, N} <: StaticTimeSeries{T}
             data,
             _maybe_string(units),
             _maybe_string(quantity_kind),
-            _maybe_string(per_unit_of),
+            _per_unit_of_label(per_unit_of),
         )
     end
 end
@@ -98,7 +98,7 @@ function NonSequentialTimeSeries(
         arr,
         units,
         quantity_kind,
-        _maybe_string(per_unit_of),
+        _per_unit_of_label(per_unit_of),
     )
 end
 

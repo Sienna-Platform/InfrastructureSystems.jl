@@ -71,7 +71,7 @@ function Probabilistic(
         interval,
         _maybe_string(units),
         _maybe_string(quantity_kind),
-        _maybe_string(per_unit_of),
+        _per_unit_of_label(per_unit_of),
     )
 end
 

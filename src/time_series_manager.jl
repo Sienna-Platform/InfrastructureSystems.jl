@@ -144,9 +144,14 @@ end
 """
     check_time_series_owner(owner, labels)
 
-Extension point called before every series is attached to `owner`: every single add, direct
+Extension point called before a series is attached to `owner`: every single add, direct
 or through a transaction (so bulk adds reach it too), and every [`copy_time_series!`](@ref).
-Throw to refuse the series. `labels` is the series being added, or, for a copy, the source's
+Throw to refuse the series.
+
+Two paths do not call it. [`transform_single_time_series!`](@ref) derives forecasts from
+`SingleTimeSeries` already checked on the same owner. The store-level
+`add_time_series!(store, owner_id, owner_type, owner_category, ts)` names its owner by id
+and has no owner object to pass, so its caller is responsible for the check. `labels` is the series being added, or, for a copy, the source's
 [`TimeSeriesMetadata`](@ref) as it is, still naming the source's owner and the source's
 series name; both carry the same label getters. So check the labels against `owner`, not
 the name or the owner `labels` records. The default accepts everything; a package defines a
