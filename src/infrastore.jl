@@ -53,7 +53,7 @@ function _compression_settings(c)
 end
 
 """
-    open_deserialized_infrastore_store(source, directory, read_only, ignore_label_errors = false)
+    open_deserialized_infrastore_store(source, directory, read_only)
 
 Open the InfraStore store for a deserialized system. In read-only mode the source
 artifacts are opened in place. Otherwise the `.h5` (+ sidecar `.sqlite`) are
@@ -73,31 +73,8 @@ A `source` with no `.sqlite` beside it is an arrays-plus-document bundle (see
 and replays them after this returns. Such a source is always copied out and given a freshly
 minted catalog, `read_only` or not — there is no catalog to open in place, and minting one
 into the caller's directory is exactly the mutation `read_only` exists to prevent.
-
-# Inconsistent labels
-
-A catalog row whose recorded `unit_system` disagrees with its labels (see
-[`unit_system_mismatches`](@ref)) fails the open with a `DataFormatError` listing every such
-row. With `ignore_label_errors` the rows are logged instead and the store opens; reads
-derive the unit system from the labels, so the recorded value is ignored.
 """
 function open_deserialized_infrastore_store(
-    source::AbstractString,
-    directory::Union{Nothing, AbstractString},
-    read_only::Bool,
-    ignore_label_errors::Bool = false,
-)
-    store = _open_deserialized_infrastore_store(source, directory, read_only)
-    try
-        report_time_series_label_errors(unit_system_mismatches(store), ignore_label_errors)
-    catch
-        close!(store)
-        rethrow()
-    end
-    return store
-end
-
-function _open_deserialized_infrastore_store(
     source::AbstractString,
     directory::Union{Nothing, AbstractString},
     read_only::Bool,
@@ -159,61 +136,10 @@ function _from_store_unit_system(unit_system::InfraStore.UnitSystem)
     throw(ArgumentError("unrecognized store unit system: $unit_system"))
 end
 
-"""
-$(TYPEDSIGNATURES)
-
-Describe every series in `store` whose recorded `unit_system` disagrees with the one its
-labels imply (see [`get_unit_system`](@ref)), one line per series; empty when all agree.
-
-The recorded value is redundant and IS reads never use it, so a disagreeing one is
-corrupt rather than a preference: it came from another client or a document, since IS
-writes the derived value. [`open_deserialized_infrastore_store`](@ref) and
-[`import_time_series_association_rows!`](@ref) run this on what they bring in; call it
-yourself on a store opened any other way.
-"""
-function unit_system_mismatches(store::Store)
-    # ponytail: lists every row; push the comparison into a catalog query if loads of
-    # very large stores show it.
-    out = String[]
-    for row in InfraStore.list_metadata(store.inner)
-        stored = _from_store_unit_system(row.unit_system)
-        derived = derive_unit_system(row.units, row.per_unit_of)
-        (isnothing(stored) || stored === derived) && continue
-        push!(
-            out,
-            "$(row.owner_type) $(row.owner_id), \"$(row.name)\": records unit_system " *
-            "$stored, but its labels (units = $(repr(row.units)), per_unit_of = " *
-            "$(repr(row.per_unit_of))) imply $derived",
-        )
-    end
-    return out
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Throw a `DataFormatError` listing `errors` (one line per offending series), or, when
-`ignore` is set, log them as a warning instead. Does nothing when `errors` is empty. The
-message names the `ignore_time_series_label_errors` load option, so the user can open the
-system and repair it by removing and re-adding the listed series.
-"""
-function report_time_series_label_errors(errors::Vector{String}, ignore::Bool)
-    isempty(errors) && return
-    msg =
-        "$(length(errors)) time series have inconsistent units labels:\n  " *
-        join(errors, "\n  ")
-    if ignore
-        @warn msg * "\nLoaded anyway (ignore_time_series_label_errors = true). Remove " *
-              "and re-add these series with consistent labels."
-        return
-    end
-    throw(
-        DataFormatError(
-            msg * "\nPass ignore_time_series_label_errors = true to load anyway, then " *
-            "remove and re-add these series with consistent labels.",
-        ),
-    )
-end
+# The unit system a store row or series implies, after checking any it recorded.
+_checked_store_unit_system(x, name) = check_unit_system(
+    _from_store_unit_system(x.unit_system), x.units, x.per_unit_of, name,
+)
 
 # Owner category of an association owner, as the `InfraStore.OwnerCategory`
 # enum the binding takes everywhere. Accepts an owner instance or its type.
@@ -486,6 +412,7 @@ end
 # Rebuild the IS `NonSequentialTimeSeries` from whatever the store handed back,
 # however the read was addressed.
 function _non_sequential_from_store(nts, name::AbstractString)
+    _checked_store_unit_system(nts, name)
     return NonSequentialTimeSeries(
         String(name), nts.timestamps, nts.data;
         units = nts.units, quantity_kind = nts.quantity_kind,
@@ -1026,6 +953,7 @@ end
 # Rebuild the IS `SingleTimeSeries` from whatever the store handed back, however
 # the read was addressed.
 function _single_from_store(sts, name::AbstractString)
+    _checked_store_unit_system(sts, name)
     return SingleTimeSeries(
         String(name), sts.initial_timestamp, sts.resolution, sts.data;
         units = sts.units, quantity_kind = sts.quantity_kind,
@@ -1483,6 +1411,7 @@ end
 # without ever round-tripping through these Julia objects.
 function _forecast_from_store(d::InfraStore.Deterministic, name::String, len)
     _check_forecast_len(d, len)
+    _checked_store_unit_system(d, name)
     _check_deterministic_window_shape(d.data, name, d.element_type)
     window(i) = _window_copy(d.data, i, len)
     data = _assemble_forecast_windows(d.initial_timestamp, d.interval, d.count, window)
@@ -1496,6 +1425,7 @@ end
 # `.data` is the canonical (percentile_count, horizon_count, count) array.
 function _forecast_from_store(p::InfraStore.Probabilistic, name::String, len)
     _check_forecast_len(p, len)
+    _checked_store_unit_system(p, name)
     _check_member_window_type(Probabilistic, name, p.element_type)
     window(i) = _member_window(p.data, i, len)
     data = _assemble_forecast_windows(p.initial_timestamp, p.interval, p.count, window)
@@ -1511,6 +1441,7 @@ end
 # `.data` is the canonical (scenario_count, horizon_count, count) array.
 function _forecast_from_store(s_ts::InfraStore.Scenarios, name::String, len)
     _check_forecast_len(s_ts, len)
+    _checked_store_unit_system(s_ts, name)
     _check_member_window_type(Scenarios, name, s_ts.element_type)
     window(i) = _member_window(s_ts.data, i, len)
     data = _assemble_forecast_windows(
@@ -2437,7 +2368,7 @@ function _metadata_from_row(row)
         row.data_hash,
         row.units,
         row.quantity_kind,
-        derive_unit_system(row.units, row.per_unit_of),
+        _checked_store_unit_system(row, row.name),
         row.component_field,
         row.per_unit_of,
         Dims(row.element_shape),

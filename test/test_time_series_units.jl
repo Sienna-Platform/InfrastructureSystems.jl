@@ -353,70 +353,13 @@ end
     @test IS.get_unit_system(sts(; units = "MW")) === IS.NU
     @test IS.get_unit_system(sts()) === nothing
     @test_throws MethodError sts(; unit_system = IS.CU)
-end
 
-@testset "Test a recorded unit_system that disagrees with the labels fails the load" begin
-    data = IS.SystemData()
-    owner = IS.TestComponent("c", 1)
-    IS.add_component!(data, owner)
-    t0 = Dates.DateTime("2020-09-01")
-    for (name, labels) in (
-        ("cu", (per_unit_of = "base_power",)),
-        ("nu", (units = "MW",)),
-        ("ok", (units = "MW",)),
-    )
-        IS.add_time_series!(
-            data, owner, IS.SingleTimeSeries(name, t0, Dates.Hour(1), rand(3); labels...),
-        )
-    end
-    # Another client recorded the opposite basis for two of them.
-    rows = JSON.parse(IS.openapi_time_series_association_json(data))
-    for row in rows
-        row["name"] == "cu" && (row["unit_system"] = "NATURAL_UNITS")
-        row["name"] == "nu" && (row["unit_system"] = "COMPONENT_BASE")
-    end
-    json = JSON.json(rows)
-    dir = mktempdir()
-    arrays = joinpath(dir, "arrays.h5")
-    IS.serialize_arrays(IS.get_data_store(data), arrays)
-
-    # Every offender is listed, and the message names the way out.
-    rejected = IS.open_deserialized_infrastore_store(arrays, dir, false)
-    err = try
-        IS.import_time_series_association_rows!(rejected, json)
-    catch e
-        e
-    end
-    IS.close!(rejected)
-    @test err isa IS.DataFormatError
-    @test occursin("2 time series", err.msg)
-    @test occursin("\"cu\"", err.msg) && occursin("\"nu\"", err.msg)
-    @test !occursin("\"ok\"", err.msg)
-    @test occursin("ignore_time_series_label_errors", err.msg)
-
-    # Opted in: logged, and reads derive the unit system from the labels.
-    store = IS.open_deserialized_infrastore_store(arrays, dir, false)
-    @test_logs (:warn, r"2 time series") match_mode = :any IS.import_time_series_association_rows!(
-        store, json, true,
-    )
-    @test length(IS.unit_system_mismatches(store)) == 2
-    derived = Dict(
-        IS.get_name(md) => IS.get_unit_system(md) for
-        md in IS._infrastore_list_metadata(store)
-    )
-    @test derived == Dict("cu" => IS.CU, "nu" => IS.NU, "ok" => IS.NU)
-
-    # The same rows in a full artifact fail the open the same way.
-    full = joinpath(dir, "full.h5")
-    IS.serialize(store, full)
-    @test_throws "ignore_time_series_label_errors" IS.open_deserialized_infrastore_store(
-        full, dir, false,
-    )
-    reopened =
-        @test_logs (:warn, r"2 time series") match_mode = :any IS.open_deserialized_infrastore_store(
-            full, dir, false, true,
-        )
-    @test length(IS.unit_system_mismatches(reopened)) == 2
+    # A recorded unit system must agree with the labels; an absent one is derived.
+    @test IS.check_unit_system(nothing, "MW", nothing, "s") === IS.NU
+    @test IS.check_unit_system(IS.CU, nothing, "base_power", "s") === IS.CU
+    @test_throws IS.DataFormatError IS.check_unit_system(IS.CU, "MW", nothing, "s")
+    @test_throws IS.DataFormatError IS.check_unit_system(IS.NU, nothing, "base_power", "s")
+    @test_throws IS.DataFormatError IS.check_unit_system(IS.NU, nothing, nothing, "s")
 end
 
 # A package validates series against their owners through this hook. Scoped to one owner

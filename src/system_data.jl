@@ -108,7 +108,6 @@ end
 The [`Store`](@ref) backing this system's time series and association rows.
 """
 get_data_store(data::SystemData) = get_data_store(data.time_series_manager)
-unit_system_mismatches(data::SystemData) = unit_system_mismatches(get_data_store(data))
 
 """
 Return the next integer id and advance the counter. Components and supplemental attributes
@@ -846,7 +845,6 @@ function deserialize(
     time_series_read_only = false,
     time_series_directory = nothing,
     validation_descriptor_file = nothing,
-    ignore_time_series_label_errors::Bool = false,
     kwargs...,
 )
     @debug "deserialize" raw _group = LOG_GROUP_SERIALIZATION
@@ -864,7 +862,6 @@ function deserialize(
                 raw["time_series_storage_file"],
                 time_series_directory,
                 time_series_read_only,
-                ignore_time_series_label_errors,
             ),
             read_only = time_series_read_only,
         )

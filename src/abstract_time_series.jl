@@ -82,9 +82,8 @@ base) or `NU` (natural units) — or `nothing` when the series declares neither.
 It is derived, not set: a series that names [`get_per_unit_of`](@ref) is in `CU`, one that
 names only [`get_units`](@ref) is in `NU`, and one that names neither is unspecified. So a
 series cannot contradict itself. The store and the document still record it, for readers
-that do not know this rule. IS reads never use the recorded value; loading a store or
-document whose recorded value disagrees with the labels fails (see
-[`unit_system_mismatches`](@ref)).
+that do not know this rule; when a stored value is present it must agree with the derived
+one, or reading the series fails.
 
 Note the direction: `SU`/`CU`/`NU` are used elsewhere in IS as a *target* to convert
 **to**, whereas here the marker records the basis the stored values are **in**. It is a
@@ -101,6 +100,20 @@ get_unit_system(value::TimeSeriesData) =
 derive_unit_system(::Any, ::AbstractString) = CU
 derive_unit_system(::AbstractString, ::Nothing) = NU
 derive_unit_system(::Nothing, ::Nothing) = nothing
+
+# A stored unit system (a catalog column or a document field) is redundant with the labels
+# it was derived from; one that disagrees with them is corrupt, not a preference.
+function check_unit_system(stored, units, per_unit_of, name::AbstractString)
+    derived = derive_unit_system(units, per_unit_of)
+    isnothing(stored) || stored === derived ||
+        throw(
+            DataFormatError(
+                "time series \"$name\" records unit_system $stored, but its labels " *
+                "(units = $(repr(units)), per_unit_of = $(repr(per_unit_of))) imply $derived",
+            ),
+        )
+    return derived
+end
 
 """
 Return the name of the field on the owning component that a time series' values are a
