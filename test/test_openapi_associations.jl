@@ -126,10 +126,8 @@ end
     @test row.data_hash == row.uri
     @test row.units == "MW"
     @test row.quantity_kind == "ActivePower"
-    # Declared by nobody stays unset: unspecified is deliberately not NATURAL_UNITS. An
-    # absent optional field decodes to `ABSENT`, not `nothing` (`nothing` means an explicit
-    # JSON `null`).
-    @test row.unit_system isa OpenAPI.Runtime.Absent
+    # Units without `per_unit_of` are natural units, and the document records that.
+    @test row.unit_system.value == "NATURAL_UNITS"
     # From the catalog, never re-derived: a scalar series has an empty per-step shape.
     @test row.element_type == "f64"
     @test isempty(row.element_shape)
@@ -242,7 +240,7 @@ end
     @test !any(r -> typeof(r) === InfrastructureTimeSeriesOpenAPIModels.Deterministic, rows)
 end
 
-@testset "openapi_time_series_association_rows: the unit system a series declares round trips, unset stays absent" begin
+@testset "openapi_time_series_association_rows: the derived unit system is written, unset stays absent" begin
     data, component = _openapi_ts_fixture()
     initial = Dates.DateTime(2024, 1, 1)
     resolution = Dates.Hour(1)
@@ -255,7 +253,10 @@ end
             ),
         ),
     )
-    for (basis, spelling) in ((IS.NU, "NATURAL_UNITS"), (IS.CU, "COMPONENT_BASE"))
+    for (labels, spelling) in (
+        ((units = "MW",), "NATURAL_UNITS"),
+        ((per_unit_of = "base_power",), "COMPONENT_BASE"),
+    )
         IS.add_time_series!(
             data, component,
             IS.SingleTimeSeries(
@@ -263,7 +264,7 @@ end
                 TimeSeries.TimeArray(
                     [initial + resolution * (i - 1) for i in 1:3], [1.0, 2.0, 3.0],
                 );
-                unit_system = basis,
+                labels...,
             ),
         )
         row = _openapi_row(data, string("series_", spelling))
