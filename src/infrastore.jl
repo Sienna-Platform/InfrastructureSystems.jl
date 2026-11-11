@@ -1728,13 +1728,17 @@ function _materialize_forecast_group(reader::ForecastReader{T}, group::Integer) 
     tag = reader.group_element_types[group]
     decode = _decodes_forecast_window(T, tag)
     lazy = _reads_lazily(T, reader.lazy, decode)
-    raws = [
-        InfraStore.forecast_values(reader.inner, i; lazy = lazy) for
-        i in reader.group_slot_firsts[group]
-    ]
+    # One call for the group's slots: they share a dtype and window rank by construction,
+    # so the window type is resolved once rather than once per slot.
+    raws = InfraStore.forecast_values(
+        reader.inner, reader.group_slot_firsts[group]; lazy = lazy,
+    )
     windows = decode ? _decode_forecast_group(T, raws, tag) : raws
-    return [windows[k] for k in reader.group_window_index[group]]
+    return _gather_windows(windows, reader.group_window_index[group])
 end
+
+# Function barrier: `windows` is concrete here, so indexing it per entry does not dispatch.
+_gather_windows(windows::AbstractVector, index::Vector{Int}) = [windows[k] for k in index]
 
 # A decode call parses its tag and resolves the decoder before touching a row, a fixed
 # cost that outweighs decoding one short window. A deterministic group's windows share
