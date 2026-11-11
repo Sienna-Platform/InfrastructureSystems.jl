@@ -315,6 +315,7 @@ function SingleTimeSeries(time_series::AbstractVector{<:SingleTimeSeries})
         ("units", get_units),
         ("quantity_kind", get_quantity_kind),
         ("unit_system", get_unit_system),
+        ("per_unit_of", get_per_unit_of),
     )
         expected = getter(src)
         for x in time_series
