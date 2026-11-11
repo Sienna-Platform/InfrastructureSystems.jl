@@ -1202,7 +1202,7 @@ function _copy_time_series_same_kind!(
                 end
                 @debug "Copy ts_key with" _group = LOG_GROUP_TIME_SERIES new_name
             end
-            check_time_series_owner(dst, _with_name(md, new_name))
+            check_time_series_owner(dst, md)
             # The key already carries the association id, so the copy is addressed
             # by it: no attribute re-resolution in the store to find the source row.
             InfraStore.copy_time_series!(
@@ -1216,16 +1216,6 @@ function _copy_time_series_same_kind!(
     end
     return
 end
-
-# `md` as a copy under `name` would list it.
-_with_name(md::TimeSeriesMetadata, name::String) =
-    if name == get_name(md)
-        md
-    else
-        typeof(md)(
-            (f === :name ? name : getfield(md, f) for f in fieldnames(typeof(md)))...,
-        )
-    end
 
 """
     list_time_series_metadata(owner; time_series_type, name, resolution, interval, features)

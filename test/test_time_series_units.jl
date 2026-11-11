@@ -419,37 +419,42 @@ end
     @test length(IS.unit_system_mismatches(reopened)) == 2
 end
 
-# A package validates series against their owners through this hook. Scoped to one name so
-# the method doesn't affect other tests.
+# A package validates series against their owners through this hook. Scoped to one owner
+# name so the method doesn't affect other tests.
 IS.check_time_series_owner(
-    ::IS.TestComponent,
+    owner::IS.TestComponent,
     labels::Union{IS.SingleTimeSeries, IS.TimeSeriesMetadata},
-) = IS.get_name(labels) == "refused" && throw(ArgumentError("refused"))
+) =
+    IS.get_name(owner) == "picky" && IS.get_quantity_kind(labels) == "refused" &&
+    throw(ArgumentError("refused"))
 
 @testset "Test check_time_series_owner runs on every add" begin
     sys = create_system_data()
     component = IS.get_component(IS.TestComponent, sys, "Component1")
-    others = collect(IS.get_components(IS.TestComponent, sys))
-    series(name) = IS.SingleTimeSeries(name, Dates.DateTime("2020-09-01"), Dates.Hour(1),
-        rand(24))
+    picky = IS.TestComponent("picky", 6)
+    IS.add_component!(sys, picky)
+    series(name; quantity_kind = nothing) = IS.SingleTimeSeries(
+        name, Dates.DateTime("2020-09-01"), Dates.Hour(1), rand(24);
+        quantity_kind = quantity_kind,
+    )
+    refused = series("s"; quantity_kind = "refused")
 
-    @test_throws ArgumentError IS.add_time_series!(sys, component, series("refused"))
-    @test_throws ArgumentError IS.add_time_series!(sys, others, series("refused"))
+    @test_throws ArgumentError IS.add_time_series!(sys, picky, refused)
+    @test_throws ArgumentError IS.add_time_series!(sys, [component, picky], refused)
     @test_throws ArgumentError IS.time_series_transaction(sys) do txn
-        IS.add_time_series!(txn, component, series("refused"))
+        IS.add_time_series!(txn, picky, refused)
     end
-    @test !IS.has_time_series(component)
-    IS.add_time_series!(sys, component, series("accepted"))
-    @test IS.has_time_series(component)
+    @test !IS.has_time_series(component) && !IS.has_time_series(picky)
+    IS.add_time_series!(sys, picky, series("accepted"))
+    @test IS.has_time_series(picky)
 
-    # A copy is checked under the name it is copied to, and a refusal copies nothing.
-    other = IS.TestComponent("Component2", 6)
-    IS.add_component!(sys, other)
-    IS.add_time_series!(sys, component, series("also_accepted"))
-    @test_throws ArgumentError IS.copy_time_series!(other, component;
-        name_mapping = Dict(("Component1", "accepted") => "refused",
-            ("Component1", "also_accepted") => "also_accepted"))
-    @test !IS.has_time_series(other)
-    IS.copy_time_series!(other, component)
-    @test length(IS.list_time_series_metadata(other)) == 2
+    # A copy is checked on the source's labels, and a refusal copies nothing.
+    IS.add_time_series!(sys, component, refused)
+    IS.add_time_series!(sys, component, series("fine"))
+    @test_throws ArgumentError IS.copy_time_series!(picky, component)
+    @test length(IS.list_time_series_metadata(picky)) == 1
+    # The name it is copied under doesn't matter.
+    IS.copy_time_series!(picky, component;
+        name_mapping = Dict(("Component1", "fine") => "s"))
+    @test length(IS.list_time_series_metadata(picky)) == 2
 end

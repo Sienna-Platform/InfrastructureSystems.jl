@@ -147,9 +147,11 @@ end
 Extension point called before every series is attached to `owner`: every single add, direct
 or through a transaction (so bulk adds reach it too), and every [`copy_time_series!`](@ref).
 Throw to refuse the series. `labels` is the series being added, or, for a copy, the source's
-[`TimeSeriesMetadata`](@ref) under the name it is copied to; both carry the same label
-getters. The default accepts everything; a package defines a method for its own owner types
-to validate a series against its owner (for example its units labels).
+[`TimeSeriesMetadata`](@ref) as it is, still naming the source's owner and the source's
+series name; both carry the same label getters. So check the labels against `owner`, not
+the name or the owner `labels` records. The default accepts everything; a package defines a
+method for its own owner types to validate a series against its owner (for example its
+units labels).
 """
 check_time_series_owner(::TimeSeriesOwners, ::Union{TimeSeriesData, TimeSeriesMetadata}) =
     nothing
