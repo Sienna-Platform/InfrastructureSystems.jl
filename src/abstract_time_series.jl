@@ -36,8 +36,8 @@ _per_unit_of_label(::Nothing) = nothing
 _per_unit_of_label(value::AbstractString) =
     if isempty(value)
         throw(
-        ArgumentError("per_unit_of must name a field; pass nothing to leave it unset"),
-    )
+            ArgumentError("per_unit_of must name a field; pass nothing to leave it unset"),
+        )
     else
         String(value)
     end
