@@ -117,12 +117,29 @@ Bulk-ingest a JSON array of time-series association OpenAPI rows into the store'
 `time_series_associations` table in one all-or-nothing transaction; returns the number of
 rows inserted. Each row must name an array the store already holds and keeps the
 `association_id` the document recorded, so existing document references stay valid.
-"""
-import_time_series_association_rows!(store::Store, json::AbstractString) =
-    InfraStore.import_time_series_associations_openapi!(store.inner, json)
 
-import_time_series_association_rows!(data::SystemData, json::AbstractString) =
-    import_time_series_association_rows!(get_data_store(data), json)
+A row whose recorded `unit_system` disagrees with its labels (see
+[`unit_system_mismatches`](@ref)) then fails with a `DataFormatError` listing every such
+row in the store, or, with `ignore_label_errors`, is logged instead. The rows stay imported
+either way; a caller that throws away the store on error loses nothing.
+"""
+function import_time_series_association_rows!(
+    store::Store,
+    json::AbstractString,
+    ignore_label_errors::Bool = false,
+)
+    n = InfraStore.import_time_series_associations_openapi!(store.inner, json)
+    report_time_series_label_errors(unit_system_mismatches(store), ignore_label_errors)
+    return n
+end
+
+import_time_series_association_rows!(
+    data::SystemData,
+    json::AbstractString,
+    ignore_label_errors::Bool = false,
+) = import_time_series_association_rows!(
+    get_data_store(data), json, ignore_label_errors,
+)
 
 """
 $(TYPEDSIGNATURES)

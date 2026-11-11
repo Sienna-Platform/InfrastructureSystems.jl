@@ -314,8 +314,11 @@ field. The store column already existed, so no `DATA_FORMAT_VERSION` bump.
 
 `get_unit_system` on a series is **derived**, not a field or constructor kwarg: `per_unit_of` set ⇒
 `CU`, else `units` set ⇒ `NU`, else `nothing` (PR #673 thread). It is still written to the store
-column / document; on read, a recorded value must match the derived one (`check_unit_system`,
-`DataFormatError`). `SU` cannot be expressed on a series.
+column / document, but reads never use it — they derive. A recorded value that disagrees is caught
+at load by `unit_system_mismatches` (run by `open_deserialized_infrastore_store` and
+`import_time_series_association_rows!`): a `DataFormatError` listing every offender, or a warning
+with the `ignore_label_errors` positional (PSY: `ignore_time_series_label_errors`). A bare
+`open_infrastore_store` is unchecked. `SU` cannot be expressed on a series.
 
 The same move was made in the Rust core: `units`, `ext`, and `element_type` are now fields
 on the five `TimeSeriesData` variants and are **gone from `AddRequest`** — one shape across
