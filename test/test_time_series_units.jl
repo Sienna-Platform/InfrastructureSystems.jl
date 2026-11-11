@@ -188,8 +188,7 @@ end
 
     sts = IS.SingleTimeSeries(
         "sts", initial_time, resolution, rand(24);
-        units = "MW", quantity_kind = "ActivePower",
-        per_unit_of = "base_power",
+        quantity_kind = "ActivePower", per_unit_of = "base_power",
     )
     @test descriptors(sts) == ("ActivePower", IS.CU, "base_power")
     IS.add_time_series!(sys, component, sts)
@@ -352,6 +351,8 @@ end
     @test IS.get_unit_system(sts(; units = "CU", per_unit_of = "base_power")) === IS.CU
     @test IS.get_unit_system(sts(; units = "MW")) === IS.NU
     @test IS.get_unit_system(sts()) === nothing
+    # An empty name is not a basis: it would otherwise make the series CU.
+    @test_throws ArgumentError sts(; per_unit_of = "")
     @test_throws MethodError sts(; unit_system = IS.CU)
 
     # A recorded unit system must agree with the labels; an absent one is derived.

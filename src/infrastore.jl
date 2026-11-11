@@ -129,6 +129,10 @@ _to_store_unit_system(::Nothing) = nothing
 _to_store_unit_system(::NaturalUnit) = InfraStore.NaturalUnits
 _to_store_unit_system(::ComponentBaseUnit) = InfraStore.ComponentBase
 
+# The unit system every store writer records, from the labels it writes.
+_store_unit_system(units, per_unit_of) =
+    _to_store_unit_system(derive_unit_system(units, per_unit_of))
+
 _from_store_unit_system(::Nothing) = nothing
 function _from_store_unit_system(unit_system::InfraStore.UnitSystem)
     unit_system === InfraStore.NaturalUnits && return NU
@@ -361,7 +365,7 @@ function serialize_single!(
         name;
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = _to_store_unit_system(derive_unit_system(units, per_unit_of)),
+        unit_system = _store_unit_system(units, per_unit_of),
         per_unit_of = per_unit_of,
         application_data = _value_axes_application_data(get_value_axes(sts)),
     )
@@ -401,7 +405,7 @@ function serialize_non_sequential!(
         name;
         units = units,
         quantity_kind = quantity_kind,
-        unit_system = _to_store_unit_system(derive_unit_system(units, per_unit_of)),
+        unit_system = _store_unit_system(units, per_unit_of),
         per_unit_of = per_unit_of,
     )
     InfraStore.add_time_series!(batch, owner_id, owner_type,
@@ -1133,7 +1137,7 @@ function _infrastore_build_forecast(
         _dense_forecast_array(ts, length(get_percentiles(ts))), name;
         units = get_units(ts),
         quantity_kind = get_quantity_kind(ts),
-        unit_system = _to_store_unit_system(get_unit_system(ts)),
+        unit_system = _store_unit_system(get_units(ts), get_per_unit_of(ts)),
         per_unit_of = get_per_unit_of(ts))
 end
 
@@ -1152,7 +1156,7 @@ function _infrastore_build_forecast(
         length(windows), stack(windows; dims = 2), name;
         units = get_units(ts),
         quantity_kind = get_quantity_kind(ts),
-        unit_system = _to_store_unit_system(get_unit_system(ts)),
+        unit_system = _store_unit_system(get_units(ts), get_per_unit_of(ts)),
         per_unit_of = get_per_unit_of(ts),
         application_data = _value_axes_application_data(get_value_axes(ts)))
 end
@@ -1168,7 +1172,7 @@ function _infrastore_build_forecast(
     return InfraStore.Scenarios(initial, resolution, horizon, interval,
         get_count(ts), _dense_forecast_array(ts, get_scenario_count(ts)), name;
         units = get_units(ts), quantity_kind = get_quantity_kind(ts),
-        unit_system = _to_store_unit_system(get_unit_system(ts)),
+        unit_system = _store_unit_system(get_units(ts), get_per_unit_of(ts)),
         per_unit_of = get_per_unit_of(ts))
 end
 

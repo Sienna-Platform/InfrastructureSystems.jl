@@ -30,6 +30,18 @@ Base.eltype(::Type{<:TimeSeriesData{T}}) where {T} = T
 _maybe_string(::Nothing) = nothing
 _maybe_string(value::AbstractString) = String(value)
 
+# Setting `per_unit_of` is what makes a series CU, so an empty name (a blank CSV cell, say)
+# must not count as set.
+_per_unit_of_label(::Nothing) = nothing
+_per_unit_of_label(value::AbstractString) =
+    if isempty(value)
+        throw(
+        ArgumentError("per_unit_of must name a field; pass nothing to leave it unset"),
+    )
+    else
+        String(value)
+    end
+
 # Normalize an arbitrary array (view, range, ...) to a concrete `Array`; copy-free
 # when it already is one.
 _ensure_array(data::Array) = data

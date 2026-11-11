@@ -74,7 +74,7 @@ struct Deterministic{T, N} <: AbstractDeterministic{T}
             interval,
             _maybe_string(units),
             _maybe_string(quantity_kind),
-            _maybe_string(per_unit_of),
+            _per_unit_of_label(per_unit_of),
             value_axes,
         )
     end
@@ -100,7 +100,7 @@ function Deterministic(
         interval,
         units,
         quantity_kind,
-        _maybe_string(per_unit_of),
+        _per_unit_of_label(per_unit_of),
         value_axes,
     )
 end
