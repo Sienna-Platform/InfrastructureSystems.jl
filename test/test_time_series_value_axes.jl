@@ -468,22 +468,30 @@ end
     part(t; kwargs...) = IS.SingleTimeSeries(
         "f", _VA_T0 + Dates.Hour(t), Dates.Hour(1), [1.0, 2.0]; kwargs...,
     )
-    labels = (units = "MW", quantity_kind = "ActivePower", unit_system = IS.CU)
+    labels = (units = "MW", quantity_kind = "ActivePower", per_unit_of = "base_power")
     joined = IS.SingleTimeSeries([part(0; labels...), part(2; labels...)])
     @test IS.get_units(joined) == "MW"
     @test IS.get_quantity_kind(joined) == "ActivePower"
     @test IS.get_unit_system(joined) == IS.CU
+    @test IS.get_per_unit_of(joined) == "base_power"
     @test_throws "different units: \"MW\" and \"kW\"" IS.SingleTimeSeries(
         [part(0; labels...), part(2; labels..., units = "kW")],
     )
     @test_throws "different quantity_kind: \"ActivePower\" and \"Energy\"" IS.SingleTimeSeries(
         [part(0; labels...), part(2; labels..., quantity_kind = "Energy")],
     )
+    # Dropping per_unit_of turns a CU segment into an NU one.
     @test_throws "different unit_system" IS.SingleTimeSeries(
-        [part(0; labels...), part(2; labels..., unit_system = IS.NU)],
+        [part(0; labels...), part(2; units = "MW", quantity_kind = "ActivePower")],
+    )
+    @test_throws "different per_unit_of: \"base_power\" and \"base_voltage\"" IS.SingleTimeSeries(
+        [part(0; labels...), part(2; labels..., per_unit_of = "base_voltage")],
     )
     @test_throws "different units: \"MW\" and nothing" IS.SingleTimeSeries(
-        [part(0; labels...), part(2; quantity_kind = "ActivePower", unit_system = IS.CU)],
+        [
+        part(0; labels...),
+        part(2; quantity_kind = "ActivePower", per_unit_of = "base_power"),
+    ],
     )
 end
 
