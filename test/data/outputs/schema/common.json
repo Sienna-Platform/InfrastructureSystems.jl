@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sienna outputs common definitions",
+  "$defs": {
+    "Kind": {
+      "enum": [
+        "single",
+        "simulation",
+        "power_flow",
+        "security_analysis"
+      ]
+    },
+    "ModelType": {
+      "enum": [
+        "decision",
+        "emulation",
+        "power_flow",
+        "security_analysis"
+      ]
+    },
+    "Container": {
+      "enum": [
+        "variables",
+        "aux_variables",
+        "parameters",
+        "expressions",
+        "duals"
+      ]
+    },
+    "Dtype": {
+      "enum": [
+        "f64",
+        "f32",
+        "i64",
+        "i32",
+        "bool"
+      ]
+    },
+    "ColumnDtype": {
+      "enum": [
+        "f64",
+        "i64",
+        "bool",
+        "str"
+      ]
+    },
+    "UnitSystem": {
+      "enum": [
+        "COMPONENT_BASE",
+        "NATURAL_UNITS"
+      ]
+    },
+    "BaseReference": {
+      "enum": [
+        "system",
+        "component"
+      ]
+    },
+    "RunStatus": {
+      "enum": [
+        "RUNNING",
+        "SUCCESSFULLY_FINALIZED",
+        "FAILED"
+      ]
+    },
+    "AxisKind": {
+      "enum": [
+        "time",
+        "execution",
+        "horizon",
+        "component",
+        "label"
+      ]
+    },
+    "QuantityKind": {
+      "enum": [
+        "ActivePower",
+        "ReactivePower",
+        "ApparentPower",
+        "ActivePowerChangeRate",
+        "ElectricalEnergy",
+        "FractionPerTime",
+        "Voltage",
+        "CurrentFlow",
+        "Resistance",
+        "Reactance",
+        "Impedance",
+        "Conductance",
+        "Susceptance",
+        "Angle",
+        "Frequency",
+        "PowerPerFrequency",
+        "VoltagePerPower",
+        "Length",
+        "Elevation",
+        "Duration",
+        "OperationalDuration",
+        "CalendarPeriod",
+        "Dimensionless",
+        "Fraction",
+        "PowerFactor",
+        "HeatRate",
+        "StartFuelPerCapacity",
+        "VolumeFlowRate",
+        "HeadRate",
+        "Volume",
+        "Inductance",
+        "Capacitance",
+        "CostPerCapacity",
+        "CostPerEnergy",
+        "CostPerTime",
+        "CO2Emissions",
+        "Mass",
+        "Money",
+        "CostPerVolume",
+        "CostPerLevel",
+        "EmissionRate",
+        "CostPerMass"
+      ]
+    },
+    "Duration": {
+      "type": "string",
+      "pattern": "^P(?!$)(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+S)?)?$"
+    },
+    "Uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "Filter": {
+      "type": "string",
+      "pattern": "^(shuffle|deflate:[1-9])$"
+    },
+    "TypeName": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9]*$"
+    },
+    "Meta": {
+      "type": "string",
+      "not": {
+        "pattern": "__"
+      }
+    },
+    "Timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?$"
+    }
+  }
+}

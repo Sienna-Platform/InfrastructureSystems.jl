@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "name",
+    "group",
+    "length",
+    "columns"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "group": {
+      "type": "string",
+      "pattern": "^/[^/]+/tables/[^/]+$"
+    },
+    "length": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "columns": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/Column"
+      }
+    }
+  },
+  "$defs": {
+    "Column": {
+      "type": "object",
+      "required": [
+        "name",
+        "dtype"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dtype": {
+          "$ref": "common.json#/$defs/ColumnDtype"
+        },
+        "quantity_kind": {
+          "$ref": "common.json#/$defs/QuantityKind"
+        },
+        "unit_system": {
+          "$ref": "common.json#/$defs/UnitSystem"
+        },
+        "base_reference": {
+          "$ref": "common.json#/$defs/BaseReference"
+        },
+        "units": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "dependentRequired": {
+        "units": [
+          "quantity_kind",
+          "unit_system"
+        ],
+        "quantity_kind": [
+          "units",
+          "unit_system"
+        ],
+        "unit_system": [
+          "units",
+          "quantity_kind"
+        ]
+      },
+      "if": {
+        "properties": {
+          "unit_system": {
+            "const": "COMPONENT_BASE"
+          }
+        },
+        "required": [
+          "unit_system"
+        ]
+      },
+      "then": {
+        "required": [
+          "base_reference"
+        ],
+        "properties": {
+          "units": {
+            "const": "pu"
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "required": [
+            "base_reference"
+          ]
+        }
+      }
+    }
+  }
+}
