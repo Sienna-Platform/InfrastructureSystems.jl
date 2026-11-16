@@ -213,7 +213,7 @@ and stored with the data), `horizon` / `interval` / `count` on a static series,
 
 A row carries **every** column the catalog records bar the values themselves —
 the descriptive labels (`units`, `quantity_kind`, `unit_system`,
-`component_field`) as well as the identity ones, the store's own `element_type`
+`component_field`, `per_unit_of`) as well as the identity ones, the store's own `element_type`
 and `element_shape`, the array's content hash, the row's `time_reference`, and
 its `application_data`. That completeness is the contract: a writer restaging
 these series into another store, or emitting them into a document, works from this
@@ -255,6 +255,7 @@ struct TimeSeriesMetadata{T <: TimeSeriesData}
     quantity_kind::Union{Nothing, String}
     unit_system::Union{Nothing, AbstractUnitSystem}
     component_field::Union{Nothing, String}
+    per_unit_of::Union{Nothing, String}
     """
     The stored array's shape after its leading axis, as the store records it —
     `()` for one number per timestep, `(3,)` for a three-wide row. A restaging
@@ -299,6 +300,7 @@ get_units(md::TimeSeriesMetadata) = md.units
 get_quantity_kind(md::TimeSeriesMetadata) = md.quantity_kind
 get_unit_system(md::TimeSeriesMetadata) = md.unit_system
 get_component_field(md::TimeSeriesMetadata) = md.component_field
+get_per_unit_of(md::TimeSeriesMetadata) = md.per_unit_of
 get_element_type(md::TimeSeriesMetadata) = md.element_type
 get_element_shape(md::TimeSeriesMetadata) = md.element_shape
 get_time_reference(md::TimeSeriesMetadata) = md.time_reference

@@ -312,6 +312,11 @@ kwarg documented under "Time series accessors" is **not present on this branch**
 `units` spellings will collide by name and the accessor kwarg should be renamed, not this
 field. The store column already existed, so no `DATA_FORMAT_VERSION` bump.
 
+`get_unit_system` on a series is **derived**, not a field or constructor kwarg: `per_unit_of` set ⇒
+`CU`, else `units` set ⇒ `NU`, else `nothing` (PR #673 thread). It is still written to the store
+column / document; on read, a recorded value must match the derived one (`check_unit_system`,
+`DataFormatError`). `SU` cannot be expressed on a series.
+
 The same move was made in the Rust core: `units`, `ext`, and `element_type` are now fields
 on the five `TimeSeriesData` variants and are **gone from `AddRequest`** — one shape across
 IS.jl / InfraStore.jl / infrastore. Set them with the `with_units` / `with_ext` /
