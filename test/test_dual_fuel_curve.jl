@@ -181,3 +181,29 @@ _to_base(curve, to) = IS.convert_power_units(curve, to, 100.0, 1.0)
     @test occursin("second_fuel_share: nothing", expanded(STACKED))
     @test occursin("second_fuel_share: 0.3", expanded(BLENDED))
 end
+
+@testset "DualFuelCurve startup fuel offtake" begin
+    for c in (STACKED, BLENDED)
+        @test IS.get_first_fuel_startup_offtake(c) == IS.LinearCurve(0.0)
+        @test IS.get_second_fuel_startup_offtake(c) == IS.LinearCurve(0.0)
+    end
+    with_offtake(c) = IS.DualFuelCurve(;
+        first_fuel_curve = IS.get_first_fuel_curve(c),
+        second_fuel_curve = IS.get_second_fuel_curve(c),
+        fuel_units = IS.CommodityUnits.MMBtu,
+        first_fuel_cost = IS.get_first_fuel_cost(c),
+        second_fuel_cost = IS.get_second_fuel_cost(c),
+        second_fuel_share = IS.get_second_fuel_share(c),
+        first_fuel_startup_offtake = IS.LinearCurve(5.0),
+        second_fuel_startup_offtake = IS.LinearCurve(2.0))
+    for c in (STACKED, BLENDED)
+        o = with_offtake(c)
+        @test IS.get_first_fuel_startup_offtake(o) == IS.LinearCurve(5.0)
+        @test IS.get_second_fuel_startup_offtake(o) == IS.LinearCurve(2.0)
+        @test IS.deserialize(typeof(o), IS.serialize(o)) == o
+        # Like FuelCurve, a conversion leaves the startup offtake as it is.
+        db = _to_base(o, IS.SystemBaseUnit())
+        @test IS.get_first_fuel_startup_offtake(db) == IS.LinearCurve(5.0)
+        @test IS.get_second_fuel_startup_offtake(db) == IS.LinearCurve(2.0)
+    end
+end

@@ -457,7 +457,8 @@ $(TYPEDFIELDS)
 
     DualFuelCurve(; first_fuel_curve, second_fuel_curve, fuel_units, power_units,
         first_fuel_cost, first_fuel_cost_time_series, second_fuel_cost,
-        second_fuel_cost_time_series, second_fuel_share, vom_cost)
+        second_fuel_cost_time_series, second_fuel_share, first_fuel_startup_offtake,
+        second_fuel_startup_offtake, vom_cost)
 
 Fuel use of a unit that burns two fuels, each with its own [`ValueCurve`](@ref) and fuel
 price. `T` is the second fuel's curve type and `F` the first's. `second_fuel_share` selects
@@ -469,6 +470,7 @@ turbine is the motivating case: recovered exhaust heat first, duct firing above 
 second curve is a `PiecewiseIncrementalCurve` without `initial_input`, since consumers price
 only its increase above the threshold. A piecewise first curve ends at that threshold.
 `first_fuel_cost` defaults to `0.0`, meaning the first fuel is paid for elsewhere.
+A nonzero `first_fuel_startup_offtake` has no physical meaning here and is stored as given.
 
 **Blended** (`second_fuel_share` between 0 and 1): one output `P` is served by both fuels,
 at cost `(1 - share) * first(P) + share * second(P)`. Both curves cover the full output, so
@@ -496,8 +498,12 @@ struct DualFuelCurve{
     second_fuel_cost::Union{Nothing, Float64}
     "The [`TimeSeriesKey`](@ref) to a second fuel price time series"
     second_fuel_cost_time_series::Union{Nothing, ScalarTimeSeriesKey}
-    "`nothing` for stacked fuels; for blended fuels the share of output from the second fuel, between 0 and 1"
+    "`nothing` for stacked fuels; for blended fuels the fixed share of the blend the second fuel supplies, between 0 and 1"
     second_fuel_share::Union{Nothing, Float64}
+    "(default of 0) Fuel of the first kind consumed during a startup, a [`LinearCurve`](@ref) in `fuel_units`"
+    first_fuel_startup_offtake::LinearCurve
+    "(default of 0) Fuel of the second kind consumed during a startup, a [`LinearCurve`](@ref) in `fuel_units`"
+    second_fuel_startup_offtake::LinearCurve
     "(default of 0) Variable operation and maintenance cost, a [`LinearCurve`](@ref)"
     vom_cost::LinearCurve
 
@@ -509,6 +515,8 @@ struct DualFuelCurve{
         second_fuel_cost::Union{Nothing, Float64},
         second_fuel_cost_time_series::Union{Nothing, TimeSeriesKey},
         second_fuel_share::Union{Nothing, Float64},
+        first_fuel_startup_offtake::LinearCurve,
+        second_fuel_startup_offtake::LinearCurve,
         vom_cost::LinearCurve,
     ) where {T, F, U, Y}
         _check_fuel_price("first", first_fuel_cost, first_fuel_cost_time_series)
@@ -524,7 +532,8 @@ struct DualFuelCurve{
         _check_dual_fuel_layout(first_fuel_curve, second_fuel_curve, second_fuel_share)
         return new{T, F, U, Y}(first_fuel_curve, second_fuel_curve, first_fuel_cost,
             first_fuel_cost_time_series, second_fuel_cost, second_fuel_cost_time_series,
-            second_fuel_share, vom_cost)
+            second_fuel_share, first_fuel_startup_offtake, second_fuel_startup_offtake,
+            vom_cost)
     end
 end
 
@@ -627,6 +636,8 @@ function DualFuelCurve(;
     second_fuel_cost::Union{Nothing, Real} = nothing,
     second_fuel_cost_time_series::Union{Nothing, TimeSeriesKey} = nothing,
     second_fuel_share::Union{Nothing, Real} = nothing,
+    first_fuel_startup_offtake::LinearCurve = LinearCurve(0.0),
+    second_fuel_startup_offtake::LinearCurve = LinearCurve(0.0),
     vom_cost::LinearCurve = LinearCurve(0.0),
 )
     # A stacked curve's first fuel is paid for elsewhere unless priced.
@@ -648,6 +659,8 @@ function DualFuelCurve(;
         _normalize_fuel_cost(second_fuel_cost),
         second_fuel_cost_time_series,
         isnothing(second_fuel_share) ? nothing : Float64(second_fuel_share),
+        first_fuel_startup_offtake,
+        second_fuel_startup_offtake,
         vom_cost,
     )
 end
@@ -666,6 +679,10 @@ get_second_fuel_cost(c::DualFuelCurve) = c.second_fuel_cost
 get_second_fuel_cost_time_series(c::DualFuelCurve) = c.second_fuel_cost_time_series
 "Get the share of output from the second fuel, or `nothing` for stacked fuels"
 get_second_fuel_share(c::DualFuelCurve) = c.second_fuel_share
+"Get the function for the first fuel consumption at startup"
+get_first_fuel_startup_offtake(c::DualFuelCurve) = c.first_fuel_startup_offtake
+"Get the function for the second fuel consumption at startup"
+get_second_fuel_startup_offtake(c::DualFuelCurve) = c.second_fuel_startup_offtake
 "Whether the two fuels are blended at a fixed share rather than stacked"
 is_blended(c::DualFuelCurve) = !isnothing(c.second_fuel_share)
 
@@ -706,7 +723,7 @@ get_time_series_key(::DualFuelCurve) = throw(
 
 """
 Convert a [`DualFuelCurve`](@ref) to the `to` unit system. Both curves and `vom_cost` move;
-fuel prices and the share are not in power units and stay.
+fuel prices, the share and the startup offtakes are not in power units and stay.
 """
 function convert_power_units(
     c::DualFuelCurve{T, F, U, Y},
@@ -724,6 +741,8 @@ function convert_power_units(
         c.second_fuel_cost,
         c.second_fuel_cost_time_series,
         c.second_fuel_share,
+        c.first_fuel_startup_offtake,
+        c.second_fuel_startup_offtake,
         scale_x(c.vom_cost, x_ratio),
     )
 end
@@ -744,6 +763,10 @@ _deserialize_curve_field(::Val{:first_fuel_cost_time_series}, raw) =
     _deserialize_fuel_cost_time_series(raw)
 _deserialize_curve_field(::Val{:second_fuel_cost_time_series}, raw) =
     _deserialize_fuel_cost_time_series(raw)
+_deserialize_curve_field(::Val{:first_fuel_startup_offtake}, raw) =
+    deserialize(LinearCurve, raw)
+_deserialize_curve_field(::Val{:second_fuel_startup_offtake}, raw) =
+    deserialize(LinearCurve, raw)
 _deserialize_curve_field(::Val{:second_fuel_share}, ::Nothing) = nothing
 _deserialize_curve_field(::Val{:second_fuel_share}, raw::Real) = Float64(raw)
 
