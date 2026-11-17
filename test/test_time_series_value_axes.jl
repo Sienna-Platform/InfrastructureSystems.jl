@@ -464,6 +464,36 @@ end
     @test IS.get_value_axes(flat) === nothing
 end
 
+@testset "Test concatenating SingleTimeSeries checks units labels" begin
+    part(t; kwargs...) = IS.SingleTimeSeries(
+        "f", _VA_T0 + Dates.Hour(t), Dates.Hour(1), [1.0, 2.0]; kwargs...,
+    )
+    cu = (quantity_kind = "ActivePower", per_unit_of = "base_power")
+    mw = (units = "MW", quantity_kind = "ActivePower")
+    joined = IS.SingleTimeSeries([part(0; cu...), part(2; cu...)])
+    @test IS.get_units(joined) === nothing
+    @test IS.get_quantity_kind(joined) == "ActivePower"
+    @test IS.get_unit_system(joined) == IS.CU
+    @test IS.get_per_unit_of(joined) == "base_power"
+    @test IS.get_units(IS.SingleTimeSeries([part(0; mw...), part(2; mw...)])) == "MW"
+    @test_throws "different units: \"MW\" and \"kW\"" IS.SingleTimeSeries(
+        [part(0; mw...), part(2; mw..., units = "kW")],
+    )
+    @test_throws "different units: \"MW\" and nothing" IS.SingleTimeSeries(
+        [part(0; mw...), part(2; quantity_kind = "ActivePower")],
+    )
+    @test_throws "different quantity_kind: \"ActivePower\" and \"Energy\"" IS.SingleTimeSeries(
+        [part(0; cu...), part(2; cu..., quantity_kind = "Energy")],
+    )
+    # Dropping per_unit_of turns a CU segment into an unspecified one.
+    @test_throws "different unit_system" IS.SingleTimeSeries(
+        [part(0; cu...), part(2; quantity_kind = "ActivePower")],
+    )
+    @test_throws "different per_unit_of: \"base_power\" and \"base_voltage\"" IS.SingleTimeSeries(
+        [part(0; cu...), part(2; cu..., per_unit_of = "base_voltage")],
+    )
+end
+
 @testset "Test value_axes TimeArray accessors reject N-D static series" begin
     msg = "ArgumentError: get_time_array is only defined for 1- or 2-D values (got N = 3)"
     sys, (owner,) = _va_system()

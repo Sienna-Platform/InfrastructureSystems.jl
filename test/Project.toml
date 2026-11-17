@@ -29,7 +29,6 @@ YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
 [sources]
 InfrastructureSystems = {path = ".."}
-InfraStore = {url = "https://github.com/NatLabRockies/infrastore.git", rev = "main", subdir = "julia/InfraStore.jl"}
 
 [compat]
-InfraStore = "0.16"
+InfraStore = "0.17"

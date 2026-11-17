@@ -1202,6 +1202,7 @@ function _copy_time_series_same_kind!(
                 end
                 @debug "Copy ts_key with" _group = LOG_GROUP_TIME_SERIES new_name
             end
+            check_time_series_owner(dst, md)
             # The key already carries the association id, so the copy is addressed
             # by it: no attribute re-resolution in the store to find the source row.
             InfraStore.copy_time_series!(

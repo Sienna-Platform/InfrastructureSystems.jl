@@ -22,3 +22,14 @@ end
     run_test(Int, [1, 2, 3], [4, 5, 6])
     run_test(Int, [], [])
 end
+
+@testset "Test IS.FlattenIteratorWrapper filter" begin
+    iter = IS.FlattenIteratorWrapper(Int, [[1, 2, 3], [4, 5, 6]])
+    evens = filter(iseven, iter)
+    @test typeof(evens) == Vector{Int}
+    @test evens == [2, 4, 6]
+    @test filter(x -> x > 2, evens) == [4, 6]
+    empty_result = filter(x -> x > 10, iter)
+    @test typeof(empty_result) == Vector{Int}
+    @test isempty(empty_result)
+end
