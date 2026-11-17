@@ -33,6 +33,10 @@ const BLENDED_TS = IS.DualFuelCurve(;
     @test IS.get_second_fuel_share(BLENDED) == 0.3
     @test IS.get_fuel_units(BLENDED) == IS.CommodityUnits.MMBtu
     @test IS.is_convex(BLENDED)
+    @test !IS.is_concave(BLENDED)
+    @test IS.is_concave(STACKED)    # a line and one step
+    @test_throws ArgumentError IS.get_function_data(BLENDED)
+    @test_throws ArgumentError IS.get_initial_input(STACKED)
     @test !IS.is_time_series_backed(BLENDED)
     @test_throws ArgumentError IS.get_stacking_threshold(BLENDED)
     @test_throws ArgumentError IS.get_value_curve(STACKED)
@@ -49,6 +53,16 @@ const BLENDED_TS = IS.DualFuelCurve(;
         first_fuel_curve = IS.PiecewisePointCurve([(40.0, 500.0), (185.4, 1947.0)]),
         second_fuel_curve = IS.PiecewiseIncrementalCurve(nothing, [185.4, 304.4], [10.017]),
         fuel_units = IS.CommodityUnits.MMBtu, second_fuel_cost = 3.44) isa IS.DualFuelCurve
+    # a first curve with no x range is taken to cover output up to the threshold
+    for first_curve in (IS.LinearCurve(9.89, 113.0), IS.QuadraticCurve(0.01, 9.0, 113.0))
+        @test IS.get_stacking_threshold(
+            IS.DualFuelCurve(;
+                first_fuel_curve = first_curve,
+                second_fuel_curve = IS.PiecewiseIncrementalCurve(
+                    nothing, [185.4, 304.4], [10.017]),
+                fuel_units = IS.CommodityUnits.MMBtu, second_fuel_cost = 3.44),
+        ) == 185.4
+    end
 end
 
 @testset "DualFuelCurve rejects bad input" begin

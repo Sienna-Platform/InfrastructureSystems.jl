@@ -461,14 +461,21 @@ $(TYPEDFIELDS)
         second_fuel_startup_offtake, vom_cost)
 
 Fuel use of a unit that burns two fuels, each with its own [`ValueCurve`](@ref) and fuel
-price. `T` is the second fuel's curve type and `F` the first's. `second_fuel_share` selects
-the case. Each fuel's price is exactly one of a fixed value and a time series key.
+price. `second_fuel_share` selects the case. Each fuel's price is exactly one of a fixed
+value and a time series key.
+
+`T` is the second fuel's curve type and `F` the first's. The supertype
+`ProductionVariableCostCurve{T, U, Y}` can name only one curve, so it names the second, and
+it does not describe the whole cost. A method that dispatches on
+`ProductionVariableCostCurve{<:PiecewiseIncrementalCurve}` matches a stacked curve and then
+throws in [`get_value_curve`](@ref); dispatch on `DualFuelCurve` instead.
 
 **Stacked** (`second_fuel_share` is `nothing`): output up to the first x of the second curve
 follows the first fuel and output above it follows the second. A combined cycle steam
 turbine is the motivating case: recovered exhaust heat first, duct firing above it. The
 second curve is a `PiecewiseIncrementalCurve` without `initial_input`, since consumers price
-only its increase above the threshold. A piecewise first curve ends at that threshold.
+only its increase above the threshold. A piecewise first curve must end at that threshold.
+A first curve with no x range, such as a `LinearCurve`, is taken to cover output up to it.
 `first_fuel_cost` defaults to `0.0`, meaning the first fuel is paid for elsewhere.
 A nonzero `first_fuel_startup_offtake` has no physical meaning here and is stored as given.
 
@@ -578,11 +585,11 @@ _bad_stacked_second_curve(c) = throw(
 function _check_dual_fuel_layout(first_curve, second_curve, ::Nothing)
     _check_stacked_second_curve(second_curve)
     threshold = first(_x_range(second_curve))
-    range = _x_range(first_curve)
-    if !isnothing(range) && !isapprox(last(range), threshold)
+    first_range = _x_range(first_curve)
+    if !isnothing(first_range) && !isapprox(last(first_range), threshold)
         throw(
             ArgumentError(
-                "the first fuel curve ends at $(last(range)) but the second starts at $threshold",
+                "the first fuel curve ends at $(last(first_range)) but the second starts at $threshold",
             ),
         )
     end
@@ -708,6 +715,24 @@ junction of the two curves are not compared.
 """
 is_convex(c::DualFuelCurve) =
     is_convex(c.first_fuel_curve) && is_convex(c.second_fuel_curve)
+"""
+True when each of the two fuel curves is concave. For a stacked curve the slopes at the
+junction of the two curves are not compared.
+"""
+is_concave(c::DualFuelCurve) =
+    is_concave(c.first_fuel_curve) && is_concave(c.second_fuel_curve)
+get_function_data(::DualFuelCurve) = throw(
+    ArgumentError(
+        "get_function_data is not defined for DualFuelCurve; use the function data of " *
+        "get_first_fuel_curve or get_second_fuel_curve",
+    ),
+)
+get_initial_input(::DualFuelCurve) = throw(
+    ArgumentError(
+        "get_initial_input is not defined for DualFuelCurve; use the initial input of " *
+        "get_first_fuel_curve or get_second_fuel_curve",
+    ),
+)
 is_time_series_backed(c::DualFuelCurve) =
     is_time_series_backed(c.first_fuel_curve) ||
     is_time_series_backed(c.second_fuel_curve) ||
