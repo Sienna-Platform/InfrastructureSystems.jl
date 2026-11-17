@@ -97,6 +97,7 @@
           "path": "/model/datasets/PowerFlowConverged"
         }
       ],
+      "supports_realized_values_post_calculation": false,
       "tables": [
         {
           "name": "solver_stats",

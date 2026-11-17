@@ -436,6 +436,41 @@ function _check_settings(model::String, settings::Dict{String, Any})
     return
 end
 
+function _check_realized_intervals(model::String, e::ExecutionAxis, h::HorizonAxis)
+    interval = Dates.value(get_interval(e))
+    resolution = Dates.value(get_resolution(h))
+    if interval <= 0 || !iszero(rem(interval, resolution))
+        throw(
+            ArgumentError(
+                "model $model: supports_realized_values_post_calculation needs an execution interval that is a positive whole multiple of the horizon resolution, got interval \"$(e.interval)\" and resolution \"$(h.resolution)\"",
+            ),
+        )
+    end
+    if interval > Dates.value(get_horizon(h))
+        throw(
+            ArgumentError(
+                "model $model: supports_realized_values_post_calculation needs an execution interval \"$(e.interval)\" of at most the horizon ($(h.horizon_count) x \"$(h.resolution)\")",
+            ),
+        )
+    end
+    return
+end
+
+function _check_realized_values(model::String, entry::ModelEntry)
+    if !entry.supports_realized_values_post_calculation
+        return
+    end
+    if !haskey(entry.axes, "execution") || !haskey(entry.axes, "horizon")
+        throw(
+            ArgumentError(
+                "model $model: supports_realized_values_post_calculation requires an execution axis and a horizon axis",
+            ),
+        )
+    end
+    _check_realized_intervals(model, entry.axes["execution"], entry.axes["horizon"])
+    return
+end
+
 function _check_model_entry(m::OutputsMetadata, model::String, entry::ModelEntry)
     _check_path_name("metadata", "model name", model)
     _check_member("model $model", "model_type", entry.model_type, _MODEL_TYPES)
@@ -458,6 +493,7 @@ function _check_model_entry(m::OutputsMetadata, model::String, entry::ModelEntry
     for (name, axis) in entry.axes
         _check_axis(model, name, axis)
     end
+    _check_realized_values(model, entry)
     seen = Set{Tuple{String, String, String}}()
     for d in entry.datasets
         key = dataset_key(d)

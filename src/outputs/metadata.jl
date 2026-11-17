@@ -165,7 +165,13 @@ struct OutputTable
     columns::Vector{OutputColumn}
 end
 
-"Description of the outputs of one model."
+"""
+Description of the outputs of one model. The field
+`supports_realized_values_post_calculation` is `true` when a reader can join the datasets
+of the model across executions into one time axis. The reader keeps the first
+`interval / resolution` horizon steps of each execution. A model with a `time` axis must
+set it to `false`, because its values are already realized.
+"""
 JSON.@defaults struct ModelEntry
     model_type::String
     system_uuid::String
@@ -173,6 +179,7 @@ JSON.@defaults struct ModelEntry
     settings::Dict{String, Any}
     axes::Dict{String, AbstractAxis}
     datasets::Vector{OutputDataset}
+    supports_realized_values_post_calculation::Bool
     tables::Vector{OutputTable} = OutputTable[]
 end
 

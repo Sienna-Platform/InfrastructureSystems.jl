@@ -80,7 +80,8 @@ function _with_extras(m::IS.OutputsMetadata)
     tbl = IS.OutputTable("notes", "/model/tables/notes", 3,
         [IS.OutputColumn("execution", "i64"), IS.OutputColumn("note", "str")])
     e2 = IS.ModelEntry(e.model_type, e.system_uuid, e.base_power, e.settings, e.axes,
-        vcat(e.datasets, ds), vcat(e.tables, tbl))
+        vcat(e.datasets, ds), e.supports_realized_values_post_calculation,
+        vcat(e.tables, tbl))
     return IS.OutputsMetadata(m.schema_version, m.kind, m.producer, m.created_at,
         m.status, m.systems, Dict("model" => e2), m.simulation)
 end

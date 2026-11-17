@@ -488,3 +488,213 @@ end
     @test !occursin("\"simulation\":{", IS.JSON.json(gone))
     @test !occursin("present", IS.JSON.json(m))
 end
+
+@testset "validate_metadata: supports_realized_values_post_calculation" begin
+    @test _sim_meta().models["UC"].supports_realized_values_post_calculation
+    @test IS.validate_metadata(_sim_meta()) === nothing
+
+    m = _sim_meta()
+    delete!(m.models["UC"].axes, "horizon")
+    _expect_invalid(
+        "flag without horizon",
+        m,
+        r"model UC: supports_realized_values_post_calculation requires",
+    )
+
+    m = _sim_meta()
+    m.models["UC"].axes["execution"] =
+        _with(m.models["UC"].axes["execution"]; interval = "PT90M")
+    _expect_invalid("interval not a multiple", m, r"model UC: .*whole multiple")
+
+    m = _sim_meta()
+    m.models["UC"].axes["execution"] =
+        _with(m.models["UC"].axes["execution"]; interval = "P3D")
+    _expect_invalid("interval above horizon", m, r"model UC: .*at most the horizon")
+
+    text = read(joinpath(DATA_DIR, "outputs", "single", "outputs.json"), String)
+    sim_json = read(joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"), String)
+    sim_obj = match(r"(?s)\"simulation\": \{.*?\n  \}", sim_json).match
+    path = joinpath(mktempdir(), "outputs.json")
+    write(path, replace(text, "\"models\":" => sim_obj * ",\n  \"models\":"; count = 1))
+    carrying = IS.read_outputs_metadata(path)
+    @test IS.has_simulation(carrying)
+    _expect_invalid(
+        "single kind with a simulation object",
+        carrying,
+        r"simulation parameters must be present exactly",
+    )
+    zero_steps = replace(read(path, String), "\"num_steps\": 7" => "\"num_steps\": 0")
+    write(path, zero_steps)
+    @test IS.has_simulation(IS.read_outputs_metadata(path))
+    _expect_invalid(
+        "empty execution_order",
+        _with(
+            _sim_meta();
+            simulation = _with(sim(_sim_meta()); execution_order = String[]),
+        ),
+        r"execution_order is empty",
+    )
+
+    table(m) = m.models["UC"].tables[1]
+    set_table!(m, t) = (m.models["UC"].tables[1] = t; m)
+    t = table(_sim_meta())
+    _expect_invalid(
+        "negative table length",
+        set_table!(_sim_meta(), _with(t; length = -1)),
+        r"length is -1",
+    )
+    _expect_invalid(
+        "table without columns",
+        set_table!(_sim_meta(), _with(t; columns = IS.OutputColumn[])),
+        r"has no columns",
+    )
+    cols = copy(t.columns)
+    cols[1] = _with(cols[1]; name = "")
+    _expect_invalid(
+        "column with an empty name",
+        set_table!(_sim_meta(), _with(t; columns = cols)),
+        r"empty name",
+    )
+    cols = copy(t.columns)
+    cols[2] = _with(cols[2]; quantity_kind = "Bogus")
+    _expect_invalid(
+        "table column quantity_kind",
+        set_table!(_sim_meta(), _with(t; columns = cols)),
+        r"quantity_kind \"Bogus\"",
+    )
+    cols = copy(t.columns)
+    cols[2] = _with(
+        cols[2];
+        unit_system = "COMPONENT_BASE",
+        base_reference = "device",
+        units = "pu",
+    )
+    _expect_invalid(
+        "table column base_reference",
+        set_table!(_sim_meta(), _with(t; columns = cols)),
+        r"base_reference \"device\"",
+    )
+end
+
+function _meta_with_text(replacements...)
+    text = read(joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"), String)
+    path = joinpath(mktempdir(), "outputs.json")
+    write(path, replace(text, replacements...))
+    return path
+end
+
+@testset "read_outputs_metadata: timestamps are naive" begin
+    ts = "\"initial_timestamp\": \"2024-01-01T00:00:00\""
+    for suffix in ("Z", "+02:00", "-05:00")
+        path =
+            _meta_with_text(ts => "\"initial_timestamp\": \"2024-01-01T00:00:00$suffix\"")
+        @test_throws ArgumentError IS.read_outputs_metadata(path)
+        @test_throws r"not naive" IS.read_outputs_metadata(path)
+    end
+    path = _meta_with_text(
+        "\"initial_time\": \"2024-01-01T00:00:00\"" => "\"initial_time\": \"2024-01-01T00:00:00Z\"",
+    )
+    @test_throws r"not naive" IS.read_outputs_metadata(path)
+    path = _meta_with_text(ts => "\"initial_timestamp\": \"2024-01-01T00:00:00.250\"")
+    m = IS.read_outputs_metadata(path)
+    @test m.models["UC"].axes["execution"].initial_timestamp ==
+          DateTime(2024, 1, 1, 0, 0, 0, 250)
+end
+
+@testset "ISO duration predicate" begin
+    @test IS.is_iso_duration("PT1H") && IS.is_iso_duration("P2DT30M")
+    @test IS.is_iso_duration("PT0S")
+    for bad in ("", "P", "PT", "P1DT", "1h", "P-1D", "PT1.5H", "P1W", "PT9999999999S")
+        @test !IS.is_iso_duration(bad)
+        @test_throws ArgumentError IS.parse_iso_duration(bad)
+    end
+end
+
+@testset "validate_metadata: model, axis, table, and meta names are path segments" begin
+    for bad in ("", "a/b")
+        m = _sim_meta()
+        m.models[bad] = pop!(m.models, "EM")
+        _expect_invalid("model name \"$bad\"", m, r"model name")
+        m = _sim_meta()
+        m.models["UC"].axes[bad] = m.models["UC"].axes["horizon"]
+        _expect_invalid("axis key \"$bad\"", m, r"axis key")
+        m = _sim_meta()
+        t = m.models["UC"].tables[1]
+        m.models["UC"].tables[1] = _with(t; name = bad, group = "/UC/tables/$bad")
+        _expect_invalid("table name \"$bad\"", m, r"table name")
+    end
+    m = _sim_meta()
+    d = m.models["UC"].datasets[1]
+    m.models["UC"].datasets[1] = _with(d; meta = "a/b", path = d.path * "__a/b")
+    _expect_invalid("meta with a slash", m, r"meta \"a/b\" contains")
+end
+
+@testset "outputs metadata: simulation presence follows the document" begin
+    sim_text = read(joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"), String)
+    single_text = read(joinpath(DATA_DIR, "outputs", "single", "outputs.json"), String)
+    path = joinpath(mktempdir(), "outputs.json")
+    obj = match(r"(?s)\"simulation\": \{.*?\n  \}", sim_text).match
+    # kind single plus any simulation object
+    write(path, replace(single_text, "\"models\":" => obj * ",\n  \"models\":"; count = 1))
+    m = IS.read_outputs_metadata(path)
+    @test IS.has_simulation(m)
+    _expect_invalid("single with a simulation object", m, r"must be present exactly")
+    # kind simulation without the object
+    m = IS.read_outputs_metadata(
+        joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
+    )
+    @test IS.has_simulation(m)
+    gone = _with(m; simulation = IS.NoSimulation())
+    @test !IS.has_simulation(gone)
+    _expect_invalid("simulation kind without the object", gone, r"must be present exactly")
+    @test_throws ErrorException IS.get_simulation(gone)
+    write(path, replace(sim_text, r"(?s)  \"simulation\": \{.*?\n  \},\n" => ""))
+    @test !IS.has_simulation(IS.read_outputs_metadata(path))
+    # a "present" key is an unknown field
+    write(
+        path,
+        replace(sim_text, "\"num_steps\": 7" => "\"num_steps\": 7, \"present\": false"),
+    )
+    @test_throws Exception IS.read_outputs_metadata(path)
+    # the written JSON has no simulation key for NoSimulation and no present key ever
+    @test !occursin("\"simulation\":{", IS.JSON.json(gone))
+    @test !occursin("present", IS.JSON.json(m))
+end
+
+@testset "validate_metadata: supports_realized_values_post_calculation" begin
+    @test _sim_meta().models["UC"].supports_realized_values_post_calculation
+    @test IS.validate_metadata(_sim_meta()) === nothing
+
+    m = _sim_meta()
+    delete!(m.models["UC"].axes, "horizon")
+    _expect_invalid(
+        "flag without horizon",
+        m,
+        r"model UC: supports_realized_values_post_calculation requires",
+    )
+
+    m = _sim_meta()
+    m.models["UC"].axes["execution"] =
+        _with(m.models["UC"].axes["execution"]; interval = "PT90M")
+    _expect_invalid("interval not a multiple", m, r"model UC: .*whole multiple")
+
+    m = _sim_meta()
+    m.models["UC"].axes["execution"] =
+        _with(m.models["UC"].axes["execution"]; interval = "P3D")
+    _expect_invalid("interval above horizon", m, r"model UC: .*at most the horizon")
+
+    m = _sim_meta()
+    _set_entry(m, "UC"; supports_realized_values_post_calculation = false)
+    delete!(m.models["UC"].axes, "horizon")
+    m.models["UC"].datasets[1] = _with(m.models["UC"].datasets[1]; axes = ["execution"],
+        layout = IS.DatasetLayout([1], m.models["UC"].datasets[1].layout.filters))
+    @test !m.models["UC"].supports_realized_values_post_calculation
+
+    text = read(joinpath(DATA_DIR, "outputs", "single", "outputs.json"), String)
+    missing_key = replace(text, r"\n *\"supports_realized_values_post_calculation\": \w+,"
+    => "")
+    @test missing_key != text
+    path = joinpath(mktempdir(), "outputs.json")
+    write(path, missing_key)
+    @test_throws Exception IS.read_outputs_metadata(path)
+end

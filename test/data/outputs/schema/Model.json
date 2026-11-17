@@ -5,6 +5,7 @@
     "model_type",
     "system_uuid",
     "base_power",
+    "supports_realized_values_post_calculation",
     "settings",
     "axes",
     "datasets"
@@ -20,6 +21,10 @@
     "base_power": {
       "type": "number",
       "exclusiveMinimum": 0
+    },
+    "supports_realized_values_post_calculation": {
+      "type": "boolean",
+      "description": "True when PowerAnalytics can stitch the datasets of the model across executions into one time axis. Stitching keeps the first interval/resolution horizon steps of each execution, as PowerSimulations read_realized does. A model with a time axis is false, because its values are already realized."
     },
     "settings": {
       "type": "object",
@@ -50,5 +55,29 @@
         "$ref": "Table.json"
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "supports_realized_values_post_calculation": {
+            "const": true
+          }
+        },
+        "required": [
+          "supports_realized_values_post_calculation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "axes": {
+            "required": [
+              "execution",
+              "horizon"
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

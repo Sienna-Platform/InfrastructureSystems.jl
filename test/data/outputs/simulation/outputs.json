@@ -187,6 +187,7 @@
           "path": "/UC/datasets/ProductionCostExpression__ThermalStandard"
         }
       ],
+      "supports_realized_values_post_calculation": true,
       "tables": [
         {
           "name": "optimizer_stats",
@@ -325,6 +326,7 @@
           "path": "/ED/datasets/NodalBalanceActiveConstraint__ACBus"
         }
       ],
+      "supports_realized_values_post_calculation": true,
       "tables": [
         {
           "name": "optimizer_stats",
@@ -414,6 +416,7 @@
           "path": "/EM/datasets/ActivePowerVariable__ThermalStandard"
         }
       ],
+      "supports_realized_values_post_calculation": false,
       "tables": [
         {
           "name": "optimizer_stats",

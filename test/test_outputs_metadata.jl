@@ -144,7 +144,7 @@ end
                 tables = [IS.OutputTable(t.name, t.group, t.length, cols)]
                 return IS.ModelEntry(
                     e.model_type, e.system_uuid, e.base_power, e.settings, e.axes,
-                    e.datasets, tables,
+                    e.datasets, e.supports_realized_values_post_calculation, tables,
                 )
             end,
         )
@@ -153,6 +153,7 @@ end
         with_model(
             e -> IS.ModelEntry(
                 "bogus", e.system_uuid, e.base_power, e.settings, e.axes, e.datasets,
+                e.supports_realized_values_post_calculation,
                 e.tables,
             ),
         ),
@@ -199,7 +200,7 @@ end
                 ]
                 return IS.ModelEntry(
                     e.model_type, e.system_uuid, e.base_power, e.settings, e.axes,
-                    e.datasets, tables,
+                    e.datasets, e.supports_realized_values_post_calculation, tables,
                 )
             end,
         ),
@@ -217,7 +218,8 @@ end
                 )
                 return IS.ModelEntry(
                     e.model_type, e.system_uuid, e.base_power, e.settings, e.axes,
-                    [bad, e.datasets[2]], e.tables,
+                    [bad, e.datasets[2]], e.supports_realized_values_post_calculation,
+                    e.tables,
                 )
             end,
         ),
@@ -234,7 +236,8 @@ end
                 )
                 return IS.ModelEntry(
                     e.model_type, e.system_uuid, e.base_power, e.settings, e.axes,
-                    [bad, e.datasets[2]], e.tables,
+                    [bad, e.datasets[2]], e.supports_realized_values_post_calculation,
+                    e.tables,
                 )
             end,
         ),
