@@ -133,3 +133,9 @@ $RECYCLE.BIN/
 
 ## Acknowledgements
 # Many thanks to `https://gitignore.io/`, written and maintained by Joe Blau, which contributed much material to this gitignore file.
+.claude/plans/
+
+# Local agent files (never committed)
+.claude/drafts/
+.claude/worktrees/
+.claude/settings.local.json
