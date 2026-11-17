@@ -36,10 +36,6 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 ZipArchives = "49080126-0e18-4c2a-b176-c102e4b3760c"
 
-[sources]
-# Until InfraStore releases the readers' `lazy` option.
-InfraStore = {url = "https://github.com/NatLabRockies/infrastore.git", rev = "main", subdir = "julia/InfraStore.jl"}
-
 [compat]
 DataFrames = "^1.7"
 DataStructures = "^0.18, ^0.19"
@@ -47,9 +43,9 @@ Dates = "1"
 DocStringExtensions = "0.8, 0.9"
 EnumX = "1"
 GeoJSON = "0.8.4"
-InfraStore = "0.16"
-InfrastructureCoreOpenAPIModels = "0.4"
-InfrastructureTimeSeriesOpenAPIModels = "0.4"
+InfraStore = "0.17"
+InfrastructureCoreOpenAPIModels = "0.5"
+InfrastructureTimeSeriesOpenAPIModels = "0.5"
 InteractiveUtils = "1"
 JSON = "^1.5"
 LinearAlgebra = "1"
