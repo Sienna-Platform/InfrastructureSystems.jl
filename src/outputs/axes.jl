@@ -548,7 +548,12 @@ function _check_simulation(m::OutputsMetadata)
     return
 end
 
-const _RUN_OUTCOMES = ("RUNNING", "SUCCESSFULLY_FINALIZED", "FAILED")
+const _RUN_OUTCOMES =
+    string.((
+        Simulation.RunStatus.RUNNING,
+        Simulation.RunStatus.SUCCESSFULLY_FINALIZED,
+        Simulation.RunStatus.FAILED,
+    ))
 
 function _check_bundle_name(uuid::AbstractString, name::AbstractString)
     if isempty(name) || name in (".", "..") || isabspath(name) ||
