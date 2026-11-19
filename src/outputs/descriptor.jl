@@ -6,7 +6,7 @@ function _default_fill(dtype::String)
 end
 
 "Upper bound of the byte size of one dataset chunk."
-const MAX_CHUNK_BYTES = 64 * 1024 * 1024
+const MAX_CHUNK_BYTES = 1024 * 1024
 
 # Axes that shrink first when a chunk is too large: time and horizon, then the others.
 function _shrink_priority(name::String)
