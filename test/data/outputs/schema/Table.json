@@ -10,23 +10,26 @@
   "additionalProperties": false,
   "properties": {
     "name": {
-      "type": "string",
-      "minLength": 1
+      "$ref": "common.json#/$defs/PathName",
+      "description": "Table name. It is unique in the model."
     },
     "group": {
       "type": "string",
-      "pattern": "^/[^/]+/tables/[^/]+$"
+      "pattern": "^/[^/]+/tables/[^/]+$",
+      "description": "HDF5 group path that holds the columns."
     },
     "length": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Number of rows."
     },
     "columns": {
       "type": "array",
       "minItems": 1,
       "items": {
         "$ref": "#/$defs/Column"
-      }
+      },
+      "description": "Columns of the table."
     }
   },
   "$defs": {
@@ -40,23 +43,29 @@
       "properties": {
         "name": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Column name. It is unique in the table."
         },
         "dtype": {
-          "$ref": "common.json#/$defs/ColumnDtype"
+          "$ref": "common.json#/$defs/ColumnDtype",
+          "description": "Element type of the column."
         },
         "quantity_kind": {
-          "$ref": "common.json#/$defs/QuantityKind"
+          "$ref": "common.json#/$defs/QuantityKind",
+          "description": "Kind of the physical quantity. The name comes from the shared quantity registry."
         },
         "unit_system": {
-          "$ref": "common.json#/$defs/UnitSystem"
+          "$ref": "common.json#/$defs/UnitSystem",
+          "description": "Unit system of the values."
         },
         "base_reference": {
-          "$ref": "common.json#/$defs/BaseReference"
+          "$ref": "common.json#/$defs/BaseReference",
+          "description": "Base of a COMPONENT_BASE value. It is absent for NATURAL_UNITS."
         },
         "units": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Unit of the values. It is pu for COMPONENT_BASE."
         }
       },
       "dependentRequired": {
@@ -99,7 +108,9 @@
             "base_reference"
           ]
         }
-      }
+      },
+      "description": "One column of a table."
     }
-  }
+  },
+  "description": "A set of 1-D columns of the same length, such as optimizer statistics. Each column is one HDF5 dataset."
 }

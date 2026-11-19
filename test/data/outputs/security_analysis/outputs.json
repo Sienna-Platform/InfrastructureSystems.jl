@@ -11,22 +11,23 @@
   "systems": {
     "6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11": "system-6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11"
   },
-  "models": {
-    "base_case": {
+  "models": [
+    {
+      "name": "base_case",
       "model_type": "security_analysis",
       "system_uuid": "6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11",
       "base_power": 100.0,
       "supports_realized_values_post_calculation": false,
       "settings": {},
-      "axes": {
-        "time": {
+      "axes": [
+        {
           "kind": "time",
           "initial_timestamp": "2024-01-01T00:00:00",
           "resolution": "PT1H",
           "length": 24,
           "group": "/base_case/axes/time"
         },
-        "ACBus": {
+        {
           "kind": "component",
           "columns": [
             {
@@ -37,15 +38,16 @@
           "length": 73,
           "group": "/base_case/axes/ACBus"
         },
-        "winding": {
+        {
           "kind": "label",
+          "name": "winding",
           "labels": [
             "primary",
             "secondary",
             "tertiary"
           ]
         }
-      },
+      ],
       "datasets": [
         {
           "container": "aux_variables",
@@ -99,5 +101,5 @@
         }
       ]
     }
-  }
+  ]
 }

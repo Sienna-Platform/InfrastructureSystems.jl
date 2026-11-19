@@ -5,6 +5,17 @@ import HDF5
 const _SINGLE_JSON = joinpath(DATA_DIR, "outputs", "single", "outputs.json")
 const _KEY = ("ActivePowerVariable", "ThermalStandard", "")
 
+# The fixture holds one execution. The writer tests need several.
+function _single_meta()
+    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    entry = outputs_model(m, "model")
+    set_outputs_axis!(
+        entry, "execution", _with(outputs_axis(entry, "execution"); count = 7),
+    )
+    entry.tables[1] = _with(entry.tables[1]; length = 7)
+    return m
+end
+
 function _fake_axis_data(ax::IS.ComponentAxis)
     n = IS.axis_length(ax)
     nc = length(ax.columns)
@@ -37,8 +48,8 @@ _add_fake_axis!(d, model, key, ::Union{IS.HorizonAxis, IS.LabelAxis}) = nothing
 
 function simulation_axis_data(m)
     d = Dict{Tuple{String, String}, IS.AxisData}()
-    for (model_name, model) in m.models, (key, ax) in model.axes
-        _add_fake_axis!(d, model_name, key, ax)
+    for model in m.models, ax in model.axes
+        _add_fake_axis!(d, model.name, IS.axis_key(ax), ax)
     end
     return d
 end
@@ -58,8 +69,9 @@ _dtype_zero(::Val{:bool}) = false
 # Zero values for every dataset of `m`, in the form `write_outputs` takes.
 function _all_values(m)
     vals = Dict()
-    for (model, entry) in m.models, d in entry.datasets
-        dims = Tuple(reverse([IS.axis_length(entry.axes[a]) for a in d.axes]))
+    for entry in m.models, d in entry.datasets
+        model = entry.name
+        dims = Tuple(reverse([IS.axis_length(outputs_axis(entry, a)) for a in d.axes]))
         vals[(model, IS.dataset_key(d)...)] = fill(_dtype_zero(Val(Symbol(d.dtype))), dims)
     end
     return vals
@@ -74,8 +86,8 @@ _column_fill(::Val{:bool}, n) = falses(n)
 # Placeholder columns for every table of `m`.
 function _all_tables(m)
     tables = Dict()
-    for (model, entry) in m.models, t in entry.tables
-        tables[(model, t.name)] = NamedTuple{Tuple(Symbol(c.name) for c in t.columns)}(
+    for entry in m.models, t in entry.tables
+        tables[(entry.name, t.name)] = NamedTuple{Tuple(Symbol(c.name) for c in t.columns)}(
             Tuple(_column_fill(c, t.length) for c in t.columns),
         )
     end
@@ -86,7 +98,7 @@ end
 _bundle_systems(m) = Dict(uuid => _MockSystem() for uuid in keys(m.systems))
 
 @testset "outputs writer: one-shot write then raw read with HDF5" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     vals = rand(48, 76, 7)
     IS.write_outputs(dir, m; axis_data = simulation_axis_data(m),
@@ -108,7 +120,7 @@ _bundle_systems(m) = Dict(uuid => _MockSystem() for uuid in keys(m.systems))
 end
 
 @testset "outputs writer: incremental append, unwritten reads NaN" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status == "RUNNING"
@@ -122,7 +134,7 @@ end
 end
 
 @testset "outputs writer: append bounds" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     w = IS.open_outputs_writer(mktempdir(), m; axis_data = simulation_axis_data(m))
     @test_throws ArgumentError IS.append!(w, "model", _KEY, fill(1.0, 48, 76), 8)
     @test_throws ArgumentError IS.append!(w, "model", _KEY, fill(1.0, 47, 76), 1)
@@ -133,7 +145,7 @@ end
 end
 
 @testset "outputs writer: axis data shape is checked before any write" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     ad = simulation_axis_data(m)
     ad[("model", "ThermalStandard")] =
         IS.AxisData(zeros(Int64, 1, 75), fill("x", 1, 75), DateTime[])
@@ -143,7 +155,7 @@ end
 end
 
 @testset "outputs writer: tables write one dataset per column" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     IS.write_table!(w, "model", "optimizer_stats",
@@ -164,12 +176,14 @@ end
 end
 
 @testset "outputs writer: axis data keys are exact" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     ad = simulation_axis_data(m)
-    ad[("model", "horizon")] = _fake_axis_data(m.models["model"].axes["execution"])
+    ad[("model", "horizon")] =
+        _fake_axis_data(outputs_axis(outputs_model(m, "model"), "execution"))
     @test_throws ArgumentError IS.open_outputs_writer(mktempdir(), m; axis_data = ad)
     ad = simulation_axis_data(m)
-    ad[("model", "nope")] = _fake_axis_data(m.models["model"].axes["execution"])
+    ad[("model", "nope")] =
+        _fake_axis_data(outputs_axis(outputs_model(m, "model"), "execution"))
     @test_throws ArgumentError IS.open_outputs_writer(mktempdir(), m; axis_data = ad)
     ad = simulation_axis_data(m)
     delete!(ad, ("model", "execution"))
@@ -178,15 +192,15 @@ end
 
 function _with_dataset(m, f)
     m2 = deepcopy(m)
-    d = m2.models["model"].datasets[1]
-    m2.models["model"].datasets[1] = f(d)
+    entry = outputs_model(m2, "model")
+    entry.datasets[1] = f(entry.datasets[1])
     return m2
 end
 
 @testset "outputs writer: bad layout fails before any file exists" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     ad = simulation_axis_data(m)
-    d0 = m.models["model"].datasets[1]
+    d0 = outputs_model(m, "model").datasets[1]
     mk(; dtype = d0.dtype, fill_value = d0.fill_value, filters = d0.layout.filters) =
         _with_dataset(
             m,
@@ -218,7 +232,7 @@ function IS.write_system_bundle(::_FailingSystem, ::AbstractString)
 end
 
 @testset "outputs writer: systems path" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     ad = simulation_axis_data(m)
     uuid, name = first(m.systems)
     vals = merge(_all_values(m), Dict(("model", _KEY...) => rand(48, 76, 7)))
@@ -255,7 +269,7 @@ end
 end
 
 @testset "outputs writer: appended values are readable before finalize" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     IS.append!(w, "model", _KEY, fill(4.0, 48, 76), 2)
@@ -275,7 +289,7 @@ end
 end
 
 @testset "outputs writer: finalize! accepts only terminal statuses" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     @test_throws ArgumentError IS.finalize!(w; status = IS.Simulation.RunStatus.RUNNING)
@@ -297,7 +311,7 @@ end
 end
 
 @testset "outputs writer: refuses a directory that holds outputs files" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     ad = simulation_axis_data(m)
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = ad, values = _all_values(m),
@@ -316,7 +330,7 @@ end
 end
 
 @testset "outputs writer: a failed JSON write leaves the writer finalizable" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     for (k, v) in _all_values(m)
@@ -348,7 +362,7 @@ end
 end
 
 @testset "outputs writer: SUCCESSFULLY_FINALIZED needs every dataset and table" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     ad = simulation_axis_data(m)
     success = IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED
     dir = mktempdir()
@@ -385,7 +399,7 @@ end
 end
 
 @testset "outputs writer: FAILED is allowed at any point" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
@@ -393,7 +407,7 @@ end
 end
 
 @testset "outputs writer: write_outputs with a missing dataset fails the run" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     @test_throws "never written" IS.write_outputs(dir, m;
         axis_data = simulation_axis_data(m), values = Dict(), tables = Dict())
@@ -401,7 +415,7 @@ end
 end
 
 @testset "outputs writer: abort! marks FAILED and closes the file" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     @test IS.abort!(w) === nothing

@@ -17,16 +17,20 @@
   "additionalProperties": false,
   "properties": {
     "container": {
-      "$ref": "common.json#/$defs/Container"
+      "$ref": "common.json#/$defs/Container",
+      "description": "Store container that holds the entry."
     },
     "entry_type": {
-      "$ref": "common.json#/$defs/TypeName"
+      "$ref": "common.json#/$defs/TypeName",
+      "description": "Name of the entry type, for example ActivePowerVariable."
     },
     "component_type": {
-      "$ref": "common.json#/$defs/TypeName"
+      "$ref": "common.json#/$defs/TypeName",
+      "description": "Name of the component type. The entry has no component type when this field is absent."
     },
     "meta": {
-      "$ref": "common.json#/$defs/Meta"
+      "$ref": "common.json#/$defs/Meta",
+      "description": "Optional entry label that separates entries with the same entry type and component type. It is empty when absent."
     },
     "axes": {
       "type": "array",
@@ -35,44 +39,40 @@
       "items": {
         "type": "string"
       },
-      "description": "Each item is a key of the model axes object. The order is the storage order of the array dimensions. The writer sets it."
+      "description": "Axis names, in the storage order of the array dimensions. The writer sets the order. For a time, execution, or horizon axis the name is the kind. For a component axis it is the component_type values joined with two underscores, plus two underscores and the subset value if present. For a label axis it is the name field."
     },
     "dtype": {
-      "$ref": "common.json#/$defs/Dtype"
+      "$ref": "common.json#/$defs/Dtype",
+      "description": "Element type of the array."
     },
     "fill_value": {
-      "oneOf": [
-        {
-          "const": "NaN"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        }
-      ],
-      "description": "Must match dtype: f64 and f32 take a number or \"NaN\"; i64 and i32 take an integer; bool takes a boolean."
+      "description": "Value of the array cells that no solve wrote. It must match dtype: f64 and f32 take a number or \"NaN\"; i64 and i32 take an integer; bool takes a boolean."
     },
     "quantity_kind": {
-      "$ref": "common.json#/$defs/QuantityKind"
+      "$ref": "common.json#/$defs/QuantityKind",
+      "description": "Kind of the physical quantity. The name comes from the shared quantity registry."
     },
     "unit_system": {
-      "$ref": "common.json#/$defs/UnitSystem"
+      "$ref": "common.json#/$defs/UnitSystem",
+      "description": "Unit system of the values."
     },
     "base_reference": {
-      "$ref": "common.json#/$defs/BaseReference"
+      "$ref": "common.json#/$defs/BaseReference",
+      "description": "Base of a COMPONENT_BASE value. It is absent for NATURAL_UNITS."
     },
     "units": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Unit of the values. It is pu for COMPONENT_BASE."
     },
     "layout": {
-      "$ref": "#/$defs/DatasetLayout"
+      "$ref": "#/$defs/DatasetLayout",
+      "description": "HDF5 chunking and filters of the array, as written."
     },
     "path": {
       "type": "string",
-      "pattern": "^/[^/]+/datasets/[^/]+$"
+      "pattern": "^/[^/]+/datasets/[^/]+$",
+      "description": "HDF5 path of the array."
     }
   },
   "allOf": [
@@ -214,15 +214,19 @@
           "items": {
             "type": "integer",
             "minimum": 1
-          }
+          },
+          "description": "Chunk size of each array dimension."
         },
         "filters": {
           "type": "array",
           "items": {
             "$ref": "common.json#/$defs/Filter"
-          }
+          },
+          "description": "HDF5 filters that the writer applied, in order."
         }
-      }
+      },
+      "description": "HDF5 storage layout of an array. A reader uses it to plan partial reads."
     }
-  }
+  },
+  "description": "One dense array of a model. The tuple entry_type, component_type, and meta identifies it in the model."
 }

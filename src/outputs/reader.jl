@@ -43,7 +43,7 @@ end
 get_metadata(a::OutputArtifact) = a.metadata
 
 "Return the sorted model names of the artifact."
-list_models(a::OutputArtifact) = sort!(collect(keys(a.metadata.models)))
+list_models(a::OutputArtifact) = sort!(String[e.name for e in a.metadata.models])
 
 "Return `(entry_type, component_type, meta)` of every dataset of `model`."
 function list_datasets(a::OutputArtifact, model::AbstractString)
@@ -60,10 +60,7 @@ end
 "Return the axis `key` of `model`."
 function get_axis(a::OutputArtifact, model::AbstractString, key::AbstractString)
     entry = _model_entry(a.metadata, model)
-    if !haskey(entry.axes, key)
-        throw(ArgumentError("model $model: no axis \"$key\""))
-    end
-    return entry.axes[key]
+    return _find_axis(entry, key)
 end
 
 _h5_path(a::OutputArtifact) = joinpath(a.dir, "outputs.h5")
@@ -193,11 +190,13 @@ function read_dataset(
         idx[pos], keep[pos] =
             _execution_selection(
                 execution,
-                axis_length(_model_entry(a.metadata, model).axes["execution"]),
+                axis_length(_find_axis(_model_entry(a.metadata, model), "execution")),
             )
     end
     expected = Tuple(
-        reverse([axis_length(_model_entry(a.metadata, model).axes[k]) for k in d.axes]),
+        reverse([
+            axis_length(_find_axis(_model_entry(a.metadata, model), k)) for k in d.axes
+        ]),
     )
     arr = HDF5.h5open(_h5_path(a), "r") do f
         ds = f[d.path]

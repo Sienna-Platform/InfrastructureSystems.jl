@@ -1,7 +1,7 @@
 # Tests `src/outputs/reader.jl`. Reuses helpers from test_outputs_writer.jl.
 
 function _written_single_dir(vals = rand(48, 76, 7))
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = simulation_axis_data(m),
         systems = _bundle_systems(m),
@@ -20,7 +20,7 @@ function _written_single_dir(vals = rand(48, 76, 7))
 end
 
 @testset "outputs reader: read back what the writer wrote" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     vals = rand(48, 76, 7)
     a = IS.open_outputs(_written_single_dir(vals))
     @test IS.get_metadata(a).status == "SUCCESSFULLY_FINALIZED"
@@ -71,7 +71,7 @@ end
 end
 
 function _with_extras(m::IS.OutputsMetadata)
-    e = m.models["model"]
+    e = outputs_model(m, "model")
     ds = IS.OutputDataset(
         "OnStatus", "", ["execution", "ThermalStandard", "horizon"], "bool", false,
         "Dimensionless", "NATURAL_UNITS", "1", IS.DatasetLayout([1, 76, 48], String[]),
@@ -79,15 +79,13 @@ function _with_extras(m::IS.OutputsMetadata)
     )
     tbl = IS.OutputTable("notes", "/model/tables/notes", 3,
         [IS.OutputColumn("execution", "i64"), IS.OutputColumn("note", "str")])
-    e2 = IS.ModelEntry(e.model_type, e.system_uuid, e.base_power, e.settings, e.axes,
-        vcat(e.datasets, ds), e.supports_realized_values_post_calculation,
-        vcat(e.tables, tbl))
+    e2 = _with(e; datasets = vcat(e.datasets, ds), tables = vcat(e.tables, tbl))
     return IS.OutputsMetadata(m.schema_version, m.kind, m.producer, m.created_at,
-        m.status, m.systems, Dict("model" => e2), m.simulation)
+        m.status, m.systems, [e2], m.simulation)
 end
 
 @testset "outputs reader: bool dataset and str table column round trip" begin
-    m = _with_extras(IS.read_outputs_metadata(_SINGLE_JSON))
+    m = _with_extras(_single_meta())
     dir = mktempdir()
     flags = rand(Bool, 48, 76, 7)
     notes = ["a", "bb", "ccc"]
@@ -113,7 +111,7 @@ end
 end
 
 @testset "outputs reader: RUNNING status warns" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     for (k, _) in m.systems

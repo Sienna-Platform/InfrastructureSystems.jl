@@ -30,12 +30,10 @@
           "description": "Number of time steps."
         },
         "group": {
-          "type": "string",
-          "pattern": "^/[^/]+/axes/[^/]+$",
-          "description": "HDF5 group path that holds the axis data."
+          "$ref": "common.json#/$defs/AxisGroup"
         }
       },
-      "description": "One continuous timeline. A single solve or values that are already realized use it."
+      "description": "One continuous timeline. An emulation model, a power flow, and a security analysis use it. The axis name is time."
     },
     "ExecutionAxis": {
       "type": "object",
@@ -66,12 +64,10 @@
           "description": "Number of solves."
         },
         "group": {
-          "type": "string",
-          "pattern": "^/[^/]+/axes/[^/]+$",
-          "description": "HDF5 group path that holds the axis data."
+          "$ref": "common.json#/$defs/AxisGroup"
         }
       },
-      "description": "The start timestamp of each solve: initial_timestamp + k*interval, for k < count. A simulation dataset uses execution and horizon."
+      "description": "The start timestamp of each solve: initial_timestamp + k*interval, for k < count. Each decision model has one, also for a single solve, where count is 1. The axis name is execution."
     },
     "HorizonAxis": {
       "type": "object",
@@ -96,7 +92,7 @@
           "description": "Number of horizon steps in one solve."
         }
       },
-      "description": "The step offset inside one solve. It has horizon_count steps of the given resolution. A simulation dataset uses execution and horizon. A single solve uses time."
+      "description": "The step offset inside one solve. It has horizon_count steps of the given resolution. Each decision model has one. The axis name is horizon."
     },
     "ComponentAxis": {
       "type": "object",
@@ -141,21 +137,20 @@
           "description": "Number of components."
         },
         "group": {
-          "type": "string",
-          "pattern": "^/[^/]+/axes/[^/]+$",
-          "description": "HDF5 group path that holds the axis data."
+          "$ref": "common.json#/$defs/AxisGroup"
         },
         "subset": {
           "type": "string",
-          "description": "Optional name suffix. The axis key appends it after two underscores to the component types."
+          "description": "Optional suffix of the axis name. The axis name appends it after two underscores to the component types."
         }
       },
-      "description": "One entry for each component."
+      "description": "One entry for each component. The axis name is the component_type values of the columns, joined with two underscores. A subset adds two underscores and the subset value."
     },
     "LabelAxis": {
       "type": "object",
       "required": [
         "kind",
+        "name",
         "labels"
       ],
       "additionalProperties": false,
@@ -163,6 +158,18 @@
         "kind": {
           "const": "label",
           "description": "Axis kind. The value is \"label\"."
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "not": {
+            "enum": [
+              "time",
+              "execution",
+              "horizon"
+            ]
+          },
+          "description": "Axis name. It is lower snake case and is not time, execution, or horizon."
         },
         "labels": {
           "type": "array",
@@ -174,7 +181,7 @@
           "description": "The fixed string labels."
         }
       },
-      "description": "An axis whose entries are not components and not time. It has only fixed string labels. IOM uses it for an extra column dimension of some store arrays."
+      "description": "An axis whose entries are not components and not time. It has only fixed string labels. IOM uses it for an extra column dimension of some store arrays. The axis name is the name field."
     }
   },
   "oneOf": [

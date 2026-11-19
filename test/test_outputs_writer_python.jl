@@ -34,6 +34,9 @@ end
     script = joinpath(@__DIR__, "python", "read_outputs.py")
     for kind in ("single", "simulation", "power_flow", "security_analysis")
         m = IS.read_outputs_metadata(joinpath(DATA_DIR, "outputs", kind, "outputs.json"))
+        if kind == "single"
+            m = _single_meta()
+        end
         dir = mktempdir()
         values = _all_values(m)
         if kind == "single"
@@ -56,7 +59,7 @@ end
     end
 
     # a document that violates the schema exits with code 3
-    m = IS.read_outputs_metadata(joinpath(DATA_DIR, "outputs", "single", "outputs.json"))
+    m = _single_meta()
     dir = mktempdir()
     IS.write_outputs(
         dir, m; axis_data = simulation_axis_data(m), values = _all_values(m),

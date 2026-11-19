@@ -106,8 +106,8 @@ function validate_components(
 )
     entry = _model_entry(a.metadata, model)
     HDF5.h5open(_h5_path(a), "r") do f
-        for (key, ax) in sort!(collect(entry.axes); by = first)
-            _validate_axis(f, model, key, ax, data)
+        for ax in sort(entry.axes; by = axis_key)
+            _validate_axis(f, model, axis_key(ax), ax, data)
         end
     end
     return nothing

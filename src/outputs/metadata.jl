@@ -112,9 +112,10 @@ JSON.@defaults struct ComponentAxis <: AbstractAxis
     subset::String = "" & (json = (lower = _omit_if_empty,),)
 end
 
-"Axis that lists plain labels."
+"Axis that lists plain labels. The `name` is the key that a dataset uses to refer to the axis."
 struct LabelAxis <: AbstractAxis
     kind::String
+    name::String
     labels::Vector{String}
 end
 
@@ -166,18 +167,19 @@ struct OutputTable
 end
 
 """
-Description of the outputs of one model. The field
+Description of the outputs of one model. The `name` is unique in the document. The field
 `supports_realized_values_post_calculation` is `true` when a reader can join the datasets
 of the model across executions into one time axis. The reader keeps the first
 `interval / resolution` horizon steps of each execution. A model with a `time` axis must
 set it to `false`, because its values are already realized.
 """
 JSON.@defaults struct ModelEntry
+    name::String
     model_type::String
     system_uuid::String
     base_power::Float64
     settings::Dict{String, Any}
-    axes::Dict{String, AbstractAxis}
+    axes::Vector{AbstractAxis}
     datasets::Vector{OutputDataset}
     supports_realized_values_post_calculation::Bool
     tables::Vector{OutputTable} = OutputTable[]
@@ -221,7 +223,7 @@ JSON.@defaults struct OutputsMetadata
     created_at::String
     status::String
     systems::Dict{String, String}
-    models::Dict{String, ModelEntry}
+    models::Vector{ModelEntry}
     simulation::AbstractSimulation =
         NoSimulation() & (json = (lower = _omit_if_no_simulation,),)
 end
@@ -286,10 +288,23 @@ function _column_storage_type(dtype::String)
 end
 
 function _model_entry(m::OutputsMetadata, model::AbstractString)
-    if !haskey(m.models, model)
+    i = findfirst(e -> e.name == model, m.models)
+    if isnothing(i)
         throw(ArgumentError("unknown model $model"))
     end
-    return m.models[model]
+    return m.models[i]
+end
+
+function _has_axis(entry::ModelEntry, name::AbstractString)
+    return any(a -> axis_key(a) == name, entry.axes)
+end
+
+function _find_axis(entry::ModelEntry, name::AbstractString)
+    i = findfirst(a -> axis_key(a) == name, entry.axes)
+    if isnothing(i)
+        throw(ArgumentError("model $(entry.name): unknown axis $name"))
+    end
+    return entry.axes[i]
 end
 
 function _find_dataset(m::OutputsMetadata, model::AbstractString, key::Tuple)

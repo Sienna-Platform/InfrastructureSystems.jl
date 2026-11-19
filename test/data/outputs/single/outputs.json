@@ -11,8 +11,9 @@
   "systems": {
     "6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11": "system-6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11"
   },
-  "models": {
-    "model": {
+  "models": [
+    {
+      "name": "model",
       "model_type": "decision",
       "system_uuid": "6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11",
       "base_power": 100.0,
@@ -23,20 +24,20 @@
         "resolution": "PT1H",
         "optimizer": "HiGHS"
       },
-      "axes": {
-        "execution": {
+      "axes": [
+        {
           "kind": "execution",
           "initial_timestamp": "2024-01-01T00:00:00",
           "interval": "P1D",
-          "count": 7,
+          "count": 1,
           "group": "/model/axes/execution"
         },
-        "horizon": {
+        {
           "kind": "horizon",
           "resolution": "PT1H",
           "horizon_count": 48
         },
-        "ThermalStandard": {
+        {
           "kind": "component",
           "columns": [
             {
@@ -47,7 +48,7 @@
           "length": 76,
           "group": "/model/axes/ThermalStandard"
         },
-        "VariableReserve__ThermalStandard": {
+        {
           "kind": "component",
           "columns": [
             {
@@ -62,7 +63,7 @@
           "length": 152,
           "group": "/model/axes/VariableReserve__ThermalStandard"
         }
-      },
+      ],
       "datasets": [
         {
           "container": "variables",
@@ -183,7 +184,7 @@
         {
           "name": "optimizer_stats",
           "group": "/model/tables/optimizer_stats",
-          "length": 7,
+          "length": 1,
           "columns": [
             {
               "name": "execution",
@@ -211,5 +212,5 @@
         }
       ]
     }
-  }
+  ]
 }

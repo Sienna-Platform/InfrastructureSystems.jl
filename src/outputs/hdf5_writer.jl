@@ -70,10 +70,10 @@ _needs_axis_data(::Union{HorizonAxis, LabelAxis}) = false
 
 function _check_axis_set(m::OutputsMetadata, axis_data)
     for (model, name) in keys(axis_data)
-        if !haskey(m.models, model) || !haskey(m.models[model].axes, name)
+        if !any(e -> e.name == model && _has_axis(e, name), m.models)
             throw(ArgumentError("model $model: axis data key \"$name\" names no axis"))
         end
-        if !_needs_axis_data(m.models[model].axes[name])
+        if !_needs_axis_data(_find_axis(_model_entry(m, model), name))
             throw(
                 ArgumentError(
                     "model $model: axis \"$name\" carries no datasets and takes no axis data",
@@ -81,7 +81,9 @@ function _check_axis_set(m::OutputsMetadata, axis_data)
             )
         end
     end
-    for (model, entry) in m.models, (name, ax) in entry.axes
+    for entry in m.models, ax in entry.axes
+        model = entry.name
+        name = axis_key(ax)
         if _needs_axis_data(ax)
             if !haskey(axis_data, (model, name))
                 throw(ArgumentError("model $model: no axis data for axis \"$name\""))
@@ -166,7 +168,7 @@ end
 function _create_dataset!(f::HDF5.File, model::String, d::OutputDataset, m::ModelEntry)
     key = dataset_key(d)
     T = _DTYPES[d.dtype][1]
-    dims = reverse([axis_length(m.axes[a]) for a in d.axes])
+    dims = reverse([axis_length(_find_axis(m, a)) for a in d.axes])
     pos = findfirst(==("execution"), d.axes)
     exec_dim = 0
     expected = dims
@@ -196,8 +198,10 @@ end
 
 function _populate!(f::HDF5.File, m::OutputsMetadata, axis_data)
     records = Dict{Tuple{String, String, String, String}, DatasetRecord}()
-    for (model, entry) in m.models
-        for (name, ax) in entry.axes
+    for entry in m.models
+        model = entry.name
+        for ax in entry.axes
+            name = axis_key(ax)
             g = HDF5.create_group(f, "/$model/axes/$name")
             _write_axis!(g, ax, axis_data, (model, name))
         end
@@ -413,7 +417,8 @@ function _unwritten(w::OutputsWriter)
             )
         end
     end
-    for (model, entry) in w.metadata.models, t in entry.tables
+    for entry in w.metadata.models, t in entry.tables
+        model = entry.name
         if !((model, t.name) in w.tables_written)
             push!(missing_, "model $model: table $(t.name) was never written")
         end

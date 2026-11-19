@@ -166,3 +166,40 @@ function create_forecast_key_fixture(
     end
     return sys, keys
 end
+
+function outputs_model_index(m::IS.OutputsMetadata, name::AbstractString)
+    return only(findall(e -> e.name == name, m.models))
+end
+
+function outputs_model(m::IS.OutputsMetadata, name::AbstractString)
+    return m.models[outputs_model_index(m, name)]
+end
+
+function outputs_axis_index(entry::IS.ModelEntry, name::AbstractString)
+    return only(findall(a -> IS.axis_key(a) == name, entry.axes))
+end
+
+function outputs_axis(entry::IS.ModelEntry, name::AbstractString)
+    return entry.axes[outputs_axis_index(entry, name)]
+end
+
+function _with(x; kw...)
+    T = typeof(x)
+    vals = Dict{Symbol, Any}(k => getfield(x, k) for k in fieldnames(T))
+    merge!(vals, Dict{Symbol, Any}(kw))
+    return T((vals[k] for k in fieldnames(T))...)
+end
+
+function set_outputs_axis!(
+    entry::IS.ModelEntry,
+    name::AbstractString,
+    axis::IS.AbstractAxis,
+)
+    entry.axes[outputs_axis_index(entry, name)] = axis
+    return entry
+end
+
+function delete_outputs_axis!(entry::IS.ModelEntry, name::AbstractString)
+    deleteat!(entry.axes, outputs_axis_index(entry, name))
+    return entry
+end

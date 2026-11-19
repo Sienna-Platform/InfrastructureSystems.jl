@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
+  "description": "The outputs.json metadata document. It describes the raw model outputs that one run stored in the artifact.",
   "required": [
     "schema_version",
     "kind",
@@ -13,13 +14,16 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "0.1.0"
+      "const": "0.1.0",
+      "description": "Version of this schema that the document satisfies."
     },
     "kind": {
-      "$ref": "common.json#/$defs/Kind"
+      "$ref": "common.json#/$defs/Kind",
+      "description": "Kind of run. Listing tools use it as a hint. Readers dispatch on the model_type of each model."
     },
     "producer": {
-      "$ref": "#/$defs/ProducerInfo"
+      "$ref": "#/$defs/ProducerInfo",
+      "description": "The package that wrote the document."
     },
     "created_at": {
       "type": "string",
@@ -28,7 +32,8 @@
       "description": "Absolute instant. Requires a trailing Z or a UTC offset."
     },
     "status": {
-      "$ref": "common.json#/$defs/RunStatus"
+      "$ref": "common.json#/$defs/RunStatus",
+      "description": "Status of the run."
     },
     "systems": {
       "type": "object",
@@ -37,19 +42,21 @@
         "$ref": "common.json#/$defs/Uuid"
       },
       "additionalProperties": {
-        "type": "string",
-        "minLength": 1
-      }
+        "$ref": "common.json#/$defs/PathName"
+      },
+      "description": "Maps the UUID of each source system to its directory, relative to the artifact."
     },
     "simulation": {
-      "$ref": "#/$defs/SimulationParams"
+      "$ref": "#/$defs/SimulationParams",
+      "description": "Parameters of the simulation. Required when kind is simulation, and not allowed for other kinds."
     },
     "models": {
-      "type": "object",
-      "minProperties": 1,
-      "additionalProperties": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
         "$ref": "Model.json"
-      }
+      },
+      "description": "The models that wrote data. Model names are unique in the document."
     }
   },
   "if": {
@@ -77,6 +84,7 @@
   "$defs": {
     "ProducerInfo": {
       "type": "object",
+      "description": "Provenance of the document. The writing package records it at write time.",
       "required": [
         "package",
         "version",
@@ -85,18 +93,22 @@
       "additionalProperties": false,
       "properties": {
         "package": {
-          "type": "string"
+          "type": "string",
+          "description": "Name of the writing package."
         },
         "version": {
-          "type": "string"
+          "type": "string",
+          "description": "Version of the writing package."
         },
         "julia": {
-          "type": "string"
+          "type": "string",
+          "description": "Julia version that ran the writer."
         }
       }
     },
     "SimulationParams": {
       "type": "object",
+      "description": "Parameters of the whole simulation run. They do not belong to one model.",
       "required": [
         "initial_time",
         "step_resolution",
@@ -107,21 +119,24 @@
       "properties": {
         "initial_time": {
           "$ref": "common.json#/$defs/Timestamp",
-          "description": "Naive local datetime with no zone or offset."
+          "description": "Start of the simulation. Naive local datetime with no zone or offset."
         },
         "step_resolution": {
-          "$ref": "common.json#/$defs/Duration"
+          "$ref": "common.json#/$defs/Duration",
+          "description": "Duration of one simulation step."
         },
         "num_steps": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Number of simulation steps."
         },
         "execution_order": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Names of the models in the order that the simulation runs them."
         }
       }
     }

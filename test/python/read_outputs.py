@@ -40,7 +40,8 @@ def main(directory, schema_dir):
     if schema_dir is not None:
         validate_schema(meta, schema_dir)
     with h5py.File(f"{directory}/outputs.h5", "r") as h5:
-        for model, spec in models.items():
+        for spec in models:
+            model = spec["name"]
             for entry in spec["datasets"]:
                 path = entry["path"]
                 if path not in h5:
@@ -48,9 +49,10 @@ def main(directory, schema_dir):
                     sys.exit(2)
                 ds = h5[path]
                 print(model, path.rsplit("/", 1)[-1], ds.shape, ds.chunks)
-            for key, axis in spec["axes"].items():
+            for axis in spec["axes"]:
                 if axis["kind"] != "component":
                     continue
+                key = axis["group"].rsplit("/", 1)[-1]
                 group = h5[axis["group"]]
                 ids = group["ids"].shape if "ids" in group else "none"
                 print(model, "axis", key, "labels", group["labels"].shape, "ids", ids)

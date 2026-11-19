@@ -13,7 +13,7 @@ const _OUTPUT_UNIT_SYSTEMS = ("COMPONENT_BASE", "NATURAL_UNITS")
 const _BASE_REFERENCES = ("system", "component")
 const _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 const _RFC3339_PATTERN =
-    r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])[Tt]([01]\d|2[0-3]):[0-5]\d:([0-5]\d|60)(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$"
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$"
 const _FILTER_PATTERN = r"^(shuffle|deflate:[1-9])$"
 
 function _check_member(where_::String, field::String, value::AbstractString, allowed)
@@ -28,12 +28,13 @@ function _check_member(where_::String, field::String, value::AbstractString, all
 end
 
 """
-Return the key of the axis in the `axes` map of its model.
+Return the name that a dataset uses to refer to the axis.
 """
 function axis_key end
 axis_key(::TimeAxis) = "time"
 axis_key(::ExecutionAxis) = "execution"
 axis_key(::HorizonAxis) = "horizon"
+axis_key(a::LabelAxis) = a.name
 
 function axis_key(a::ComponentAxis)
     key = join((c.component_type for c in a.columns), "__")
@@ -76,29 +77,18 @@ function _check_axis_kind(model::String, name::String, a::AbstractAxis)
     return
 end
 
-function _check_axis_key(model::String, name::String, a::AbstractAxis)
-    expected = axis_key(a)
-    if name != expected
-        throw(
-            ArgumentError(
-                "model $model: axis key \"$name\" differs from derived key \"$expected\""),
-        )
-    end
-    return
-end
-
-function _check_axis_key(model::String, name::String, ::LabelAxis)
+function _check_label_name(model::String, name::String)
     if name in _RESERVED_AXIS_KEYS
         throw(
             ArgumentError(
-                "model $model: label axis key \"$name\" is reserved for the axis kind of the same name",
+                "model $model: label axis name \"$name\" is reserved for the axis kind of the same name",
             ),
         )
     end
     if !occursin(_LABEL_KEY_PATTERN, name)
         throw(
             ArgumentError(
-                "model $model: label axis key \"$name\" is not lower snake case"),
+                "model $model: label axis name \"$name\" is not lower snake case"),
         )
     end
     return
@@ -266,6 +256,7 @@ end
 
 function _check_axis_fields(model::String, name::String, a::LabelAxis)
     where_ = "model $model: axis \"$name\""
+    _check_label_name(model, name)
     if isempty(a.labels)
         throw(ArgumentError("$where_ has no labels"))
     end
@@ -276,15 +267,14 @@ function _check_axis_fields(model::String, name::String, a::LabelAxis)
 end
 
 function _check_axis(model::String, name::String, a::AbstractAxis)
-    _check_path_name("model $model", "axis key", name)
+    _check_path_name("model $model", "axis name", name)
     _check_axis_kind(model, name, a)
     _check_axis_fields(model, name, a)
-    _check_axis_key(model, name, a)
     return
 end
 
 function _check_component_type(where_::String, m::ModelEntry, d::OutputDataset)
-    columns = [_component_columns(m.axes[name]) for name in d.axes]
+    columns = [_component_columns(_find_axis(m, name)) for name in d.axes]
     filter!(!isempty, columns)
     if isempty(columns)
         if !isempty(d.component_type)
@@ -329,7 +319,7 @@ function _check_dataset(model::String, m::ModelEntry, d::OutputDataset)
         throw(ArgumentError("$where_ has no axes"))
     end
     for name in d.axes
-        if !haskey(m.axes, name)
+        if !_has_axis(m, name)
             throw(
                 ArgumentError(
                     "$where_ uses axis \"$name\" absent from the model axes",
@@ -468,25 +458,28 @@ function _check_realized_values(model::String, entry::ModelEntry)
     if !entry.supports_realized_values_post_calculation
         return
     end
-    if !haskey(entry.axes, "execution") || !haskey(entry.axes, "horizon")
+    if !_has_axis(entry, "execution") || !_has_axis(entry, "horizon")
         throw(
             ArgumentError(
                 "model $model: supports_realized_values_post_calculation requires an execution axis and a horizon axis",
             ),
         )
     end
-    if haskey(entry.axes, "time")
+    if _has_axis(entry, "time")
         throw(
             ArgumentError(
                 "model $model: supports_realized_values_post_calculation forbids a time axis, the model already holds realized values",
             ),
         )
     end
-    _check_realized_intervals(model, entry.axes["execution"], entry.axes["horizon"])
+    _check_realized_intervals(
+        model, _find_axis(entry, "execution"), _find_axis(entry, "horizon"),
+    )
     return
 end
 
-function _check_model_entry(m::OutputsMetadata, model::String, entry::ModelEntry)
+function _check_model_entry(m::OutputsMetadata, entry::ModelEntry)
+    model = entry.name
     _check_path_name("metadata", "model name", model)
     _check_member("model $model", "model_type", entry.model_type, _MODEL_TYPES)
     _check_pattern(
@@ -505,7 +498,13 @@ function _check_model_entry(m::OutputsMetadata, model::String, entry::ModelEntry
         )
     end
     _check_settings(model, entry.settings)
-    for (name, axis) in entry.axes
+    seen_axes = Set{String}()
+    for axis in entry.axes
+        name = axis_key(axis)
+        if name in seen_axes
+            throw(ArgumentError("model $model: duplicate axis name \"$name\""))
+        end
+        push!(seen_axes, name)
         _check_axis(model, name, axis)
     end
     _check_realized_values(model, entry)
@@ -542,7 +541,7 @@ function _check_simulation(m::OutputsMetadata)
         throw(ArgumentError("simulation: execution_order is empty"))
     end
     for name in sim.execution_order
-        if !haskey(m.models, name)
+        if !any(e -> e.name == name, m.models)
             throw(ArgumentError("execution_order entry \"$name\" is not in the models"))
         end
     end
@@ -604,8 +603,13 @@ function validate_metadata(m::OutputsMetadata)
         _check_bundle_name(uuid, name)
     end
     _check_simulation(m)
-    for (model, entry) in m.models
-        _check_model_entry(m, model, entry)
+    seen_models = Set{String}()
+    for entry in m.models
+        if entry.name in seen_models
+            throw(ArgumentError("metadata: duplicate model name \"$(entry.name)\""))
+        end
+        push!(seen_models, entry.name)
+        _check_model_entry(m, entry)
     end
     return
 end

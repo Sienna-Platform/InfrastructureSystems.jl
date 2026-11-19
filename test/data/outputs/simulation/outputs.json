@@ -20,8 +20,9 @@
       "ED"
     ]
   },
-  "models": {
-    "UC": {
+  "models": [
+    {
+      "name": "UC",
       "model_type": "decision",
       "system_uuid": "6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11",
       "base_power": 100.0,
@@ -32,20 +33,20 @@
         "resolution": "PT1H",
         "optimizer": "HiGHS"
       },
-      "axes": {
-        "execution": {
+      "axes": [
+        {
           "kind": "execution",
           "initial_timestamp": "2024-01-01T00:00:00",
           "interval": "P1D",
           "count": 7,
           "group": "/UC/axes/execution"
         },
-        "horizon": {
+        {
           "kind": "horizon",
           "resolution": "PT1H",
           "horizon_count": 48
         },
-        "ThermalStandard": {
+        {
           "kind": "component",
           "columns": [
             {
@@ -56,7 +57,7 @@
           "length": 76,
           "group": "/UC/axes/ThermalStandard"
         },
-        "VariableReserve__ThermalStandard": {
+        {
           "kind": "component",
           "columns": [
             {
@@ -71,7 +72,7 @@
           "length": 152,
           "group": "/UC/axes/VariableReserve__ThermalStandard"
         }
-      },
+      ],
       "datasets": [
         {
           "container": "variables",
@@ -220,7 +221,8 @@
         }
       ]
     },
-    "ED": {
+    {
+      "name": "ED",
       "model_type": "decision",
       "system_uuid": "6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11",
       "base_power": 100.0,
@@ -231,20 +233,20 @@
         "resolution": "PT5M",
         "optimizer": "HiGHS"
       },
-      "axes": {
-        "execution": {
+      "axes": [
+        {
           "kind": "execution",
           "initial_timestamp": "2024-01-01T00:00:00",
           "interval": "PT1H",
           "count": 168,
           "group": "/ED/axes/execution"
         },
-        "horizon": {
+        {
           "kind": "horizon",
           "resolution": "PT5M",
           "horizon_count": 12
         },
-        "ThermalStandard": {
+        {
           "kind": "component",
           "columns": [
             {
@@ -255,7 +257,7 @@
           "length": 76,
           "group": "/ED/axes/ThermalStandard"
         },
-        "ACBus": {
+        {
           "kind": "component",
           "columns": [
             {
@@ -266,7 +268,7 @@
           "length": 73,
           "group": "/ED/axes/ACBus"
         }
-      },
+      ],
       "datasets": [
         {
           "container": "variables",
@@ -359,7 +361,8 @@
         }
       ]
     },
-    "EM": {
+    {
+      "name": "EM",
       "model_type": "emulation",
       "system_uuid": "6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11",
       "base_power": 100.0,
@@ -368,15 +371,15 @@
         "resolution": "PT5M",
         "optimizer": "HiGHS"
       },
-      "axes": {
-        "time": {
+      "axes": [
+        {
           "kind": "time",
           "initial_timestamp": "2024-01-01T00:00:00",
           "resolution": "PT5M",
           "length": 2016,
           "group": "/EM/axes/time"
         },
-        "ThermalStandard": {
+        {
           "kind": "component",
           "columns": [
             {
@@ -387,7 +390,7 @@
           "length": 76,
           "group": "/EM/axes/ThermalStandard"
         }
-      },
+      ],
       "datasets": [
         {
           "container": "variables",
@@ -449,5 +452,5 @@
         }
       ]
     }
-  }
+  ]
 }

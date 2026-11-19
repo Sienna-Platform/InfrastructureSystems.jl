@@ -27,7 +27,8 @@
         ),
     ) == "ACBranch__monitored"
     @test IS.axis_length(IS.HorizonAxis("horizon", "PT1H", 48)) == 48
-    @test IS.axis_length(IS.LabelAxis("label", ["a", "b"])) == 2
+    @test IS.axis_length(IS.LabelAxis("label", "winding", ["a", "b"])) == 2
+    @test IS.axis_key(IS.LabelAxis("label", "winding", ["a", "b"])) == "winding"
 end
 
 @testset "the outputs fixtures validate" begin
@@ -37,24 +38,69 @@ end
     end
 end
 
-@testset "derived keys are enforced" begin
+@testset "a dataset axis name must match an axis" begin
     m = IS.read_outputs_metadata(
         joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
     )
-    uc = m.models["UC"]
-    uc.axes["therm"] = pop!(uc.axes, "ThermalStandard")
-    for d in uc.datasets
+    for d in outputs_model(m, "UC").datasets
         replace!(d.axes, "ThermalStandard" => "therm")
     end
     @test_throws ArgumentError IS.validate_metadata(m)
-    @test_throws r"UC.*therm.*ThermalStandard" IS.validate_metadata(m)
+    @test_throws r"UC.*axis \"therm\" absent" IS.validate_metadata(m)
+end
+
+@testset "model and axis names are unique" begin
+    base() = IS.read_outputs_metadata(
+        joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
+    )
+    m = base()
+    push!(m.models, outputs_model(m, "UC"))
+    @test_throws ArgumentError IS.validate_metadata(m)
+    @test_throws r"duplicate model name \"UC\"" IS.validate_metadata(m)
+    m = base()
+    uc = outputs_model(m, "UC")
+    push!(uc.axes, outputs_axis(uc, "ThermalStandard"))
+    @test_throws ArgumentError IS.validate_metadata(m)
+    @test_throws r"model UC: duplicate axis name \"ThermalStandard\"" IS.validate_metadata(
+        m,
+    )
+    m = base()
+    uc = outputs_model(m, "UC")
+    push!(uc.axes, IS.LabelAxis("label", "execution", ["a"]))
+    @test_throws ArgumentError IS.validate_metadata(m)
+    @test_throws r"duplicate axis name \"execution\"" IS.validate_metadata(m)
+end
+
+@testset "label axis name rules" begin
+    read_fixture(name) = IS.read_outputs_metadata(
+        joinpath(DATA_DIR, "outputs", name, "outputs.json"),
+    )
+    @test IS.validate_metadata(read_fixture("security_analysis")) === nothing
+    for (fixture, name, rx) in (
+        ("simulation", "time", r"label axis name \"time\" is reserved"),
+        ("security_analysis", "execution", r"label axis name \"execution\" is reserved"),
+        ("security_analysis", "horizon", r"label axis name \"horizon\" is reserved"),
+        (
+            "security_analysis",
+            "Bad Key",
+            r"label axis name \"Bad Key\" is not lower snake case",
+        ),
+        ("security_analysis", "1st", r"not lower snake case"),
+        ("security_analysis", "a/b", r"axis name \"a/b\""),
+        ("security_analysis", "", r"axis name"),
+    )
+        m = read_fixture(fixture)
+        push!(m.models[1].axes, IS.LabelAxis("label", name, ["primary"]))
+        @test_throws ArgumentError IS.validate_metadata(m)
+        @test_throws rx IS.validate_metadata(m)
+    end
 end
 
 @testset "every structural rule has a failing case" begin
     base() = IS.read_outputs_metadata(
         joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
     )
-    first_ds(m) = first(m.models["UC"].datasets)
+    first_ds(m) = first(outputs_model(m, "UC").datasets)
     function with_fields(d; kw...)
         vals = Dict{Symbol, Any}(k => getfield(d, k) for k in fieldnames(IS.OutputDataset))
         merge!(vals, Dict{Symbol, Any}(kw))
@@ -63,16 +109,21 @@ end
     cases = [
         ("axis ref", m -> push!(first_ds(m).axes, "Nope")),
         ("chunk rank", m -> push!(first_ds(m).layout.chunks, 1)),
-        ("duplicate tuple", m -> push!(m.models["UC"].datasets, first_ds(m))),
+        ("duplicate tuple", m -> push!(outputs_model(m, "UC").datasets, first_ds(m))),
         (
             "missing container",
             m ->
-                (m.models["UC"].datasets[1] = with_fields(first_ds(m); container = "")),
+                (
+                    outputs_model(m, "UC").datasets[1] =
+                        with_fields(first_ds(m); container = "")
+                ),
         ),
         (
             "bad container",
-            m -> (m.models["UC"].datasets[1] =
-                    with_fields(first_ds(m); container = "x")),
+            m -> (
+                outputs_model(m, "UC").datasets[1] =
+                    with_fields(first_ds(m); container = "x")
+            ),
         ),
         ("execution_order", m -> push!(IS.get_simulation(m).execution_order, "XX")),
         (
@@ -90,12 +141,15 @@ end
         (
             "bad path",
             m ->
-                (m.models["UC"].datasets[1] = with_fields(first_ds(m); path = "/UC/x")),
+                (
+                    outputs_model(m, "UC").datasets[1] =
+                        with_fields(first_ds(m); path = "/UC/x")
+                ),
         ),
         (
             "base unit without reference",
             m -> (
-                m.models["UC"].datasets[1] = with_fields(
+                outputs_model(m, "UC").datasets[1] = with_fields(
                     first_ds(m);
                     unit_system = "COMPONENT_BASE",
                     base_reference = "",
@@ -106,7 +160,7 @@ end
         (
             "natural units with reference",
             m -> (
-                m.models["UC"].datasets[1] = with_fields(
+                outputs_model(m, "UC").datasets[1] = with_fields(
                     first_ds(m);
                     unit_system = "NATURAL_UNITS",
                     base_reference = "system",
@@ -116,7 +170,7 @@ end
         (
             "component_type without component axis",
             m -> (
-                m.models["UC"].datasets[1] =
+                outputs_model(m, "UC").datasets[1] =
                     with_fields(first_ds(m); axes = ["execution"],
                         layout = IS.DatasetLayout([1], String[]))
             ),
@@ -124,28 +178,42 @@ end
         (
             "component_type differs from axis",
             m -> (
-                m.models["UC"].datasets[1] =
+                outputs_model(m, "UC").datasets[1] =
                     with_fields(first_ds(m); component_type = "Other")
             ),
         ),
         (
             "meta with double underscore",
-            m -> (m.models["UC"].datasets[1] = with_fields(first_ds(m); meta = "a__b")),
+            m -> (
+                outputs_model(m, "UC").datasets[1] =
+                    with_fields(first_ds(m); meta = "a__b")
+            ),
         ),
         (
             "entry_type not a type name",
             m -> (
-                m.models["UC"].datasets[1] =
+                outputs_model(m, "UC").datasets[1] =
                     with_fields(first_ds(m); entry_type = "bad name")
             ),
         ),
         (
             "axis kind differs from type",
-            m -> (m.models["UC"].axes["horizon"] = IS.HorizonAxis("time", "PT1H", 48)),
+            m -> (
+                outputs_model(m, "UC").axes[outputs_axis_index(
+                    outputs_model(m, "UC"),
+                    "horizon",
+                )] =
+                    IS.HorizonAxis("time", "PT1H", 48)
+            ),
         ),
         ("system uuid", m -> empty!(m.systems)),
-        ("label key", m -> (m.models["UC"].axes["Bad Key"] =
-                IS.LabelAxis("label", ["a"]))),
+        (
+            "label name",
+            m -> push!(
+                outputs_model(m, "UC").axes,
+                IS.LabelAxis("label", "Bad Key", ["a"]),
+            ),
+        ),
     ]
     for (label, mutate!) in cases
         m = base()

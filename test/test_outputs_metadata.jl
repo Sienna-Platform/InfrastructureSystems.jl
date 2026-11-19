@@ -21,22 +21,22 @@ end
     @test m.kind == "simulation"
     @test IS.has_simulation(m)
     @test IS.get_simulation(m).execution_order == ["UC", "ED"]
-    uc = m.models["UC"]
+    uc = outputs_model(m, "UC")
     @test uc.model_type == "decision"
-    @test typeof(uc.axes["execution"]) === IS.ExecutionAxis
-    @test typeof(uc.axes["horizon"]) === IS.HorizonAxis
-    @test typeof(uc.axes["ThermalStandard"]) === IS.ComponentAxis
-    @test IS.get_interval(uc.axes["execution"]) == Dates.Millisecond(86_400_000)
-    @test IS.get_horizon(uc.axes["horizon"]) == Dates.Millisecond(48 * 3_600_000)
+    @test typeof(outputs_axis(uc, "execution")) === IS.ExecutionAxis
+    @test typeof(outputs_axis(uc, "horizon")) === IS.HorizonAxis
+    @test typeof(outputs_axis(uc, "ThermalStandard")) === IS.ComponentAxis
+    @test IS.get_interval(outputs_axis(uc, "execution")) == Dates.Millisecond(86_400_000)
+    @test IS.get_horizon(outputs_axis(uc, "horizon")) == Dates.Millisecond(48 * 3_600_000)
     ds = first(uc.datasets)
     @test IS.dataset_key(ds) == ("ActivePowerVariable", "ThermalStandard", "")
     @test IS.dataset_name(ds) == "ActivePowerVariable__ThermalStandard"
     @test ds.layout.chunks == [1, 76, 48]
     @test IS.dataset_name(uc.datasets[3]) ==
           "ActivePowerReserveVariable__VariableReserve__Reserve_Up"
-    em = m.models["EM"]
-    @test typeof(em.axes["time"]) === IS.TimeAxis
-    @test IS.get_resolution(em.axes["time"]) == Dates.Millisecond(300_000)
+    em = outputs_model(m, "EM")
+    @test typeof(outputs_axis(em, "time")) === IS.TimeAxis
+    @test IS.get_resolution(outputs_axis(em, "time")) == Dates.Millisecond(300_000)
     single = IS.read_outputs_metadata(
         joinpath(DATA_DIR, "outputs", "single", "outputs.json"),
     )
@@ -54,7 +54,7 @@ end
 end
 
 @testset "metadata writes and re-reads identically" begin
-    for kind in ("simulation", "single")
+    for kind in ("simulation", "single", "security_analysis")
         m = IS.read_outputs_metadata(joinpath(DATA_DIR, "outputs", kind, "outputs.json"))
         path = joinpath(mktempdir(), "outputs.json")
         IS.write_outputs_metadata(path, m)
@@ -79,7 +79,7 @@ end
     )
         write(path, replace(text, "\"fill_value\": \"NaN\"" => "\"fill_value\": $literal"))
         m = IS.read_outputs_metadata(path)
-        fv = first(m.models["model"].datasets).fill_value
+        fv = first(outputs_model(m, "model").datasets).fill_value
         @test typeof(fv) === T
         @test fv == expected
     end
@@ -109,19 +109,10 @@ end
     @test_throws ArgumentError IS.iso_duration(Dates.Hour(-1))
 end
 
-@testset "outputs metadata: valid and invalid corpus" begin
+@testset "outputs metadata: valid corpus" begin
     for kind in ("simulation", "single", "power_flow", "security_analysis")
         m = IS.read_outputs_metadata(joinpath(DATA_DIR, "outputs", kind, "outputs.json"))
         @test IS.validate_metadata(m) === nothing
-    end
-    dir = joinpath(DATA_DIR, "outputs", "invalid")
-    files = sort(readdir(dir))
-    @test length(files) == 23
-    @test "invalid_axis_ref.json" in files
-    for f in files
-        @test_throws ArgumentError IS.validate_metadata(
-            IS.read_outputs_metadata(joinpath(dir, f)),
-        )
     end
 end
 
@@ -131,8 +122,8 @@ end
     )
     function with_model(f)
         m = deepcopy(base)
-        entry = m.models["model"]
-        m.models["model"] = f(entry)
+        i = outputs_model_index(m, "model")
+        m.models[i] = f(m.models[i])
         return m
     end
     function with_table_column(c)
@@ -142,20 +133,13 @@ end
                 cols = copy(t.columns)
                 cols[2] = c
                 tables = [IS.OutputTable(t.name, t.group, t.length, cols)]
-                return IS.ModelEntry(
-                    e.model_type, e.system_uuid, e.base_power, e.settings, e.axes,
-                    e.datasets, e.supports_realized_values_post_calculation, tables,
-                )
+                return _with(e; tables = tables)
             end,
         )
     end
     @test_throws ArgumentError IS.validate_metadata(
         with_model(
-            e -> IS.ModelEntry(
-                "bogus", e.system_uuid, e.base_power, e.settings, e.axes, e.datasets,
-                e.supports_realized_values_post_calculation,
-                e.tables,
-            ),
+            e -> _with(e; model_type = "bogus"),
         ),
     )
     m = deepcopy(base)
@@ -198,10 +182,7 @@ end
                 tables = [
                     IS.OutputTable(t.name, "/model/tables/other", t.length, t.columns),
                 ]
-                return IS.ModelEntry(
-                    e.model_type, e.system_uuid, e.base_power, e.settings, e.axes,
-                    e.datasets, e.supports_realized_values_post_calculation, tables,
-                )
+                return _with(e; tables = tables)
             end,
         ),
     )
@@ -209,18 +190,8 @@ end
         with_model(
             e -> begin
                 d = e.datasets[1]
-                bad = IS.OutputDataset(
-                    d.entry_type, d.meta, d.axes, "f16", d.fill_value,
-                    d.quantity_kind,
-                    d.unit_system, d.units, d.layout, d.path, d.container,
-                    d.component_type,
-                    d.base_reference,
-                )
-                return IS.ModelEntry(
-                    e.model_type, e.system_uuid, e.base_power, e.settings, e.axes,
-                    [bad, e.datasets[2]], e.supports_realized_values_post_calculation,
-                    e.tables,
-                )
+                bad = _with(d; dtype = "f16")
+                return _with(e; datasets = [bad, e.datasets[2]])
             end,
         ),
     )
@@ -228,17 +199,8 @@ end
         with_model(
             e -> begin
                 d = e.datasets[1]
-                bad = IS.OutputDataset(
-                    d.entry_type, d.meta, d.axes, d.dtype, d.fill_value,
-                    d.quantity_kind,
-                    "PU", d.units, d.layout, d.path, d.container, d.component_type,
-                    d.base_reference,
-                )
-                return IS.ModelEntry(
-                    e.model_type, e.system_uuid, e.base_power, e.settings, e.axes,
-                    [bad, e.datasets[2]], e.supports_realized_values_post_calculation,
-                    e.tables,
-                )
+                bad = _with(d; unit_system = "PU")
+                return _with(e; datasets = [bad, e.datasets[2]])
             end,
         ),
     )
@@ -248,7 +210,7 @@ end
     pf = IS.read_outputs_metadata(
         joinpath(DATA_DIR, "outputs", "power_flow", "outputs.json"),
     )
-    d = pf.models["model"].datasets[2]
+    d = outputs_model(pf, "model").datasets[2]
     @test d.component_type == "" && IS.dataset_name(d) == "PowerFlowConverged"
     @test d.path == "/model/datasets/PowerFlowConverged"
 end

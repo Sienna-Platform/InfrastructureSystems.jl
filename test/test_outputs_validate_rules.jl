@@ -1,13 +1,6 @@
 # Tests the rules of `validate_metadata` that mirror the outputs JSON schema, and the
 # naive-timestamp rule of `read_outputs_metadata`.
 
-function _with(x; kw...)
-    T = typeof(x)
-    vals = Dict{Symbol, Any}(k => getfield(x, k) for k in fieldnames(T))
-    merge!(vals, Dict{Symbol, Any}(kw))
-    return T((vals[k] for k in fieldnames(T))...)
-end
-
 _sim_meta() = IS.read_outputs_metadata(
     joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
 )
@@ -22,17 +15,18 @@ function _expect_invalid(label::String, m::IS.OutputsMetadata, rx::Regex)
 end
 
 function _set_dataset!(m, model, i, d)
-    m.models[model].datasets[i] = d
+    outputs_model(m, model).datasets[i] = d
     return m
 end
 
 function _set_entry(m, model; kw...)
-    m.models[model] = _with(m.models[model]; kw...)
+    i = outputs_model_index(m, model)
+    m.models[i] = _with(m.models[i]; kw...)
     return m
 end
 
 @testset "validate_metadata: dataset field rules" begin
-    ds(m) = m.models["UC"].datasets[1]
+    ds(m) = outputs_model(m, "UC").datasets[1]
     _expect_invalid(
         "quantity_kind outside the enum",
         _set_dataset!(
@@ -144,9 +138,9 @@ end
 end
 
 @testset "validate_metadata: axis rules" begin
-    ax(m, key) = m.models["UC"].axes[key]
+    ax(m, key) = outputs_axis(outputs_model(m, "UC"), key)
     function set_axis!(m, key, a)
-        m.models["UC"].axes[key] = a
+        set_outputs_axis!(outputs_model(m, "UC"), key, a)
         return m
     end
     for bad in ("1h", "PT", "P1DT", "", "P-1D")
@@ -170,7 +164,11 @@ end
         r"resolution",
     )
     m = _sim_meta()
-    m.models["EM"].axes["time"] = _with(m.models["EM"].axes["time"]; resolution = "5min")
+    set_outputs_axis!(
+        outputs_model(m, "EM"),
+        "time",
+        _with(outputs_axis(outputs_model(m, "EM"), "time"); resolution = "5min"),
+    )
     _expect_invalid("time resolution", m, r"resolution")
     for n in (0, -2)
         _expect_invalid(
@@ -193,7 +191,11 @@ end
         r"horizon_count is 0",
     )
     m = _sim_meta()
-    m.models["EM"].axes["time"] = _with(m.models["EM"].axes["time"]; length = 0)
+    set_outputs_axis!(
+        outputs_model(m, "EM"),
+        "time",
+        _with(outputs_axis(outputs_model(m, "EM"), "time"); length = 0),
+    )
     _expect_invalid("time length of zero", m, r"length is 0")
     _expect_invalid(
         "wrong axis group",
@@ -204,8 +206,11 @@ end
         r"group \"/UC/axes/other\"",
     )
     m = _sim_meta()
-    m.models["EM"].axes["time"] =
-        _with(m.models["EM"].axes["time"]; group = "/UC/axes/time")
+    set_outputs_axis!(
+        outputs_model(m, "EM"),
+        "time",
+        _with(outputs_axis(outputs_model(m, "EM"), "time"); group = "/UC/axes/time"),
+    )
     _expect_invalid("time group of another model", m, r"expected \"/EM/axes/time\"")
     thermal = ax(_sim_meta(), "ThermalStandard")
     _expect_invalid(
@@ -216,7 +221,8 @@ end
     _expect_invalid(
         "component axis without columns",
         set_axis!(
-            _sim_meta(), "ThermalStandard", _with(thermal; columns = IS.AxisColumn[]),
+            _sim_meta(), "ThermalStandard",
+            _with(thermal; columns = IS.AxisColumn[], subset = "s"),
         ),
         r"has no columns",
     )
@@ -235,16 +241,20 @@ end
     )
 
     pf = _pf_meta()
-    labels(m) = m.models["model"].axes["winding"]
-    pf.models["model"].axes["winding"] = _with(labels(pf); labels = String[])
+    labels(m) = outputs_axis(outputs_model(m, "model"), "winding")
+    set_outputs_axis!(
+        outputs_model(pf, "model"), "winding", _with(labels(pf); labels = String[]),
+    )
     _expect_invalid("label axis without labels", pf, r"has no labels")
     pf = _pf_meta()
-    pf.models["model"].axes["winding"] = _with(labels(pf); labels = ["a", "a"])
+    set_outputs_axis!(
+        outputs_model(pf, "model"), "winding", _with(labels(pf); labels = ["a", "a"]),
+    )
     _expect_invalid("label axis with duplicate labels", pf, r"duplicate labels")
 end
 
 @testset "validate_metadata: model and document rules" begin
-    entry(m) = m.models["UC"]
+    entry(m) = outputs_model(m, "UC")
     for p in (0.0, -100.0, NaN)
         _expect_invalid(
             "base_power $p",
@@ -286,8 +296,10 @@ end
         s = Dict{String, Any}("x" => ok)
         @test IS.validate_metadata(_set_entry(_sim_meta(), "UC"; settings = s)) === nothing
     end
-    for bad in
-        ("yesterday", "2026-11-03T18:00:00", "2026-13-03T18:00:00Z", "2026-11-03 18:00:00Z")
+    for bad in (
+        "yesterday", "2026-11-03T18:00:00", "2026-11-03 18:00:00Z",
+        "2026-11-03T18:00:00.1234Z", "2026-11-03t18:00:00z", "2026-11-03T18:00:00+0530",
+    )
         _expect_invalid(
             "created_at $bad",
             _with(_sim_meta(); created_at = bad),
@@ -363,8 +375,8 @@ end
         r"execution_order is empty",
     )
 
-    table(m) = m.models["UC"].tables[1]
-    set_table!(m, t) = (m.models["UC"].tables[1] = t; m)
+    table(m) = outputs_model(m, "UC").tables[1]
+    set_table!(m, t) = (outputs_model(m, "UC").tables[1] = t; m)
     t = table(_sim_meta())
     _expect_invalid(
         "negative table length",
@@ -425,7 +437,7 @@ end
     @test_throws r"not naive" IS.read_outputs_metadata(path)
     path = _meta_with_text(ts => "\"initial_timestamp\": \"2024-01-01T00:00:00.250\"")
     m = IS.read_outputs_metadata(path)
-    @test m.models["UC"].axes["execution"].initial_timestamp ==
+    @test outputs_axis(outputs_model(m, "UC"), "execution").initial_timestamp ==
           DateTime(2024, 1, 1, 0, 0, 0, 250)
 end
 
@@ -441,19 +453,20 @@ end
 @testset "validate_metadata: model, axis, table, and meta names are path segments" begin
     for bad in ("", "a/b")
         m = _sim_meta()
-        m.models[bad] = pop!(m.models, "EM")
+        i = outputs_model_index(m, "EM")
+        m.models[i] = _with(m.models[i]; name = bad)
         _expect_invalid("model name \"$bad\"", m, r"model name")
         m = _sim_meta()
-        m.models["UC"].axes[bad] = m.models["UC"].axes["horizon"]
-        _expect_invalid("axis key \"$bad\"", m, r"axis key")
+        push!(outputs_model(m, "UC").axes, IS.LabelAxis("label", bad, ["x"]))
+        _expect_invalid("axis name \"$bad\"", m, r"axis name")
         m = _sim_meta()
-        t = m.models["UC"].tables[1]
-        m.models["UC"].tables[1] = _with(t; name = bad, group = "/UC/tables/$bad")
+        t = outputs_model(m, "UC").tables[1]
+        outputs_model(m, "UC").tables[1] = _with(t; name = bad, group = "/UC/tables/$bad")
         _expect_invalid("table name \"$bad\"", m, r"table name")
     end
     m = _sim_meta()
-    d = m.models["UC"].datasets[1]
-    m.models["UC"].datasets[1] = _with(d; meta = "a/b", path = d.path * "__a/b")
+    d = outputs_model(m, "UC").datasets[1]
+    outputs_model(m, "UC").datasets[1] = _with(d; meta = "a/b", path = d.path * "__a/b")
     _expect_invalid("meta with a slash", m, r"meta \"a/b\" contains")
 end
 
@@ -490,11 +503,11 @@ end
 end
 
 @testset "validate_metadata: supports_realized_values_post_calculation" begin
-    @test _sim_meta().models["UC"].supports_realized_values_post_calculation
+    @test outputs_model(_sim_meta(), "UC").supports_realized_values_post_calculation
     @test IS.validate_metadata(_sim_meta()) === nothing
 
     m = _sim_meta()
-    delete!(m.models["UC"].axes, "horizon")
+    delete_outputs_axis!(outputs_model(m, "UC"), "horizon")
     _expect_invalid(
         "flag without horizon",
         m,
@@ -502,13 +515,19 @@ end
     )
 
     m = _sim_meta()
-    m.models["UC"].axes["execution"] =
-        _with(m.models["UC"].axes["execution"]; interval = "PT90M")
+    set_outputs_axis!(
+        outputs_model(m, "UC"),
+        "execution",
+        _with(outputs_axis(outputs_model(m, "UC"), "execution"); interval = "PT90M"),
+    )
     _expect_invalid("interval not a multiple", m, r"model UC: .*whole multiple")
 
     m = _sim_meta()
-    m.models["UC"].axes["execution"] =
-        _with(m.models["UC"].axes["execution"]; interval = "P3D")
+    set_outputs_axis!(
+        outputs_model(m, "UC"),
+        "execution",
+        _with(outputs_axis(outputs_model(m, "UC"), "execution"); interval = "P3D"),
+    )
     _expect_invalid("interval above horizon", m, r"model UC: .*at most the horizon")
 
     text = read(joinpath(DATA_DIR, "outputs", "single", "outputs.json"), String)
@@ -535,8 +554,8 @@ end
         r"execution_order is empty",
     )
 
-    table(m) = m.models["UC"].tables[1]
-    set_table!(m, t) = (m.models["UC"].tables[1] = t; m)
+    table(m) = outputs_model(m, "UC").tables[1]
+    set_table!(m, t) = (outputs_model(m, "UC").tables[1] = t; m)
     t = table(_sim_meta())
     _expect_invalid(
         "negative table length",
@@ -597,7 +616,7 @@ end
     @test_throws r"not naive" IS.read_outputs_metadata(path)
     path = _meta_with_text(ts => "\"initial_timestamp\": \"2024-01-01T00:00:00.250\"")
     m = IS.read_outputs_metadata(path)
-    @test m.models["UC"].axes["execution"].initial_timestamp ==
+    @test outputs_axis(outputs_model(m, "UC"), "execution").initial_timestamp ==
           DateTime(2024, 1, 1, 0, 0, 0, 250)
 end
 
@@ -613,19 +632,20 @@ end
 @testset "validate_metadata: model, axis, table, and meta names are path segments" begin
     for bad in ("", "a/b")
         m = _sim_meta()
-        m.models[bad] = pop!(m.models, "EM")
+        i = outputs_model_index(m, "EM")
+        m.models[i] = _with(m.models[i]; name = bad)
         _expect_invalid("model name \"$bad\"", m, r"model name")
         m = _sim_meta()
-        m.models["UC"].axes[bad] = m.models["UC"].axes["horizon"]
-        _expect_invalid("axis key \"$bad\"", m, r"axis key")
+        push!(outputs_model(m, "UC").axes, IS.LabelAxis("label", bad, ["x"]))
+        _expect_invalid("axis name \"$bad\"", m, r"axis name")
         m = _sim_meta()
-        t = m.models["UC"].tables[1]
-        m.models["UC"].tables[1] = _with(t; name = bad, group = "/UC/tables/$bad")
+        t = outputs_model(m, "UC").tables[1]
+        outputs_model(m, "UC").tables[1] = _with(t; name = bad, group = "/UC/tables/$bad")
         _expect_invalid("table name \"$bad\"", m, r"table name")
     end
     m = _sim_meta()
-    d = m.models["UC"].datasets[1]
-    m.models["UC"].datasets[1] = _with(d; meta = "a/b", path = d.path * "__a/b")
+    d = outputs_model(m, "UC").datasets[1]
+    outputs_model(m, "UC").datasets[1] = _with(d; meta = "a/b", path = d.path * "__a/b")
     _expect_invalid("meta with a slash", m, r"meta \"a/b\" contains")
 end
 
@@ -662,11 +682,11 @@ end
 end
 
 @testset "validate_metadata: supports_realized_values_post_calculation" begin
-    @test _sim_meta().models["UC"].supports_realized_values_post_calculation
+    @test outputs_model(_sim_meta(), "UC").supports_realized_values_post_calculation
     @test IS.validate_metadata(_sim_meta()) === nothing
 
     m = _sim_meta()
-    delete!(m.models["UC"].axes, "horizon")
+    delete_outputs_axis!(outputs_model(m, "UC"), "horizon")
     _expect_invalid(
         "flag without horizon",
         m,
@@ -674,21 +694,31 @@ end
     )
 
     m = _sim_meta()
-    m.models["UC"].axes["execution"] =
-        _with(m.models["UC"].axes["execution"]; interval = "PT90M")
+    set_outputs_axis!(
+        outputs_model(m, "UC"),
+        "execution",
+        _with(outputs_axis(outputs_model(m, "UC"), "execution"); interval = "PT90M"),
+    )
     _expect_invalid("interval not a multiple", m, r"model UC: .*whole multiple")
 
     m = _sim_meta()
-    m.models["UC"].axes["execution"] =
-        _with(m.models["UC"].axes["execution"]; interval = "P3D")
+    set_outputs_axis!(
+        outputs_model(m, "UC"),
+        "execution",
+        _with(outputs_axis(outputs_model(m, "UC"), "execution"); interval = "P3D"),
+    )
     _expect_invalid("interval above horizon", m, r"model UC: .*at most the horizon")
 
     m = _sim_meta()
     _set_entry(m, "UC"; supports_realized_values_post_calculation = false)
-    delete!(m.models["UC"].axes, "horizon")
-    m.models["UC"].datasets[1] = _with(m.models["UC"].datasets[1]; axes = ["execution"],
-        layout = IS.DatasetLayout([1], m.models["UC"].datasets[1].layout.filters))
-    @test !m.models["UC"].supports_realized_values_post_calculation
+    delete_outputs_axis!(outputs_model(m, "UC"), "horizon")
+    outputs_model(m, "UC").datasets[1] =
+        _with(outputs_model(m, "UC").datasets[1]; axes = ["execution"],
+            layout = IS.DatasetLayout(
+                [1],
+                outputs_model(m, "UC").datasets[1].layout.filters,
+            ))
+    @test !outputs_model(m, "UC").supports_realized_values_post_calculation
 
     text = read(joinpath(DATA_DIR, "outputs", "single", "outputs.json"), String)
     missing_key = replace(text, r"\n *\"supports_realized_values_post_calculation\": \w+,"
@@ -699,40 +729,158 @@ end
     @test_throws Exception IS.read_outputs_metadata(path)
 end
 
-@testset "validate_metadata: axis keys bind to axis kinds" begin
+@testset "validate_metadata: axis names bind to axis kinds" begin
     m = _sim_meta()
-    m.models["UC"].axes["time"] =
-        _with(m.models["EM"].axes["time"]; group = "/UC/axes/time")
+    push!(
+        outputs_model(m, "UC").axes,
+        _with(outputs_axis(outputs_model(m, "EM"), "time"); group = "/UC/axes/time"),
+    )
     _expect_invalid(
         "time axis under the realized values flag",
         m,
         r"model UC: supports_realized_values_post_calculation forbids a time axis",
     )
 
-    for key in ("execution", "horizon", "time")
+    for (model, key) in (("UC", "time"), ("EM", "execution"), ("EM", "horizon"))
         m = _sim_meta()
-        m.models["UC"].axes[key] = IS.LabelAxis("label", ["x"])
+        push!(outputs_model(m, model).axes, IS.LabelAxis("label", key, ["x"]))
         _expect_invalid(
-            "label axis under $key",
+            "label axis named $key",
             m,
-            Regex("model UC: label axis key \"$key\" is reserved"),
+            Regex("model $model: label axis name \"$key\" is reserved"),
         )
     end
+end
 
-    dir = joinpath(DATA_DIR, "outputs", "invalid")
+@testset "validate_metadata: one field changed in a valid document" begin
+    single() = IS.read_outputs_metadata(
+        joinpath(DATA_DIR, "outputs", "single", "outputs.json"),
+    )
+    function edit_dataset(m, model, i; kw...)
+        entry = outputs_model(m, model)
+        entry.datasets[i] = _with(entry.datasets[i]; kw...)
+        return m
+    end
+    function edit_axis(m, model, name; kw...)
+        entry = outputs_model(m, model)
+        set_outputs_axis!(entry, name, _with(outputs_axis(entry, name); kw...))
+        return m
+    end
+
+    _expect_invalid(
+        "execution group path",
+        edit_axis(single(), "model", "execution"; group = "/model/execution"),
+        r"axis \"execution\" has group \"/model/execution\", expected \"/model/axes/execution\"",
+    )
+    _expect_invalid(
+        "component group path",
+        edit_axis(single(), "model", "ThermalStandard"; group = "/model/ThermalStandard"),
+        r"axis \"ThermalStandard\" has group",
+    )
+    _expect_invalid(
+        "time group path",
+        edit_axis(_pf_meta(), "model", "time"; group = "/model/time"),
+        r"axis \"time\" has group \"/model/time\"",
+    )
+    m = single()
+    d = outputs_model(m, "model").datasets[1]
+    _expect_invalid(
+        "dataset axis that does not exist",
+        edit_dataset(m, "model", 1; axes = [d.axes[1], "Nope", d.axes[3]]),
+        r"uses axis \"Nope\" absent from the model axes",
+    )
+    _expect_invalid(
+        "dataset without container",
+        edit_dataset(single(), "model", 1; container = ""),
+        r"container \"\" is not one of",
+    )
+    _expect_invalid(
+        "units other than pu for COMPONENT_BASE",
+        edit_dataset(single(), "model", 1; units = "MW"),
+        r"COMPONENT_BASE needs a base_reference and units \"pu\"",
+    )
+    _expect_invalid(
+        "COMPONENT_BASE without base_reference",
+        edit_dataset(single(), "model", 1; base_reference = ""),
+        r"COMPONENT_BASE needs a base_reference",
+    )
+    _expect_invalid(
+        "NATURAL_UNITS with base_reference",
+        edit_dataset(single(), "model", 2; base_reference = "system"),
+        r"NATURAL_UNITS must not have a base_reference",
+    )
+    _expect_invalid(
+        "meta with double underscore",
+        edit_dataset(single(), "model", 1; meta = "a__b"),
+        r"meta \"a__b\" contains \"__\"",
+    )
+    for (label, kw) in (
+        ("true fill for f64", (fill_value = true,)),
+        ("float fill for i64", (dtype = "i64", fill_value = 1.5)),
+        ("NaN fill for i64", (dtype = "i64", fill_value = "NaN")),
+        ("number fill for bool", (dtype = "bool", fill_value = 1)),
+    )
+        _expect_invalid(
+            label,
+            edit_dataset(single(), "model", 2; kw...),
+            r"fill_value .* is not valid for dtype",
+        )
+    end
+    m = single()
+    entry = outputs_model(m, "model")
+    t = entry.tables[1]
+    cols = copy(t.columns)
+    cols[2] = _with(cols[2]; quantity_kind = "")
+    entry.tables[1] = _with(t; columns = cols)
+    _expect_invalid(
+        "table column with units and without quantity_kind",
+        m,
+        r"must be all present or all absent",
+    )
+    m = single()
+    d = outputs_model(m, "model").datasets[1]
+    entry = outputs_model(m, "model")
+    entry.datasets[1] = _with(d; axes = ["ThermalStandard", "horizon"],
+        layout = IS.DatasetLayout([76, 48], d.layout.filters))
     _expect_invalid(
         "horizon without execution",
-        IS.read_outputs_metadata(joinpath(dir, "invalid_horizon_without_execution.json")),
+        m,
         r"has a horizon axis without an execution axis",
     )
+    m = single()
     _expect_invalid(
-        "execution key holding a label axis",
-        IS.read_outputs_metadata(joinpath(dir, "invalid_execution_key_wrong_kind.json")),
-        r"label axis key \"execution\" is reserved",
+        "kind not in the list",
+        IS.OutputsMetadata(
+            m.schema_version, "batch", m.producer, m.created_at, m.status, m.systems,
+            m.models, m.simulation,
+        ),
+        r"kind \"batch\" is not one of",
     )
     _expect_invalid(
-        "time axis under the flag fixture",
-        IS.read_outputs_metadata(joinpath(dir, "invalid_realized_with_time_axis.json")),
-        r"forbids a time axis",
+        "unknown schema version",
+        _with(single(); schema_version = "0.2.0"),
+        r"schema_version \"0.2.0\"",
     )
+    _expect_invalid(
+        "kind simulation without simulation parameters",
+        _with(single(); kind = "simulation"),
+        r"simulation parameters must be present exactly when kind is simulation",
+    )
+    m = single()
+    uuid = first(keys(m.systems))
+    m.systems[uuid] = ""
+    _expect_invalid("empty system directory", m, r"plain relative name")
+    m = _sim_meta()
+    _set_entry(m, "EM"; supports_realized_values_post_calculation = true)
+    _expect_invalid(
+        "realized-values flag on a model without execution and horizon",
+        m,
+        r"model EM: supports_realized_values_post_calculation requires",
+    )
+    m = _sim_meta()
+    push!(
+        outputs_model(m, "UC").axes,
+        _with(outputs_axis(outputs_model(m, "EM"), "time"); group = "/UC/axes/time"),
+    )
+    _expect_invalid("realized-values flag with a time axis", m, r"forbids a time axis")
 end
