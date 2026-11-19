@@ -747,4 +747,17 @@ end
     m = _sim_meta()
     IS._systems(m)[uuid] = "ab:c"
     @test IS.validate_metadata(m) === nothing
+    for bad in ("outputs.json", "outputs.h5", "OUTPUTS.JSON")
+        m = _sim_meta()
+        IS._systems(m)[uuid] = bad
+        _expect_invalid(
+            m,
+            Regex(
+                "system $uuid: bundle directory \"$bad\" is the name of an artifact file",
+            ),
+        )
+    end
+    m = _sim_meta()
+    IS._systems(m)[uuid] = "outputs"
+    @test IS.validate_metadata(m) === nothing
 end

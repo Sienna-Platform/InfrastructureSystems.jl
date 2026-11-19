@@ -271,7 +271,7 @@ function _create_h5(path::String, m::PowerOutputSchemas.OutputsDocument, axis_da
 end
 
 function _check_fresh(dir::AbstractString)
-    for name in ("outputs.json", "outputs.h5")
+    for name in _ARTIFACT_FILE_NAMES
         path = joinpath(dir, name)
         if ispath(path)
             throw(ArgumentError("outputs file $path already exists"))

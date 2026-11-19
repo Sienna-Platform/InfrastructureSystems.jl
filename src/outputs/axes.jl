@@ -4,6 +4,8 @@ Schema version string of `outputs.json`. Public: producers set it in the
 """
 const OUTPUTS_SCHEMA_VERSION = "0.1.0"
 
+const _ARTIFACT_FILE_NAMES = ("outputs.json", "outputs.h5")
+
 """
 Return the name that a dataset uses to refer to the axis.
 """
@@ -299,6 +301,14 @@ function _check_bundle_names(m::PowerOutputSchemas.OutputsDocument)
             throw(
                 ArgumentError(
                     "system $uuid: bundle directory \"$name\" starts with a Windows drive prefix",
+                ),
+            )
+        end
+        # A file system that ignores case treats `OUTPUTS.JSON` as `outputs.json`.
+        if lowercase(name) in _ARTIFACT_FILE_NAMES
+            throw(
+                ArgumentError(
+                    "system $uuid: bundle directory \"$name\" is the name of an artifact file",
                 ),
             )
         end
