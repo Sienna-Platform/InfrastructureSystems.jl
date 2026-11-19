@@ -220,7 +220,7 @@ end
     @test IS.validate_metadata(m) === nothing
     bad = IS.OutputsMetadata(
         m.schema_version, "simulation", m.producer, m.created_at, m.status, m.systems,
-        m.models, IS.NoSimulation(),
+        m.models, IS.Simulation.NoSimulation(),
     )
     @test_throws ArgumentError IS.validate_metadata(bad)
 end

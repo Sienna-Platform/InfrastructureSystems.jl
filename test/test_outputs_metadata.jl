@@ -229,7 +229,7 @@ end
     @test IS.JSON.parse(IS.JSON.json(sub), IS.ComponentAxis) == sub
     single =
         IS.read_outputs_metadata(joinpath(DATA_DIR, "outputs", "single", "outputs.json"))
-    @test single.simulation === IS.NoSimulation() && !IS.has_simulation(single)
+    @test single.simulation === IS.Simulation.NoSimulation() && !IS.has_simulation(single)
     @test !occursin("simulation", IS.JSON.json(single))
     sim = IS.read_outputs_metadata(
         joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),

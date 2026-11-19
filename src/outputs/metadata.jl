@@ -192,29 +192,12 @@ struct ProducerInfo
     julia::String
 end
 
-"Simulation parameters of an `OutputsMetadata`: `SimulationParams` or `NoSimulation`."
-abstract type AbstractSimulation end
-
-"Simulation-wide parameters. Only present when `kind` is `simulation`."
-JSON.@defaults struct SimulationParams <: AbstractSimulation
-    initial_time::Dates.DateTime & (json = (lift = _naive_timestamp,),)
-    step_resolution::String
-    num_steps::Int
-    execution_order::Vector{String}
-end
-
-"The `simulation` value of a file that omits the simulation object."
-struct NoSimulation <: AbstractSimulation end
-
-# Absence in the file is `NoSimulation`; a present object is always `SimulationParams`.
-JSON.@choosetype AbstractSimulation x -> SimulationParams
-
-_omit_if_no_simulation(::NoSimulation) = JSON.Omit()
-_omit_if_no_simulation(p::SimulationParams) = p
+_omit_if_no_simulation(::Simulation.NoSimulation) = JSON.Omit()
+_omit_if_no_simulation(p::Simulation.SimulationParams) = p
 
 """
-Content of the `outputs.json` file. The `simulation` field is `NoSimulation()` when the
-file omits it. Use `has_simulation` and `get_simulation` to access it.
+Content of the `outputs.json` file. The `simulation` field is `Simulation.NoSimulation()`
+when the file omits it. Use `has_simulation` and `get_simulation` to access it.
 """
 JSON.@defaults struct OutputsMetadata
     schema_version::String
@@ -224,8 +207,8 @@ JSON.@defaults struct OutputsMetadata
     status::String
     systems::Dict{String, String}
     models::Vector{ModelEntry}
-    simulation::AbstractSimulation =
-        NoSimulation() & (json = (lower = _omit_if_no_simulation,),)
+    simulation::Simulation.AbstractSimulation =
+        Simulation.NoSimulation() & (json = (lower = _omit_if_no_simulation,),)
 end
 
 function _axis_type(kind::AbstractString)
@@ -258,7 +241,7 @@ for T in (
     OutputTable,
     ModelEntry,
     ProducerInfo,
-    SimulationParams,
+    Simulation.SimulationParams,
     OutputsMetadata,
 )
     @eval function Base.:(==)(a::$T, b::$T)
@@ -348,19 +331,19 @@ function has_simulation(m::OutputsMetadata)
     return has_simulation(m.simulation)
 end
 
-has_simulation(::SimulationParams) = true
-has_simulation(::NoSimulation) = false
+has_simulation(::Simulation.SimulationParams) = true
+has_simulation(::Simulation.NoSimulation) = false
 
 """
-Return the `SimulationParams` of the metadata. Throw an error when absent.
+Return the `Simulation.SimulationParams` of the metadata. Throw an error when absent.
 """
 function get_simulation(m::OutputsMetadata)
     return _get_simulation(m.simulation, m.kind)
 end
 
-_get_simulation(s::SimulationParams, ::String) = s
+_get_simulation(s::Simulation.SimulationParams, ::String) = s
 
-function _get_simulation(::NoSimulation, kind::String)
+function _get_simulation(::Simulation.NoSimulation, kind::String)
     error("outputs metadata of kind $kind has no simulation parameters")
 end
 

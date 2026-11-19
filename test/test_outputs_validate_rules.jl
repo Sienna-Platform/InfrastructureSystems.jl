@@ -328,7 +328,7 @@ end
     empty!(m.models)
     _expect_invalid(
         "no models",
-        _with(m; simulation = IS.NoSimulation(), kind = "single"),
+        _with(m; simulation = IS.Simulation.NoSimulation(), kind = "single"),
         r"models is empty",
     )
 end
@@ -485,7 +485,7 @@ end
         joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
     )
     @test IS.has_simulation(m)
-    gone = _with(m; simulation = IS.NoSimulation())
+    gone = _with(m; simulation = IS.Simulation.NoSimulation())
     @test !IS.has_simulation(gone)
     _expect_invalid("simulation kind without the object", gone, r"must be present exactly")
     @test_throws ErrorException IS.get_simulation(gone)
