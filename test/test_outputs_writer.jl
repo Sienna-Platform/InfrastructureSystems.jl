@@ -124,7 +124,7 @@ end
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status == "RUNNING"
-    IS.append!(w, "model", _KEY, fill(2.0, 48, 76), 3)
+    IS.write_execution!(w, "model", _KEY, fill(2.0, 48, 76), 3)
     IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r") do f
         a = read(f["/model/datasets/ActivePowerVariable__ThermalStandard"])
@@ -136,9 +136,9 @@ end
 @testset "outputs writer: append bounds" begin
     m = _single_meta()
     w = IS.open_outputs_writer(mktempdir(), m; axis_data = simulation_axis_data(m))
-    @test_throws ArgumentError IS.append!(w, "model", _KEY, fill(1.0, 48, 76), 8)
-    @test_throws ArgumentError IS.append!(w, "model", _KEY, fill(1.0, 47, 76), 1)
-    @test_throws ArgumentError IS.append!(
+    @test_throws ArgumentError IS.write_execution!(w, "model", _KEY, fill(1.0, 48, 76), 8)
+    @test_throws ArgumentError IS.write_execution!(w, "model", _KEY, fill(1.0, 47, 76), 1)
+    @test_throws ArgumentError IS.write_execution!(
         w, "model", ("Nope", "ThermalStandard", ""), fill(1.0, 48, 76), 1)
     IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
     @test_throws ArgumentError IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
@@ -272,7 +272,7 @@ end
     m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
-    IS.append!(w, "model", _KEY, fill(4.0, 48, 76), 2)
+    IS.write_execution!(w, "model", _KEY, fill(4.0, 48, 76), 2)
     flush(w)
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r") do f
         a = read(f["/model/datasets/ActivePowerVariable__ThermalStandard"])
@@ -350,7 +350,13 @@ end
         chmod(json, 0o644)
         @test IS.read_outputs_metadata(json).status == "RUNNING"
         @test w.metadata.status == "RUNNING"
-        @test_throws ArgumentError IS.append!(w, "model", _KEY, fill(1.0, 48, 76), 1)
+        @test_throws ArgumentError IS.write_execution!(
+            w,
+            "model",
+            _KEY,
+            fill(1.0, 48, 76),
+            1,
+        )
         IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
         @test IS.read_outputs_metadata(json).status == "FAILED"
         @test w.metadata.status == "FAILED"
@@ -383,11 +389,11 @@ end
     end
     # a dataset with an execution that was never appended
     for i in 1:6
-        IS.append!(w, "model", _KEY, fill(1.0, 48, 76), i)
+        IS.write_execution!(w, "model", _KEY, fill(1.0, 48, 76), i)
     end
     @test_throws "dataset ActivePowerVariable__ThermalStandard lacks executions [7]" IS.finalize!(
         w; status = success)
-    IS.append!(w, "model", _KEY, fill(1.0, 48, 76), 7)
+    IS.write_execution!(w, "model", _KEY, fill(1.0, 48, 76), 7)
     @test_throws "bundle directory" IS.finalize!(w; status = success)
     @test w.metadata.status == "RUNNING" && isopen(w.file)
     for name in values(m.systems)

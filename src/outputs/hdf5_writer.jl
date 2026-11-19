@@ -20,10 +20,10 @@ function AxisData(timestamps::Vector{Dates.DateTime})
     return AxisData(zeros(Int64, 0, 0), Matrix{String}(undef, 0, 0), timestamps)
 end
 
-# Open handle of one dataset with what `append!` and `write_values!` need. `exec_dim` is the
-# execution dimension in Julia order, 0 when absent. `expected` is the size of one
-# execution slice (the whole dataset size when `exec_dim` is 0). `written` has one entry per
-# execution, or one entry when `exec_dim` is 0.
+# Open handle of one dataset with what `write_execution!` and `write_values!` need.
+# `exec_dim` is the execution dimension in Julia order, 0 when absent. `expected` is the
+# size of one execution slice (the whole dataset size when `exec_dim` is 0). `written` has
+# one entry per execution, or one entry when `exec_dim` is 0.
 struct DatasetRecord
     dataset::HDF5.Dataset
     dtype::String
@@ -304,12 +304,12 @@ function _slice_index(i::Int, exec_dim::Int, execution_index::Int)
 end
 
 """
-    append!(w, model, key, values, execution_index)
+    write_execution!(w, model, key, values, execution_index)
 
 Write `values` (Julia order, every axis except `execution`) into slice `execution_index`
 of the dataset `key = (entry_type, component_type, meta)`.
 """
-function Base.append!(
+function write_execution!(
     w::OutputsWriter,
     model::AbstractString,
     key::Tuple{String, String, String},
