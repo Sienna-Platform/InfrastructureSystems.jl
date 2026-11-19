@@ -82,33 +82,11 @@
           "quantity_kind"
         ]
       },
-      "if": {
-        "properties": {
-          "unit_system": {
-            "const": "COMPONENT_BASE"
-          }
-        },
-        "required": [
-          "unit_system"
-        ]
-      },
-      "then": {
-        "required": [
-          "base_reference"
-        ],
-        "properties": {
-          "units": {
-            "const": "pu"
-          }
+      "allOf": [
+        {
+          "$ref": "common.json#/$defs/UnitSystemRule"
         }
-      },
-      "else": {
-        "not": {
-          "required": [
-            "base_reference"
-          ]
-        }
-      },
+      ],
       "description": "One column of a table."
     }
   },

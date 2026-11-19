@@ -77,33 +77,7 @@
   },
   "allOf": [
     {
-      "if": {
-        "properties": {
-          "unit_system": {
-            "const": "COMPONENT_BASE"
-          }
-        },
-        "required": [
-          "unit_system"
-        ]
-      },
-      "then": {
-        "required": [
-          "base_reference"
-        ],
-        "properties": {
-          "units": {
-            "const": "pu"
-          }
-        }
-      },
-      "else": {
-        "not": {
-          "required": [
-            "base_reference"
-          ]
-        }
-      }
+      "$ref": "common.json#/$defs/UnitSystemRule"
     },
     {
       "if": {

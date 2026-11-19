@@ -159,6 +159,36 @@
       "type": "string",
       "pattern": "^/[^/]+/axes/[^/]+$",
       "description": "HDF5 group path that holds the axis data."
+    },
+    "UnitSystemRule": {
+      "if": {
+        "properties": {
+          "unit_system": {
+            "const": "COMPONENT_BASE"
+          }
+        },
+        "required": [
+          "unit_system"
+        ]
+      },
+      "then": {
+        "required": [
+          "base_reference"
+        ],
+        "properties": {
+          "units": {
+            "const": "pu"
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "required": [
+            "base_reference"
+          ]
+        }
+      },
+      "description": "A COMPONENT_BASE value requires base_reference and has units pu. Other values have no base_reference."
     }
   }
 }
