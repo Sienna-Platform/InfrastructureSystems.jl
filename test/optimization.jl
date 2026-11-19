@@ -98,3 +98,25 @@ end
     @test convert(IS.Optimization.ModelBuildStatus.Value, "IN_PROGRESS") ==
           IS.Optimization.ModelBuildStatus.IN_PROGRESS
 end
+
+@testset "output key traits: no default, schema pair, container names" begin
+    struct MockPower <: IS.Optimization.VariableType end
+    IS.Optimization.output_unit_system(::Type{MockPower}) = IS.SU
+    @test IS.Optimization.output_unit_system(MockPower) === IS.SU
+    @test IS.unit_system_pair(IS.Optimization.output_unit_system(MockPower)) ==
+          ("COMPONENT_BASE", "system")
+    @test IS.unit_system_pair(IS.CU) == ("COMPONENT_BASE", "component")
+    @test IS.unit_system_pair(IS.NU) == ("NATURAL_UNITS", "")
+    @test IS.output_units(IS.SU, MockPower) == "pu"
+    @test IS.output_units(IS.CU, MockPower) == "pu"
+    @test_throws ArgumentError IS.Optimization.output_unit_system(MockVariable2)
+    @test_throws ArgumentError IS.Optimization.output_unit_system(MockInitialCondition)
+    @test_throws ArgumentError IS.Optimization.quantity_kind(MockVariable2)
+    @test_throws ArgumentError IS.Optimization.natural_units(MockVariable2)
+    @test IS.Optimization.container_name(MockVariable) == "variables"
+    @test IS.Optimization.container_name(MockAuxVariable) == "aux_variables"
+    @test IS.Optimization.container_name(MockParameter) == "parameters"
+    @test IS.Optimization.container_name(MockExpression) == "expressions"
+    @test IS.Optimization.container_name(MockConstraint) == "duals"
+    @test_throws ArgumentError IS.Optimization.container_name(MockInitialCondition)
+end

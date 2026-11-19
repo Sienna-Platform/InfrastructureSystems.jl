@@ -166,3 +166,59 @@ function create_forecast_key_fixture(
     end
     return sys, keys
 end
+
+function outputs_model_index(m::PowerOutputSchemas.OutputsDocument, name::AbstractString)
+    return only(findall(e -> e.name == name, m.models))
+end
+
+outputs_model(m::PowerOutputSchemas.OutputsDocument, name::AbstractString) =
+    IS._model_entry(m, name)
+
+function outputs_axis_index(entry::PowerOutputSchemas.Model, name::AbstractString)
+    return only(findall(a -> IS.axis_key(a) == name, entry.axes))
+end
+
+outputs_axis(entry::PowerOutputSchemas.Model, name::AbstractString) =
+    IS._find_axis(entry, name)
+
+function _with(x; kw...)
+    T = typeof(x)
+    vals = Dict{Symbol, Any}(k => getfield(x, k) for k in fieldnames(T))
+    merge!(vals, Dict{Symbol, Any}(kw))
+    return T((vals[k] for k in fieldnames(T))...)
+end
+
+function set_outputs_axis!(entry::PowerOutputSchemas.Model, name::AbstractString, axis)
+    entry.axes[outputs_axis_index(entry, name)] = PowerOutputSchemas.Axis(axis)
+    return entry
+end
+
+function delete_outputs_axis!(entry::PowerOutputSchemas.Model, name::AbstractString)
+    deleteat!(entry.axes, outputs_axis_index(entry, name))
+    return entry
+end
+
+outputs_fixture(kind::AbstractString) = joinpath(DATA_DIR, "outputs", kind, "outputs.json")
+
+# Parse the JSON fixture `kind`, let `f!` change it, write it, and return the new path.
+function outputs_fixture_with(f!, kind::AbstractString)
+    raw = JSON.parse(read(outputs_fixture(kind), String))
+    f!(raw)
+    path = joinpath(mktempdir(), "outputs.json")
+    write(path, JSON.json(raw))
+    return path
+end
+
+# The schema rejects the document `m`, at the rule that `rx` names.
+function expect_schema_invalid(m::PowerOutputSchemas.OutputsDocument, rx::Regex)
+    @test_throws PowerOutputSchemas.SchemaValidationError IS.validate_metadata(m)
+    @test_throws rx IS.validate_metadata(m)
+    return
+end
+
+# The schema rejects the JSON file at `path` when it is read, at the rule that `rx` names.
+function expect_schema_invalid(path::AbstractString, rx::Regex)
+    @test_throws PowerOutputSchemas.SchemaValidationError IS.read_outputs_metadata(path)
+    @test_throws rx IS.read_outputs_metadata(path)
+    return
+end
