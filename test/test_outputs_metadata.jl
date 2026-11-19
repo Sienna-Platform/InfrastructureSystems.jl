@@ -116,7 +116,7 @@ end
     end
     dir = joinpath(DATA_DIR, "outputs", "invalid")
     files = sort(readdir(dir))
-    @test length(files) == 12
+    @test length(files) == 23
     @test "invalid_axis_ref.json" in files
     for f in files
         @test_throws ArgumentError IS.validate_metadata(

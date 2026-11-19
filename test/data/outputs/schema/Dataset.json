@@ -34,7 +34,8 @@
       "uniqueItems": true,
       "items": {
         "type": "string"
-      }
+      },
+      "description": "Each item is a key of the model axes object. The order is the storage order of the array dimensions. The writer sets it."
     },
     "dtype": {
       "$ref": "common.json#/$defs/Dtype"

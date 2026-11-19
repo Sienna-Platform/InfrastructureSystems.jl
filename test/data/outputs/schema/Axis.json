@@ -13,24 +13,29 @@
       "additionalProperties": false,
       "properties": {
         "kind": {
-          "const": "time"
+          "const": "time",
+          "description": "Axis kind. The value is \"time\"."
         },
         "initial_timestamp": {
           "$ref": "common.json#/$defs/Timestamp",
-          "description": "Naive local datetime with no zone or offset."
+          "description": "Timestamp of the first time step. Naive local datetime with no zone or offset."
         },
         "resolution": {
-          "$ref": "common.json#/$defs/Duration"
+          "$ref": "common.json#/$defs/Duration",
+          "description": "Time step between two values."
         },
         "length": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Number of time steps."
         },
         "group": {
           "type": "string",
-          "pattern": "^/[^/]+/axes/[^/]+$"
+          "pattern": "^/[^/]+/axes/[^/]+$",
+          "description": "HDF5 group path that holds the axis data."
         }
-      }
+      },
+      "description": "One continuous timeline. A single solve or values that are already realized use it."
     },
     "ExecutionAxis": {
       "type": "object",
@@ -44,24 +49,29 @@
       "additionalProperties": false,
       "properties": {
         "kind": {
-          "const": "execution"
+          "const": "execution",
+          "description": "Axis kind. The value is \"execution\"."
         },
         "initial_timestamp": {
           "$ref": "common.json#/$defs/Timestamp",
-          "description": "Naive local datetime with no zone or offset."
+          "description": "Start timestamp of the first solve. Naive local datetime with no zone or offset."
         },
         "interval": {
-          "$ref": "common.json#/$defs/Duration"
+          "$ref": "common.json#/$defs/Duration",
+          "description": "Time between the starts of two solves."
         },
         "count": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Number of solves."
         },
         "group": {
           "type": "string",
-          "pattern": "^/[^/]+/axes/[^/]+$"
+          "pattern": "^/[^/]+/axes/[^/]+$",
+          "description": "HDF5 group path that holds the axis data."
         }
-      }
+      },
+      "description": "The start timestamp of each solve: initial_timestamp + k*interval, for k < count. A simulation dataset uses execution and horizon."
     },
     "HorizonAxis": {
       "type": "object",
@@ -73,16 +83,20 @@
       "additionalProperties": false,
       "properties": {
         "kind": {
-          "const": "horizon"
+          "const": "horizon",
+          "description": "Axis kind. The value is \"horizon\"."
         },
         "resolution": {
-          "$ref": "common.json#/$defs/Duration"
+          "$ref": "common.json#/$defs/Duration",
+          "description": "Time step between two horizon steps."
         },
         "horizon_count": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Number of horizon steps in one solve."
         }
-      }
+      },
+      "description": "The step offset inside one solve. It has horizon_count steps of the given resolution. A simulation dataset uses execution and horizon. A single solve uses time."
     },
     "ComponentAxis": {
       "type": "object",
@@ -95,7 +109,8 @@
       "additionalProperties": false,
       "properties": {
         "kind": {
-          "const": "component"
+          "const": "component",
+          "description": "Axis kind. The value is \"component\"."
         },
         "columns": {
           "type": "array",
@@ -109,26 +124,33 @@
             "additionalProperties": false,
             "properties": {
               "component_type": {
-                "$ref": "common.json#/$defs/TypeName"
+                "$ref": "common.json#/$defs/TypeName",
+                "description": "Component type of the column."
               },
               "has_ids": {
-                "type": "boolean"
+                "type": "boolean",
+                "description": "True when the column stores component ids."
               }
             }
-          }
+          },
+          "description": "Component types of the columns. Each column holds the components of one type."
         },
         "length": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Number of components."
         },
         "group": {
           "type": "string",
-          "pattern": "^/[^/]+/axes/[^/]+$"
+          "pattern": "^/[^/]+/axes/[^/]+$",
+          "description": "HDF5 group path that holds the axis data."
         },
         "subset": {
-          "type": "string"
+          "type": "string",
+          "description": "Optional name suffix. The axis key appends it after two underscores to the component types."
         }
-      }
+      },
+      "description": "One entry for each component."
     },
     "LabelAxis": {
       "type": "object",
@@ -139,7 +161,8 @@
       "additionalProperties": false,
       "properties": {
         "kind": {
-          "const": "label"
+          "const": "label",
+          "description": "Axis kind. The value is \"label\"."
         },
         "labels": {
           "type": "array",
@@ -147,9 +170,11 @@
           "uniqueItems": true,
           "items": {
             "type": "string"
-          }
+          },
+          "description": "The fixed string labels."
         }
-      }
+      },
+      "description": "An axis whose entries are not components and not time. It has only fixed string labels. IOM uses it for an extra column dimension of some store arrays."
     }
   },
   "oneOf": [

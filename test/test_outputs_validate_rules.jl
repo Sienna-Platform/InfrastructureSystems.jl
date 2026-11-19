@@ -698,3 +698,41 @@ end
     write(path, missing_key)
     @test_throws Exception IS.read_outputs_metadata(path)
 end
+
+@testset "validate_metadata: axis keys bind to axis kinds" begin
+    m = _sim_meta()
+    m.models["UC"].axes["time"] =
+        _with(m.models["EM"].axes["time"]; group = "/UC/axes/time")
+    _expect_invalid(
+        "time axis under the realized values flag",
+        m,
+        r"model UC: supports_realized_values_post_calculation forbids a time axis",
+    )
+
+    for key in ("execution", "horizon", "time")
+        m = _sim_meta()
+        m.models["UC"].axes[key] = IS.LabelAxis("label", ["x"])
+        _expect_invalid(
+            "label axis under $key",
+            m,
+            Regex("model UC: label axis key \"$key\" is reserved"),
+        )
+    end
+
+    dir = joinpath(DATA_DIR, "outputs", "invalid")
+    _expect_invalid(
+        "horizon without execution",
+        IS.read_outputs_metadata(joinpath(dir, "invalid_horizon_without_execution.json")),
+        r"has a horizon axis without an execution axis",
+    )
+    _expect_invalid(
+        "execution key holding a label axis",
+        IS.read_outputs_metadata(joinpath(dir, "invalid_execution_key_wrong_kind.json")),
+        r"label axis key \"execution\" is reserved",
+    )
+    _expect_invalid(
+        "time axis under the flag fixture",
+        IS.read_outputs_metadata(joinpath(dir, "invalid_realized_with_time_axis.json")),
+        r"forbids a time axis",
+    )
+end

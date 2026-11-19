@@ -16,6 +16,7 @@
       "model_type": "decision",
       "system_uuid": "6f1c2a90-3b1e-4c7d-9a2f-0d5e8b7c6a11",
       "base_power": 100.0,
+      "supports_realized_values_post_calculation": false,
       "settings": {
         "horizon": "P2D",
         "interval": "P1D",
@@ -177,7 +178,6 @@
           "path": "/model/datasets/ProductionCostExpression__ThermalStandard"
         }
       ],
-      "supports_realized_values_post_calculation": false,
       "tables": [
         {
           "name": "optimizer_stats",

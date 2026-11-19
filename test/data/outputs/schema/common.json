@@ -48,13 +48,15 @@
       "enum": [
         "COMPONENT_BASE",
         "NATURAL_UNITS"
-      ]
+      ],
+      "description": "COMPONENT_BASE means per unit, on the base named by base_reference. NATURAL_UNITS means physical units, given in units; it has no base_reference."
     },
     "BaseReference": {
       "enum": [
         "system",
         "component"
-      ]
+      ],
+      "description": "Base of a COMPONENT_BASE value. The value system is the system base power. The value component is the own base of the component."
     },
     "RunStatus": {
       "enum": [

@@ -1,6 +1,7 @@
 const OUTPUT_CONTAINERS =
     ("variables", "aux_variables", "parameters", "expressions", "duals")
 const _LABEL_KEY_PATTERN = r"^[a-z][a-z0-9_]*$"
+const _RESERVED_AXIS_KEYS = ("time", "execution", "horizon")
 """
 Schema version string of `outputs.json`. Public: producers set it in `OutputsMetadata`.
 """
@@ -87,6 +88,13 @@ function _check_axis_key(model::String, name::String, a::AbstractAxis)
 end
 
 function _check_axis_key(model::String, name::String, ::LabelAxis)
+    if name in _RESERVED_AXIS_KEYS
+        throw(
+            ArgumentError(
+                "model $model: label axis key \"$name\" is reserved for the axis kind of the same name",
+            ),
+        )
+    end
     if !occursin(_LABEL_KEY_PATTERN, name)
         throw(
             ArgumentError(
@@ -464,6 +472,13 @@ function _check_realized_values(model::String, entry::ModelEntry)
         throw(
             ArgumentError(
                 "model $model: supports_realized_values_post_calculation requires an execution axis and a horizon axis",
+            ),
+        )
+    end
+    if haskey(entry.axes, "time")
+        throw(
+            ArgumentError(
+                "model $model: supports_realized_values_post_calculation forbids a time axis, the model already holds realized values",
             ),
         )
     end
