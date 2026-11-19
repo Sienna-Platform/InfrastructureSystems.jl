@@ -21,6 +21,7 @@ using Unitful: @u_str, uconvert, DimensionError
 import OpenAPI
 import InfrastructureCoreOpenAPIModels
 import InfrastructureTimeSeriesOpenAPIModels
+import PowerOutputSchemas
 
 import Aqua
 # `piracies` crashes on Julia 1.12+ (`Core.TypeName.mt` was removed), unfixed in Aqua 0.8.11.

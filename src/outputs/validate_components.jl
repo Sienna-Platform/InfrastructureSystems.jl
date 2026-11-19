@@ -59,7 +59,7 @@ function _validate_axis(
     ::HDF5.File,
     ::AbstractString,
     ::AbstractString,
-    ::AbstractAxis,
+    ::Any,
     ::SystemData,
 )
     return
@@ -69,17 +69,25 @@ function _validate_axis(
     f::HDF5.File,
     model::AbstractString,
     key::AbstractString,
-    ax::ComponentAxis,
+    ax::PowerOutputSchemas.ComponentAxis,
     data::SystemData,
 )
     ad = _read_axis_data(f, model, key, ax)
+    expected = (length(ax.columns), axis_length(ax))
+    if size(ad.labels) != expected
+        throw(
+            ArgumentError(
+                "model $model axis $key: labels have size $(size(ad.labels)), expected $expected",
+            ),
+        )
+    end
     if !any(c -> c.has_ids, ax.columns)
         return
     end
-    if size(ad.ids) != size(ad.labels)
+    if size(ad.ids) != expected
         throw(
             ArgumentError(
-                "model $model axis $key: ids have size $(size(ad.ids)), labels have size $(size(ad.labels))",
+                "model $model axis $key: ids have size $(size(ad.ids)), expected $expected",
             ),
         )
     end
@@ -106,7 +114,7 @@ function validate_components(
 )
     entry = _model_entry(a.metadata, model)
     HDF5.h5open(_h5_path(a), "r") do f
-        for ax in sort(entry.axes; by = axis_key)
+        for ax in sort!(collect(_axes(entry)); by = axis_key)
             _validate_axis(f, model, axis_key(ax), ax, data)
         end
     end

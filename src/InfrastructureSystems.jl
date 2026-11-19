@@ -46,6 +46,7 @@ import GeoJSON
 import OpenAPI
 import InfrastructureCoreOpenAPIModels
 import InfrastructureTimeSeriesOpenAPIModels
+import PowerOutputSchemas
 import Logging
 import Random
 import Pkg
@@ -240,7 +241,6 @@ include("openapi_associations.jl")
 include("subsystems.jl")
 include("validation.jl")
 include("component_selector.jl")
-include("Simulation/Simulation.jl")
 include("outputs.jl")
 include("outputs/iso_duration.jl")
 include("outputs/metadata.jl")
@@ -259,6 +259,7 @@ include("production_variable_cost_curve.jl")
 include("loss_curve.jl")
 include("function_data/make_convex.jl")
 include("Optimization/Optimization.jl")
+include("Simulation/Simulation.jl")
 include("outputs/hdf5_writer.jl")
 include("outputs/reader.jl")
 include("outputs/validate_components.jl")

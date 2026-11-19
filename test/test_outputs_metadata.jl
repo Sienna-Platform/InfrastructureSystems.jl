@@ -8,97 +8,89 @@
     @test IS.iso_duration(Dates.Hour(1)) == "PT1H"
     @test IS.iso_duration(Dates.Day(1)) == "P1D"
     @test IS.iso_duration(Dates.Millisecond(300_000)) == "PT5M"
+    @test IS.iso_duration(Dates.Minute(1500)) == "P1DT1H"
+    @test IS.iso_duration(Dates.Minute(0)) == "PT0M"
     @test_throws ArgumentError IS.parse_iso_duration("1h")
     @test_throws ArgumentError IS.parse_iso_duration("P")
+    @test_throws ArgumentError IS.parse_iso_duration("PT30S")
     @test_throws ArgumentError IS.iso_duration(Dates.Millisecond(1500))
+    @test_throws ArgumentError IS.iso_duration(Dates.Second(90))
 end
 
 @testset "outputs.json parses into typed metadata" begin
-    m = IS.read_outputs_metadata(
-        joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
-    )
-    @test m.schema_version == "0.1.0"
-    @test m.kind == "simulation"
+    m = IS.read_outputs_metadata(outputs_fixture("simulation"))
     @test IS.has_simulation(m)
     @test IS.get_simulation(m).execution_order == ["UC", "ED"]
     uc = outputs_model(m, "UC")
-    @test uc.model_type == "decision"
-    @test typeof(outputs_axis(uc, "execution")) === IS.ExecutionAxis
-    @test typeof(outputs_axis(uc, "horizon")) === IS.HorizonAxis
-    @test typeof(outputs_axis(uc, "ThermalStandard")) === IS.ComponentAxis
+    @test typeof(outputs_axis(uc, "execution")) === PowerOutputSchemas.ExecutionAxis
+    @test typeof(outputs_axis(uc, "horizon")) === PowerOutputSchemas.HorizonAxis
+    @test typeof(outputs_axis(uc, "ThermalStandard")) === PowerOutputSchemas.ComponentAxis
     @test IS.get_interval(outputs_axis(uc, "execution")) == Dates.Millisecond(86_400_000)
     @test IS.get_horizon(outputs_axis(uc, "horizon")) == Dates.Millisecond(48 * 3_600_000)
     ds = first(uc.datasets)
     @test IS.dataset_key(ds) == ("ActivePowerVariable", "ThermalStandard", "")
     @test IS.dataset_name(ds) == "ActivePowerVariable__ThermalStandard"
-    @test ds.layout.chunks == [1, 76, 48]
     @test IS.dataset_name(uc.datasets[3]) ==
           "ActivePowerReserveVariable__VariableReserve__Reserve_Up"
     em = outputs_model(m, "EM")
-    @test typeof(outputs_axis(em, "time")) === IS.TimeAxis
+    @test typeof(outputs_axis(em, "time")) === PowerOutputSchemas.TimeAxis
     @test IS.get_resolution(outputs_axis(em, "time")) == Dates.Millisecond(300_000)
-    single = IS.read_outputs_metadata(
-        joinpath(DATA_DIR, "outputs", "single", "outputs.json"),
-    )
+    single = IS.read_outputs_metadata(outputs_fixture("single"))
     @test !IS.has_simulation(single)
     @test_throws ErrorException IS.get_simulation(single)
 end
 
 @testset "unknown axis kind and unknown fields are rejected" begin
-    text = read(joinpath(DATA_DIR, "outputs", "single", "outputs.json"), String)
-    path = joinpath(mktempdir(), "outputs.json")
-    write(path, replace(text, "\"kind\": \"horizon\"" => "\"kind\": \"bogus\""))
-    @test_throws ArgumentError IS.read_outputs_metadata(path)
-    write(path, replace(text, "\"status\"" => "\"extra\": 1, \"status\""))
-    @test_throws Exception IS.read_outputs_metadata(path)
+    path = outputs_fixture_with("single") do raw
+        raw["models"][1]["axes"][2]["kind"] = "bogus"
+    end
+    expect_schema_invalid(path, r"/axes/1: oneOf")
+    path = outputs_fixture_with(raw -> (raw["extra"] = 1), "single")
+    expect_schema_invalid(path, r"/extra: schema")
 end
 
 @testset "metadata writes and re-reads identically" begin
     for kind in ("simulation", "single", "security_analysis")
-        m = IS.read_outputs_metadata(joinpath(DATA_DIR, "outputs", kind, "outputs.json"))
+        m = IS.read_outputs_metadata(outputs_fixture(kind))
         path = joinpath(mktempdir(), "outputs.json")
         IS.write_outputs_metadata(path, m)
-        @test !occursin("null", read(path, String))
+        text = read(path, String)
+        @test !occursin("null", text)
+        @test occursin("simulation", text) == (kind == "simulation")
         m2 = IS.read_outputs_metadata(path)
-        @test m2 == m
+        @test PowerOutputSchemas.encode(m2) == PowerOutputSchemas.encode(m)
     end
 end
 
-# IS.JSON.jl parse of the fill_value union: each JSON literal keeps its Julia type.
+# Each JSON literal of fill_value keeps its Julia type.
 @testset "fill_value parses to its JSON type" begin
-    text = read(joinpath(DATA_DIR, "outputs", "single", "outputs.json"), String)
-    path = joinpath(mktempdir(), "outputs.json")
     for (literal, T, expected) in (
-        ("0", Int64, 0),
-        ("1", Int64, 1),
-        ("5", Int64, 5),
-        ("-1", Int64, -1),
-        ("1.5", Float64, 1.5),
-        ("\"NaN\"", String, "NaN"),
-        ("false", Bool, false),
+        (0, Int64, 0),
+        (1, Int64, 1),
+        (5, Int64, 5),
+        (-1, Int64, -1),
+        (1.5, Float64, 1.5),
+        ("NaN", String, "NaN"),
     )
-        write(path, replace(text, "\"fill_value\": \"NaN\"" => "\"fill_value\": $literal"))
-        m = IS.read_outputs_metadata(path)
-        fv = first(outputs_model(m, "model").datasets).fill_value
+        path = outputs_fixture_with("single") do raw
+            raw["models"][1]["datasets"][1]["fill_value"] = literal
+        end
+        fv =
+            first(
+                outputs_model(IS.read_outputs_metadata(path), "model").datasets,
+            ).fill_value
         @test typeof(fv) === T
         @test fv == expected
     end
+    path = outputs_fixture_with("single") do raw
+        raw["models"][1]["datasets"][1]["dtype"] = "bool"
+        raw["models"][1]["datasets"][1]["fill_value"] = false
+    end
+    fv = first(outputs_model(IS.read_outputs_metadata(path), "model").datasets).fill_value
+    @test fv === false
 end
 
-@testset "empty optional fields are omitted from the written JSON" begin
-    d = IS.OutputDataset(
-        "E", "", ["time"], "f64", "NaN", "Q", "NATURAL_UNITS", "rad",
-        IS.DatasetLayout([1], String[]), "/m/datasets/E", "variables", "", "",
-    )
-    c = IS.OutputColumn("n", "i64", "", "", "", "")
-    dj = IS.JSON.json(d)
-    @test !occursin("component_type", dj) && !occursin("base_reference", dj)
-    @test occursin("\"meta\":\"\"", dj)
-    cj = IS.JSON.json(c)
-    @test cj == "{\"name\":\"n\",\"dtype\":\"i64\"}"
-    @test IS.JSON.parse(dj, IS.OutputDataset) == d
-    @test IS.JSON.parse(cj, IS.OutputColumn) == c
-    @test hash(d) == hash(IS.JSON.parse(dj, IS.OutputDataset))
+@testset "dataset names" begin
     @test IS.dataset_name("E", "", "") == "E"
     @test IS.dataset_name("E", "", "m") == "E__m"
     @test IS.dataset_name("E", "C", "") == "E__C"
@@ -111,15 +103,13 @@ end
 
 @testset "outputs metadata: valid corpus" begin
     for kind in ("simulation", "single", "power_flow", "security_analysis")
-        m = IS.read_outputs_metadata(joinpath(DATA_DIR, "outputs", kind, "outputs.json"))
+        m = IS.read_outputs_metadata(outputs_fixture(kind))
         @test IS.validate_metadata(m) === nothing
     end
 end
 
 @testset "validate_metadata: value sets and table rules" begin
-    base = IS.read_outputs_metadata(
-        joinpath(DATA_DIR, "outputs", "power_flow", "outputs.json"),
-    )
+    base = IS.read_outputs_metadata(outputs_fixture("power_flow"))
     function with_model(f)
         m = deepcopy(base)
         i = outputs_model_index(m, "model")
@@ -132,107 +122,84 @@ end
                 t = e.tables[1]
                 cols = copy(t.columns)
                 cols[2] = c
-                tables = [IS.OutputTable(t.name, t.group, t.length, cols)]
-                return _with(e; tables = tables)
+                return _with(e; tables = [_with(t; columns = cols)])
             end,
         )
     end
-    @test_throws ArgumentError IS.validate_metadata(
-        with_model(
-            e -> _with(e; model_type = "bogus"),
-        ),
+    column(; kw...) = PowerOutputSchemas.Column(;
+        name = "residual", dtype = PowerOutputSchemas.ColumnDtype("f64"), kw...,
     )
-    m = deepcopy(base)
-    @test_throws "\"DONE\" is not one of RUNNING, SUCCESSFULLY_FINALIZED, FAILED" IS.validate_metadata(
-        IS.with_status(m, "DONE"),
+    # Enum values: the reader rejects them, and the Julia constructors cannot build them.
+    for (field, value, at_dataset) in (
+        ("model_type", "bogus", false),
+        ("status", "DONE", false),
+        ("dtype", "f16", true),
+        ("unit_system", "PU", true),
     )
-    uuid = first(keys(m.systems))
-    for bad in ("../x", "/abs", "a/b", "a\\b", ".", "..", "")
-        m2 = deepcopy(m)
-        m2.systems[uuid] = bad
-        @test_throws "plain relative name" IS.validate_metadata(m2)
+        path = outputs_fixture_with("power_flow") do raw
+            target = raw
+            if field == "model_type"
+                target = raw["models"][1]
+            elseif at_dataset
+                target = raw["models"][1]["datasets"][1]
+            end
+            target[field] = value
+        end
+        expect_schema_invalid(path, Regex("/$field: enum"))
     end
-    @test_throws ArgumentError IS.validate_metadata(
-        with_table_column(IS.OutputColumn("residual", "f16")),
-    )
-    @test_throws ArgumentError IS.validate_metadata(
-        with_table_column(IS.OutputColumn("residual", "f64", "Dimensionless", "", "", "1")),
-    )
-    @test_throws ArgumentError IS.validate_metadata(
+    for (field, value) in (("dtype", "f16"), ("unit_system", "PU"))
+        path = outputs_fixture_with("power_flow") do raw
+            raw["models"][1]["tables"][1]["columns"][2][field] = value
+        end
+        expect_schema_invalid(path, Regex("/columns/1/$field: enum"))
+    end
+    @test_throws "invalid RunStatus value \"DONE\"" IS.with_status(deepcopy(base), "DONE")
+
+    uuid = first(keys(IS._systems(base)))
+    for bad in ("../x", "/abs", "a/b", "a\\b", ".", "..", "")
+        m2 = deepcopy(base)
+        IS._systems(m2)[uuid] = bad
+        expect_schema_invalid(m2, Regex("/$uuid: pattern"))
+    end
+    expect_schema_invalid(
         with_table_column(
-            IS.OutputColumn("residual", "f64", "Dimensionless", "PU", "", "1"),
+            column(;
+                quantity_kind = PowerOutputSchemas.QuantityKind("Dimensionless"),
+                units = "1",
+            ),
         ),
+        r": dependentRequired",
     )
-    @test_throws ArgumentError IS.validate_metadata(
+    expect_schema_invalid(
         with_table_column(
-            IS.OutputColumn("residual", "f64", "Dimensionless", "COMPONENT_BASE", "", "pu"),
+            column(;
+                quantity_kind = PowerOutputSchemas.QuantityKind("Dimensionless"),
+                unit_system = PowerOutputSchemas.UnitSystem("COMPONENT_BASE"),
+                units = "pu",
+            ),
         ),
+        r": required",
     )
     @test IS.validate_metadata(
         with_table_column(
-            IS.OutputColumn(
-                "residual", "f64", "Dimensionless", "COMPONENT_BASE", "system", "pu",
+            column(;
+                quantity_kind = PowerOutputSchemas.QuantityKind("Dimensionless"),
+                unit_system = PowerOutputSchemas.UnitSystem("COMPONENT_BASE"),
+                base_reference = PowerOutputSchemas.BaseReference("system"),
+                units = "pu",
             ),
         ),
     ) === nothing
-    @test_throws ArgumentError IS.validate_metadata(
+    @test_throws r"table solver_stats has group \"/model/tables/other\"" IS.validate_metadata(
         with_model(
-            e -> begin
-                t = e.tables[1]
-                tables = [
-                    IS.OutputTable(t.name, "/model/tables/other", t.length, t.columns),
-                ]
-                return _with(e; tables = tables)
-            end,
-        ),
-    )
-    @test_throws ArgumentError IS.validate_metadata(
-        with_model(
-            e -> begin
-                d = e.datasets[1]
-                bad = _with(d; dtype = "f16")
-                return _with(e; datasets = [bad, e.datasets[2]])
-            end,
-        ),
-    )
-    @test_throws ArgumentError IS.validate_metadata(
-        with_model(
-            e -> begin
-                d = e.datasets[1]
-                bad = _with(d; unit_system = "PU")
-                return _with(e; datasets = [bad, e.datasets[2]])
-            end,
+            e -> _with(e; tables = [_with(e.tables[1]; group = "/model/tables/other")]),
         ),
     )
 end
 
 @testset "component-less datasets: name, path, and descriptor" begin
-    pf = IS.read_outputs_metadata(
-        joinpath(DATA_DIR, "outputs", "power_flow", "outputs.json"),
-    )
+    pf = IS.read_outputs_metadata(outputs_fixture("power_flow"))
     d = outputs_model(pf, "model").datasets[2]
-    @test d.component_type == "" && IS.dataset_name(d) == "PowerFlowConverged"
+    @test IS.dataset_key(d)[2] == "" && IS.dataset_name(d) == "PowerFlowConverged"
     @test d.path == "/model/datasets/PowerFlowConverged"
-end
-
-@testset "empty subset and absent simulation are omitted from the JSON" begin
-    plain = IS.ComponentAxis(
-        "component", [IS.AxisColumn("ACBranch", true)], 3, "/m/axes/ACBranch", "",
-    )
-    @test !occursin("subset", IS.JSON.json(plain))
-    sub = IS.ComponentAxis(
-        "component", [IS.AxisColumn("ACBranch", true)], 3, "/m/axes/ACBranch__mon",
-        "mon",
-    )
-    @test occursin("\"subset\":\"mon\"", IS.JSON.json(sub))
-    @test IS.JSON.parse(IS.JSON.json(plain), IS.ComponentAxis) == plain
-    @test IS.JSON.parse(IS.JSON.json(sub), IS.ComponentAxis) == sub
-    single =
-        IS.read_outputs_metadata(joinpath(DATA_DIR, "outputs", "single", "outputs.json"))
-    @test single.simulation === IS.Simulation.NoSimulation() && !IS.has_simulation(single)
-    @test !occursin("simulation", IS.JSON.json(single))
-    sim = IS.read_outputs_metadata(
-        joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
-    )
-    @test occursin("\"simulation\":{", IS.JSON.json(sim))
 end

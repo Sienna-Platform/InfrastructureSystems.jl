@@ -16,10 +16,10 @@
         axes = ["execution", "TestComponent", "horizon"],
         axis_lengths = [7, 76, 48],
     )
-    @test d.container == "variables" && d.entry_type == "DescPower" &&
-          d.component_type == "TestComponent"
-    @test d.unit_system == "COMPONENT_BASE" && d.base_reference == "system" &&
-          d.units == "pu"
+    @test string(d.container) == "variables" &&
+          IS.dataset_key(d) == ("DescPower", "TestComponent", "")
+    @test string(d.unit_system) == "COMPONENT_BASE" &&
+          string(d.base_reference) == "system" && d.units == "pu"
     @test d.layout.chunks == [1, 76, 48] && d.fill_value == "NaN"
     @test d.path == "/UC/datasets/DescPower__TestComponent"
     a = IS.dataset_descriptor(
@@ -30,8 +30,9 @@
         axes = ["time", "TestComponent"],
         axis_lengths = [24, 73],
     )
-    @test a.container == "aux_variables" && a.unit_system == "NATURAL_UNITS" &&
-          a.base_reference == "" && a.units == "rad"
+    @test string(a.container) == "aux_variables" &&
+          string(a.unit_system) == "NATURAL_UNITS" && a.units == "rad"
+    @test !haskey(PowerOutputSchemas.encode(a), "base_reference")
     @test a.layout.chunks == [24, 73]
     i = IS.dataset_descriptor(
         DescPower,
@@ -79,10 +80,10 @@ end
         axis_lengths = [24],
         dtype = "bool",
     )
-    @test d.component_type == "" && d.path == "/pf/datasets/DescFlag"
+    @test IS.dataset_key(d)[2] == "" && d.path == "/pf/datasets/DescFlag"
     @test IS.dataset_name(d) == "DescFlag"
-    j = IS.JSON.json(d)
-    @test !occursin("component_type", j) && !occursin("base_reference", j)
+    j = PowerOutputSchemas.encode(d)
+    @test !haskey(j, "component_type") && !haskey(j, "base_reference")
     m = IS.dataset_descriptor(
         DescFlag, "m"; model = "pf", axes = ["time"], axis_lengths = [24],
     )

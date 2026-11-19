@@ -1,257 +1,3 @@
-const StructUtils = JSON.StructUtils
-
-abstract type AbstractAxis end
-
-# Axis and simulation timestamps are naive: `DateTime` parsing alone accepts a `Z` or an
-# offset and converts it. The pattern is the `Timestamp` rule of the outputs schema.
-const _TIMESTAMP_PATTERN = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?$"
-
-function _naive_timestamp(s::AbstractString)
-    if !occursin(_TIMESTAMP_PATTERN, s)
-        throw(
-            ArgumentError(
-                "timestamp \"$s\" is not naive (no offset), expected YYYY-MM-DDTHH:MM:SS[.sss]",
-            ),
-        )
-    end
-    return Dates.DateTime(s)
-end
-
-# Field lowering that drops an empty optional string from the written JSON.
-function _omit_if_empty(s::AbstractString)
-    if isempty(s)
-        return JSON.Omit()
-    end
-    return s
-end
-
-# Mirror of the `QuantityKind` enum of the outputs schema (`common.json`). IS cannot depend
-# on PowerAnalytics, which owns the schema.
-const QUANTITY_KINDS = (
-    "ActivePower",
-    "ReactivePower",
-    "ApparentPower",
-    "ActivePowerChangeRate",
-    "ElectricalEnergy",
-    "FractionPerTime",
-    "Voltage",
-    "CurrentFlow",
-    "Resistance",
-    "Reactance",
-    "Impedance",
-    "Conductance",
-    "Susceptance",
-    "Angle",
-    "Frequency",
-    "PowerPerFrequency",
-    "VoltagePerPower",
-    "Length",
-    "Elevation",
-    "Duration",
-    "OperationalDuration",
-    "CalendarPeriod",
-    "Dimensionless",
-    "Fraction",
-    "PowerFactor",
-    "HeatRate",
-    "StartFuelPerCapacity",
-    "VolumeFlowRate",
-    "HeadRate",
-    "Volume",
-    "Inductance",
-    "Capacitance",
-    "CostPerCapacity",
-    "CostPerEnergy",
-    "CostPerTime",
-    "CO2Emissions",
-    "Mass",
-    "Money",
-    "CostPerVolume",
-    "CostPerLevel",
-    "EmissionRate",
-    "CostPerMass",
-)
-
-"Time axis of a model that runs without an execution loop."
-JSON.@defaults struct TimeAxis <: AbstractAxis
-    kind::String
-    initial_timestamp::Dates.DateTime & (json = (lift = _naive_timestamp,),)
-    resolution::String
-    length::Int
-    group::String
-end
-
-"Execution axis of a decision model: one entry per solve."
-JSON.@defaults struct ExecutionAxis <: AbstractAxis
-    kind::String
-    initial_timestamp::Dates.DateTime & (json = (lift = _naive_timestamp,),)
-    interval::String
-    count::Int
-    group::String
-end
-
-"Horizon axis of a decision model: the steps inside one solve."
-struct HorizonAxis <: AbstractAxis
-    kind::String
-    resolution::String
-    horizon_count::Int
-end
-
-"One component-type column of a `ComponentAxis`."
-struct AxisColumn
-    component_type::String
-    has_ids::Bool
-end
-
-"Axis that lists components. A tuple of component types makes one column per type."
-JSON.@defaults struct ComponentAxis <: AbstractAxis
-    kind::String
-    columns::Vector{AxisColumn}
-    length::Int
-    group::String
-    subset::String = "" & (json = (lower = _omit_if_empty,),)
-end
-
-"Axis that lists plain labels. The `name` is the key that a dataset uses to refer to the axis."
-struct LabelAxis <: AbstractAxis
-    kind::String
-    name::String
-    labels::Vector{String}
-end
-
-"HDF5 chunk shape and filter names of a dataset."
-struct DatasetLayout
-    chunks::Vector{Int}
-    filters::Vector{String}
-end
-
-"""
-Description of one HDF5 dataset that stores one entry of a model. An empty
-`component_type` or `base_reference` is omitted from the written JSON.
-"""
-JSON.@defaults struct OutputDataset
-    entry_type::String
-    meta::String
-    axes::Vector{String}
-    dtype::String
-    fill_value::Union{String, Float64, Int64, Bool}
-    quantity_kind::String
-    unit_system::String
-    units::String
-    layout::DatasetLayout
-    path::String
-    container::String
-    component_type::String = "" & (json = (lower = _omit_if_empty,),)
-    base_reference::String = "" & (json = (lower = _omit_if_empty,),)
-end
-
-"""
-Description of one column of an `OutputTable`. Empty unit fields are omitted from the
-written JSON.
-"""
-JSON.@defaults struct OutputColumn
-    name::String
-    dtype::String
-    quantity_kind::String = "" & (json = (lower = _omit_if_empty,),)
-    unit_system::String = "" & (json = (lower = _omit_if_empty,),)
-    base_reference::String = "" & (json = (lower = _omit_if_empty,),)
-    units::String = "" & (json = (lower = _omit_if_empty,),)
-end
-
-"Description of one HDF5 table group."
-struct OutputTable
-    name::String
-    group::String
-    length::Int
-    columns::Vector{OutputColumn}
-end
-
-"""
-Description of the outputs of one model. The `name` is unique in the document. The field
-`supports_realized_values_post_calculation` is `true` when a reader can join the datasets
-of the model across executions into one time axis. The reader keeps the first
-`interval / resolution` horizon steps of each execution. A model with a `time` axis must
-set it to `false`, because its values are already realized.
-"""
-JSON.@defaults struct ModelEntry
-    name::String
-    model_type::String
-    system_uuid::String
-    base_power::Float64
-    settings::Dict{String, Any}
-    axes::Vector{AbstractAxis}
-    datasets::Vector{OutputDataset}
-    supports_realized_values_post_calculation::Bool
-    tables::Vector{OutputTable} = OutputTable[]
-end
-
-"Package, package version, and Julia version that wrote the outputs."
-struct ProducerInfo
-    package::String
-    version::String
-    julia::String
-end
-
-_omit_if_no_simulation(::Simulation.NoSimulation) = JSON.Omit()
-_omit_if_no_simulation(p::Simulation.SimulationParams) = p
-
-"""
-Content of the `outputs.json` file. The `simulation` field is `Simulation.NoSimulation()`
-when the file omits it. Use `has_simulation` and `get_simulation` to access it.
-"""
-JSON.@defaults struct OutputsMetadata
-    schema_version::String
-    kind::String
-    producer::ProducerInfo
-    created_at::String
-    status::String
-    systems::Dict{String, String}
-    models::Vector{ModelEntry}
-    simulation::Simulation.AbstractSimulation =
-        Simulation.NoSimulation() & (json = (lower = _omit_if_no_simulation,),)
-end
-
-function _axis_type(kind::AbstractString)
-    if kind == "time"
-        return TimeAxis
-    elseif kind == "execution"
-        return ExecutionAxis
-    elseif kind == "horizon"
-        return HorizonAxis
-    elseif kind == "component"
-        return ComponentAxis
-    elseif kind == "label"
-        return LabelAxis
-    end
-    throw(ArgumentError("unknown outputs axis kind: $kind"))
-end
-
-JSON.@choosetype AbstractAxis x -> _axis_type(x.kind[])
-
-for T in (
-    TimeAxis,
-    ExecutionAxis,
-    HorizonAxis,
-    AxisColumn,
-    ComponentAxis,
-    LabelAxis,
-    DatasetLayout,
-    OutputDataset,
-    OutputColumn,
-    OutputTable,
-    ModelEntry,
-    ProducerInfo,
-    Simulation.SimulationParams,
-    OutputsMetadata,
-)
-    @eval function Base.:(==)(a::$T, b::$T)
-        return double_equals_from_fields(a, b)
-    end
-    @eval function Base.hash(a::$T, h::UInt)
-        return hash_from_fields(a, h)
-    end
-end
-
 # Storage type and default fill value of each dataset dtype. Bool is stored as UInt8; the
 # reader converts it back. Table columns also allow variable-length strings.
 const _DTYPES = Dict(
@@ -261,7 +7,6 @@ const _DTYPES = Dict(
     "i32" => (Int32, 0),
     "bool" => (UInt8, false),
 )
-const _COLUMN_DTYPES = ("f64", "i64", "bool", "str")
 
 function _column_storage_type(dtype::String)
     if dtype == "str"
@@ -270,7 +15,21 @@ function _column_storage_type(dtype::String)
     return _DTYPES[dtype][1]
 end
 
-function _model_entry(m::OutputsMetadata, model::AbstractString)
+# The generated types spell an absent optional field as `ABSENT` or `nothing`. The schema
+# rejects an explicit `nothing`, so only `validate_metadata` can tell the two apart.
+_optional_string(s::String) = s
+_optional_string(::Union{OpenAPI.Runtime.Absent, Nothing}) = ""
+
+_model_tables(entry::PowerOutputSchemas.Model) = _model_tables(entry.tables)
+_model_tables(tables::Vector{PowerOutputSchemas.Table}) = tables
+_model_tables(::Union{OpenAPI.Runtime.Absent, Nothing}) = PowerOutputSchemas.Table[]
+
+_systems(m::PowerOutputSchemas.OutputsDocument) = m.systems.additional_properties
+
+# The concrete axis of each `PowerOutputSchemas.Axis` of the model.
+_axes(entry::PowerOutputSchemas.Model) = (a.value for a in entry.axes)
+
+function _model_entry(m::PowerOutputSchemas.OutputsDocument, model::AbstractString)
     i = findfirst(e -> e.name == model, m.models)
     if isnothing(i)
         throw(ArgumentError("unknown model $model"))
@@ -278,19 +37,23 @@ function _model_entry(m::OutputsMetadata, model::AbstractString)
     return m.models[i]
 end
 
-function _has_axis(entry::ModelEntry, name::AbstractString)
+function _has_axis(entry::PowerOutputSchemas.Model, name::AbstractString)
     return any(a -> axis_key(a) == name, entry.axes)
 end
 
-function _find_axis(entry::ModelEntry, name::AbstractString)
+function _find_axis(entry::PowerOutputSchemas.Model, name::AbstractString)
     i = findfirst(a -> axis_key(a) == name, entry.axes)
     if isnothing(i)
         throw(ArgumentError("model $(entry.name): unknown axis $name"))
     end
-    return entry.axes[i]
+    return entry.axes[i].value
 end
 
-function _find_dataset(m::OutputsMetadata, model::AbstractString, key::Tuple)
+function _find_dataset(
+    m::PowerOutputSchemas.OutputsDocument,
+    model::AbstractString,
+    key::Tuple,
+)
     entry = _model_entry(m, model)
     i = findfirst(d -> dataset_key(d) == key, entry.datasets)
     if isnothing(i)
@@ -299,13 +62,17 @@ function _find_dataset(m::OutputsMetadata, model::AbstractString, key::Tuple)
     return entry.datasets[i]
 end
 
-function _find_table(m::OutputsMetadata, model::AbstractString, name::AbstractString)
-    entry = _model_entry(m, model)
-    i = findfirst(t -> t.name == name, entry.tables)
+function _find_table(
+    m::PowerOutputSchemas.OutputsDocument,
+    model::AbstractString,
+    name::AbstractString,
+)
+    tables = _model_tables(_model_entry(m, model))
+    i = findfirst(t -> t.name == name, tables)
     if isnothing(i)
         throw(ArgumentError("model $model: no table $name"))
     end
-    return entry.tables[i]
+    return tables[i]
 end
 
 function _check_values_size(
@@ -325,62 +92,67 @@ function _check_values_size(
 end
 
 """
-Return `true` when the metadata has simulation parameters.
+Return `true` when the document has simulation parameters.
 """
-function has_simulation(m::OutputsMetadata)
-    return has_simulation(m.simulation)
+function has_simulation(m::PowerOutputSchemas.OutputsDocument)
+    return _has_simulation(m.simulation)
 end
 
-has_simulation(::Simulation.SimulationParams) = true
-has_simulation(::Simulation.NoSimulation) = false
+_has_simulation(::PowerOutputSchemas.SimulationParams) = true
+_has_simulation(::Union{OpenAPI.Runtime.Absent, Nothing}) = false
 
 """
-Return the `Simulation.SimulationParams` of the metadata. Throw an error when absent.
+Return the `PowerOutputSchemas.SimulationParams` of the document. Throw an error when absent.
 """
-function get_simulation(m::OutputsMetadata)
-    return _get_simulation(m.simulation, m.kind)
+function get_simulation(m::PowerOutputSchemas.OutputsDocument)
+    return _get_simulation(m.simulation, string(m.kind))
 end
 
-_get_simulation(s::Simulation.SimulationParams, ::String) = s
+_get_simulation(s::PowerOutputSchemas.SimulationParams, ::String) = s
 
-function _get_simulation(::Simulation.NoSimulation, kind::String)
+function _get_simulation(::Union{OpenAPI.Runtime.Absent, Nothing}, kind::String)
     error("outputs metadata of kind $kind has no simulation parameters")
 end
 
 """
 Return the resolution of the axis as `Dates.Millisecond`.
 """
-function get_resolution(a::Union{TimeAxis, HorizonAxis})
+function get_resolution(
+    a::Union{PowerOutputSchemas.TimeAxis, PowerOutputSchemas.HorizonAxis},
+)
     return parse_iso_duration(a.resolution)
 end
 
 """
 Return the interval of the execution axis as `Dates.Millisecond`.
 """
-function get_interval(a::ExecutionAxis)
+function get_interval(a::PowerOutputSchemas.ExecutionAxis)
     return parse_iso_duration(a.interval)
 end
 
 """
-Return the full horizon of the axis as `Dates.Millisecond`.
+Return the full horizon of the axis as `Dates.Millisecond`. Throw `OverflowError` when the
+horizon is too long for `Int64` milliseconds.
 """
-function get_horizon(a::HorizonAxis)
-    return a.horizon_count * get_resolution(a)
+function get_horizon(a::PowerOutputSchemas.HorizonAxis)
+    ms = Base.checked_mul(a.horizon_count, Dates.value(get_resolution(a)))
+    return Dates.Millisecond(ms)
 end
 
 """
-Return `(entry_type, component_type, meta)` of the dataset.
+Return `(entry_type, component_type, meta)` of the dataset. The component type is `""` when
+the dataset has none.
 """
-function dataset_key(d::OutputDataset)
-    return (d.entry_type, d.component_type, d.meta)
+function dataset_key(d::PowerOutputSchemas.Dataset)
+    return (d.entry_type, _optional_string(d.component_type), d.meta)
 end
 
 """
 Return the dataset name `EntryType__ComponentType[__meta]`. A dataset without a component
 type is named `EntryType[__meta]`.
 """
-function dataset_name(d::OutputDataset)
-    return dataset_name(d.entry_type, d.component_type, d.meta)
+function dataset_name(d::PowerOutputSchemas.Dataset)
+    return dataset_name(dataset_key(d)...)
 end
 
 function dataset_name(
@@ -399,29 +171,52 @@ function dataset_name(
 end
 
 """
-Read and parse an `outputs.json` file. Throw an error on unknown keys.
+Read an `outputs.json` file into a `PowerOutputSchemas.OutputsDocument`. Throw
+`PowerOutputSchemas.SchemaValidationError` when the file does not satisfy the outputs schema.
 """
 function read_outputs_metadata(path::AbstractString)
-    return JSON.parse(read(path, String), OutputsMetadata; unknown_fields = :error)
+    return PowerOutputSchemas.decode(
+        PowerOutputSchemas.OutputsDocument,
+        JSON.parse(read(path, String)),
+    )
 end
 
 """
-Write `m` to `path` as pretty-printed JSON.
+Write `m` to `path` as pretty-printed JSON. Write a temporary file in the same directory,
+then move it to `path`. When the write fails, `path` keeps its previous contents.
 """
-function write_outputs_metadata(path::AbstractString, m::OutputsMetadata)
-    open(path, "w") do io
-        JSON.json(io, m; pretty = 2)
+function write_outputs_metadata(path::AbstractString, m::PowerOutputSchemas.OutputsDocument)
+    doc = PowerOutputSchemas.encode(m)
+    tmp = string(path, ".tmp")
+    try
+        open(tmp, "w") do io
+            JSON.json(io, doc; pretty = 2)
+        end
+        mv(tmp, path; force = true)
+    catch
+        rm(tmp; force = true)
+        rethrow()
     end
     return
 end
 
 """
-Return the metadata `m` with `status` (and optionally `created_at`) replaced.
+Return the document `m` with `status` (and optionally `created_at`) replaced.
 """
-function with_status(m::OutputsMetadata, status::String; created_at::String = m.created_at)
-    return OutputsMetadata(
-        m.schema_version, m.kind, m.producer, created_at, status, m.systems, m.models,
-        m.simulation,
+function with_status(
+    m::PowerOutputSchemas.OutputsDocument,
+    status::String;
+    created_at::TimeZones.ZonedDateTime = m.created_at,
+)
+    return PowerOutputSchemas.OutputsDocument(;
+        schema_version = m.schema_version,
+        kind = m.kind,
+        producer = m.producer,
+        created_at = created_at,
+        status = PowerOutputSchemas.RunStatus(status),
+        systems = m.systems,
+        simulation = m.simulation,
+        models = m.models,
     )
 end
 

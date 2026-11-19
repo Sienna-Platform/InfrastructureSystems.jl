@@ -35,7 +35,7 @@ end
 "Writer of an outputs directory. Use `open_outputs_writer` to create one."
 mutable struct OutputsWriter
     dir::String
-    metadata::OutputsMetadata
+    metadata::PowerOutputSchemas.OutputsDocument
     file::HDF5.File
     datasets::Dict{Tuple{String, String, String, String}, DatasetRecord}
     tables_written::Set{Tuple{String, String}}
@@ -51,7 +51,7 @@ function timestamps_epoch_ms(ts::Vector{Dates.DateTime})
     return Int64[Dates.value(t - Dates.DateTime(1970)) for t in ts]
 end
 
-# Validated by `_check_filters`: every name is `shuffle` or `deflate:L`.
+# The schema accepts only `shuffle` and `deflate:L` names.
 function _make_filters(names::Vector{String})
     filters = HDF5.Filters.Filter[]
     for f in names
@@ -65,10 +65,19 @@ function _make_filters(names::Vector{String})
 end
 
 # Only time, execution, and component axes carry datasets and need AxisData.
-_needs_axis_data(::Union{TimeAxis, ExecutionAxis, ComponentAxis}) = true
-_needs_axis_data(::Union{HorizonAxis, LabelAxis}) = false
+function _needs_axis_data(
+    ::Union{
+        PowerOutputSchemas.TimeAxis,
+        PowerOutputSchemas.ExecutionAxis,
+        PowerOutputSchemas.ComponentAxis,
+    },
+)
+    return true
+end
+_needs_axis_data(::Union{PowerOutputSchemas.HorizonAxis, PowerOutputSchemas.LabelAxis}) =
+    false
 
-function _check_axis_set(m::OutputsMetadata, axis_data)
+function _check_axis_set(m::PowerOutputSchemas.OutputsDocument, axis_data)
     for (model, name) in keys(axis_data)
         i = findfirst(e -> e.name == model, m.models)
         if isnothing(i) || !_has_axis(m.models[i], name)
@@ -82,7 +91,7 @@ function _check_axis_set(m::OutputsMetadata, axis_data)
             )
         end
     end
-    for entry in m.models, ax in entry.axes
+    for entry in m.models, ax in _axes(entry)
         model = entry.name
         name = axis_key(ax)
         if _needs_axis_data(ax)
@@ -95,7 +104,12 @@ function _check_axis_set(m::OutputsMetadata, axis_data)
     return
 end
 
-function _check_axis_data(model::String, name::String, ax::ComponentAxis, d::AxisData)
+function _check_axis_data(
+    model::String,
+    name::String,
+    ax::PowerOutputSchemas.ComponentAxis,
+    d::AxisData,
+)
     n = axis_length(ax)
     nc = length(ax.columns)
     if size(d.labels) != (nc, n)
@@ -130,7 +144,7 @@ end
 function _check_axis_data(
     model::String,
     name::String,
-    ax::Union{TimeAxis, ExecutionAxis},
+    ax::Union{PowerOutputSchemas.TimeAxis, PowerOutputSchemas.ExecutionAxis},
     d::AxisData,
 )
     n = axis_length(ax)
@@ -141,34 +155,60 @@ function _check_axis_data(
             ),
         )
     end
+    start = Dates.DateTime(ax.initial_timestamp)
+    step = _axis_step(ax)
+    for (i, t) in enumerate(d.timestamps)
+        expected = start + (i - 1) * step
+        if t != expected
+            throw(
+                ArgumentError(
+                    "model $model: axis \"$name\" timestamp $i is $t, expected $expected",
+                ),
+            )
+        end
+    end
     return
 end
 
-# Only time, execution, and component axes index `axis_data`.
-_write_axis!(::HDF5.Group, ::HorizonAxis, _, _) = nothing
+_axis_step(ax::PowerOutputSchemas.TimeAxis) = get_resolution(ax)
+_axis_step(ax::PowerOutputSchemas.ExecutionAxis) = get_interval(ax)
 
-function _write_axis!(g::HDF5.Group, ax::LabelAxis, _, _)
+# Only time, execution, and component axes index `axis_data`.
+_write_axis!(::HDF5.Group, ::PowerOutputSchemas.HorizonAxis, _, _) = nothing
+
+function _write_axis!(g::HDF5.Group, ax::PowerOutputSchemas.LabelAxis, _, _)
     g["labels"] = ax.labels
     return
 end
 
-function _write_axis!(g::HDF5.Group, ::ComponentAxis, axis_data, key)
+function _write_axis!(g::HDF5.Group, ax::PowerOutputSchemas.ComponentAxis, axis_data, key)
     d = axis_data[key]
-    if !isempty(d.ids)
+    if all(c -> c.has_ids, ax.columns)
         g["ids"] = d.ids
     end
     g["labels"] = d.labels
     return
 end
 
-function _write_axis!(g::HDF5.Group, ::Union{TimeAxis, ExecutionAxis}, axis_data, key)
+function _write_axis!(
+    g::HDF5.Group,
+    ::Union{PowerOutputSchemas.TimeAxis, PowerOutputSchemas.ExecutionAxis},
+    axis_data,
+    key,
+)
     g["timestamps"] = timestamps_epoch_ms(axis_data[key].timestamps)
     return
 end
 
-function _create_dataset!(f::HDF5.File, model::String, d::OutputDataset, m::ModelEntry)
+function _create_dataset!(
+    f::HDF5.File,
+    model::String,
+    d::PowerOutputSchemas.Dataset,
+    m::PowerOutputSchemas.Model,
+)
     key = dataset_key(d)
-    T = _DTYPES[d.dtype][1]
+    dtype = string(d.dtype)
+    T = _DTYPES[dtype][1]
     dims = reverse([axis_length(_find_axis(m, a)) for a in d.axes])
     pos = findfirst(==("execution"), d.axes)
     exec_dim = 0
@@ -185,23 +225,23 @@ function _create_dataset!(f::HDF5.File, model::String, d::OutputDataset, m::Mode
         fill_value = _parse_fill(T, d.fill_value),
         filters = _make_filters(d.layout.filters),
     )
-    return (model, key...) => DatasetRecord(ds, d.dtype, exec_dim, expected, written)
+    return (model, key...) => DatasetRecord(ds, dtype, exec_dim, expected, written)
 end
 
-function _create_table!(f::HDF5.File, t::OutputTable)
+function _create_table!(f::HDF5.File, t::PowerOutputSchemas.Table)
     g = HDF5.create_group(f, t.group)
     for c in t.columns
-        T = _column_storage_type(c.dtype)
+        T = _column_storage_type(string(c.dtype))
         HDF5.create_dataset(g, c.name, HDF5.datatype(T), HDF5.dataspace((t.length,)))
     end
     return
 end
 
-function _populate!(f::HDF5.File, m::OutputsMetadata, axis_data)
+function _populate!(f::HDF5.File, m::PowerOutputSchemas.OutputsDocument, axis_data)
     records = Dict{Tuple{String, String, String, String}, DatasetRecord}()
     for entry in m.models
         model = entry.name
-        for ax in entry.axes
+        for ax in _axes(entry)
             name = axis_key(ax)
             g = HDF5.create_group(f, "/$model/axes/$name")
             _write_axis!(g, ax, axis_data, (model, name))
@@ -209,7 +249,7 @@ function _populate!(f::HDF5.File, m::OutputsMetadata, axis_data)
         for d in entry.datasets
             push!(records, _create_dataset!(f, model, d, entry))
         end
-        for t in entry.tables
+        for t in _model_tables(entry)
             _create_table!(f, t)
         end
     end
@@ -217,7 +257,7 @@ function _populate!(f::HDF5.File, m::OutputsMetadata, axis_data)
 end
 
 # Create the file and close it again when populating fails.
-function _create_h5(path::String, m::OutputsMetadata, axis_data)
+function _create_h5(path::String, m::PowerOutputSchemas.OutputsDocument, axis_data)
     f = HDF5.h5open(path, "w")
     try
         return f, _populate!(f, m, axis_data)
@@ -250,7 +290,7 @@ Validate `m`, create `dir`, write `outputs.json` with status `RUNNING`, and crea
 """
 function open_outputs_writer(
     dir::AbstractString,
-    m::OutputsMetadata;
+    m::PowerOutputSchemas.OutputsDocument;
     axis_data::Dict{Tuple{String, String}, AxisData},
 )
     validate_metadata(m)
@@ -272,7 +312,7 @@ function open_outputs_writer(
 end
 
 function _check_running(w::OutputsWriter)
-    if w.metadata.status != string(Simulation.RunStatus.RUNNING) || !isopen(w.file)
+    if string(w.metadata.status) != string(Simulation.RunStatus.RUNNING) || !isopen(w.file)
         throw(ArgumentError("outputs writer for $(w.dir) is not running"))
     end
     return
@@ -388,7 +428,7 @@ function write_table!(
             )
         end
         w.file[string(t.group, "/", c.name)][:] =
-            _convert_values(_column_storage_type(c.dtype), v)
+            _convert_values(_column_storage_type(string(c.dtype)), v)
     end
     push!(w.tables_written, (String(model), String(table_name)))
     return
@@ -418,7 +458,7 @@ function _unwritten(w::OutputsWriter)
             )
         end
     end
-    for entry in w.metadata.models, t in entry.tables
+    for entry in w.metadata.models, t in _model_tables(entry)
         model = entry.name
         if !((model, t.name) in w.tables_written)
             push!(missing_, "model $model: table $(t.name) was never written")
@@ -446,7 +486,7 @@ then, and `finalize!` with `FAILED` stays possible.
 When the JSON write fails, the writer keeps status `RUNNING` and `finalize!` can run again.
 """
 function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
-    if w.metadata.status != string(Simulation.RunStatus.RUNNING)
+    if string(w.metadata.status) != string(Simulation.RunStatus.RUNNING)
         throw(ArgumentError("outputs writer for $(w.dir) is finalized"))
     end
     if !(
@@ -463,7 +503,7 @@ function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
     end
     if status == Simulation.RunStatus.SUCCESSFULLY_FINALIZED
         unwritten = _unwritten(w)
-        for (uuid, name) in w.metadata.systems
+        for (uuid, name) in _systems(w.metadata)
             if !isdir(joinpath(w.dir, name))
                 push!(unwritten, "system $uuid: bundle directory $name does not exist")
             end
@@ -483,19 +523,18 @@ function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
     if isopen(w.file)
         close(w.file)
     end
-    stamp = Dates.format(Dates.now(Dates.UTC), "yyyy-mm-ddTHH:MM:SS") * "Z"
+    stamp = TimeZones.now(TimeZones.tz"UTC")
     m = with_status(w.metadata, string(status); created_at = stamp)
     write_outputs_metadata(joinpath(w.dir, "outputs.json"), m)
     w.metadata = m
     return
 end
 
-function _check_systems(m::OutputsMetadata, systems::AbstractDict)
+function _check_systems(m::PowerOutputSchemas.OutputsDocument, systems::AbstractDict)
     for uuid in keys(systems)
-        if !haskey(m.systems, uuid)
+        if !haskey(_systems(m), uuid)
             throw(ArgumentError("system $uuid is not in the metadata systems"))
         end
-        _check_bundle_name(uuid, m.systems[uuid])
     end
     return
 end
@@ -507,7 +546,7 @@ Mark the run `FAILED` when possible and always close the file. Never throws. Pub
 producers of outputs call it when a write fails.
 """
 function abort!(w::OutputsWriter)
-    if w.metadata.status == string(Simulation.RunStatus.RUNNING)
+    if string(w.metadata.status) == string(Simulation.RunStatus.RUNNING)
         try
             finalize!(w; status = Simulation.RunStatus.FAILED)
         catch
@@ -531,7 +570,7 @@ implements `write_system_bundle(obj, dir)`.
 """
 function write_outputs(
     dir::AbstractString,
-    m::OutputsMetadata;
+    m::PowerOutputSchemas.OutputsDocument;
     axis_data::Dict{Tuple{String, String}, AxisData},
     values::AbstractDict,
     tables::AbstractDict,
@@ -547,7 +586,7 @@ function write_outputs(
             write_table!(w, model, table, cols)
         end
         for (uuid, obj) in systems
-            bundle = joinpath(dir, m.systems[uuid])
+            bundle = joinpath(dir, _systems(m)[uuid])
             mkpath(bundle)
             write_system_bundle(obj, bundle)
         end

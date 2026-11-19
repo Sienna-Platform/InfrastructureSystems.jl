@@ -4,7 +4,7 @@ Use `open_outputs` to create one.
 """
 struct OutputArtifact
     dir::String
-    metadata::OutputsMetadata
+    metadata::PowerOutputSchemas.OutputsDocument
 end
 
 """
@@ -24,7 +24,7 @@ function open_outputs(dir::AbstractString)
     if !isfile(joinpath(dir, "outputs.h5"))
         throw(ArgumentError("outputs directory $dir has no outputs.h5"))
     end
-    for (uuid, name) in m.systems
+    for (uuid, name) in _systems(m)
         if !isdir(joinpath(dir, name))
             throw(
                 ArgumentError(
@@ -33,13 +33,13 @@ function open_outputs(dir::AbstractString)
             )
         end
     end
-    if m.status == string(Simulation.RunStatus.RUNNING)
+    if string(m.status) == string(Simulation.RunStatus.RUNNING)
         @warn "Outputs in $dir have status RUNNING: the run is not finished or ended without a final status. Datasets can be partly written."
     end
     return OutputArtifact(String(dir), m)
 end
 
-"Return the `OutputsMetadata` of the artifact."
+"Return the `PowerOutputSchemas.OutputsDocument` of the artifact."
 get_metadata(a::OutputArtifact) = a.metadata
 
 "Return the sorted model names of the artifact."
@@ -54,7 +54,7 @@ end
 
 "Return the table names of `model`."
 function list_tables(a::OutputArtifact, model::AbstractString)
-    return String[t.name for t in _model_entry(a.metadata, model).tables]
+    return String[t.name for t in _model_tables(_model_entry(a.metadata, model))]
 end
 
 "Return the axis `key` of `model`."
@@ -70,7 +70,7 @@ function _read_axis_data(
     ::HDF5.File,
     ::AbstractString,
     ::AbstractString,
-    ::Union{HorizonAxis, LabelAxis},
+    ::Union{PowerOutputSchemas.HorizonAxis, PowerOutputSchemas.LabelAxis},
 )
     return AxisData()
 end
@@ -79,7 +79,7 @@ function _read_axis_data(
     f::HDF5.File,
     model::AbstractString,
     key::AbstractString,
-    ax::ComponentAxis,
+    ax::PowerOutputSchemas.ComponentAxis,
 )
     g = f[ax.group]
     ids = zeros(Int64, 0, 0)
@@ -95,7 +95,7 @@ function _read_axis_data(
     f::HDF5.File,
     ::AbstractString,
     ::AbstractString,
-    ax::Union{TimeAxis, ExecutionAxis},
+    ax::Union{PowerOutputSchemas.TimeAxis, PowerOutputSchemas.ExecutionAxis},
 )
     ts = [
         Dates.DateTime(1970) + Dates.Millisecond(ms) for
@@ -141,7 +141,13 @@ function _decode(dtype::String, v)
 end
 
 # Design check 4: the stored shape and element type match the metadata.
-function _check_stored(model, key, d::OutputDataset, ds::HDF5.Dataset, expected::Tuple)
+function _check_stored(
+    model,
+    key,
+    d::PowerOutputSchemas.Dataset,
+    ds::HDF5.Dataset,
+    expected::Tuple,
+)
     if size(ds) != expected
         throw(
             ArgumentError(
@@ -149,11 +155,12 @@ function _check_stored(model, key, d::OutputDataset, ds::HDF5.Dataset, expected:
             ),
         )
     end
-    storage = _DTYPES[d.dtype][1]
+    dtype = string(d.dtype)
+    storage = _DTYPES[dtype][1]
     if eltype(ds) != storage
         throw(
             ArgumentError(
-                "model $model: dataset $key is stored as $(eltype(ds)), the metadata dtype $(d.dtype) expects $storage",
+                "model $model: dataset $key is stored as $(eltype(ds)), the metadata dtype $dtype expects $storage",
             ),
         )
     end
@@ -200,7 +207,7 @@ function read_dataset(
         _check_stored(model, key, d, ds, expected)
         return ds[idx...]
     end
-    return _decode(d.dtype, arr), keys_julia[keep]
+    return _decode(string(d.dtype), arr), keys_julia[keep]
 end
 
 "Return the columns of table `name` of `model` as a `NamedTuple` of vectors."
@@ -210,6 +217,6 @@ function read_table(a::OutputArtifact, model::AbstractString, name::AbstractStri
         return [read(f[string(t.group, "/", c.name)]) for c in t.columns]
     end
     return NamedTuple{Tuple(Symbol(c.name) for c in t.columns)}(
-        Tuple(_decode(c.dtype, v) for (c, v) in zip(t.columns, cols)),
+        Tuple(_decode(string(c.dtype), v) for (c, v) in zip(t.columns, cols)),
     )
 end

@@ -2,7 +2,7 @@
 
 import HDF5
 
-const _SINGLE_JSON = joinpath(DATA_DIR, "outputs", "single", "outputs.json")
+const _SINGLE_JSON = outputs_fixture("single")
 const _KEY = ("ActivePowerVariable", "ThermalStandard", "")
 
 # The fixture holds one execution. The writer tests need several.
@@ -16,7 +16,7 @@ function _single_meta()
     return m
 end
 
-function _fake_axis_data(ax::IS.ComponentAxis)
+function _fake_axis_data(ax::PowerOutputSchemas.ComponentAxis)
     n = IS.axis_length(ax)
     nc = length(ax.columns)
     ids = repeat(collect(Int64, 1:n)', nc, 1)
@@ -24,13 +24,19 @@ function _fake_axis_data(ax::IS.ComponentAxis)
     return IS.AxisData(ids, labels, DateTime[])
 end
 
-function _fake_axis_data(ax::IS.ExecutionAxis)
-    ts = [ax.initial_timestamp + Day(i - 1) for i in 1:(ax.count)]
+function _fake_axis_data(ax::PowerOutputSchemas.ExecutionAxis)
+    ts = [
+        DateTime(ax.initial_timestamp) + (i - 1) * IS.get_interval(ax) for
+        i in 1:(ax.count)
+    ]
     return IS.AxisData(ts)
 end
 
-function _fake_axis_data(ax::IS.TimeAxis)
-    ts = [ax.initial_timestamp + Hour(i - 1) for i in 1:(ax.length)]
+function _fake_axis_data(ax::PowerOutputSchemas.TimeAxis)
+    ts = [
+        DateTime(ax.initial_timestamp) + (i - 1) * IS.get_resolution(ax) for
+        i in 1:(ax.length)
+    ]
     return IS.AxisData(ts)
 end
 
@@ -38,18 +44,29 @@ function _add_fake_axis!(
     d,
     model,
     key,
-    ax::Union{IS.ComponentAxis, IS.ExecutionAxis, IS.TimeAxis},
+    ax::Union{
+        PowerOutputSchemas.ComponentAxis,
+        PowerOutputSchemas.ExecutionAxis,
+        PowerOutputSchemas.TimeAxis,
+    },
 )
     d[(model, key)] = _fake_axis_data(ax)
     return
 end
 
-_add_fake_axis!(d, model, key, ::Union{IS.HorizonAxis, IS.LabelAxis}) = nothing
+function _add_fake_axis!(
+    d,
+    model,
+    key,
+    ::Union{PowerOutputSchemas.HorizonAxis, PowerOutputSchemas.LabelAxis},
+)
+    return
+end
 
 function simulation_axis_data(m)
     d = Dict{Tuple{String, String}, IS.AxisData}()
     for model in m.models, ax in model.axes
-        _add_fake_axis!(d, model.name, IS.axis_key(ax), ax)
+        _add_fake_axis!(d, model.name, IS.axis_key(ax), ax.value)
     end
     return d
 end
@@ -72,12 +89,14 @@ function _all_values(m)
     for entry in m.models, d in entry.datasets
         model = entry.name
         dims = Tuple(reverse([IS.axis_length(outputs_axis(entry, a)) for a in d.axes]))
-        vals[(model, IS.dataset_key(d)...)] = fill(_dtype_zero(Val(Symbol(d.dtype))), dims)
+        vals[(model, IS.dataset_key(d)...)] =
+            fill(_dtype_zero(Val(Symbol(string(d.dtype)))), dims)
     end
     return vals
 end
 
-_column_fill(c::IS.OutputColumn, n) = _column_fill(Val(Symbol(c.dtype)), n)
+_column_fill(c::PowerOutputSchemas.Column, n) =
+    _column_fill(Val(Symbol(string(c.dtype))), n)
 _column_fill(::Val{:str}, n) = fill("x", n)
 _column_fill(::Val{:f64}, n) = zeros(n)
 _column_fill(::Val{:i64}, n) = ones(Int64, n)
@@ -86,7 +105,7 @@ _column_fill(::Val{:bool}, n) = falses(n)
 # Placeholder columns for every table of `m`.
 function _all_tables(m)
     tables = Dict()
-    for entry in m.models, t in entry.tables
+    for entry in m.models, t in IS._model_tables(entry)
         tables[(entry.name, t.name)] = NamedTuple{Tuple(Symbol(c.name) for c in t.columns)}(
             Tuple(_column_fill(c, t.length) for c in t.columns),
         )
@@ -95,7 +114,7 @@ function _all_tables(m)
 end
 
 # A bundle writer object for every system of `m`.
-_bundle_systems(m) = Dict(uuid => _MockSystem() for uuid in keys(m.systems))
+_bundle_systems(m) = Dict(uuid => _MockSystem() for uuid in keys(IS._systems(m)))
 
 @testset "outputs writer: one-shot write then raw read with HDF5" begin
     m = _single_meta()
@@ -116,14 +135,15 @@ _bundle_systems(m) = Dict(uuid => _MockSystem() for uuid in keys(m.systems))
         @test length(f["/model/axes/execution/timestamps"]) == 7
     end
     m2 = IS.read_outputs_metadata(joinpath(dir, "outputs.json"))
-    @test m2.status == "SUCCESSFULLY_FINALIZED"
+    @test string(m2.status) == "SUCCESSFULLY_FINALIZED"
 end
 
 @testset "outputs writer: incremental append, unwritten reads NaN" begin
     m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
-    @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status == "RUNNING"
+    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) ==
+          "RUNNING"
     IS.write_execution!(w, "model", _KEY, fill(2.0, 48, 76), 3)
     IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r") do f
@@ -204,26 +224,67 @@ end
     mk(; dtype = d0.dtype, fill_value = d0.fill_value, filters = d0.layout.filters) =
         _with_dataset(
             m,
-            d -> IS.OutputDataset(
-                d.entry_type, d.meta, d.axes, dtype, fill_value, d.quantity_kind,
-                d.unit_system, d.units, IS.DatasetLayout(d.layout.chunks, filters),
-                d.path,
-                d.container, d.component_type, d.base_reference),
+            d -> _with(
+                d;
+                dtype = dtype,
+                fill_value = fill_value,
+                layout = PowerOutputSchemas.DatasetLayout(;
+                    chunks = d.layout.chunks, filters = filters,
+                ),
+            ),
         )
     for bad in (
-        mk(; dtype = "f16"),
-        mk(; fill_value = 1.5, dtype = "i64"),
+        mk(; fill_value = 1.5, dtype = PowerOutputSchemas.Dtype("i64")),
         mk(; filters = ["lz4"]),
         mk(; filters = ["deflate:0"]),
         mk(; filters = ["deflate:10"]),
         mk(; filters = ["deflate:x"]),
     )
         dir = joinpath(mktempdir(), "out")
-        @test_throws ArgumentError IS.open_outputs_writer(dir, bad; axis_data = ad)
+        @test_throws PowerOutputSchemas.SchemaValidationError IS.open_outputs_writer(
+            dir, bad; axis_data = ad)
         @test !ispath(dir)
     end
-    @test_throws "fill_value 1.5 is not valid for dtype i64" IS.open_outputs_writer(
-        mktempdir(), mk(; fill_value = 1.5, dtype = "i64"); axis_data = ad)
+    @test_throws r"/fill_value: type" IS.open_outputs_writer(
+        mktempdir(), mk(; fill_value = 1.5, dtype = PowerOutputSchemas.Dtype("i64"));
+        axis_data = ad)
+end
+
+@testset "outputs writer: axis timestamps follow the declared step" begin
+    sim = IS.read_outputs_metadata(outputs_fixture("simulation"))
+    for (m, model, key, i, expected) in (
+        (_single_meta(), "model", "execution", 3, DateTime(2024, 1, 3)),
+        (sim, "EM", "time", 2, DateTime(2024, 1, 1, 0, 5)),
+    )
+        ad = simulation_axis_data(m)
+        ts = copy(ad[(model, key)].timestamps)
+        @test ts[i] == expected
+        ts[i] += Minute(1)
+        ad[(model, key)] = IS.AxisData(ts)
+        dir = joinpath(mktempdir(), "out")
+        @test_throws ArgumentError IS.open_outputs_writer(dir, m; axis_data = ad)
+        @test_throws Regex(
+            "model $model: axis \"$key\" timestamp $i is $(ts[i]), expected $expected",
+        ) IS.open_outputs_writer(dir, m; axis_data = ad)
+        @test !ispath(dir)
+        w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
+        IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
+        @test isfile(joinpath(dir, "outputs.h5"))
+    end
+end
+
+@testset "outputs writer: a zero-length component axis keeps its ids" begin
+    m = _single_meta()
+    entry = outputs_model(m, "model")
+    set_outputs_axis!(
+        entry, "ThermalStandard", _with(outputs_axis(entry, "ThermalStandard"); length = 0),
+    )
+    dir = mktempdir()
+    IS.write_outputs(dir, m; axis_data = simulation_axis_data(m), values = _all_values(m),
+        tables = _all_tables(m), systems = _bundle_systems(m))
+    a = IS.open_outputs(dir)
+    @test size(IS.read_axis_data(a, "model", "ThermalStandard").ids) == (1, 0)
+    @test size(IS.read_axis_data(a, "model", "ThermalStandard").labels) == (1, 0)
 end
 
 struct _FailingSystem end
@@ -234,7 +295,7 @@ end
 @testset "outputs writer: systems path" begin
     m = _single_meta()
     ad = simulation_axis_data(m)
-    uuid, name = first(m.systems)
+    uuid, name = first(IS._systems(m))
     vals = merge(_all_values(m), Dict(("model", _KEY...) => rand(48, 76, 7)))
     tbls = _all_tables(m)
     dir = mktempdir()
@@ -246,7 +307,7 @@ end
     dir = mktempdir()
     @test_throws "bundle boom" IS.write_outputs(dir, m; axis_data = ad, values = vals,
         tables = tbls, systems = Dict(uuid => _FailingSystem()))
-    @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status == "FAILED"
+    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) == "FAILED"
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r") do f
         @test haskey(f, "/model/datasets")
     end
@@ -260,9 +321,10 @@ end
     # bundle directory must be a plain relative name
     for bad in ("../x", "/abs", "a/b", "..", "")
         m2 = deepcopy(m)
-        m2.systems[uuid] = bad
+        IS._systems(m2)[uuid] = bad
         dir = joinpath(mktempdir(), "out")
-        @test_throws ArgumentError IS.write_outputs(dir, m2; axis_data = ad,
+        @test_throws PowerOutputSchemas.SchemaValidationError IS.write_outputs(
+            dir, m2; axis_data = ad,
             values = vals, tables = tbls, systems = Dict(uuid => _MockSystem()))
         @test !ispath(dir)
     end
@@ -295,18 +357,18 @@ end
     @test_throws ArgumentError IS.finalize!(w; status = IS.Simulation.RunStatus.RUNNING)
     @test_throws ArgumentError IS.finalize!(
         w; status = IS.Simulation.RunStatus.INITIALIZED)
-    @test w.metadata.status == "RUNNING"
+    @test string(w.metadata.status) == "RUNNING"
     for (k, v) in _all_values(m)
         IS.write_values!(w, k[1], k[2:end], v)
     end
     for ((model, name), cols) in _all_tables(m)
         IS.write_table!(w, model, name, cols)
     end
-    for name in values(m.systems)
+    for name in values(IS._systems(m))
         mkpath(joinpath(dir, name))
     end
     IS.finalize!(w; status = IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED)
-    @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status ==
+    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) ==
           "SUCCESSFULLY_FINALIZED"
 end
 
@@ -319,7 +381,7 @@ end
     @test_throws ArgumentError IS.open_outputs_writer(dir, m; axis_data = ad)
     @test_throws joinpath(dir, "outputs.json") IS.open_outputs_writer(
         dir, m; axis_data = ad)
-    @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status ==
+    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) ==
           "SUCCESSFULLY_FINALIZED"
     rm(joinpath(dir, "outputs.json"))
     @test_throws ArgumentError IS.open_outputs_writer(dir, m; axis_data = ad)
@@ -339,17 +401,24 @@ end
     for ((model, name), cols) in _all_tables(m)
         IS.write_table!(w, model, name, cols)
     end
-    for name in values(m.systems)
+    for name in values(IS._systems(m))
         mkpath(joinpath(dir, name))
     end
     json = joinpath(dir, "outputs.json")
     if !Sys.iswindows() && !iszero(Libc.getuid())
-        chmod(json, 0o444)
+        before = read(json, String)
+        inode = stat(json).inode
+        # A read-only directory makes the temporary file fail.
+        chmod(dir, 0o555)
         @test_throws SystemError IS.finalize!(
             w; status = IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED)
-        chmod(json, 0o644)
-        @test IS.read_outputs_metadata(json).status == "RUNNING"
-        @test w.metadata.status == "RUNNING"
+        chmod(dir, 0o755)
+        @test read(json, String) == before
+        @test sort!(readdir(dir)) == sort!(
+            ["outputs.h5", "outputs.json", collect(values(IS._systems(m)))...],
+        )
+        @test string(IS.read_outputs_metadata(json).status) == "RUNNING"
+        @test string(w.metadata.status) == "RUNNING"
         @test_throws ArgumentError IS.write_execution!(
             w,
             "model",
@@ -358,12 +427,14 @@ end
             1,
         )
         IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-        @test IS.read_outputs_metadata(json).status == "FAILED"
-        @test w.metadata.status == "FAILED"
+        @test string(IS.read_outputs_metadata(json).status) == "FAILED"
+        @test string(w.metadata.status) == "FAILED"
         @test !isopen(w.file)
+        # The manifest is replaced, not rewritten in place.
+        @test stat(json).inode != inode
     else
         IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-        @test IS.read_outputs_metadata(json).status == "FAILED"
+        @test string(IS.read_outputs_metadata(json).status) == "FAILED"
     end
 end
 
@@ -377,7 +448,7 @@ end
     @test_throws "never written" IS.finalize!(w; status = success)
     @test_throws "table optimizer_stats was never written" IS.finalize!(
         w; status = success)
-    @test w.metadata.status == "RUNNING" && isopen(w.file)
+    @test string(w.metadata.status) == "RUNNING" && isopen(w.file)
     # a failed attempt leaves the writer usable
     for (k, v) in _all_values(m)
         if k[2:end] != _KEY
@@ -395,12 +466,12 @@ end
         w; status = success)
     IS.write_execution!(w, "model", _KEY, fill(1.0, 48, 76), 7)
     @test_throws "bundle directory" IS.finalize!(w; status = success)
-    @test w.metadata.status == "RUNNING" && isopen(w.file)
-    for name in values(m.systems)
+    @test string(w.metadata.status) == "RUNNING" && isopen(w.file)
+    for name in values(IS._systems(m))
         mkpath(joinpath(dir, name))
     end
     IS.finalize!(w; status = success)
-    @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status ==
+    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) ==
           "SUCCESSFULLY_FINALIZED"
 end
 
@@ -409,7 +480,7 @@ end
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-    @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status == "FAILED"
+    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) == "FAILED"
 end
 
 @testset "outputs writer: write_outputs with a missing dataset fails the run" begin
@@ -417,7 +488,7 @@ end
     dir = mktempdir()
     @test_throws "never written" IS.write_outputs(dir, m;
         axis_data = simulation_axis_data(m), values = Dict(), tables = Dict())
-    @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status == "FAILED"
+    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) == "FAILED"
 end
 
 @testset "outputs writer: abort! marks FAILED and closes the file" begin
@@ -426,6 +497,6 @@ end
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     @test IS.abort!(w) === nothing
     @test !isopen(w.file)
-    @test IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status == "FAILED"
+    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) == "FAILED"
     @test IS.OUTPUTS_SCHEMA_VERSION == "0.1.0"
 end

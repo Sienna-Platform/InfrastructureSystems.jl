@@ -85,6 +85,26 @@ end
     @test_throws "ids have size (1, 3)" IS.validate_components(a, "model", data)
 end
 
+@testset "outputs validate: stored ids and labels have the declared axis shape" begin
+    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    data = _validate_system(152)
+    dir = mktempdir()
+    IS.write_outputs(dir, m; axis_data = _validate_axis_data(m, data),
+        systems = _bundle_systems(m), values = _all_values(m), tables = _all_tables(m))
+    @test IS.validate_components(IS.open_outputs(dir), "model", data) === nothing
+    HDF5.h5open(joinpath(dir, "outputs.h5"), "r+") do f
+        for name in ("ids", "labels")
+            HDF5.delete_object(f, "/model/axes/ThermalStandard/$name")
+        end
+        f["/model/axes/ThermalStandard/ids"] = zeros(Int64, 1, 0)
+        f["/model/axes/ThermalStandard/labels"] = Matrix{String}(undef, 1, 0)
+    end
+    a = IS.open_outputs(dir)
+    @test_throws ArgumentError IS.validate_components(a, "model", data)
+    @test_throws "axis ThermalStandard: labels have size (1, 0), expected (1, 76)" IS.validate_components(
+        a, "model", data)
+end
+
 @testset "outputs validate: ids resolve to supplemental attributes" begin
     m = IS.read_outputs_metadata(_SINGLE_JSON)
     data = _validate_system(152)

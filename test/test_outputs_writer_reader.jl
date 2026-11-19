@@ -23,7 +23,7 @@ end
     m = _single_meta()
     vals = rand(48, 76, 7)
     a = IS.open_outputs(_written_single_dir(vals))
-    @test IS.get_metadata(a).status == "SUCCESSFULLY_FINALIZED"
+    @test string(IS.get_metadata(a).status) == "SUCCESSFULLY_FINALIZED"
     @test IS.list_models(a) == ["model"]
     @test _KEY in IS.list_datasets(a, "model")
     @test IS.list_tables(a, "model") == ["optimizer_stats"]
@@ -45,7 +45,7 @@ end
     @test size(ad.ids) == (1, 76)
     ex = IS.read_axis_data(a, "model", "execution")
     @test ex.timestamps == simulation_axis_data(m)[("model", "execution")].timestamps
-    @test IS.get_axis(a, "model", "horizon") isa IS.HorizonAxis
+    @test typeof(IS.get_axis(a, "model", "horizon")) === PowerOutputSchemas.HorizonAxis
     @test isempty(IS.read_axis_data(a, "model", "horizon").timestamps)
     tbl = IS.read_table(a, "model", "optimizer_stats")
     @test tbl.execution == 1:7
@@ -70,18 +70,38 @@ end
     @test_throws ArgumentError IS.open_outputs(mktempdir())
 end
 
-function _with_extras(m::IS.OutputsMetadata)
+function _with_extras(m::PowerOutputSchemas.OutputsDocument)
     e = outputs_model(m, "model")
-    ds = IS.OutputDataset(
-        "OnStatus", "", ["execution", "ThermalStandard", "horizon"], "bool", false,
-        "Dimensionless", "NATURAL_UNITS", "1", IS.DatasetLayout([1, 76, 48], String[]),
-        "/model/datasets/OnStatus__ThermalStandard", "variables", "ThermalStandard", "",
+    ds = PowerOutputSchemas.Dataset(;
+        container = PowerOutputSchemas.Container("variables"),
+        entry_type = "OnStatus",
+        component_type = "ThermalStandard",
+        meta = "",
+        axes = ["execution", "ThermalStandard", "horizon"],
+        dtype = PowerOutputSchemas.Dtype("bool"),
+        fill_value = false,
+        quantity_kind = PowerOutputSchemas.QuantityKind("Dimensionless"),
+        unit_system = PowerOutputSchemas.UnitSystem("NATURAL_UNITS"),
+        units = "1",
+        layout = PowerOutputSchemas.DatasetLayout(;
+            chunks = [1, 76, 48],
+            filters = String[],
+        ),
+        path = "/model/datasets/OnStatus__ThermalStandard",
     )
-    tbl = IS.OutputTable("notes", "/model/tables/notes", 3,
-        [IS.OutputColumn("execution", "i64"), IS.OutputColumn("note", "str")])
+    column(name, dtype) =
+        PowerOutputSchemas.Column(;
+            name = name,
+            dtype = PowerOutputSchemas.ColumnDtype(dtype),
+        )
+    tbl = PowerOutputSchemas.Table(;
+        name = "notes",
+        group = "/model/tables/notes",
+        length = 3,
+        columns = [column("execution", "i64"), column("note", "str")],
+    )
     e2 = _with(e; datasets = vcat(e.datasets, ds), tables = vcat(e.tables, tbl))
-    return IS.OutputsMetadata(m.schema_version, m.kind, m.producer, m.created_at,
-        m.status, m.systems, [e2], m.simulation)
+    return _with(m; models = [e2])
 end
 
 @testset "outputs reader: bool dataset and str table column round trip" begin
@@ -114,8 +134,8 @@ end
     m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
-    for (k, _) in m.systems
-        mkpath(joinpath(dir, m.systems[k]))
+    for name in values(IS._systems(m))
+        mkpath(joinpath(dir, name))
     end
     flush(w)
     @test_logs (:warn, r"status RUNNING") IS.open_outputs(dir)
@@ -125,7 +145,7 @@ end
 
 @testset "outputs reader: a missing system bundle directory is an error" begin
     dir = _written_single_dir()
-    uuid, name = first(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).systems)
+    uuid, name = first(IS._systems(IS.read_outputs_metadata(joinpath(dir, "outputs.json"))))
     rm(joinpath(dir, name); recursive = true)
     @test_throws ArgumentError IS.open_outputs(dir)
     @test_throws "bundle directory \"$name\"" IS.open_outputs(dir)

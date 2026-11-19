@@ -10,6 +10,5 @@ Modules = [InfrastructureSystems,
     InfrastructureSystems.UnitSystem,
     InfrastructureSystems.NormalizationTypes,
     InfrastructureSystems.CompressionTypes,
-    InfrastructureSystems.CommodityUnits,
     InfrastructureSystems.InfrastructureMatrices]
 ```

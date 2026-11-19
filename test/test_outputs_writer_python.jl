@@ -1,9 +1,5 @@
-# Tests that a Python reader with json + h5py reads the artifact and that the written
-# outputs.json satisfies the PowerAnalytics JSON schema, using the vendored schema copy.
-# The tests error, never skip, when python, h5py, or jsonschema is missing: set
-# SIENNA_PYTHON to a python3 that has h5py and jsonschema.
-
-const _SCHEMA_DIR = joinpath(DATA_DIR, "outputs", "schema")
+# Tests that a Python reader with json + h5py reads the artifact. The tests error, never
+# skip, when python or h5py is missing: set SIENNA_PYTHON to a python3 that has h5py.
 
 function _outputs_python()
     python = get(
@@ -13,63 +9,57 @@ function _outputs_python()
     )
     if !isfile(python)
         error(
-            "outputs python tests need a python3 with h5py and jsonschema: $python does not exist. Set SIENNA_PYTHON.",
+            "outputs python tests need a python3 with h5py: $python does not exist. Set SIENNA_PYTHON.",
         )
     end
-    for pkg in ("h5py", "jsonschema", "referencing")
-        ok = success(
-            pipeline(`$python -I -c "import $pkg"`; stdout = devnull, stderr = devnull),
+    ok =
+        success(pipeline(`$python -I -c "import h5py"`; stdout = devnull, stderr = devnull))
+    if !ok
+        error(
+            "outputs python tests need the python package h5py: $python cannot import it.",
         )
-        if !ok
-            error(
-                "outputs python tests need the python package $pkg: $python cannot import it.",
-            )
-        end
     end
     return python
 end
 
-@testset "outputs python: h5py reads the artifact and the schema validates it" begin
+@testset "outputs python: h5py reads the artifact" begin
     python = _outputs_python()
     script = joinpath(@__DIR__, "python", "read_outputs.py")
     for kind in ("single", "simulation", "power_flow", "security_analysis")
-        m = IS.read_outputs_metadata(joinpath(DATA_DIR, "outputs", kind, "outputs.json"))
+        m = IS.read_outputs_metadata(outputs_fixture(kind))
         if kind == "single"
             m = _single_meta()
         end
         dir = mktempdir()
         values = _all_values(m)
+        # Each value encodes its Julia index, so a reader sees where it sits.
+        sentinel = [i + 100j + 10_000k for i in 1:48, j in 1:76, k in 1:7]
         if kind == "single"
-            values[("model", "ActivePowerVariable", "ThermalStandard", "")] =
-                rand(48, 76, 7)
+            values[("model", "ActivePowerVariable", "ThermalStandard", "")] = sentinel
         end
         IS.write_outputs(
             dir, m; axis_data = simulation_axis_data(m), values = values,
             tables = _all_tables(m), systems = _bundle_systems(m),
         )
-        out = read(`$python -I $script $dir --schema $_SCHEMA_DIR`, String)
-        @test occursin("schema ok", out)
+        path = "/model/datasets/ActivePowerVariable__ThermalStandard"
+        points = ((1, 1, 1), (5, 10, 3), (48, 76, 7))
+        point_args = String[]
+        if kind == "single"
+            for p in points
+                push!(point_args, path, join(reverse(p) .- 1, ","))
+            end
+        end
+        out = read(`$python -I $script $dir $point_args`, String)
         if kind == "single"
             @test occursin(
                 "model ActivePowerVariable__ThermalStandard (7, 76, 48) (1, 76, 48)",
                 out,
             )
             @test occursin("model axis ThermalStandard labels (76, 1) ids (76, 1)", out)
+            for p in points
+                index = join(reverse(p) .- 1, ",")
+                @test occursin("value $path $index $(float(sentinel[p...]))", out)
+            end
         end
     end
-
-    # a document that violates the schema exits with code 3
-    m = _single_meta()
-    dir = mktempdir()
-    IS.write_outputs(
-        dir, m; axis_data = simulation_axis_data(m), values = _all_values(m),
-        tables = _all_tables(m), systems = _bundle_systems(m),
-    )
-    path = joinpath(dir, "outputs.json")
-    write(path, replace(read(path, String), "\"0.1.0\"" => "\"9.9.9\""))
-    proc = run(
-        pipeline(ignorestatus(`$python -I $script $dir --schema $_SCHEMA_DIR`);
-            stdout = devnull, stderr = devnull),
-    )
-    @test proc.exitcode == 3
 end
