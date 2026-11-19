@@ -70,10 +70,11 @@ _needs_axis_data(::Union{HorizonAxis, LabelAxis}) = false
 
 function _check_axis_set(m::OutputsMetadata, axis_data)
     for (model, name) in keys(axis_data)
-        if !any(e -> e.name == model && _has_axis(e, name), m.models)
+        i = findfirst(e -> e.name == model, m.models)
+        if isnothing(i) || !_has_axis(m.models[i], name)
             throw(ArgumentError("model $model: axis data key \"$name\" names no axis"))
         end
-        if !_needs_axis_data(_find_axis(_model_entry(m, model), name))
+        if !_needs_axis_data(_find_axis(m.models[i], name))
             throw(
                 ArgumentError(
                     "model $model: axis \"$name\" carries no datasets and takes no axis data",

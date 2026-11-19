@@ -101,11 +101,6 @@ end
         joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
     )
     first_ds(m) = first(outputs_model(m, "UC").datasets)
-    function with_fields(d; kw...)
-        vals = Dict{Symbol, Any}(k => getfield(d, k) for k in fieldnames(IS.OutputDataset))
-        merge!(vals, Dict{Symbol, Any}(kw))
-        return IS.OutputDataset((vals[k] for k in fieldnames(IS.OutputDataset))...)
-    end
     cases = [
         ("axis ref", m -> push!(first_ds(m).axes, "Nope")),
         ("chunk rank", m -> push!(first_ds(m).layout.chunks, 1)),
@@ -115,14 +110,14 @@ end
             m ->
                 (
                     outputs_model(m, "UC").datasets[1] =
-                        with_fields(first_ds(m); container = "")
+                        _with(first_ds(m); container = "")
                 ),
         ),
         (
             "bad container",
             m -> (
                 outputs_model(m, "UC").datasets[1] =
-                    with_fields(first_ds(m); container = "x")
+                    _with(first_ds(m); container = "x")
             ),
         ),
         ("execution_order", m -> push!(IS.get_simulation(m).execution_order, "XX")),
@@ -143,13 +138,13 @@ end
             m ->
                 (
                     outputs_model(m, "UC").datasets[1] =
-                        with_fields(first_ds(m); path = "/UC/x")
+                        _with(first_ds(m); path = "/UC/x")
                 ),
         ),
         (
             "base unit without reference",
             m -> (
-                outputs_model(m, "UC").datasets[1] = with_fields(
+                outputs_model(m, "UC").datasets[1] = _with(
                     first_ds(m);
                     unit_system = "COMPONENT_BASE",
                     base_reference = "",
@@ -160,7 +155,7 @@ end
         (
             "natural units with reference",
             m -> (
-                outputs_model(m, "UC").datasets[1] = with_fields(
+                outputs_model(m, "UC").datasets[1] = _with(
                     first_ds(m);
                     unit_system = "NATURAL_UNITS",
                     base_reference = "system",
@@ -171,7 +166,7 @@ end
             "component_type without component axis",
             m -> (
                 outputs_model(m, "UC").datasets[1] =
-                    with_fields(first_ds(m); axes = ["execution"],
+                    _with(first_ds(m); axes = ["execution"],
                         layout = IS.DatasetLayout([1], String[]))
             ),
         ),
@@ -179,31 +174,29 @@ end
             "component_type differs from axis",
             m -> (
                 outputs_model(m, "UC").datasets[1] =
-                    with_fields(first_ds(m); component_type = "Other")
+                    _with(first_ds(m); component_type = "Other")
             ),
         ),
         (
             "meta with double underscore",
             m -> (
                 outputs_model(m, "UC").datasets[1] =
-                    with_fields(first_ds(m); meta = "a__b")
+                    _with(first_ds(m); meta = "a__b")
             ),
         ),
         (
             "entry_type not a type name",
             m -> (
                 outputs_model(m, "UC").datasets[1] =
-                    with_fields(first_ds(m); entry_type = "bad name")
+                    _with(first_ds(m); entry_type = "bad name")
             ),
         ),
         (
             "axis kind differs from type",
-            m -> (
-                outputs_model(m, "UC").axes[outputs_axis_index(
-                    outputs_model(m, "UC"),
-                    "horizon",
-                )] =
-                    IS.HorizonAxis("time", "PT1H", 48)
+            m -> set_outputs_axis!(
+                outputs_model(m, "UC"),
+                "horizon",
+                IS.HorizonAxis("time", "PT1H", 48),
             ),
         ),
         ("system uuid", m -> empty!(m.systems)),

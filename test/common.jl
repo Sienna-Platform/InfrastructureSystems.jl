@@ -171,17 +171,13 @@ function outputs_model_index(m::IS.OutputsMetadata, name::AbstractString)
     return only(findall(e -> e.name == name, m.models))
 end
 
-function outputs_model(m::IS.OutputsMetadata, name::AbstractString)
-    return m.models[outputs_model_index(m, name)]
-end
+outputs_model(m::IS.OutputsMetadata, name::AbstractString) = IS._model_entry(m, name)
 
 function outputs_axis_index(entry::IS.ModelEntry, name::AbstractString)
     return only(findall(a -> IS.axis_key(a) == name, entry.axes))
 end
 
-function outputs_axis(entry::IS.ModelEntry, name::AbstractString)
-    return entry.axes[outputs_axis_index(entry, name)]
-end
+outputs_axis(entry::IS.ModelEntry, name::AbstractString) = IS._find_axis(entry, name)
 
 function _with(x; kw...)
     T = typeof(x)

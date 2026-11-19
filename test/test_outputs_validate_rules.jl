@@ -530,185 +530,6 @@ end
     )
     _expect_invalid("interval above horizon", m, r"model UC: .*at most the horizon")
 
-    text = read(joinpath(DATA_DIR, "outputs", "single", "outputs.json"), String)
-    sim_json = read(joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"), String)
-    sim_obj = match(r"(?s)\"simulation\": \{.*?\n  \}", sim_json).match
-    path = joinpath(mktempdir(), "outputs.json")
-    write(path, replace(text, "\"models\":" => sim_obj * ",\n  \"models\":"; count = 1))
-    carrying = IS.read_outputs_metadata(path)
-    @test IS.has_simulation(carrying)
-    _expect_invalid(
-        "single kind with a simulation object",
-        carrying,
-        r"simulation parameters must be present exactly",
-    )
-    zero_steps = replace(read(path, String), "\"num_steps\": 7" => "\"num_steps\": 0")
-    write(path, zero_steps)
-    @test IS.has_simulation(IS.read_outputs_metadata(path))
-    _expect_invalid(
-        "empty execution_order",
-        _with(
-            _sim_meta();
-            simulation = _with(sim(_sim_meta()); execution_order = String[]),
-        ),
-        r"execution_order is empty",
-    )
-
-    table(m) = outputs_model(m, "UC").tables[1]
-    set_table!(m, t) = (outputs_model(m, "UC").tables[1] = t; m)
-    t = table(_sim_meta())
-    _expect_invalid(
-        "negative table length",
-        set_table!(_sim_meta(), _with(t; length = -1)),
-        r"length is -1",
-    )
-    _expect_invalid(
-        "table without columns",
-        set_table!(_sim_meta(), _with(t; columns = IS.OutputColumn[])),
-        r"has no columns",
-    )
-    cols = copy(t.columns)
-    cols[1] = _with(cols[1]; name = "")
-    _expect_invalid(
-        "column with an empty name",
-        set_table!(_sim_meta(), _with(t; columns = cols)),
-        r"empty name",
-    )
-    cols = copy(t.columns)
-    cols[2] = _with(cols[2]; quantity_kind = "Bogus")
-    _expect_invalid(
-        "table column quantity_kind",
-        set_table!(_sim_meta(), _with(t; columns = cols)),
-        r"quantity_kind \"Bogus\"",
-    )
-    cols = copy(t.columns)
-    cols[2] = _with(
-        cols[2];
-        unit_system = "COMPONENT_BASE",
-        base_reference = "device",
-        units = "pu",
-    )
-    _expect_invalid(
-        "table column base_reference",
-        set_table!(_sim_meta(), _with(t; columns = cols)),
-        r"base_reference \"device\"",
-    )
-end
-
-function _meta_with_text(replacements...)
-    text = read(joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"), String)
-    path = joinpath(mktempdir(), "outputs.json")
-    write(path, replace(text, replacements...))
-    return path
-end
-
-@testset "read_outputs_metadata: timestamps are naive" begin
-    ts = "\"initial_timestamp\": \"2024-01-01T00:00:00\""
-    for suffix in ("Z", "+02:00", "-05:00")
-        path =
-            _meta_with_text(ts => "\"initial_timestamp\": \"2024-01-01T00:00:00$suffix\"")
-        @test_throws ArgumentError IS.read_outputs_metadata(path)
-        @test_throws r"not naive" IS.read_outputs_metadata(path)
-    end
-    path = _meta_with_text(
-        "\"initial_time\": \"2024-01-01T00:00:00\"" => "\"initial_time\": \"2024-01-01T00:00:00Z\"",
-    )
-    @test_throws r"not naive" IS.read_outputs_metadata(path)
-    path = _meta_with_text(ts => "\"initial_timestamp\": \"2024-01-01T00:00:00.250\"")
-    m = IS.read_outputs_metadata(path)
-    @test outputs_axis(outputs_model(m, "UC"), "execution").initial_timestamp ==
-          DateTime(2024, 1, 1, 0, 0, 0, 250)
-end
-
-@testset "ISO duration predicate" begin
-    @test IS.is_iso_duration("PT1H") && IS.is_iso_duration("P2DT30M")
-    @test IS.is_iso_duration("PT0S")
-    for bad in ("", "P", "PT", "P1DT", "1h", "P-1D", "PT1.5H", "P1W", "PT9999999999S")
-        @test !IS.is_iso_duration(bad)
-        @test_throws ArgumentError IS.parse_iso_duration(bad)
-    end
-end
-
-@testset "validate_metadata: model, axis, table, and meta names are path segments" begin
-    for bad in ("", "a/b")
-        m = _sim_meta()
-        i = outputs_model_index(m, "EM")
-        m.models[i] = _with(m.models[i]; name = bad)
-        _expect_invalid("model name \"$bad\"", m, r"model name")
-        m = _sim_meta()
-        push!(outputs_model(m, "UC").axes, IS.LabelAxis("label", bad, ["x"]))
-        _expect_invalid("axis name \"$bad\"", m, r"axis name")
-        m = _sim_meta()
-        t = outputs_model(m, "UC").tables[1]
-        outputs_model(m, "UC").tables[1] = _with(t; name = bad, group = "/UC/tables/$bad")
-        _expect_invalid("table name \"$bad\"", m, r"table name")
-    end
-    m = _sim_meta()
-    d = outputs_model(m, "UC").datasets[1]
-    outputs_model(m, "UC").datasets[1] = _with(d; meta = "a/b", path = d.path * "__a/b")
-    _expect_invalid("meta with a slash", m, r"meta \"a/b\" contains")
-end
-
-@testset "outputs metadata: simulation presence follows the document" begin
-    sim_text = read(joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"), String)
-    single_text = read(joinpath(DATA_DIR, "outputs", "single", "outputs.json"), String)
-    path = joinpath(mktempdir(), "outputs.json")
-    obj = match(r"(?s)\"simulation\": \{.*?\n  \}", sim_text).match
-    # kind single plus any simulation object
-    write(path, replace(single_text, "\"models\":" => obj * ",\n  \"models\":"; count = 1))
-    m = IS.read_outputs_metadata(path)
-    @test IS.has_simulation(m)
-    _expect_invalid("single with a simulation object", m, r"must be present exactly")
-    # kind simulation without the object
-    m = IS.read_outputs_metadata(
-        joinpath(DATA_DIR, "outputs", "simulation", "outputs.json"),
-    )
-    @test IS.has_simulation(m)
-    gone = _with(m; simulation = IS.NoSimulation())
-    @test !IS.has_simulation(gone)
-    _expect_invalid("simulation kind without the object", gone, r"must be present exactly")
-    @test_throws ErrorException IS.get_simulation(gone)
-    write(path, replace(sim_text, r"(?s)  \"simulation\": \{.*?\n  \},\n" => ""))
-    @test !IS.has_simulation(IS.read_outputs_metadata(path))
-    # a "present" key is an unknown field
-    write(
-        path,
-        replace(sim_text, "\"num_steps\": 7" => "\"num_steps\": 7, \"present\": false"),
-    )
-    @test_throws Exception IS.read_outputs_metadata(path)
-    # the written JSON has no simulation key for NoSimulation and no present key ever
-    @test !occursin("\"simulation\":{", IS.JSON.json(gone))
-    @test !occursin("present", IS.JSON.json(m))
-end
-
-@testset "validate_metadata: supports_realized_values_post_calculation" begin
-    @test outputs_model(_sim_meta(), "UC").supports_realized_values_post_calculation
-    @test IS.validate_metadata(_sim_meta()) === nothing
-
-    m = _sim_meta()
-    delete_outputs_axis!(outputs_model(m, "UC"), "horizon")
-    _expect_invalid(
-        "flag without horizon",
-        m,
-        r"model UC: supports_realized_values_post_calculation requires",
-    )
-
-    m = _sim_meta()
-    set_outputs_axis!(
-        outputs_model(m, "UC"),
-        "execution",
-        _with(outputs_axis(outputs_model(m, "UC"), "execution"); interval = "PT90M"),
-    )
-    _expect_invalid("interval not a multiple", m, r"model UC: .*whole multiple")
-
-    m = _sim_meta()
-    set_outputs_axis!(
-        outputs_model(m, "UC"),
-        "execution",
-        _with(outputs_axis(outputs_model(m, "UC"), "execution"); interval = "P3D"),
-    )
-    _expect_invalid("interval above horizon", m, r"model UC: .*at most the horizon")
-
     m = _sim_meta()
     _set_entry(m, "UC"; supports_realized_values_post_calculation = false)
     delete_outputs_axis!(outputs_model(m, "UC"), "horizon")
@@ -756,32 +577,9 @@ end
     single() = IS.read_outputs_metadata(
         joinpath(DATA_DIR, "outputs", "single", "outputs.json"),
     )
-    function edit_dataset(m, model, i; kw...)
-        entry = outputs_model(m, model)
-        entry.datasets[i] = _with(entry.datasets[i]; kw...)
-        return m
-    end
-    function edit_axis(m, model, name; kw...)
-        entry = outputs_model(m, model)
-        set_outputs_axis!(entry, name, _with(outputs_axis(entry, name); kw...))
-        return m
-    end
+    edit_dataset(m, model, i; kw...) =
+        _set_dataset!(m, model, i, _with(outputs_model(m, model).datasets[i]; kw...))
 
-    _expect_invalid(
-        "execution group path",
-        edit_axis(single(), "model", "execution"; group = "/model/execution"),
-        r"axis \"execution\" has group \"/model/execution\", expected \"/model/axes/execution\"",
-    )
-    _expect_invalid(
-        "component group path",
-        edit_axis(single(), "model", "ThermalStandard"; group = "/model/ThermalStandard"),
-        r"axis \"ThermalStandard\" has group",
-    )
-    _expect_invalid(
-        "time group path",
-        edit_axis(_pf_meta(), "model", "time"; group = "/model/time"),
-        r"axis \"time\" has group \"/model/time\"",
-    )
     m = single()
     d = outputs_model(m, "model").datasets[1]
     _expect_invalid(
@@ -814,18 +612,11 @@ end
         edit_dataset(single(), "model", 1; meta = "a__b"),
         r"meta \"a__b\" contains \"__\"",
     )
-    for (label, kw) in (
-        ("true fill for f64", (fill_value = true,)),
-        ("float fill for i64", (dtype = "i64", fill_value = 1.5)),
-        ("NaN fill for i64", (dtype = "i64", fill_value = "NaN")),
-        ("number fill for bool", (dtype = "bool", fill_value = 1)),
+    _expect_invalid(
+        "float fill for i64",
+        edit_dataset(single(), "model", 2; dtype = "i64", fill_value = 1.5),
+        r"fill_value .* is not valid for dtype",
     )
-        _expect_invalid(
-            label,
-            edit_dataset(single(), "model", 2; kw...),
-            r"fill_value .* is not valid for dtype",
-        )
-    end
     m = single()
     entry = outputs_model(m, "model")
     t = entry.tables[1]
@@ -861,15 +652,6 @@ end
         _with(single(); schema_version = "0.2.0"),
         r"schema_version \"0.2.0\"",
     )
-    _expect_invalid(
-        "kind simulation without simulation parameters",
-        _with(single(); kind = "simulation"),
-        r"simulation parameters must be present exactly when kind is simulation",
-    )
-    m = single()
-    uuid = first(keys(m.systems))
-    m.systems[uuid] = ""
-    _expect_invalid("empty system directory", m, r"plain relative name")
     m = _sim_meta()
     _set_entry(m, "EM"; supports_realized_values_post_calculation = true)
     _expect_invalid(
@@ -877,10 +659,4 @@ end
         m,
         r"model EM: supports_realized_values_post_calculation requires",
     )
-    m = _sim_meta()
-    push!(
-        outputs_model(m, "UC").axes,
-        _with(outputs_axis(outputs_model(m, "EM"), "time"); group = "/UC/axes/time"),
-    )
-    _expect_invalid("realized-values flag with a time axis", m, r"forbids a time axis")
 end

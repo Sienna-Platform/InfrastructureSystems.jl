@@ -178,6 +178,7 @@ function read_dataset(
 )
     key = (String(entry_type), String(component_type), String(meta))
     d = _find_dataset(a.metadata, model, key)
+    entry = _model_entry(a.metadata, model)
     keys_julia = reverse(d.axes)
     idx = Any[Colon() for _ in keys_julia]
     keep = trues(length(keys_julia))
@@ -190,14 +191,10 @@ function read_dataset(
         idx[pos], keep[pos] =
             _execution_selection(
                 execution,
-                axis_length(_find_axis(_model_entry(a.metadata, model), "execution")),
+                axis_length(_find_axis(entry, "execution")),
             )
     end
-    expected = Tuple(
-        reverse([
-            axis_length(_find_axis(_model_entry(a.metadata, model), k)) for k in d.axes
-        ]),
-    )
+    expected = Tuple(reverse([axis_length(_find_axis(entry, k)) for k in d.axes]))
     arr = HDF5.h5open(_h5_path(a), "r") do f
         ds = f[d.path]
         _check_stored(model, key, d, ds, expected)
