@@ -491,6 +491,9 @@ incremental or average rate curve needs an `initial_input`.
 **`UNDEFINED`** (the default): the layout is not checked, and consumers that model the
 curve reject it until `fuel_curve_type` is set.
 
+The range checks above need x coordinates, so a time series curve skips them: its points
+are known only once it is resolved for a time step.
+
 A unit with one fuel uses a [`FuelCurve`](@ref).
 """
 struct TwoFuelCurve{
