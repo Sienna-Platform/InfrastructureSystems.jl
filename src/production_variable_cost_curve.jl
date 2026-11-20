@@ -4,7 +4,7 @@ Supertype for production variable cost curve representations.
 A [`ValueCurveWithUnits`](@ref) that additionally carries a `vom_cost`.
 
 Concrete subtypes are [`CostCurve`](@ref), [`FuelCurve`](@ref) and
-[`DualFuelCurve`](@ref).
+[`TwoFuelCurve`](@ref).
 """
 abstract type ProductionVariableCostCurve{
     T <: ValueCurve,
@@ -455,39 +455,45 @@ end
 $(TYPEDEF)
 $(TYPEDFIELDS)
 
-    DualFuelCurve(; first_fuel_curve, second_fuel_curve, fuel_units, power_units,
-        first_fuel_cost, first_fuel_cost_time_series, second_fuel_cost,
-        second_fuel_cost_time_series, second_fuel_share, first_fuel_startup_offtake,
+    TwoFuelCurve(; first_fuel_curve, second_fuel_curve, fuel_units, power_units,
+        fuel_curve_type, first_fuel_cost, first_fuel_cost_time_series, second_fuel_cost,
+        second_fuel_cost_time_series, second_fuel_output_share, first_fuel_startup_offtake,
         second_fuel_startup_offtake, vom_cost)
 
 Fuel use of a unit that burns two fuels, each with its own [`ValueCurve`](@ref) and fuel
-price. `second_fuel_share` selects the case. Each fuel's price is exactly one of a fixed
-value and a time series key.
+price. `fuel_curve_type`, a `TwoFuelCurveType`, states how the fuels serve the output. Both curves
+give fuel per hour in `fuel_units`, and both prices are per one `fuel_units`. Each fuel's
+price is exactly one of a fixed value and a time series key.
 
 `T` is the second fuel's curve type and `F` the first's. The supertype
 `ProductionVariableCostCurve{T, U, Y}` can name only one curve, so it names the second, and
 it does not describe the whole cost. A method that dispatches on
 `ProductionVariableCostCurve{<:PiecewiseIncrementalCurve}` matches a stacked curve and then
-throws in [`get_value_curve`](@ref); dispatch on `DualFuelCurve` instead.
+throws in [`get_value_curve`](@ref); dispatch on `TwoFuelCurve` instead.
 
-**Stacked** (`second_fuel_share` is `nothing`): output up to the first x of the second curve
-follows the first fuel and output above it follows the second. A combined cycle steam
-turbine is the motivating case: recovered exhaust heat first, duct firing above it. The
-second curve is a `PiecewiseIncrementalCurve` without `initial_input`, since consumers price
-only its increase above the threshold. A piecewise first curve must end at that threshold.
-A first curve with no x range, such as a `LinearCurve`, is taken to cover output up to it.
+**`STACKED`**: output up to the first x of the second curve follows the first fuel and
+output above it follows the second. A combined cycle steam turbine is the motivating case:
+recovered exhaust heat first, duct firing above it. The second curve is a
+`PiecewiseIncrementalCurve` without `initial_input`, since consumers price only its increase
+above the threshold. A piecewise first curve must end at that threshold. A first curve with
+no x range, such as a `LinearCurve`, is taken to cover output up to it.
 `first_fuel_cost` defaults to `0.0`, meaning the first fuel is paid for elsewhere.
-A nonzero `first_fuel_startup_offtake` has no physical meaning here and is stored as given.
+`second_fuel_output_share` must be 0. A nonzero `first_fuel_startup_offtake` has no physical
+meaning here and is stored as given.
 
-**Blended** (`second_fuel_share` between 0 and 1): one output `P` is served by both fuels,
-at cost `(1 - share) * first(P) + share * second(P)`. Both curves cover the full output, so
-two piecewise curves share their first and last x. The first fuel price is required.
-Each curve must give total fuel, so an incremental or average rate curve needs an
-`initial_input`; a stacked curve must not set `second_fuel_share`.
+**`BLENDED`**: a share `s` of the output, `second_fuel_output_share`, is made from the
+second fuel and the rest from the first, each at its own curve's fuel use at the operating
+point `P`: cost `(1 - s) * first(P) + s * second(P)`. `s` is a share of output, not of fuel
+energy or volume. Both curves cover the full output, so two piecewise curves share their
+first and last x. The first fuel price is required. Each curve must give total fuel, so an
+incremental or average rate curve needs an `initial_input`.
+
+**`UNDEFINED`** (the default): the layout is not checked, and consumers that model the
+curve reject it until `fuel_curve_type` is set.
 
 A unit with one fuel uses a [`FuelCurve`](@ref).
 """
-struct DualFuelCurve{
+struct TwoFuelCurve{
     T <: ValueCurve,
     F <: ValueCurve,
     U <: AbstractUnitSystem,
@@ -497,6 +503,8 @@ struct DualFuelCurve{
     first_fuel_curve::F
     "Fuel use against output for the second fuel"
     second_fuel_curve::T
+    "How the two fuels serve the output: `UNDEFINED`, `BLENDED` or `STACKED`"
+    fuel_curve_type::TwoFuelCurveType.Value
     "A fixed price for first fuel; mutually exclusive with `first_fuel_cost_time_series`"
     first_fuel_cost::Union{Nothing, Float64}
     "The [`TimeSeriesKey`](@ref) to a first fuel price time series"
@@ -505,8 +513,8 @@ struct DualFuelCurve{
     second_fuel_cost::Union{Nothing, Float64}
     "The [`TimeSeriesKey`](@ref) to a second fuel price time series"
     second_fuel_cost_time_series::Union{Nothing, ScalarTimeSeriesKey}
-    "`nothing` for stacked fuels; for blended fuels the fixed share of the blend the second fuel supplies, between 0 and 1"
-    second_fuel_share::Union{Nothing, Float64}
+    "(default of 0) Share of output produced from the second fuel, between 0 and 1; used only when `fuel_curve_type` is `BLENDED`"
+    second_fuel_output_share::Float64
     "(default of 0) Fuel of the first kind consumed during a startup, a [`LinearCurve`](@ref) in `fuel_units`"
     first_fuel_startup_offtake::LinearCurve
     "(default of 0) Fuel of the second kind consumed during a startup, a [`LinearCurve`](@ref) in `fuel_units`"
@@ -514,33 +522,35 @@ struct DualFuelCurve{
     "(default of 0) Variable operation and maintenance cost, a [`LinearCurve`](@ref)"
     vom_cost::LinearCurve
 
-    function DualFuelCurve{T, F, U, Y}(
+    function TwoFuelCurve{T, F, U, Y}(
         first_fuel_curve::F,
         second_fuel_curve::T,
+        fuel_curve_type::TwoFuelCurveType.Value,
         first_fuel_cost::Union{Nothing, Float64},
         first_fuel_cost_time_series::Union{Nothing, TimeSeriesKey},
         second_fuel_cost::Union{Nothing, Float64},
         second_fuel_cost_time_series::Union{Nothing, TimeSeriesKey},
-        second_fuel_share::Union{Nothing, Float64},
+        second_fuel_output_share::Float64,
         first_fuel_startup_offtake::LinearCurve,
         second_fuel_startup_offtake::LinearCurve,
         vom_cost::LinearCurve,
     ) where {T, F, U, Y}
         _check_fuel_price("first", first_fuel_cost, first_fuel_cost_time_series)
         _check_fuel_price("second", second_fuel_cost, second_fuel_cost_time_series)
-        if !isnothing(second_fuel_share) &&
-           !(isfinite(second_fuel_share) && 0.0 <= second_fuel_share <= 1.0)
+        if !(isfinite(second_fuel_output_share) && 0.0 <= second_fuel_output_share <= 1.0)
             throw(
                 ArgumentError(
-                    "second_fuel_share must be finite and between 0 and 1; got $second_fuel_share",
+                    "second_fuel_output_share must be finite and between 0 and 1; got " *
+                    "$second_fuel_output_share",
                 ),
             )
         end
-        _check_dual_fuel_layout(first_fuel_curve, second_fuel_curve, second_fuel_share)
-        return new{T, F, U, Y}(first_fuel_curve, second_fuel_curve, first_fuel_cost,
-            first_fuel_cost_time_series, second_fuel_cost, second_fuel_cost_time_series,
-            second_fuel_share, first_fuel_startup_offtake, second_fuel_startup_offtake,
-            vom_cost)
+        _check_two_fuel_layout(
+            first_fuel_curve, second_fuel_curve, fuel_curve_type, second_fuel_output_share)
+        return new{T, F, U, Y}(first_fuel_curve, second_fuel_curve, fuel_curve_type,
+            first_fuel_cost, first_fuel_cost_time_series, second_fuel_cost,
+            second_fuel_cost_time_series, second_fuel_output_share,
+            first_fuel_startup_offtake, second_fuel_startup_offtake, vom_cost)
     end
 end
 
@@ -548,7 +558,7 @@ function _check_fuel_price(which::String, cost, ts_key)
     if isnothing(cost) == isnothing(ts_key)
         throw(
             ArgumentError(
-                "DualFuelCurve requires exactly one of $(which)_fuel_cost or " *
+                "TwoFuelCurve requires exactly one of $(which)_fuel_cost or " *
                 "$(which)_fuel_cost_time_series; got $(which)_fuel_cost=$cost, " *
                 "$(which)_fuel_cost_time_series=$ts_key",
             ),
@@ -577,12 +587,26 @@ _check_stacked_second_curve(c::PiecewiseIncrementalCurve) =
 _check_stacked_second_curve(c::ValueCurve) = _bad_stacked_second_curve(c)
 _bad_stacked_second_curve(c) = throw(
     ArgumentError(
-        "stacked DualFuelCurve requires the second curve to be a " *
+        "a STACKED TwoFuelCurve requires the second curve to be a " *
         "PiecewiseIncrementalCurve with initial_input = nothing; got $c",
     ),
 )
 
-function _check_dual_fuel_layout(first_curve, second_curve, ::Nothing)
+function _check_two_fuel_layout(first_curve, second_curve, fuel_curve_type, share::Float64)
+    if fuel_curve_type == TwoFuelCurveType.STACKED
+        _check_stacked_layout(first_curve, second_curve, share)
+    elseif fuel_curve_type == TwoFuelCurveType.BLENDED
+        _check_blended_layout(first_curve, second_curve)
+    end
+    return
+end
+
+function _check_stacked_layout(first_curve, second_curve, share::Float64)
+    iszero(share) || throw(
+        ArgumentError(
+            "a STACKED TwoFuelCurve must have second_fuel_output_share = 0; got $share",
+        ),
+    )
     _check_stacked_second_curve(second_curve)
     threshold = first(_x_range(second_curve))
     first_range = _x_range(first_curve)
@@ -610,14 +634,13 @@ function _check_blended_curve(
     isnothing(get_initial_input(c)) || return
     throw(
         ArgumentError(
-            "a blended DualFuelCurve needs curves with total fuel, but the $which " *
-            "fuel curve has initial_input = nothing; a stacked curve must not set " *
-            "second_fuel_share; got $c",
+            "a BLENDED TwoFuelCurve needs curves with total fuel, but the $which " *
+            "fuel curve has initial_input = nothing; got $c",
         ),
     )
 end
 
-function _check_dual_fuel_layout(first_curve, second_curve, share::Float64)
+function _check_blended_layout(first_curve, second_curve)
     _check_blended_curve("first", first_curve)
     _check_blended_curve("second", second_curve)
     r1 = _x_range(first_curve)
@@ -625,7 +648,7 @@ function _check_dual_fuel_layout(first_curve, second_curve, share::Float64)
     if !isnothing(r1) && !isnothing(r2) && !isapprox(collect(r1), collect(r2))
         throw(
             ArgumentError(
-                "blended DualFuelCurve requires both curves to cover the same output " *
+                "a BLENDED TwoFuelCurve requires both curves to cover the same output " *
                 "range; got $r1 and $r2",
             ),
         )
@@ -633,16 +656,17 @@ function _check_dual_fuel_layout(first_curve, second_curve, share::Float64)
     return
 end
 
-function DualFuelCurve(;
+function TwoFuelCurve(;
     first_fuel_curve::ValueCurve,
     second_fuel_curve::ValueCurve,
     fuel_units::Unitful.Units,
     power_units::AbstractUnitSystem = NaturalUnit(),
+    fuel_curve_type::TwoFuelCurveType.Value = TwoFuelCurveType.UNDEFINED,
     first_fuel_cost::Union{Nothing, Real} = nothing,
     first_fuel_cost_time_series::Union{Nothing, TimeSeriesKey} = nothing,
     second_fuel_cost::Union{Nothing, Real} = nothing,
     second_fuel_cost_time_series::Union{Nothing, TimeSeriesKey} = nothing,
-    second_fuel_share::Union{Nothing, Real} = nothing,
+    second_fuel_output_share::Real = 0.0,
     first_fuel_startup_offtake::LinearCurve = LinearCurve(0.0),
     second_fuel_startup_offtake::LinearCurve = LinearCurve(0.0),
     vom_cost::LinearCurve = LinearCurve(0.0),
@@ -650,10 +674,10 @@ function DualFuelCurve(;
     # A stacked curve's first fuel is paid for elsewhere unless priced.
     if isnothing(first_fuel_cost) &&
        isnothing(first_fuel_cost_time_series) &&
-       isnothing(second_fuel_share)
+       fuel_curve_type == TwoFuelCurveType.STACKED
         first_fuel_cost = 0.0
     end
-    return DualFuelCurve{
+    return TwoFuelCurve{
         typeof(second_fuel_curve),
         typeof(first_fuel_curve),
         typeof(power_units),
@@ -661,11 +685,12 @@ function DualFuelCurve(;
     }(
         first_fuel_curve,
         second_fuel_curve,
+        fuel_curve_type,
         _normalize_fuel_cost(first_fuel_cost),
         first_fuel_cost_time_series,
         _normalize_fuel_cost(second_fuel_cost),
         second_fuel_cost_time_series,
-        isnothing(second_fuel_share) ? nothing : Float64(second_fuel_share),
+        Float64(second_fuel_output_share),
         first_fuel_startup_offtake,
         second_fuel_startup_offtake,
         vom_cost,
@@ -673,106 +698,111 @@ function DualFuelCurve(;
 end
 
 "Get the curve of the first fuel"
-get_first_fuel_curve(c::DualFuelCurve) = c.first_fuel_curve
+get_first_fuel_curve(c::TwoFuelCurve) = c.first_fuel_curve
 "Get the curve of the second fuel"
-get_second_fuel_curve(c::DualFuelCurve) = c.second_fuel_curve
+get_second_fuel_curve(c::TwoFuelCurve) = c.second_fuel_curve
 "Get the fixed price of first fuel, or `nothing` when it is a time series"
-get_first_fuel_cost(c::DualFuelCurve) = c.first_fuel_cost
+get_first_fuel_cost(c::TwoFuelCurve) = c.first_fuel_cost
 "Get the time series key of the first fuel price, or `nothing` when it is fixed"
-get_first_fuel_cost_time_series(c::DualFuelCurve) = c.first_fuel_cost_time_series
+get_first_fuel_cost_time_series(c::TwoFuelCurve) = c.first_fuel_cost_time_series
 "Get the fixed price of second fuel, or `nothing` when it is a time series"
-get_second_fuel_cost(c::DualFuelCurve) = c.second_fuel_cost
+get_second_fuel_cost(c::TwoFuelCurve) = c.second_fuel_cost
 "Get the time series key of the second fuel price, or `nothing` when it is fixed"
-get_second_fuel_cost_time_series(c::DualFuelCurve) = c.second_fuel_cost_time_series
-"Get the share of output from the second fuel, or `nothing` for stacked fuels"
-get_second_fuel_share(c::DualFuelCurve) = c.second_fuel_share
+get_second_fuel_cost_time_series(c::TwoFuelCurve) = c.second_fuel_cost_time_series
+"Get how the two fuels serve the output"
+get_fuel_curve_type(c::TwoFuelCurve) = c.fuel_curve_type
+"Get the share of output produced from the second fuel; used only by `BLENDED` curves"
+get_second_fuel_output_share(c::TwoFuelCurve) = c.second_fuel_output_share
 "Get the function for the first fuel consumption at startup"
-get_first_fuel_startup_offtake(c::DualFuelCurve) = c.first_fuel_startup_offtake
+get_first_fuel_startup_offtake(c::TwoFuelCurve) = c.first_fuel_startup_offtake
 "Get the function for the second fuel consumption at startup"
-get_second_fuel_startup_offtake(c::DualFuelCurve) = c.second_fuel_startup_offtake
-"Whether the two fuels are blended at a fixed share rather than stacked"
-is_blended(c::DualFuelCurve) = !isnothing(c.second_fuel_share)
+get_second_fuel_startup_offtake(c::TwoFuelCurve) = c.second_fuel_startup_offtake
 
-"Get the output where the second fuel starts, the first x of the second curve; stacked curves only"
-function get_stacking_threshold(c::DualFuelCurve)
-    is_blended(c) && throw(
-        ArgumentError("get_stacking_threshold is not defined for a blended DualFuelCurve"),
+"Get the output where the second fuel starts, the first x of the second curve; `STACKED` curves only"
+function get_stacking_threshold(c::TwoFuelCurve)
+    get_fuel_curve_type(c) == TwoFuelCurveType.STACKED || throw(
+        ArgumentError(
+            "get_stacking_threshold is defined only for a STACKED TwoFuelCurve; got " *
+            "$(get_fuel_curve_type(c))",
+        ),
     )
     return Float64(first(_x_range(c.second_fuel_curve)))
 end
 
-get_value_curve(::DualFuelCurve) = throw(
+get_value_curve(::TwoFuelCurve) = throw(
     ArgumentError(
-        "get_value_curve is not defined for DualFuelCurve; use get_first_fuel_curve " *
+        "get_value_curve is not defined for TwoFuelCurve; use get_first_fuel_curve " *
         "or get_second_fuel_curve",
     ),
 )
-get_fuel_units(c::DualFuelCurve) = get_y_units(c) * Unitful.hr
-_free_axis_units(c::DualFuelCurve) = (; fuel_units = get_fuel_units(c))
+get_fuel_units(c::TwoFuelCurve) = get_y_units(c) * Unitful.hr
+_free_axis_units(c::TwoFuelCurve) = (; fuel_units = get_fuel_units(c))
 """
 True when each of the two fuel curves is convex. For a stacked curve the slopes at the
 junction of the two curves are not compared.
 """
-is_convex(c::DualFuelCurve) =
+is_convex(c::TwoFuelCurve) =
     is_convex(c.first_fuel_curve) && is_convex(c.second_fuel_curve)
 """
 True when each of the two fuel curves is concave. For a stacked curve the slopes at the
 junction of the two curves are not compared.
 """
-is_concave(c::DualFuelCurve) =
+is_concave(c::TwoFuelCurve) =
     is_concave(c.first_fuel_curve) && is_concave(c.second_fuel_curve)
-get_function_data(::DualFuelCurve) = throw(
+get_function_data(::TwoFuelCurve) = throw(
     ArgumentError(
-        "get_function_data is not defined for DualFuelCurve; use the function data of " *
+        "get_function_data is not defined for TwoFuelCurve; use the function data of " *
         "get_first_fuel_curve or get_second_fuel_curve",
     ),
 )
-get_initial_input(::DualFuelCurve) = throw(
+get_initial_input(::TwoFuelCurve) = throw(
     ArgumentError(
-        "get_initial_input is not defined for DualFuelCurve; use the initial input of " *
+        "get_initial_input is not defined for TwoFuelCurve; use the initial input of " *
         "get_first_fuel_curve or get_second_fuel_curve",
     ),
 )
-is_time_series_backed(c::DualFuelCurve) =
+is_time_series_backed(c::TwoFuelCurve) =
     is_time_series_backed(c.first_fuel_curve) ||
     is_time_series_backed(c.second_fuel_curve) ||
     !isnothing(c.first_fuel_cost_time_series) ||
     !isnothing(c.second_fuel_cost_time_series)
-get_time_series_key(::DualFuelCurve) = throw(
+get_time_series_key(::TwoFuelCurve) = throw(
     ArgumentError(
-        "get_time_series_key is not defined for DualFuelCurve; use " *
+        "get_time_series_key is not defined for TwoFuelCurve; use " *
         "get_first_fuel_cost_time_series, get_second_fuel_cost_time_series, or the " *
         "time series of get_first_fuel_curve and get_second_fuel_curve",
     ),
 )
 
 """
-Convert a [`DualFuelCurve`](@ref) to the `to` unit system. Both curves and `vom_cost` move;
-fuel prices, the share and the startup offtakes are not in power units and stay.
+Convert a [`TwoFuelCurve`](@ref) to the `to` unit system. Both curves and `vom_cost` move;
+the curve type, fuel prices, the share and the startup offtakes are not in power units and
+stay.
 """
 function convert_power_units(
-    c::DualFuelCurve{T, F, U, Y},
+    c::TwoFuelCurve{T, F, U, Y},
     to::V,
     x_ratio::Real,
     y_ratio::Real,
 ) where {T, F, U <: AbstractUnitSystem, Y, V <: AbstractUnitSystem}
     first_curve = inv(y_ratio) * scale_x(c.first_fuel_curve, x_ratio)
     second_curve = inv(y_ratio) * scale_x(c.second_fuel_curve, x_ratio)
-    return DualFuelCurve{typeof(second_curve), typeof(first_curve), V, Y}(
+    return TwoFuelCurve{typeof(second_curve), typeof(first_curve), V, Y}(
         first_curve,
         second_curve,
+        c.fuel_curve_type,
         c.first_fuel_cost,
         c.first_fuel_cost_time_series,
         c.second_fuel_cost,
         c.second_fuel_cost_time_series,
-        c.second_fuel_share,
+        c.second_fuel_output_share,
         c.first_fuel_startup_offtake,
         c.second_fuel_startup_offtake,
         scale_x(c.vom_cost, x_ratio),
     )
 end
 convert_power_units(
-    c::DualFuelCurve{T, F, U},
+    c::TwoFuelCurve{T, F, U},
     ::U,
     ::Real,
     ::Real,
@@ -792,20 +822,24 @@ _deserialize_curve_field(::Val{:first_fuel_startup_offtake}, raw) =
     deserialize(LinearCurve, raw)
 _deserialize_curve_field(::Val{:second_fuel_startup_offtake}, raw) =
     deserialize(LinearCurve, raw)
-_deserialize_curve_field(::Val{:second_fuel_share}, ::Nothing) = nothing
-_deserialize_curve_field(::Val{:second_fuel_share}, raw::Real) = Float64(raw)
+_deserialize_curve_field(::Val{:second_fuel_output_share}, raw::Real) = Float64(raw)
+_deserialize_curve_field(::Val{:fuel_curve_type}, raw::AbstractString) =
+    TwoFuelCurveType.Value(raw)
 
-function _show_compact(io::IO, ::MIME"text/plain", c::DualFuelCurve)
+function _show_compact(io::IO, ::MIME"text/plain", c::TwoFuelCurve)
     compact = IOContext(io, :compact => true)
-    if is_blended(c)
+    fuel_curve_type = get_fuel_curve_type(c)
+    if fuel_curve_type == TwoFuelCurveType.BLENDED
         print(
             io,
             "$(nameof(typeof(c))) blending ",
-            get_second_fuel_share(c),
-            " second fuel, first ",
+            get_second_fuel_output_share(c),
+            " of output from the second fuel, first ",
         )
-    else
+    elseif fuel_curve_type == TwoFuelCurveType.STACKED
         print(io, "$(nameof(typeof(c))) stacking at $(get_stacking_threshold(c)), first ")
+    else
+        print(io, "$(nameof(typeof(c))) with UNDEFINED fuel_curve_type, first ")
     end
     show(compact, "text/plain", c.first_fuel_curve)
     print(io, ", second ")
