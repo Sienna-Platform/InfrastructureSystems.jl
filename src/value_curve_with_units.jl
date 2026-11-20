@@ -14,6 +14,7 @@ move at all.
 |:--------------------|:-----------------------------|:--------------------------------|
 | [`CostCurve`](@ref) | power (`MW`)                 | cost rate (`USD/h`)             |
 | [`FuelCurve`](@ref) | power (`MW`)                 | fuel rate, free (e.g. `MMBtu/h`) |
+| [`TwoFuelCurve`](@ref) | power (`MW`)             | fuel rate, free (e.g. `MMBtu/h`) |
 | [`LossCurve`](@ref) | free: power (`MW`) or current (`kA`) | power (`MW`)            |
 
 Subtypes are [`ProductionVariableCostCurve`](@ref) (costs) and
