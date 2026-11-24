@@ -116,6 +116,9 @@ end
     @test c == [1, 131_072, 1] && bytes(c, 8) <= IS.MAX_CHUNK_BYTES
     # the item size counts
     @test IS._chunk_shape(["time"], [312_500], 1) == [312_500]
+    @test IS._chunk_shape(["time", "c"], [2, 2^61], 8) == [1, 131_072]
+    c = IS._chunk_shape(fill("a", 4), fill(65_536, 4), 8)
+    @test c == [1, 1, 2, 65_536] && bytes(c, 8) <= IS.MAX_CHUNK_BYTES
     @test IS._chunk_shape(["time"], [312_500], 8) == [131_072]
     struct DescBig <: IS.Optimization.VariableType end
     IS.Optimization.output_unit_system(::Type{DescBig}) = IS.SU

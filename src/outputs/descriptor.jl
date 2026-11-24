@@ -16,6 +16,17 @@ function _shrink_priority(name::String)
     return 1
 end
 
+# Product of the chunk lengths except `skip`, capped at MAX_CHUNK_BYTES so it cannot overflow.
+function _capped_others(chunks::Vector{Int}, skip::Int)
+    others = 1
+    for (j, len) in enumerate(chunks)
+        if j != skip
+            others = min(others * min(len, MAX_CHUNK_BYTES), MAX_CHUNK_BYTES)
+        end
+    end
+    return others
+end
+
 function _chunk_shape(axes::Vector{String}, axis_lengths::Vector{Int}, itemsize::Int)
     if length(axes) != length(axis_lengths)
         throw(
@@ -33,7 +44,7 @@ function _chunk_shape(axes::Vector{String}, axis_lengths::Vector{Int}, itemsize:
     shrinkable = [i for (i, name) in enumerate(axes) if name != "execution"]
     sort!(shrinkable; by = i -> (_shrink_priority(axes[i]), i))
     for i in shrinkable
-        others = prod(chunks) ÷ chunks[i]
+        others = _capped_others(chunks, i)
         chunks[i] = clamp(MAX_CHUNK_BYTES ÷ (itemsize * others), 1, chunks[i])
     end
     return chunks

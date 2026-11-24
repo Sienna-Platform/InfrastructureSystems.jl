@@ -15,6 +15,9 @@
     @test_throws ArgumentError IS.parse_iso_duration("PT30S")
     @test_throws ArgumentError IS.iso_duration(Dates.Millisecond(1500))
     @test_throws ArgumentError IS.iso_duration(Dates.Second(90))
+    @test IS.parse_iso_duration(IS.iso_duration(Dates.Day(999_999_999))) ==
+          Dates.Millisecond(999_999_999 * 86_400_000)
+    @test_throws ArgumentError IS.iso_duration(Dates.Day(1_000_000_000))
 end
 
 @testset "outputs.json parses into typed metadata" begin

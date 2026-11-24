@@ -1,6 +1,8 @@
 # One to nine digits per part keep every value inside `Int64` milliseconds.
 const _ISO_DURATION_REGEX = r"^P(?:(\d{1,9})D)?(?:T(?:(\d{1,9})H)?(?:(\d{1,9})M)?)?\z"
 
+const _ISO_MAX_PART = 999_999_999
+
 function _capture_value(c::AbstractString)
     return parse(Int, c)
 end
@@ -47,7 +49,8 @@ end
 
 """
 Format a `Dates.Period` as an ISO-8601 duration, largest unit first, omitting zero parts.
-Throw `ArgumentError` when the period is negative or is not a whole number of minutes.
+Throw `ArgumentError` when the period is negative, is not a whole number of minutes, or has
+more than nine digits of days, because `parse_iso_duration` rejects such a value.
 """
 function iso_duration(p::Dates.Period)
     ms = Dates.value(Dates.Millisecond(p))
@@ -58,6 +61,9 @@ function iso_duration(p::Dates.Period)
         throw(ArgumentError("duration is not a whole number of minutes: $p"))
     end
     days, rem_min = divrem(div(ms, 60_000), 1440)
+    if days > _ISO_MAX_PART
+        throw(ArgumentError("duration has more than nine digits of days: $p"))
+    end
     hours, minutes = divrem(rem_min, 60)
     time_part = string(_iso_part(hours, 'H'), _iso_part(minutes, 'M'))
     if isempty(time_part)
