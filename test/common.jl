@@ -166,3 +166,71 @@ function create_forecast_key_fixture(
     end
     return sys, keys
 end
+
+function outputs_model_index(
+    doc::InfrastructureOutputSchemas.OutputsDocument,
+    name::AbstractString,
+)
+    return only(findall(model -> model.name == name, doc.models))
+end
+
+outputs_model(doc::InfrastructureOutputSchemas.OutputsDocument, name::AbstractString) =
+    IS._find_model(doc, name)
+
+function outputs_axis_index(model::InfrastructureOutputSchemas.Model, name::AbstractString)
+    return only(findall(a -> IS.axis_name(a) == name, model.axes))
+end
+
+outputs_axis(model::InfrastructureOutputSchemas.Model, name::AbstractString) =
+    IS._find_axis(model, name)
+
+function _with(x; kw...)
+    T = typeof(x)
+    vals = Dict{Symbol, Any}(k => getfield(x, k) for k in fieldnames(T))
+    merge!(vals, Dict{Symbol, Any}(kw))
+    return T((vals[k] for k in fieldnames(T))...)
+end
+
+function set_outputs_axis!(
+    model::InfrastructureOutputSchemas.Model,
+    name::AbstractString,
+    axis,
+)
+    model.axes[outputs_axis_index(model, name)] = InfrastructureOutputSchemas.Axis(axis)
+    return model
+end
+
+function delete_outputs_axis!(
+    model::InfrastructureOutputSchemas.Model,
+    name::AbstractString,
+)
+    deleteat!(model.axes, outputs_axis_index(model, name))
+    return model
+end
+
+outputs_fixture(kind::AbstractString) = joinpath(DATA_DIR, "outputs", kind, "outputs.json")
+
+# Parse the JSON fixture `kind`, let `f!` change it, write it, and return the new path.
+function outputs_fixture_with(f!, kind::AbstractString)
+    raw = JSON.parse(read(outputs_fixture(kind), String))
+    f!(raw)
+    path = joinpath(mktempdir(), "outputs.json")
+    write(path, JSON.json(raw))
+    return path
+end
+
+# The schema rejects the document `doc`, at the rule that `rx` names.
+function expect_schema_invalid(doc::InfrastructureOutputSchemas.OutputsDocument, rx::Regex)
+    @test_throws InfrastructureOutputSchemas.SchemaValidationError IS.validate_document(doc)
+    @test_throws rx IS.validate_document(doc)
+    return
+end
+
+# The schema rejects the JSON file at `path` when it is read, at the rule that `rx` names.
+function expect_schema_invalid(path::AbstractString, rx::Regex)
+    @test_throws InfrastructureOutputSchemas.SchemaValidationError IS.read_outputs_document(
+        path,
+    )
+    @test_throws rx IS.read_outputs_document(path)
+    return
+end

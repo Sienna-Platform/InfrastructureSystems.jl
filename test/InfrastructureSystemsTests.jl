@@ -21,6 +21,7 @@ using Unitful: @u_str, uconvert, DimensionError
 import OpenAPI
 import InfrastructureCoreOpenAPIModels
 import InfrastructureTimeSeriesOpenAPIModels
+import InfrastructureOutputSchemas
 
 import Aqua
 # `piracies` crashes on Julia 1.12+ (`Core.TypeName.mt` was removed), unfixed in Aqua 0.8.11.
@@ -34,6 +35,8 @@ Aqua.test_all(
 
 const BASE_DIR =
     abspath(joinpath(dirname(Base.find_package("InfrastructureSystems")), ".."))
+
+const DATA_DIR = joinpath(BASE_DIR, "test", "data")
 
 const LOG_FILE = "infrastructure-systems.log"
 

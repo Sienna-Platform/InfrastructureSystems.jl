@@ -39,12 +39,14 @@ import DataFrames
 import EnumX
 import DataFrames: DataFrame
 import Dates
+import HDF5
 import JSON
 import TimeZones
 import GeoJSON
 import OpenAPI
 import InfrastructureCoreOpenAPIModels
 import InfrastructureTimeSeriesOpenAPIModels
+import InfrastructureOutputSchemas
 import Logging
 import Random
 import Pkg
@@ -240,6 +242,9 @@ include("subsystems.jl")
 include("validation.jl")
 include("component_selector.jl")
 include("outputs.jl")
+include("outputs/iso_duration.jl")
+include("outputs/document.jl")
+include("outputs/axes.jl")
 include("utils/print.jl")
 include("utils/print_pt.jl")
 include("utils/test.jl")
@@ -255,6 +260,10 @@ include("loss_curve.jl")
 include("function_data/make_convex.jl")
 include("Optimization/Optimization.jl")
 include("Simulation/Simulation.jl")
+include("outputs/hdf5_writer.jl")
+include("outputs/reader.jl")
+include("outputs/validate_components.jl")
+include("outputs/descriptor.jl")
 include("InfrastructureMatrices/InfrastructureMatrices.jl")
 
 end # module
