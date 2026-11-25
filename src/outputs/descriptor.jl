@@ -75,7 +75,7 @@ function _dataset_descriptor(
     ::Type{T},
     component_type::Union{String, OpenAPI.Runtime.Absent},
     meta::AbstractString,
-    model::AbstractString,
+    model_name::AbstractString,
     axes::Vector{String},
     axis_lengths::Vector{Int},
     dtype::String,
@@ -99,6 +99,6 @@ function _dataset_descriptor(
             chunks = _chunk_shape(axes, axis_lengths, sizeof(_DTYPES[dtype][1])),
             filters = filters,
         ),
-        path = string("/", model, "/datasets/", name),
+        path = string("/", model_name, "/datasets/", name),
     )
 end

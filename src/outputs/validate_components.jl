@@ -29,8 +29,8 @@ function _resolve_id(data::SystemData, id::Int, where_::String)
 end
 
 function _check_column(
-    model::AbstractString,
-    key::AbstractString,
+    model_name::AbstractString,
+    name::AbstractString,
     j::Int,
     ids::Matrix{Int64},
     labels::Matrix{String},
@@ -38,12 +38,12 @@ function _check_column(
 )
     for i in axes(ids, 2)
         id = ids[j, i]
-        where_ = "model $model axis $key column $j"
-        name = output_label(_resolve_id(data, id, where_))
-        if name != labels[j, i]
+        where_ = "model $model_name axis $name column $j"
+        label = output_label(_resolve_id(data, id, where_))
+        if label != labels[j, i]
             throw(
                 ArgumentError(
-                    "$where_: id $id is named $name in the System, label is $(labels[j, i])",
+                    "$where_: id $id is named $label in the System, label is $(labels[j, i])",
                 ),
             )
         end
@@ -63,55 +63,55 @@ end
 
 function _validate_axis(
     f::HDF5.File,
-    model::AbstractString,
-    key::AbstractString,
-    ax::InfrastructureOutputSchemas.ComponentAxis,
+    model_name::AbstractString,
+    name::AbstractString,
+    axis::InfrastructureOutputSchemas.ComponentAxis,
     data::SystemData,
 )
-    ad = _read_axis_data(f, model, key, ax)
-    expected = (length(ax.columns), axis_length(ax))
-    if size(ad.labels) != expected
+    axis_data = _read_axis_data(f, model_name, name, axis)
+    expected = (length(axis.columns), axis_length(axis))
+    if size(axis_data.labels) != expected
         throw(
             ArgumentError(
-                "model $model axis $key: labels have size $(size(ad.labels)), expected $expected",
+                "model $model_name axis $name: labels have size $(size(axis_data.labels)), expected $expected",
             ),
         )
     end
-    if !any(c -> c.has_ids, ax.columns)
+    if !any(column -> column.has_ids, axis.columns)
         return
     end
-    if size(ad.ids) != expected
+    if size(axis_data.ids) != expected
         throw(
             ArgumentError(
-                "model $model axis $key: ids have size $(size(ad.ids)), expected $expected",
+                "model $model_name axis $name: ids have size $(size(axis_data.ids)), expected $expected",
             ),
         )
     end
-    for (j, col) in enumerate(ax.columns)
-        if col.has_ids
-            _check_column(model, key, j, ad.ids, ad.labels, data)
+    for (j, column) in enumerate(axis.columns)
+        if column.has_ids
+            _check_column(model_name, name, j, axis_data.ids, axis_data.labels, data)
         end
     end
     return
 end
 
 """
-Check the component axes of `model` against `data`: for every column with ids and every
-row, the label of the component or supplemental attribute with that id in `data` (see
-`output_label`) must equal the stored label. Throw `ArgumentError` on the first mismatch,
-missing id, or attribute type without a label rule. Return `nothing`.
+Check the component axes of the model `model_name` against `data`: for every column with
+ids and every row, the label of the component or supplemental attribute with that id in
+`data` (see `output_label`) must equal the stored label. Throw `ArgumentError` on the first
+mismatch, missing id, or attribute type without a label rule. Return `nothing`.
 The check is by id and label only, not by component type. Type checking belongs to the
 PSY-aware layer.
 """
 function validate_components(
-    a::OutputArtifact,
-    model::AbstractString,
+    reader::OutputsReader,
+    model_name::AbstractString,
     data::SystemData,
 )
-    entry = _model_entry(a.metadata, model)
-    HDF5.h5open(_h5_path(a), "r") do f
-        for ax in sort!(collect(_axes(entry)); by = axis_key)
-            _validate_axis(f, model, axis_key(ax), ax, data)
+    model = _find_model(reader.document, model_name)
+    HDF5.h5open(_h5_path(reader), "r") do f
+        for axis in sort!(collect(_axes(model)); by = axis_name)
+            _validate_axis(f, model_name, axis_name(axis), axis, data)
         end
     end
     return nothing

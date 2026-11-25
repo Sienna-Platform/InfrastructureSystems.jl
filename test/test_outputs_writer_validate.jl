@@ -34,12 +34,12 @@ function _validate_axis_data(m, data)
 end
 
 @testset "outputs validate: matching System passes, renamed or missing fails" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = IS.read_outputs_document(_SINGLE_JSON)
     data = _validate_system(152)
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = _validate_axis_data(m, data),
         systems = _bundle_systems(m), values = _all_values(m), tables = _all_tables(m))
-    a = IS.open_outputs(dir)
+    a = IS.open_outputs_reader(dir)
     @test IS.validate_components(a, "model", data) === nothing
 
     renamed = _validate_system(152; renamed = 5)
@@ -56,7 +56,7 @@ end
 end
 
 @testset "outputs reader: missing ids dataset is an error" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = IS.read_outputs_document(_SINGLE_JSON)
     data = _validate_system(152)
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = _validate_axis_data(m, data),
@@ -64,14 +64,14 @@ end
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r+") do f
         HDF5.delete_object(f, "/model/axes/ThermalStandard/ids")
     end
-    a = IS.open_outputs(dir)
+    a = IS.open_outputs_reader(dir)
     @test_throws ArgumentError IS.read_axis_data(a, "model", "ThermalStandard")
     @test_throws r"model.*ThermalStandard" IS.read_axis_data(a, "model", "ThermalStandard")
     @test_throws ArgumentError IS.validate_components(a, "model", data)
 end
 
 @testset "outputs validate: ids and labels must have the same size" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = IS.read_outputs_document(_SINGLE_JSON)
     data = _validate_system(152)
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = _validate_axis_data(m, data),
@@ -80,18 +80,18 @@ end
         HDF5.delete_object(f, "/model/axes/ThermalStandard/ids")
         f["/model/axes/ThermalStandard/ids"] = zeros(Int64, 1, 3)
     end
-    a = IS.open_outputs(dir)
+    a = IS.open_outputs_reader(dir)
     @test_throws ArgumentError IS.validate_components(a, "model", data)
     @test_throws "ids have size (1, 3)" IS.validate_components(a, "model", data)
 end
 
 @testset "outputs validate: stored ids and labels have the declared axis shape" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = IS.read_outputs_document(_SINGLE_JSON)
     data = _validate_system(152)
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = _validate_axis_data(m, data),
         systems = _bundle_systems(m), values = _all_values(m), tables = _all_tables(m))
-    @test IS.validate_components(IS.open_outputs(dir), "model", data) === nothing
+    @test IS.validate_components(IS.open_outputs_reader(dir), "model", data) === nothing
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r+") do f
         for name in ("ids", "labels")
             HDF5.delete_object(f, "/model/axes/ThermalStandard/$name")
@@ -99,14 +99,14 @@ end
         f["/model/axes/ThermalStandard/ids"] = zeros(Int64, 1, 0)
         f["/model/axes/ThermalStandard/labels"] = Matrix{String}(undef, 1, 0)
     end
-    a = IS.open_outputs(dir)
+    a = IS.open_outputs_reader(dir)
     @test_throws ArgumentError IS.validate_components(a, "model", data)
     @test_throws "axis ThermalStandard: labels have size (1, 0), expected (1, 76)" IS.validate_components(
         a, "model", data)
 end
 
 @testset "outputs validate: ids resolve to supplemental attributes" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = IS.read_outputs_document(_SINGLE_JSON)
     data = _validate_system(152)
     comp = IS.get_component(data, 1)
     attr = IS.GeographicInfo()
@@ -120,7 +120,7 @@ end
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = ad, systems = _bundle_systems(m),
         values = _all_values(m), tables = _all_tables(m))
-    a = IS.open_outputs(dir)
+    a = IS.open_outputs_reader(dir)
     # the id resolves to the attribute; IS has no label rule for its type
     @test_throws "GeographicInfo has no output label" IS.validate_components(
         a, "model", data)
@@ -131,11 +131,11 @@ end
     IS.write_outputs(dir, m; axis_data = ad, systems = _bundle_systems(m),
         values = _all_values(m), tables = _all_tables(m))
     @test_throws "id 100000 is neither a component nor a supplemental attribute" IS.validate_components(
-        IS.open_outputs(dir), "model", data)
+        IS.open_outputs_reader(dir), "model", data)
 end
 
 @testset "outputs validate: an attribute type with an output label validates" begin
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = IS.read_outputs_document(_SINGLE_JSON)
     data = _validate_system(152)
     attr = _LabeledAttribute("outage_1", IS.InfrastructureSystemsInternal())
     IS.add_supplemental_attribute!(data, IS.get_component(data, 1), attr)
@@ -149,7 +149,7 @@ end
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = ad, systems = _bundle_systems(m),
         values = _all_values(m), tables = _all_tables(m))
-    a = IS.open_outputs(dir)
+    a = IS.open_outputs_reader(dir)
     @test IS.validate_components(a, "model", data) === nothing
     labels[1, 2] = "wrong"
     ad[("model", "ThermalStandard")] = IS.AxisData(ids, labels, t.timestamps)
@@ -157,5 +157,5 @@ end
     IS.write_outputs(dir, m; axis_data = ad, systems = _bundle_systems(m),
         values = _all_values(m), tables = _all_tables(m))
     @test_throws "is named outage_1 in the System, label is wrong" IS.validate_components(
-        IS.open_outputs(dir), "model", data)
+        IS.open_outputs_reader(dir), "model", data)
 end

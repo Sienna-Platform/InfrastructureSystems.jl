@@ -1,69 +1,78 @@
 """
-Handle of an outputs directory. The HDF5 file is opened for each read, never held.
-Use `open_outputs` to create one.
+Handle of an artifact. The HDF5 file is opened for each read, never held.
+Use `open_outputs_reader` to create one.
 """
-struct OutputArtifact
+struct OutputsReader
     dir::String
-    metadata::InfrastructureOutputSchemas.OutputsDocument
+    document::InfrastructureOutputSchemas.OutputsDocument
 end
 
 """
-    open_outputs(dir) -> OutputArtifact
+    open_outputs_reader(dir) -> OutputsReader
 
 Read and validate `outputs.json` in `dir`. Check that `outputs.h5` and the bundle directory
 of every declared system exist. Warn when the status is `RUNNING`: the run is in progress or
 ended without a final status, and datasets can be partly written.
 """
-function open_outputs(dir::AbstractString)
-    json = joinpath(dir, "outputs.json")
-    if !isfile(json)
-        throw(ArgumentError("outputs directory $dir has no outputs.json"))
+function open_outputs_reader(dir::AbstractString)
+    json_path = joinpath(dir, "outputs.json")
+    if !isfile(json_path)
+        throw(ArgumentError("artifact $dir has no outputs.json"))
     end
-    m = read_outputs_metadata(json)
-    validate_metadata(m)
+    doc = read_outputs_document(json_path)
+    validate_document(doc)
     if !isfile(joinpath(dir, "outputs.h5"))
-        throw(ArgumentError("outputs directory $dir has no outputs.h5"))
+        throw(ArgumentError("artifact $dir has no outputs.h5"))
     end
-    for (uuid, name) in _systems(m)
+    for (uuid, name) in _systems(doc)
         if !isdir(joinpath(dir, name))
             throw(
                 ArgumentError(
-                    "outputs directory $dir has no bundle directory \"$name\" for system $uuid",
+                    "artifact $dir has no bundle directory \"$name\" for system $uuid",
                 ),
             )
         end
     end
-    if string(m.status) == string(Simulation.RunStatus.RUNNING)
-        @warn "Outputs in $dir have status RUNNING: the run is not finished or ended without a final status. Datasets can be partly written."
+    if string(doc.status) == string(Simulation.RunStatus.RUNNING)
+        @warn "The artifact in $dir has status RUNNING: the run is not finished or ended without a final status. Datasets can be partly written."
     end
-    return OutputArtifact(String(dir), m)
+    return OutputsReader(String(dir), doc)
 end
 
 "Return the `InfrastructureOutputSchemas.OutputsDocument` of the artifact."
-get_metadata(a::OutputArtifact) = a.metadata
+get_document(reader::OutputsReader) = reader.document
 
 "Return the sorted model names of the artifact."
-list_models(a::OutputArtifact) = sort!(String[e.name for e in a.metadata.models])
+function list_models(reader::OutputsReader)
+    return sort!(String[model.name for model in reader.document.models])
+end
 
-"Return `(entry_type, component_type, meta)` of every dataset of `model`."
-function list_datasets(a::OutputArtifact, model::AbstractString)
+"Return the dataset key `(entry_type, component_type, meta)` of every dataset of the model `model_name`."
+function list_datasets(reader::OutputsReader, model_name::AbstractString)
     return Tuple{String, String, String}[
-        dataset_key(d) for d in _model_entry(a.metadata, model).datasets
+        dataset_key(dataset) for
+        dataset in _find_model(reader.document, model_name).datasets
     ]
 end
 
-"Return the table names of `model`."
-function list_tables(a::OutputArtifact, model::AbstractString)
-    return String[t.name for t in _model_tables(_model_entry(a.metadata, model))]
+"Return the table names of the model `model_name`."
+function list_tables(reader::OutputsReader, model_name::AbstractString)
+    return String[
+        table.name for table in _model_tables(_find_model(reader.document, model_name))
+    ]
 end
 
-"Return the axis `key` of `model`."
-function get_axis(a::OutputArtifact, model::AbstractString, key::AbstractString)
-    entry = _model_entry(a.metadata, model)
-    return _find_axis(entry, key)
+"Return the axis with the axis name `name` of the model `model_name`."
+function get_axis(
+    reader::OutputsReader,
+    model_name::AbstractString,
+    name::AbstractString,
+)
+    model = _find_model(reader.document, model_name)
+    return _find_axis(model, name)
 end
 
-_h5_path(a::OutputArtifact) = joinpath(a.dir, "outputs.h5")
+_h5_path(reader::OutputsReader) = joinpath(reader.dir, "outputs.h5")
 
 # Axes without stored data (horizon, label) give empty AxisData.
 function _read_axis_data(
@@ -77,16 +86,20 @@ end
 
 function _read_axis_data(
     f::HDF5.File,
-    model::AbstractString,
-    key::AbstractString,
-    ax::InfrastructureOutputSchemas.ComponentAxis,
+    model_name::AbstractString,
+    name::AbstractString,
+    axis::InfrastructureOutputSchemas.ComponentAxis,
 )
-    g = f[ax.group]
+    g = f[axis.group]
     ids = zeros(Int64, 0, 0)
     if haskey(g, "ids")
         ids = read(g["ids"])
-    elseif all(c -> c.has_ids, ax.columns)
-        throw(ArgumentError("model $model: axis $key has id columns but no ids dataset"))
+    elseif all(column -> column.has_ids, axis.columns)
+        throw(
+            ArgumentError(
+                "model $model_name: axis $name has id columns but no ids HDF5 dataset",
+            ),
+        )
     end
     return AxisData(ids, read(g["labels"]), Dates.DateTime[])
 end
@@ -95,23 +108,27 @@ function _read_axis_data(
     f::HDF5.File,
     ::AbstractString,
     ::AbstractString,
-    ax::Union{
+    axis::Union{
         InfrastructureOutputSchemas.TimeAxis,
         InfrastructureOutputSchemas.ExecutionAxis,
     },
 )
-    ts = [
+    timestamps = [
         Dates.DateTime(1970) + Dates.Millisecond(ms) for
-        ms in read(f[ax.group]["timestamps"])
+        ms in read(f[axis.group]["timestamps"])
     ]
-    return AxisData(ts)
+    return AxisData(timestamps)
 end
 
-"Return the `AxisData` stored for axis `key` of `model`."
-function read_axis_data(a::OutputArtifact, model::AbstractString, key::AbstractString)
-    ax = get_axis(a, model, key)
-    return HDF5.h5open(_h5_path(a), "r") do f
-        return _read_axis_data(f, model, key, ax)
+"Return the `AxisData` stored for the axis `name` of the model `model_name`."
+function read_axis_data(
+    reader::OutputsReader,
+    model_name::AbstractString,
+    name::AbstractString,
+)
+    axis = get_axis(reader, model_name, name)
+    return HDF5.h5open(_h5_path(reader), "r") do f
+        return _read_axis_data(f, model_name, name, axis)
     end
 end
 
@@ -143,27 +160,27 @@ function _decode(dtype::String, v)
     return v
 end
 
-# Design check 4: the stored shape and element type match the metadata.
+# The stored shape and element type match the document.
 function _check_stored(
-    model,
+    model_name,
     key,
-    d::InfrastructureOutputSchemas.Dataset,
-    ds::HDF5.Dataset,
+    dataset::InfrastructureOutputSchemas.Dataset,
+    h5_dataset::HDF5.Dataset,
     expected::Tuple,
 )
-    if size(ds) != expected
+    if size(h5_dataset) != expected
         throw(
             ArgumentError(
-                "model $model: dataset $key is stored with size $(size(ds)), the metadata expects $expected",
+                "model $model_name: dataset $key is stored with size $(size(h5_dataset)), the document expects $expected",
             ),
         )
     end
-    dtype = string(d.dtype)
+    dtype = string(dataset.dtype)
     storage = _DTYPES[dtype][1]
-    if eltype(ds) != storage
+    if eltype(h5_dataset) != storage
         throw(
             ArgumentError(
-                "model $model: dataset $key is stored as $(eltype(ds)), the metadata dtype $dtype expects $storage",
+                "model $model_name: dataset $key is stored as $(eltype(h5_dataset)), the document dtype $dtype expects $storage",
             ),
         )
     end
@@ -171,55 +188,64 @@ function _check_stored(
 end
 
 """
-    read_dataset(a, model, entry_type, component_type; meta = "", execution = Colon())
-        -> (array, axis_keys)
+    read_dataset(reader, model_name, entry_type, component_type; meta = "", execution = Colon())
+        -> (array, axis_names)
 
-Read one dataset in Julia order (the reverse of the metadata `axes`). `axis_keys` lists
-the axes in the same order. `execution` (`Colon`, `Int`, or `UnitRange`) selects along the
-execution axis only. An `Int` removes that axis from the result. Bool datasets return `Bool`.
+Read one dataset in Julia order (the reverse of the document `axes`). `axis_names` lists
+the axis names in the same order. `execution` (`Colon`, `Int`, or `UnitRange`) selects along
+the execution axis only. An `Int` removes that axis from the result. Bool datasets return
+`Bool`.
 """
 function read_dataset(
-    a::OutputArtifact,
-    model::AbstractString,
+    reader::OutputsReader,
+    model_name::AbstractString,
     entry_type::AbstractString,
     component_type::AbstractString;
     meta::AbstractString = "",
     execution = Colon(),
 )
     key = (String(entry_type), String(component_type), String(meta))
-    d = _find_dataset(a.metadata, model, key)
-    entry = _model_entry(a.metadata, model)
-    keys_julia = reverse(d.axes)
-    idx = Any[Colon() for _ in keys_julia]
-    keep = trues(length(keys_julia))
-    pos = findfirst(==("execution"), keys_julia)
+    dataset = _find_dataset(reader.document, model_name, key)
+    model = _find_model(reader.document, model_name)
+    names_julia = reverse(dataset.axes)
+    idx = Any[Colon() for _ in names_julia]
+    keep = trues(length(names_julia))
+    pos = findfirst(==("execution"), names_julia)
     if isnothing(pos)
         if execution != Colon()
-            throw(ArgumentError("model $model: dataset $key has no execution axis"))
+            throw(ArgumentError("model $model_name: dataset $key has no execution axis"))
         end
     else
         idx[pos], keep[pos] =
             _execution_selection(
                 execution,
-                axis_length(_find_axis(entry, "execution")),
+                axis_length(_find_axis(model, "execution")),
             )
     end
-    expected = Tuple(reverse([axis_length(_find_axis(entry, k)) for k in d.axes]))
-    arr = HDF5.h5open(_h5_path(a), "r") do f
-        ds = f[d.path]
-        _check_stored(model, key, d, ds, expected)
-        return ds[idx...]
+    expected =
+        Tuple(reverse([axis_length(_find_axis(model, name)) for name in dataset.axes]))
+    arr = HDF5.h5open(_h5_path(reader), "r") do f
+        h5_dataset = f[dataset.path]
+        _check_stored(model_name, key, dataset, h5_dataset, expected)
+        return h5_dataset[idx...]
     end
-    return _decode(string(d.dtype), arr), keys_julia[keep]
+    return _decode(string(dataset.dtype), arr), names_julia[keep]
 end
 
-"Return the columns of table `name` of `model` as a `NamedTuple` of vectors."
-function read_table(a::OutputArtifact, model::AbstractString, name::AbstractString)
-    t = _find_table(a.metadata, model, name)
-    cols = HDF5.h5open(_h5_path(a), "r") do f
-        return [read(f[string(t.group, "/", c.name)]) for c in t.columns]
+"Return the columns of the table `table_name` of the model `model_name` as a `NamedTuple` of vectors."
+function read_table(
+    reader::OutputsReader,
+    model_name::AbstractString,
+    table_name::AbstractString,
+)
+    table = _find_table(reader.document, model_name, table_name)
+    column_values = HDF5.h5open(_h5_path(reader), "r") do f
+        return [read(f[string(table.group, "/", column.name)]) for column in table.columns]
     end
-    return NamedTuple{Tuple(Symbol(c.name) for c in t.columns)}(
-        Tuple(_decode(string(c.dtype), v) for (c, v) in zip(t.columns, cols)),
+    return NamedTuple{Tuple(Symbol(column.name) for column in table.columns)}(
+        Tuple(
+            _decode(string(column.dtype), v) for
+            (column, v) in zip(table.columns, column_values)
+        ),
     )
 end

@@ -1,5 +1,5 @@
 """
-Per-axis data written next to the metadata, in Julia order. Needed for `time`,
+Per-axis data written next to the document, in Julia order. Needed for `time`,
 `execution`, and `component` axes only. For a component axis, `labels` has size
 `(ncols, N)` and `ids` has size `(ncols, N)`, or `(0, 0)` when the axis has no ids.
 HDF5 stores them in C order as `[N, ncols]`. `timestamps` is empty for component axes.
@@ -20,22 +20,22 @@ function AxisData(timestamps::Vector{Dates.DateTime})
     return AxisData(zeros(Int64, 0, 0), Matrix{String}(undef, 0, 0), timestamps)
 end
 
-# Open handle of one dataset with what `write_execution!` and `write_values!` need.
+# Open handle of the HDF5 dataset of one dataset with what `write_execution!` and `write_values!` need.
 # `exec_dim` is the execution dimension in Julia order, 0 when absent. `expected` is the
 # size of one execution slice (the whole dataset size when `exec_dim` is 0). `written` has
 # one entry per execution, or one entry when `exec_dim` is 0.
 struct DatasetRecord
-    dataset::HDF5.Dataset
+    h5_dataset::HDF5.Dataset
     dtype::String
     exec_dim::Int
     expected::Vector{Int}
     written::BitVector
 end
 
-"Writer of an outputs directory. Use `open_outputs_writer` to create one."
+"Writer of an artifact. Use `open_outputs_writer` to create one."
 mutable struct OutputsWriter
     dir::String
-    metadata::InfrastructureOutputSchemas.OutputsDocument
+    document::InfrastructureOutputSchemas.OutputsDocument
     file::HDF5.File
     datasets::Dict{Tuple{String, String, String, String}, DatasetRecord}
     tables_written::Set{Tuple{String, String}}
@@ -66,95 +66,103 @@ _needs_axis_data(
 ) =
     false
 
-function _check_axis_set(m::InfrastructureOutputSchemas.OutputsDocument, axis_data)
-    for (model, name) in keys(axis_data)
-        i = findfirst(e -> e.name == model, m.models)
-        if isnothing(i) || !_has_axis(m.models[i], name)
-            throw(ArgumentError("model $model: axis data key \"$name\" names no axis"))
+function _check_axis_set(doc::InfrastructureOutputSchemas.OutputsDocument, axis_data)
+    for (model_name, name) in keys(axis_data)
+        i = findfirst(model -> model.name == model_name, doc.models)
+        if isnothing(i) || !_has_axis(doc.models[i], name)
+            throw(
+                ArgumentError("model $model_name: axis data name \"$name\" names no axis"),
+            )
         end
-        if !_needs_axis_data(_find_axis(m.models[i], name))
+        if !_needs_axis_data(_find_axis(doc.models[i], name))
             throw(
                 ArgumentError(
-                    "model $model: axis \"$name\" carries no datasets and takes no axis data",
+                    "model $model_name: axis \"$name\" carries no datasets and takes no axis data",
                 ),
             )
         end
     end
-    for entry in m.models, ax in _axes(entry)
-        model = entry.name
-        name = axis_key(ax)
-        if _needs_axis_data(ax)
-            if !haskey(axis_data, (model, name))
-                throw(ArgumentError("model $model: no axis data for axis \"$name\""))
+    for model in doc.models, axis in _axes(model)
+        model_name = model.name
+        name = axis_name(axis)
+        if _needs_axis_data(axis)
+            if !haskey(axis_data, (model_name, name))
+                throw(
+                    ArgumentError("model $model_name: no axis data for axis \"$name\""),
+                )
             end
-            _check_axis_data(model, name, ax, axis_data[(model, name)])
+            _check_axis_data(model_name, name, axis, axis_data[(model_name, name)])
         end
     end
     return
 end
 
 function _check_axis_data(
-    model::String,
+    model_name::String,
     name::String,
-    ax::InfrastructureOutputSchemas.ComponentAxis,
-    d::AxisData,
+    axis::InfrastructureOutputSchemas.ComponentAxis,
+    data::AxisData,
 )
-    n = axis_length(ax)
-    nc = length(ax.columns)
-    if size(d.labels) != (nc, n)
+    n = axis_length(axis)
+    nc = length(axis.columns)
+    if size(data.labels) != (nc, n)
         throw(
             ArgumentError(
-                "model $model: axis \"$name\" labels have size $(size(d.labels)), expected $((nc, n))",
+                "model $model_name: axis \"$name\" labels have size $(size(data.labels)), expected $((nc, n))",
             ),
         )
     end
-    with_ids = count(c -> c.has_ids, ax.columns)
+    with_ids = count(column -> column.has_ids, axis.columns)
     if with_ids == nc
-        if size(d.ids) != (nc, n)
+        if size(data.ids) != (nc, n)
             throw(
                 ArgumentError(
-                    "model $model: axis \"$name\" ids have size $(size(d.ids)), expected $((nc, n))",
+                    "model $model_name: axis \"$name\" ids have size $(size(data.ids)), expected $((nc, n))",
                 ),
             )
         end
     elseif iszero(with_ids)
-        if !isempty(d.ids)
-            throw(ArgumentError("model $model: axis \"$name\" has ids but no id columns"))
+        if !isempty(data.ids)
+            throw(
+                ArgumentError(
+                    "model $model_name: axis \"$name\" has ids but no id columns",
+                ),
+            )
         end
     else
         throw(
             ArgumentError(
-                "model $model: axis \"$name\" mixes columns with and without ids"),
+                "model $model_name: axis \"$name\" mixes columns with and without ids"),
         )
     end
     return
 end
 
 function _check_axis_data(
-    model::String,
+    model_name::String,
     name::String,
-    ax::Union{
+    axis::Union{
         InfrastructureOutputSchemas.TimeAxis,
         InfrastructureOutputSchemas.ExecutionAxis,
     },
-    d::AxisData,
+    data::AxisData,
 )
-    n = axis_length(ax)
-    if length(d.timestamps) != n
+    n = axis_length(axis)
+    if length(data.timestamps) != n
         throw(
             ArgumentError(
-                "model $model: axis \"$name\" has $(length(d.timestamps)) timestamps, expected $n",
+                "model $model_name: axis \"$name\" has $(length(data.timestamps)) timestamps, expected $n",
             ),
         )
     end
-    start = Dates.DateTime(ax.initial_timestamp)
-    step = _axis_step(ax)
-    for (i, t) in enumerate(d.timestamps)
+    start = Dates.DateTime(axis.initial_timestamp)
+    step = _axis_step(axis)
+    for (i, timestamp) in enumerate(data.timestamps)
         expected = start + (i - 1) * step
-        if t != expected
+        if timestamp != expected
             throw(
                 ArgumentError(
-                    "model $model: axis \"$name\" timestamp $i is $t, expected $expected",
+                    "model $model_name: axis \"$name\" timestamp $i is $timestamp, expected $expected",
                 ),
             )
         end
@@ -162,28 +170,28 @@ function _check_axis_data(
     return
 end
 
-_axis_step(ax::InfrastructureOutputSchemas.TimeAxis) = get_resolution(ax)
-_axis_step(ax::InfrastructureOutputSchemas.ExecutionAxis) = get_interval(ax)
+_axis_step(axis::InfrastructureOutputSchemas.TimeAxis) = get_resolution(axis)
+_axis_step(axis::InfrastructureOutputSchemas.ExecutionAxis) = get_interval(axis)
 
 # Only time, execution, and component axes index `axis_data`.
 _write_axis!(::HDF5.Group, ::InfrastructureOutputSchemas.HorizonAxis, _, _) = nothing
 
-function _write_axis!(g::HDF5.Group, ax::InfrastructureOutputSchemas.LabelAxis, _, _)
-    g["labels"] = ax.labels
+function _write_axis!(g::HDF5.Group, axis::InfrastructureOutputSchemas.LabelAxis, _, _)
+    g["labels"] = axis.labels
     return
 end
 
 function _write_axis!(
     g::HDF5.Group,
-    ax::InfrastructureOutputSchemas.ComponentAxis,
+    axis::InfrastructureOutputSchemas.ComponentAxis,
     axis_data,
-    key,
+    model_axis,
 )
-    d = axis_data[key]
-    if all(c -> c.has_ids, ax.columns)
-        g["ids"] = d.ids
+    data = axis_data[model_axis]
+    if all(column -> column.has_ids, axis.columns)
+        g["ids"] = data.ids
     end
-    g["labels"] = d.labels
+    g["labels"] = data.labels
     return
 end
 
@@ -194,75 +202,80 @@ function _write_axis!(
         InfrastructureOutputSchemas.ExecutionAxis,
     },
     axis_data,
-    key,
+    model_axis,
 )
-    g["timestamps"] = timestamps_epoch_ms(axis_data[key].timestamps)
+    g["timestamps"] = timestamps_epoch_ms(axis_data[model_axis].timestamps)
     return
 end
 
 function _create_dataset!(
     f::HDF5.File,
-    model::String,
-    d::InfrastructureOutputSchemas.Dataset,
-    m::InfrastructureOutputSchemas.Model,
+    model_name::String,
+    dataset::InfrastructureOutputSchemas.Dataset,
+    model::InfrastructureOutputSchemas.Model,
 )
-    key = dataset_key(d)
-    dtype = string(d.dtype)
+    key = dataset_key(dataset)
+    dtype = string(dataset.dtype)
     T = _DTYPES[dtype][1]
-    dims = reverse([axis_length(_find_axis(m, a)) for a in d.axes])
-    pos = findfirst(==("execution"), d.axes)
+    dims = reverse([axis_length(_find_axis(model, name)) for name in dataset.axes])
+    pos = findfirst(==("execution"), dataset.axes)
     exec_dim = 0
     expected = dims
     written = falses(1)
     if !isnothing(pos)
-        exec_dim = length(d.axes) - pos + 1
+        exec_dim = length(dataset.axes) - pos + 1
         expected = deleteat!(copy(dims), exec_dim)
         written = falses(dims[exec_dim])
     end
     # The schema accepts only `shuffle` and `deflate:L` names.
     filters = HDF5.Filters.Filter[]
-    for f_name in d.layout.filters
-        if f_name == "shuffle"
+    for filter_name in dataset.layout.filters
+        if filter_name == "shuffle"
             push!(filters, HDF5.Filters.Shuffle())
         else
             # The schema accepts `deflate:1` to `deflate:9`.
-            level = parse(Int, f_name[(length("deflate:") + 1):end])
+            level = parse(Int, filter_name[(length("deflate:") + 1):end])
             push!(filters, HDF5.Filters.Deflate(level))
         end
     end
-    ds = HDF5.create_dataset(
-        f, d.path, HDF5.datatype(T), HDF5.dataspace(Tuple(dims));
-        chunk = Tuple(reverse(d.layout.chunks)),
-        fill_value = _parse_fill(T, d.fill_value),
+    h5_dataset = HDF5.create_dataset(
+        f, dataset.path, HDF5.datatype(T), HDF5.dataspace(Tuple(dims));
+        chunk = Tuple(reverse(dataset.layout.chunks)),
+        fill_value = _parse_fill(T, dataset.fill_value),
         filters,
     )
-    return (model, key...) => DatasetRecord(ds, dtype, exec_dim, expected, written)
+    return (model_name, key...) =>
+        DatasetRecord(h5_dataset, dtype, exec_dim, expected, written)
 end
 
 # Create the file and close it again when populating fails.
-function _create_h5(path::String, m::InfrastructureOutputSchemas.OutputsDocument, axis_data)
+function _create_h5(
+    path::String,
+    doc::InfrastructureOutputSchemas.OutputsDocument,
+    axis_data,
+)
     f = HDF5.h5open(path, "w")
     try
         records = Dict{Tuple{String, String, String, String}, DatasetRecord}()
-        for entry in m.models
-            model = entry.name
-            for ax in _axes(entry)
-                name = axis_key(ax)
-                g = HDF5.create_group(f, "/$model/axes/$name")
-                _write_axis!(g, ax, axis_data, (model, name))
+        for model in doc.models
+            model_name = model.name
+            for axis in _axes(model)
+                name = axis_name(axis)
+                g = HDF5.create_group(f, "/$model_name/axes/$name")
+                _write_axis!(g, axis, axis_data, (model_name, name))
             end
-            for d in entry.datasets
-                push!(records, _create_dataset!(f, model, d, entry))
+            for dataset in model.datasets
+                push!(records, _create_dataset!(f, model_name, dataset, model))
             end
-            for t in _model_tables(entry)
-                g = HDF5.create_group(f, t.group)
-                for c in t.columns
-                    T = _column_storage_type(string(c.dtype))
+            for table in _model_tables(model)
+                g = HDF5.create_group(f, table.group)
+                for column in table.columns
+                    T = _column_storage_type(string(column.dtype))
                     HDF5.create_dataset(
                         g,
-                        c.name,
+                        column.name,
                         HDF5.datatype(T),
-                        HDF5.dataspace((t.length,)),
+                        HDF5.dataspace((table.length,)),
                     )
                 end
             end
@@ -278,20 +291,20 @@ function _create_h5(path::String, m::InfrastructureOutputSchemas.OutputsDocument
 end
 
 """
-    open_outputs_writer(dir, m; axis_data) -> OutputsWriter
+    open_outputs_writer(dir, doc; axis_data) -> OutputsWriter
 
-Validate `m`, create `dir`, write `outputs.json` with status `RUNNING`, and create
-`outputs.h5` with every axis, dataset, and table of `m`. `axis_data` is keyed by
-`(model, axis_key)`. Throw `ArgumentError` when `dir` already holds `outputs.json` or
+Validate `doc`, create `dir`, write `outputs.json` with status `RUNNING`, and create
+`outputs.h5` with every axis, dataset, and table of `doc`. `axis_data` is keyed by
+`(model_name, axis_name)`. Throw `ArgumentError` when `dir` already holds `outputs.json` or
 `outputs.h5`.
 """
 function open_outputs_writer(
     dir::AbstractString,
-    m::InfrastructureOutputSchemas.OutputsDocument;
+    doc::InfrastructureOutputSchemas.OutputsDocument;
     axis_data::Dict{Tuple{String, String}, AxisData},
 )
-    validate_metadata(m)
-    _check_axis_set(m, axis_data)
+    validate_document(doc)
+    _check_axis_set(doc, axis_data)
     for name in _ARTIFACT_FILE_NAMES
         path = joinpath(dir, name)
         if ispath(path)
@@ -302,9 +315,9 @@ function open_outputs_writer(
     json_path = joinpath(dir, "outputs.json")
     h5_path = joinpath(dir, "outputs.h5")
     try
-        running = with_status(m, string(Simulation.RunStatus.RUNNING))
-        write_outputs_metadata(json_path, running)
-        f, records = _create_h5(h5_path, m, axis_data)
+        running = with_status(doc, string(Simulation.RunStatus.RUNNING))
+        write_outputs_document(json_path, running)
+        f, records = _create_h5(h5_path, doc, axis_data)
         return OutputsWriter(String(dir), running, f, records, Set{Tuple{String, String}}())
     catch
         rm(h5_path; force = true)
@@ -314,7 +327,7 @@ function open_outputs_writer(
 end
 
 function _check_running(w::OutputsWriter)
-    if string(w.metadata.status) != string(Simulation.RunStatus.RUNNING) || !isopen(w.file)
+    if string(w.document.status) != string(Simulation.RunStatus.RUNNING) || !isopen(w.file)
         throw(ArgumentError("outputs writer for $(w.dir) is not running"))
     end
     return
@@ -322,14 +335,14 @@ end
 
 function _record(
     w::OutputsWriter,
-    model::AbstractString,
+    model_name::AbstractString,
     key::Tuple{String, String, String},
 )
-    k = (String(model), key...)
-    if !haskey(w.datasets, k)
-        throw(ArgumentError("model $model: no dataset $key"))
+    record_key = (String(model_name), key...)
+    if !haskey(w.datasets, record_key)
+        throw(ArgumentError("model $model_name: no dataset $key"))
     end
-    return w.datasets[k]
+    return w.datasets[record_key]
 end
 
 function _convert_values(::Type{T}, values::AbstractArray) where {T}
@@ -339,91 +352,93 @@ end
 _convert_values(::Type{T}, values::Array{T}) where {T} = values
 
 """
-    write_execution!(w, model, key, values, execution_index)
+    write_execution!(w, model_name, key, values, execution_index)
 
 Write `values` (Julia order, every axis except `execution`) into slice `execution_index`
-of the dataset `key = (entry_type, component_type, meta)`.
+of the dataset with the dataset key `key = (entry_type, component_type, meta)`.
 """
 function write_execution!(
     w::OutputsWriter,
-    model::AbstractString,
+    model_name::AbstractString,
     key::Tuple{String, String, String},
     values::AbstractArray,
     execution_index::Int,
 )
     _check_running(w)
-    r = _record(w, model, key)
-    if iszero(r.exec_dim)
-        throw(ArgumentError("model $model: dataset $key has no execution axis"))
+    record = _record(w, model_name, key)
+    if iszero(record.exec_dim)
+        throw(ArgumentError("model $model_name: dataset $key has no execution axis"))
     end
-    count = size(r.dataset, r.exec_dim)
+    count = size(record.h5_dataset, record.exec_dim)
     if !(1 <= execution_index <= count)
         throw(
             ArgumentError(
-                "model $model: dataset $key execution_index $execution_index is outside 1:$count",
+                "model $model_name: dataset $key execution_index $execution_index is outside 1:$count",
             ),
         )
     end
-    _check_values_size(model, key, values, Tuple(r.expected))
-    idx = Any[Colon() for _ in 1:ndims(r.dataset)]
-    idx[r.exec_dim] = execution_index
-    r.dataset[idx...] = _convert_values(_DTYPES[r.dtype][1], values)
-    r.written[execution_index] = true
+    _check_values_size(model_name, key, values, Tuple(record.expected))
+    idx = Any[Colon() for _ in 1:ndims(record.h5_dataset)]
+    idx[record.exec_dim] = execution_index
+    record.h5_dataset[idx...] = _convert_values(_DTYPES[record.dtype][1], values)
+    record.written[execution_index] = true
     return
 end
 
 """
-    write_values!(w, model, key, values)
+    write_values!(w, model_name, key, values)
 
-Write the whole dataset `key`. The size of `values` must equal the dataset size.
+Write the whole dataset with the dataset key `key`. The size of `values` must equal the
+dataset size.
 """
 function write_values!(
     w::OutputsWriter,
-    model::AbstractString,
+    model_name::AbstractString,
     key::Tuple{String, String, String},
     values::AbstractArray,
 )
     _check_running(w)
-    r = _record(w, model, key)
-    _check_values_size(model, key, values, size(r.dataset))
-    r.dataset[axes(values)...] = _convert_values(_DTYPES[r.dtype][1], values)
-    fill!(r.written, true)
+    record = _record(w, model_name, key)
+    _check_values_size(model_name, key, values, size(record.h5_dataset))
+    record.h5_dataset[axes(values)...] =
+        _convert_values(_DTYPES[record.dtype][1], values)
+    fill!(record.written, true)
     return
 end
 
 """
-    write_table!(w, model, table_name, columns::NamedTuple)
+    write_table!(w, model_name, table_name, columns::NamedTuple)
 
 Write one vector per column of the table. Every vector has the table `length`.
 """
 function write_table!(
     w::OutputsWriter,
-    model::AbstractString,
+    model_name::AbstractString,
     table_name::AbstractString,
     columns::NamedTuple,
 )
     _check_running(w)
-    t = _find_table(w.metadata, model, table_name)
-    if Set(keys(columns)) != Set(Symbol(c.name) for c in t.columns)
+    table = _find_table(w.document, model_name, table_name)
+    if Set(keys(columns)) != Set(Symbol(column.name) for column in table.columns)
         throw(
             ArgumentError(
-                "model $model: table $table_name columns $(collect(keys(columns))) differ from the metadata",
+                "model $model_name: table $table_name columns $(collect(keys(columns))) differ from the document",
             ),
         )
     end
-    for c in t.columns
-        v = columns[Symbol(c.name)]
-        if length(v) != t.length
+    for column in table.columns
+        v = columns[Symbol(column.name)]
+        if length(v) != table.length
             throw(
                 ArgumentError(
-                    "model $model: table $table_name column $(c.name) has length $(length(v)), expected $(t.length)",
+                    "model $model_name: table $table_name column $(column.name) has length $(length(v)), expected $(table.length)",
                 ),
             )
         end
-        w.file[string(t.group, "/", c.name)][:] =
-            _convert_values(_column_storage_type(string(c.dtype)), v)
+        w.file[string(table.group, "/", column.name)][:] =
+            _convert_values(_column_storage_type(string(column.dtype)), v)
     end
-    push!(w.tables_written, (String(model), String(table_name)))
+    push!(w.tables_written, (String(model_name), String(table_name)))
     return
 end
 
@@ -439,12 +454,12 @@ end
 # Names of the declared datasets and tables that no write call filled completely.
 function _unwritten(w::OutputsWriter)
     missing_ = String[]
-    for ((model, entry_type, component_type, meta), r) in w.datasets
+    for ((model_name, entry_type, component_type, meta), record) in w.datasets
         name = dataset_name(entry_type, component_type, meta)
-        if iszero(r.exec_dim) && !only(r.written)
-            push!(missing_, "model $model: dataset $name was never written")
-        elseif !all(r.written)
-            executions = findall(!, r.written)
+        if iszero(record.exec_dim) && !only(record.written)
+            push!(missing_, "model $model_name: dataset $name was never written")
+        elseif !all(record.written)
+            executions = findall(!, record.written)
             if length(executions) <= 5
                 summary = string(executions)
             else
@@ -452,14 +467,14 @@ function _unwritten(w::OutputsWriter)
             end
             push!(
                 missing_,
-                "model $model: dataset $name lacks executions $summary",
+                "model $model_name: dataset $name lacks executions $summary",
             )
         end
     end
-    for entry in w.metadata.models, t in _model_tables(entry)
-        model = entry.name
-        if !((model, t.name) in w.tables_written)
-            push!(missing_, "model $model: table $(t.name) was never written")
+    for model in w.document.models, table in _model_tables(model)
+        model_name = model.name
+        if !((model_name, table.name) in w.tables_written)
+            push!(missing_, "model $model_name: table $(table.name) was never written")
         end
     end
     return sort!(missing_)
@@ -471,13 +486,13 @@ end
 Close the HDF5 file, then rewrite `outputs.json` with `status` and the current time.
 `status` is `SUCCESSFULLY_FINALIZED` or `FAILED`. The writer must have status `RUNNING`.
 `SUCCESSFULLY_FINALIZED` throws `ArgumentError` when a declared dataset or table was never
-written, an execution of a dataset was never appended, or a declared system bundle
+written, an execution of a dataset was never written, or a declared system bundle
 directory does not exist. The writer keeps status `RUNNING`
 then, and `finalize!` with `FAILED` stays possible.
 When the JSON write fails, the writer keeps status `RUNNING` and `finalize!` can run again.
 """
 function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
-    if string(w.metadata.status) != string(Simulation.RunStatus.RUNNING)
+    if string(w.document.status) != string(Simulation.RunStatus.RUNNING)
         throw(ArgumentError("outputs writer for $(w.dir) is finalized"))
     end
     if !(
@@ -494,7 +509,7 @@ function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
     end
     if status == Simulation.RunStatus.SUCCESSFULLY_FINALIZED
         unwritten = _unwritten(w)
-        for (uuid, name) in _systems(w.metadata)
+        for (uuid, name) in _systems(w.document)
             if !isdir(joinpath(w.dir, name))
                 push!(unwritten, "system $uuid: bundle directory $name does not exist")
             end
@@ -508,16 +523,16 @@ function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
             )
         end
     end
-    for r in values(w.datasets)
-        close(r.dataset)
+    for record in values(w.datasets)
+        close(record.h5_dataset)
     end
     if isopen(w.file)
         close(w.file)
     end
     stamp = TimeZones.now(TimeZones.tz"UTC")
-    m = with_status(w.metadata, string(status); created_at = stamp)
-    write_outputs_metadata(joinpath(w.dir, "outputs.json"), m)
-    w.metadata = m
+    doc = with_status(w.document, string(status); created_at = stamp)
+    write_outputs_document(joinpath(w.dir, "outputs.json"), doc)
+    w.document = doc
     return
 end
 
@@ -528,7 +543,7 @@ Mark the run `FAILED` when possible and always close the file. Never throws. Pub
 producers of outputs call it when a write fails.
 """
 function abort!(w::OutputsWriter)
-    if string(w.metadata.status) == string(Simulation.RunStatus.RUNNING)
+    if string(w.document.status) == string(Simulation.RunStatus.RUNNING)
         try
             finalize!(w; status = Simulation.RunStatus.FAILED)
         catch
@@ -544,35 +559,35 @@ function abort!(w::OutputsWriter)
 end
 
 """
-    write_outputs(dir, m; axis_data, values, tables, systems)
+    write_outputs(dir, doc; axis_data, values, tables, systems)
 
-One-shot writer. `values` is keyed by `(model, entry_type, component_type, meta)` and
-`tables` by `(model, table_name)`. `systems` maps a system uuid to an object that
+One-shot writer. `values` is keyed by `(model_name, entry_type, component_type, meta)` and
+`tables` by `(model_name, table_name)`. `systems` maps a system uuid to an object that
 implements `write_system_bundle(obj, dir)`.
 """
 function write_outputs(
     dir::AbstractString,
-    m::InfrastructureOutputSchemas.OutputsDocument;
+    doc::InfrastructureOutputSchemas.OutputsDocument;
     axis_data::Dict{Tuple{String, String}, AxisData},
     values::AbstractDict,
     tables::AbstractDict,
     systems::AbstractDict = Dict{String, Any}(),
 )
     for uuid in keys(systems)
-        if !haskey(_systems(m), uuid)
-            throw(ArgumentError("system $uuid is not in the metadata systems"))
+        if !haskey(_systems(doc), uuid)
+            throw(ArgumentError("system $uuid is not in the document systems"))
         end
     end
-    w = open_outputs_writer(dir, m; axis_data = axis_data)
+    w = open_outputs_writer(dir, doc; axis_data = axis_data)
     try
-        for ((model, entry_type, component_type, meta), v) in values
-            write_values!(w, model, (entry_type, component_type, meta), v)
+        for ((model_name, entry_type, component_type, meta), v) in values
+            write_values!(w, model_name, (entry_type, component_type, meta), v)
         end
-        for ((model, table), cols) in tables
-            write_table!(w, model, table, cols)
+        for ((model_name, table_name), cols) in tables
+            write_table!(w, model_name, table_name, cols)
         end
         for (uuid, obj) in systems
-            bundle = joinpath(dir, _systems(m)[uuid])
+            bundle = joinpath(dir, _systems(doc)[uuid])
             mkpath(bundle)
             write_system_bundle(obj, bundle)
         end

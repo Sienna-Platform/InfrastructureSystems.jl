@@ -22,8 +22,8 @@ end
 @testset "outputs reader: read back what the writer wrote" begin
     m = _single_meta()
     vals = rand(48, 76, 7)
-    a = IS.open_outputs(_written_single_dir(vals))
-    @test string(IS.get_metadata(a).status) == "SUCCESSFULLY_FINALIZED"
+    a = IS.open_outputs_reader(_written_single_dir(vals))
+    @test string(IS.get_document(a).status) == "SUCCESSFULLY_FINALIZED"
     @test IS.list_models(a) == ["model"]
     @test _KEY in IS.list_datasets(a, "model")
     @test IS.list_tables(a, "model") == ["optimizer_stats"]
@@ -54,7 +54,7 @@ end
 end
 
 @testset "outputs reader: missing things" begin
-    a = IS.open_outputs(_written_single_dir())
+    a = IS.open_outputs_reader(_written_single_dir())
     @test_throws ArgumentError IS.read_dataset(a, "model", "Nope", "ThermalStandard")
     @test_throws r"model.*Nope" IS.read_dataset(a, "model", "Nope", "ThermalStandard")
     @test_throws ArgumentError IS.read_dataset(a, "ZZ", "ActivePowerVariable",
@@ -64,11 +64,11 @@ end
     @test_throws ArgumentError IS.list_datasets(a, "ZZ")
 end
 
-@testset "outputs reader: open_outputs validates the directory" begin
+@testset "outputs reader: open_outputs_reader validates the directory" begin
     dir = mktempdir()
     cp(_SINGLE_JSON, joinpath(dir, "outputs.json"))
-    @test_throws ArgumentError IS.open_outputs(dir)
-    @test_throws ArgumentError IS.open_outputs(mktempdir())
+    @test_throws ArgumentError IS.open_outputs_reader(dir)
+    @test_throws ArgumentError IS.open_outputs_reader(mktempdir())
 end
 
 function _with_extras(m::InfrastructureOutputSchemas.OutputsDocument)
@@ -116,7 +116,7 @@ end
             Dict(("model", "OnStatus", "ThermalStandard", "") => flags)),
         tables = merge(_all_tables(m),
             Dict(("model", "notes") => (execution = Int64[1, 2, 3], note = notes))))
-    a = IS.open_outputs(dir)
+    a = IS.open_outputs_reader(dir)
     arr, _ = IS.read_dataset(a, "model", "OnStatus", "ThermalStandard")
     @test eltype(arr) == Bool
     @test arr == flags
@@ -126,9 +126,9 @@ end
     @test t.execution == [1, 2, 3]
 end
 
-@testset "outputs reader: OutputArtifact is a plain struct" begin
-    @test !(IS.OutputArtifact <: IS.Outputs)
-    @test supertype(IS.OutputArtifact) === Any
+@testset "outputs reader: OutputsReader is a plain struct" begin
+    @test !(IS.OutputsReader <: IS.Outputs)
+    @test supertype(IS.OutputsReader) === Any
 end
 
 @testset "outputs reader: RUNNING status warns" begin
@@ -139,22 +139,22 @@ end
         mkpath(joinpath(dir, name))
     end
     flush(w)
-    @test_logs (:warn, r"status RUNNING") IS.open_outputs(dir)
+    @test_logs (:warn, r"status RUNNING") IS.open_outputs_reader(dir)
     IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-    @test_logs IS.open_outputs(dir)
+    @test_logs IS.open_outputs_reader(dir)
 end
 
 @testset "outputs reader: a missing system bundle directory is an error" begin
     dir = _written_single_dir()
-    uuid, name = first(IS._systems(IS.read_outputs_metadata(joinpath(dir, "outputs.json"))))
+    uuid, name = first(IS._systems(IS.read_outputs_document(joinpath(dir, "outputs.json"))))
     rm(joinpath(dir, name); recursive = true)
-    @test_throws ArgumentError IS.open_outputs(dir)
-    @test_throws "bundle directory \"$name\"" IS.open_outputs(dir)
+    @test_throws ArgumentError IS.open_outputs_reader(dir)
+    @test_throws "bundle directory \"$name\"" IS.open_outputs_reader(dir)
 end
 
-@testset "outputs reader: stored shape and dtype must match the metadata" begin
+@testset "outputs reader: stored shape and dtype must match the document" begin
     dir = _written_single_dir()
-    a = IS.open_outputs(dir)
+    a = IS.open_outputs_reader(dir)
     path = "/model/datasets/OnVariable__ThermalStandard"
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r+") do f
         HDF5.delete_object(f, path)

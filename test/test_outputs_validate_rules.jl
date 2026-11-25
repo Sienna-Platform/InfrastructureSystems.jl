@@ -1,13 +1,13 @@
-# Tests that `validate_metadata` and `read_outputs_metadata` reject each violation of the
+# Tests that `validate_document` and `read_outputs_document` reject each violation of the
 # outputs schema and of the cross-reference rules of IS.
 
-_sim_meta() = IS.read_outputs_metadata(outputs_fixture("simulation"))
-_pf_meta() = IS.read_outputs_metadata(outputs_fixture("power_flow"))
+_sim_meta() = IS.read_outputs_document(outputs_fixture("simulation"))
+_pf_meta() = IS.read_outputs_document(outputs_fixture("power_flow"))
 
 # A cross-reference rule of IS rejects `m`.
 function _expect_invalid(m::InfrastructureOutputSchemas.OutputsDocument, rx::Regex)
-    @test_throws ArgumentError IS.validate_metadata(m)
-    @test_throws rx IS.validate_metadata(m)
+    @test_throws ArgumentError IS.validate_document(m)
+    @test_throws rx IS.validate_document(m)
     return
 end
 
@@ -36,7 +36,7 @@ _raw_ds(raw) = _raw_uc(raw)["datasets"][1]
 _raw_axis(raw, kind) = first(a for a in _raw_uc(raw)["axes"] if a["kind"] == kind)
 _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
 
-@testset "validate_metadata: dataset field rules" begin
+@testset "validate_document: dataset field rules" begin
     ds(m) = outputs_model(m, "UC").datasets[1]
     path =
         outputs_fixture_with(
@@ -77,7 +77,7 @@ _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
             _sim_meta(), "UC", 1,
             _with(ds(_sim_meta()); dtype = _dtype(dtype), fill_value = fill),
         )
-        @test IS.validate_metadata(m) === nothing
+        @test IS.validate_document(m) === nothing
     end
     d = ds(_sim_meta())
     for (label, chunks) in (("chunk of zero", [1, 0, 48]), ("negative chunk", [1, 76, -3]))
@@ -127,7 +127,7 @@ _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
     )
 end
 
-@testset "validate_metadata: axis rules" begin
+@testset "validate_document: axis rules" begin
     ax(m, key) = outputs_axis(outputs_model(m, "UC"), key)
     function set_axis!(m, key, a)
         set_outputs_axis!(outputs_model(m, "UC"), key, a)
@@ -258,7 +258,7 @@ end
     expect_schema_invalid(pf, r"/labels: uniqueItems")
 end
 
-@testset "validate_metadata: model and document rules" begin
+@testset "validate_document: model and document rules" begin
     entry(m) = outputs_model(m, "UC")
     for p in (0.0, -100.0)
         expect_schema_invalid(
@@ -297,7 +297,7 @@ end
     end
     for ok in ("a", 1, 2.5, true)
         s = settings(Dict{String, Any}("x" => ok))
-        @test IS.validate_metadata(_set_entry(_sim_meta(), "UC"; settings = s)) === nothing
+        @test IS.validate_document(_set_entry(_sim_meta(), "UC"; settings = s)) === nothing
     end
     for bad in (
         "yesterday", "2026-11-03T18:00:00", "2026-11-03 18:00:00Z",
@@ -312,7 +312,7 @@ end
         "2026-11-03T18:00:00-08:00",
     )
         path = outputs_fixture_with(raw -> (raw["created_at"] = ok), "simulation")
-        @test IS.validate_metadata(IS.read_outputs_metadata(path)) === nothing
+        @test IS.validate_document(IS.read_outputs_document(path)) === nothing
     end
     m = _sim_meta()
     uuid = first(keys(IS._systems(m)))
@@ -333,7 +333,7 @@ end
     )
 end
 
-@testset "validate_metadata: simulation and table rules" begin
+@testset "validate_document: simulation and table rules" begin
     sim(m) = IS.get_simulation(m)
     with_sim(; kw...) = _with(_sim_meta(); simulation = _with(sim(_sim_meta()); kw...))
     expect_schema_invalid(with_sim(; step_resolution = "1d"), r"/step_resolution: pattern")
@@ -357,7 +357,7 @@ end
     sim_obj = JSON.parse(read(outputs_fixture("simulation"), String))["simulation"]
     path = outputs_fixture_with(raw -> (raw["simulation"] = sim_obj), "single")
     expect_schema_invalid(path, r": not")
-    single = IS.read_outputs_metadata(outputs_fixture("single"))
+    single = IS.read_outputs_document(outputs_fixture("single"))
     expect_schema_invalid(_with(single; simulation = sim(_sim_meta())), r": not")
 
     table(m) = outputs_model(m, "UC").tables[1]
@@ -399,7 +399,7 @@ end
     expect_schema_invalid(path, r"/units: const")
 end
 
-@testset "read_outputs_metadata: timestamps are naive" begin
+@testset "read_outputs_document: timestamps are naive" begin
     for suffix in ("Z", "+02:00", "-05:00")
         path = outputs_fixture_with("simulation") do raw
             _raw_axis(raw, "execution")["initial_timestamp"] = "2024-01-01T00:00:00$suffix"
@@ -413,8 +413,8 @@ end
     path = outputs_fixture_with("simulation") do raw
         _raw_axis(raw, "execution")["initial_timestamp"] = "2024-01-01T00:00:00.250"
     end
-    m = IS.read_outputs_metadata(path)
-    @test IS.validate_metadata(m) === nothing
+    m = IS.read_outputs_document(path)
+    @test IS.validate_document(m) === nothing
     @test DateTime(outputs_axis(outputs_model(m, "UC"), "execution").initial_timestamp) ==
           DateTime(2024, 1, 1, 0, 0, 0, 250)
 end
@@ -436,7 +436,7 @@ end
     end
 end
 
-@testset "validate_metadata: the schema rejects each duration that IS rejects" begin
+@testset "validate_document: the schema rejects each duration that IS rejects" begin
     function with_axis(model, key; kw...)
         m = _sim_meta()
         entry = outputs_model(m, model)
@@ -455,7 +455,7 @@ end
         ("step_resolution", "P000000001D", with_step),
     )
     for (field, ok, build) in fields
-        @test IS.validate_metadata(build(ok)) === nothing
+        @test IS.validate_document(build(ok)) === nothing
         for bad in (
             "", "P", "PT", "P1DT", "1h", "P-1D", "PT1.5H", "P1W", "P1M", "P1Y",
             "PT9999999999M", "PT0000000001M", "PT30S", "PT1M30S", "P1DT\n", "PT1H\n",
@@ -466,7 +466,7 @@ end
     end
 end
 
-@testset "validate_metadata: model, axis, table, and meta names are path segments" begin
+@testset "validate_document: model, axis, table, and meta names are path segments" begin
     for bad in ("", "a/b")
         m = _sim_meta()
         i = outputs_model_index(m, "EM")
@@ -495,7 +495,7 @@ end
     expect_schema_invalid(m, r"/meta: not")
 end
 
-@testset "outputs metadata: simulation presence follows the document" begin
+@testset "outputs document: simulation presence follows the document" begin
     m = _sim_meta()
     @test IS.has_simulation(m)
     gone = _with(m; simulation = OpenAPI.Runtime.ABSENT)
@@ -509,9 +509,9 @@ end
     expect_schema_invalid(path, r"/simulation/present: schema")
 end
 
-@testset "validate_metadata: supports_realized_values_post_calculation" begin
+@testset "validate_document: supports_realized_values_post_calculation" begin
     @test outputs_model(_sim_meta(), "UC").supports_realized_values_post_calculation
-    @test IS.validate_metadata(_sim_meta()) === nothing
+    @test IS.validate_document(_sim_meta()) === nothing
 
     m = _sim_meta()
     delete_outputs_axis!(outputs_model(m, "UC"), "horizon")
@@ -539,7 +539,7 @@ end
     expect_schema_invalid(path, r"/models/0: required")
 end
 
-@testset "validate_metadata: axis names bind to axis kinds" begin
+@testset "validate_document: axis names bind to axis kinds" begin
     m = _sim_meta()
     push!(
         outputs_model(m, "UC").axes,
@@ -565,8 +565,8 @@ end
     end
 end
 
-@testset "validate_metadata: one field changed in a valid document" begin
-    single() = IS.read_outputs_metadata(outputs_fixture("single"))
+@testset "validate_document: one field changed in a valid document" begin
+    single() = IS.read_outputs_document(outputs_fixture("single"))
     edit_dataset(m, model, i; kw...) =
         _set_dataset!(m, model, i, _with(outputs_model(m, model).datasets[i]; kw...))
 
@@ -614,8 +614,8 @@ end
     expect_schema_invalid(m, r"/axes: contains")
 end
 
-@testset "validate_metadata: a chunk is not longer than its axis" begin
-    single() = IS.read_outputs_metadata(outputs_fixture("single"))
+@testset "validate_document: a chunk is not longer than its axis" begin
+    single() = IS.read_outputs_document(outputs_fixture("single"))
     m = single()
     d = outputs_model(m, "model").datasets[1]
     _set_dataset!(m, "model", 1, _with(d; layout = _layout([2, 76, 48], d.layout.filters)))
@@ -623,17 +623,17 @@ end
         m,
         r"model model: dataset .* chunk 2 on axis \"execution\".* axis length 1",
     )
-    @test IS.validate_metadata(single()) === nothing
+    @test IS.validate_document(single()) === nothing
     m = single()
     entry = outputs_model(m, "model")
     set_outputs_axis!(
         entry, "ThermalStandard", _with(outputs_axis(entry, "ThermalStandard"); length = 0),
     )
     @test outputs_model(m, "model").datasets[1].layout.chunks == [1, 76, 48]
-    @test IS.validate_metadata(m) === nothing
+    @test IS.validate_document(m) === nothing
 end
 
-@testset "validate_metadata: table and column names are unique" begin
+@testset "validate_document: table and column names are unique" begin
     m = _sim_meta()
     t = outputs_model(m, "UC").tables[1]
     cols = copy(t.columns)
@@ -651,11 +651,11 @@ end
     )
     m = _sim_meta()
     @test outputs_model(m, "UC").tables[1].name == outputs_model(m, "ED").tables[1].name
-    @test IS.validate_metadata(m) === nothing
+    @test IS.validate_document(m) === nothing
 end
 
-@testset "validate_metadata: two datasets do not share a path" begin
-    single() = IS.read_outputs_metadata(outputs_fixture("single"))
+@testset "validate_document: two datasets do not share a path" begin
+    single() = IS.read_outputs_document(outputs_fixture("single"))
     m = single()
     d = outputs_model(m, "model").datasets[1]
     other = _with(
@@ -676,10 +676,10 @@ end
         outputs_model(m, "model").datasets,
         _with(other; meta = "Other", path = "/model/datasets/ActivePowerVariable__Other"),
     )
-    @test IS.validate_metadata(m) === nothing
+    @test IS.validate_document(m) === nothing
 end
 
-@testset "validate_metadata: realized values with extreme horizon durations" begin
+@testset "validate_document: realized values with extreme horizon durations" begin
     function with_uc!(m; interval, resolution, horizon_count = 48)
         uc = outputs_model(m, "UC")
         set_outputs_axis!(
@@ -704,7 +704,7 @@ end
         _sim_meta(); interval = "P999999999D", resolution = "P999999999D",
         horizon_count = 107,
     )
-    @test IS.validate_metadata(m) === nothing
+    @test IS.validate_document(m) === nothing
     @test_throws OverflowError IS.get_horizon(
         outputs_axis(outputs_model(m, "UC"), "horizon"),
     )
@@ -716,7 +716,7 @@ end
           Dates.Millisecond(Dates.Day(999999999))
 end
 
-@testset "validate_metadata: bundle directory names" begin
+@testset "validate_document: bundle directory names" begin
     second = "00000000-0000-0000-0000-000000000001"
     m = _sim_meta()
     uuid, name = first(IS._systems(m))
@@ -729,7 +729,7 @@ end
     )
     m = _sim_meta()
     IS._systems(m)[second] = "other-bundle"
-    @test IS.validate_metadata(m) === nothing
+    @test IS.validate_document(m) === nothing
     for bad in ("C:foo", "c:")
         m = _sim_meta()
         IS._systems(m)[uuid] = bad
@@ -743,7 +743,7 @@ end
     expect_schema_invalid(m, Regex("/$uuid: pattern"))
     m = _sim_meta()
     IS._systems(m)[uuid] = "ab:c"
-    @test IS.validate_metadata(m) === nothing
+    @test IS.validate_document(m) === nothing
     for bad in ("outputs.json", "outputs.h5", "OUTPUTS.JSON")
         m = _sim_meta()
         IS._systems(m)[uuid] = bad
@@ -756,7 +756,7 @@ end
     end
     m = _sim_meta()
     IS._systems(m)[uuid] = "outputs"
-    @test IS.validate_metadata(m) === nothing
+    @test IS.validate_document(m) === nothing
 end
 
 @testset "a document in the two-value form is rejected" begin

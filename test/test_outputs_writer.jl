@@ -7,7 +7,7 @@ const _KEY = ("ActivePowerVariable", "ThermalStandard", "")
 
 # The fixture holds one execution. The writer tests need several.
 function _single_meta()
-    m = IS.read_outputs_metadata(_SINGLE_JSON)
+    m = IS.read_outputs_document(_SINGLE_JSON)
     entry = outputs_model(m, "model")
     set_outputs_axis!(
         entry, "execution", _with(outputs_axis(entry, "execution"); count = 7),
@@ -66,7 +66,7 @@ end
 function simulation_axis_data(m)
     d = Dict{Tuple{String, String}, IS.AxisData}()
     for model in m.models, ax in model.axes
-        _add_fake_axis!(d, model.name, IS.axis_key(ax), ax.value)
+        _add_fake_axis!(d, model.name, IS.axis_name(ax), ax.value)
     end
     return d
 end
@@ -134,7 +134,7 @@ _bundle_systems(m) = Dict(uuid => _MockSystem() for uuid in keys(IS._systems(m))
         @test size(f["/model/axes/VariableReserve__ThermalStandard/ids"]) == (2, 152)
         @test length(f["/model/axes/execution/timestamps"]) == 7
     end
-    m2 = IS.read_outputs_metadata(joinpath(dir, "outputs.json"))
+    m2 = IS.read_outputs_document(joinpath(dir, "outputs.json"))
     @test string(m2.status) == "SUCCESSFULLY_FINALIZED"
 end
 
@@ -142,7 +142,7 @@ end
     m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
-    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) ==
+    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) ==
           "RUNNING"
     IS.write_execution!(w, "model", _KEY, fill(2.0, 48, 76), 3)
     IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
@@ -195,7 +195,7 @@ end
     @test_throws ArgumentError IS.write_system_bundle(1, mktempdir())
 end
 
-@testset "outputs writer: axis data keys are exact" begin
+@testset "outputs writer: axis data names are exact" begin
     m = _single_meta()
     ad = simulation_axis_data(m)
     ad[("model", "horizon")] =
@@ -252,7 +252,7 @@ end
 end
 
 @testset "outputs writer: axis timestamps follow the declared step" begin
-    sim = IS.read_outputs_metadata(outputs_fixture("simulation"))
+    sim = IS.read_outputs_document(outputs_fixture("simulation"))
     for (m, model, key, i, expected) in (
         (_single_meta(), "model", "execution", 3, DateTime(2024, 1, 3)),
         (sim, "EM", "time", 2, DateTime(2024, 1, 1, 0, 5)),
@@ -283,7 +283,7 @@ end
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = simulation_axis_data(m), values = _all_values(m),
         tables = _all_tables(m), systems = _bundle_systems(m))
-    a = IS.open_outputs(dir)
+    a = IS.open_outputs_reader(dir)
     @test size(IS.read_axis_data(a, "model", "ThermalStandard").ids) == (1, 0)
     @test size(IS.read_axis_data(a, "model", "ThermalStandard").labels) == (1, 0)
 end
@@ -308,7 +308,7 @@ end
     dir = mktempdir()
     @test_throws "bundle boom" IS.write_outputs(dir, m; axis_data = ad, values = vals,
         tables = tbls, systems = Dict(uuid => _FailingSystem()))
-    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) == "FAILED"
+    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) == "FAILED"
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r") do f
         @test haskey(f, "/model/datasets")
     end
@@ -358,7 +358,7 @@ end
     @test_throws ArgumentError IS.finalize!(w; status = IS.Simulation.RunStatus.RUNNING)
     @test_throws ArgumentError IS.finalize!(
         w; status = IS.Simulation.RunStatus.INITIALIZED)
-    @test string(w.metadata.status) == "RUNNING"
+    @test string(w.document.status) == "RUNNING"
     for (k, v) in _all_values(m)
         IS.write_values!(w, k[1], k[2:end], v)
     end
@@ -369,7 +369,7 @@ end
         mkpath(joinpath(dir, name))
     end
     IS.finalize!(w; status = IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED)
-    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) ==
+    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) ==
           "SUCCESSFULLY_FINALIZED"
 end
 
@@ -382,7 +382,7 @@ end
     @test_throws ArgumentError IS.open_outputs_writer(dir, m; axis_data = ad)
     @test_throws joinpath(dir, "outputs.json") IS.open_outputs_writer(
         dir, m; axis_data = ad)
-    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) ==
+    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) ==
           "SUCCESSFULLY_FINALIZED"
     rm(joinpath(dir, "outputs.json"))
     @test_throws ArgumentError IS.open_outputs_writer(dir, m; axis_data = ad)
@@ -418,8 +418,8 @@ end
         @test sort!(readdir(dir)) == sort!(
             ["outputs.h5", "outputs.json", collect(values(IS._systems(m)))...],
         )
-        @test string(IS.read_outputs_metadata(json).status) == "RUNNING"
-        @test string(w.metadata.status) == "RUNNING"
+        @test string(IS.read_outputs_document(json).status) == "RUNNING"
+        @test string(w.document.status) == "RUNNING"
         @test_throws ArgumentError IS.write_execution!(
             w,
             "model",
@@ -428,14 +428,14 @@ end
             1,
         )
         IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-        @test string(IS.read_outputs_metadata(json).status) == "FAILED"
-        @test string(w.metadata.status) == "FAILED"
+        @test string(IS.read_outputs_document(json).status) == "FAILED"
+        @test string(w.document.status) == "FAILED"
         @test !isopen(w.file)
         # The manifest is replaced, not rewritten in place.
         @test stat(json).inode != inode
     else
         IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-        @test string(IS.read_outputs_metadata(json).status) == "FAILED"
+        @test string(IS.read_outputs_document(json).status) == "FAILED"
     end
 end
 
@@ -449,7 +449,7 @@ end
     @test_throws "never written" IS.finalize!(w; status = success)
     @test_throws "table optimizer_stats was never written" IS.finalize!(
         w; status = success)
-    @test string(w.metadata.status) == "RUNNING" && isopen(w.file)
+    @test string(w.document.status) == "RUNNING" && isopen(w.file)
     # a failed attempt leaves the writer usable
     for (k, v) in _all_values(m)
         if k[2:end] != _KEY
@@ -459,7 +459,7 @@ end
     for ((model, name), cols) in _all_tables(m)
         IS.write_table!(w, model, name, cols)
     end
-    # a dataset with an execution that was never appended
+    # a dataset with an execution that was never written
     for i in 1:6
         IS.write_execution!(w, "model", _KEY, fill(1.0, 48, 76), i)
     end
@@ -467,12 +467,12 @@ end
         w; status = success)
     IS.write_execution!(w, "model", _KEY, fill(1.0, 48, 76), 7)
     @test_throws "bundle directory" IS.finalize!(w; status = success)
-    @test string(w.metadata.status) == "RUNNING" && isopen(w.file)
+    @test string(w.document.status) == "RUNNING" && isopen(w.file)
     for name in values(IS._systems(m))
         mkpath(joinpath(dir, name))
     end
     IS.finalize!(w; status = success)
-    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) ==
+    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) ==
           "SUCCESSFULLY_FINALIZED"
 end
 
@@ -481,7 +481,7 @@ end
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) == "FAILED"
+    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) == "FAILED"
 end
 
 @testset "outputs writer: write_outputs with a missing dataset fails the run" begin
@@ -489,7 +489,7 @@ end
     dir = mktempdir()
     @test_throws "never written" IS.write_outputs(dir, m;
         axis_data = simulation_axis_data(m), values = Dict(), tables = Dict())
-    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) == "FAILED"
+    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) == "FAILED"
 end
 
 @testset "outputs writer: abort! marks FAILED and closes the file" begin
@@ -498,6 +498,6 @@ end
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     @test IS.abort!(w) === nothing
     @test !isopen(w.file)
-    @test string(IS.read_outputs_metadata(joinpath(dir, "outputs.json")).status) == "FAILED"
+    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) == "FAILED"
     @test IS.OUTPUTS_SCHEMA_VERSION == "0.1.0"
 end

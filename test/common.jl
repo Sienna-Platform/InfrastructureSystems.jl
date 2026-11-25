@@ -168,21 +168,21 @@ function create_forecast_key_fixture(
 end
 
 function outputs_model_index(
-    m::InfrastructureOutputSchemas.OutputsDocument,
+    doc::InfrastructureOutputSchemas.OutputsDocument,
     name::AbstractString,
 )
-    return only(findall(e -> e.name == name, m.models))
+    return only(findall(model -> model.name == name, doc.models))
 end
 
-outputs_model(m::InfrastructureOutputSchemas.OutputsDocument, name::AbstractString) =
-    IS._model_entry(m, name)
+outputs_model(doc::InfrastructureOutputSchemas.OutputsDocument, name::AbstractString) =
+    IS._find_model(doc, name)
 
-function outputs_axis_index(entry::InfrastructureOutputSchemas.Model, name::AbstractString)
-    return only(findall(a -> IS.axis_key(a) == name, entry.axes))
+function outputs_axis_index(model::InfrastructureOutputSchemas.Model, name::AbstractString)
+    return only(findall(a -> IS.axis_name(a) == name, model.axes))
 end
 
-outputs_axis(entry::InfrastructureOutputSchemas.Model, name::AbstractString) =
-    IS._find_axis(entry, name)
+outputs_axis(model::InfrastructureOutputSchemas.Model, name::AbstractString) =
+    IS._find_axis(model, name)
 
 function _with(x; kw...)
     T = typeof(x)
@@ -192,20 +192,20 @@ function _with(x; kw...)
 end
 
 function set_outputs_axis!(
-    entry::InfrastructureOutputSchemas.Model,
+    model::InfrastructureOutputSchemas.Model,
     name::AbstractString,
     axis,
 )
-    entry.axes[outputs_axis_index(entry, name)] = InfrastructureOutputSchemas.Axis(axis)
-    return entry
+    model.axes[outputs_axis_index(model, name)] = InfrastructureOutputSchemas.Axis(axis)
+    return model
 end
 
 function delete_outputs_axis!(
-    entry::InfrastructureOutputSchemas.Model,
+    model::InfrastructureOutputSchemas.Model,
     name::AbstractString,
 )
-    deleteat!(entry.axes, outputs_axis_index(entry, name))
-    return entry
+    deleteat!(model.axes, outputs_axis_index(model, name))
+    return model
 end
 
 outputs_fixture(kind::AbstractString) = joinpath(DATA_DIR, "outputs", kind, "outputs.json")
@@ -219,18 +219,18 @@ function outputs_fixture_with(f!, kind::AbstractString)
     return path
 end
 
-# The schema rejects the document `m`, at the rule that `rx` names.
-function expect_schema_invalid(m::InfrastructureOutputSchemas.OutputsDocument, rx::Regex)
-    @test_throws InfrastructureOutputSchemas.SchemaValidationError IS.validate_metadata(m)
-    @test_throws rx IS.validate_metadata(m)
+# The schema rejects the document `doc`, at the rule that `rx` names.
+function expect_schema_invalid(doc::InfrastructureOutputSchemas.OutputsDocument, rx::Regex)
+    @test_throws InfrastructureOutputSchemas.SchemaValidationError IS.validate_document(doc)
+    @test_throws rx IS.validate_document(doc)
     return
 end
 
 # The schema rejects the JSON file at `path` when it is read, at the rule that `rx` names.
 function expect_schema_invalid(path::AbstractString, rx::Regex)
-    @test_throws InfrastructureOutputSchemas.SchemaValidationError IS.read_outputs_metadata(
+    @test_throws InfrastructureOutputSchemas.SchemaValidationError IS.read_outputs_document(
         path,
     )
-    @test_throws rx IS.read_outputs_metadata(path)
+    @test_throws rx IS.read_outputs_document(path)
     return
 end

@@ -6,8 +6,8 @@ _column(t) =
         has_ids = true,
     )
 
-@testset "axis keys derive from content" begin
-    @test IS.axis_key(
+@testset "axis names derive from content" begin
+    @test IS.axis_name(
         InfrastructureOutputSchemas.ComponentAxis(;
             kind = "component",
             columns = [_column("ThermalStandard")],
@@ -15,7 +15,7 @@ _column(t) =
             group = "/UC/axes/ThermalStandard",
         ),
     ) == "ThermalStandard"
-    @test IS.axis_key(
+    @test IS.axis_name(
         InfrastructureOutputSchemas.ComponentAxis(;
             kind = "component",
             columns = [_column("VariableReserve"), _column("ThermalStandard")],
@@ -23,7 +23,7 @@ _column(t) =
             group = "/UC/axes/VariableReserve__ThermalStandard",
         ),
     ) == "VariableReserve__ThermalStandard"
-    @test IS.axis_key(
+    @test IS.axis_name(
         InfrastructureOutputSchemas.ComponentAxis(;
             kind = "component",
             columns = [_column("ACBranch")],
@@ -43,8 +43,8 @@ _column(t) =
         labels = ["a", "b"],
     )
     @test IS.axis_length(label) == 2
-    @test IS.axis_key(label) == "winding"
-    @test IS.axis_key(InfrastructureOutputSchemas.Axis(label)) == "winding"
+    @test IS.axis_name(label) == "winding"
+    @test IS.axis_name(InfrastructureOutputSchemas.Axis(label)) == "winding"
 end
 
 _label_axis(name) =
@@ -52,31 +52,31 @@ _label_axis(name) =
 
 @testset "the outputs fixtures validate" begin
     for name in ("simulation", "single")
-        m = IS.read_outputs_metadata(outputs_fixture(name))
-        @test IS.validate_metadata(m) === nothing
+        m = IS.read_outputs_document(outputs_fixture(name))
+        @test IS.validate_document(m) === nothing
     end
 end
 
 @testset "a dataset axis name must match an axis" begin
-    m = IS.read_outputs_metadata(outputs_fixture("simulation"))
+    m = IS.read_outputs_document(outputs_fixture("simulation"))
     for d in outputs_model(m, "UC").datasets
         replace!(d.axes, "ThermalStandard" => "therm")
     end
-    @test_throws ArgumentError IS.validate_metadata(m)
-    @test_throws r"UC.*axis \"therm\" absent" IS.validate_metadata(m)
+    @test_throws ArgumentError IS.validate_document(m)
+    @test_throws r"UC.*axis \"therm\" absent" IS.validate_document(m)
 end
 
 @testset "model and axis names are unique" begin
-    base() = IS.read_outputs_metadata(outputs_fixture("simulation"))
+    base() = IS.read_outputs_document(outputs_fixture("simulation"))
     m = base()
     push!(m.models, outputs_model(m, "UC"))
-    @test_throws ArgumentError IS.validate_metadata(m)
-    @test_throws r"duplicate model name \"UC\"" IS.validate_metadata(m)
+    @test_throws ArgumentError IS.validate_document(m)
+    @test_throws r"duplicate model name \"UC\"" IS.validate_document(m)
     m = base()
     uc = outputs_model(m, "UC")
     push!(uc.axes, InfrastructureOutputSchemas.Axis(outputs_axis(uc, "ThermalStandard")))
-    @test_throws ArgumentError IS.validate_metadata(m)
-    @test_throws r"model UC: duplicate axis name \"ThermalStandard\"" IS.validate_metadata(
+    @test_throws ArgumentError IS.validate_document(m)
+    @test_throws r"model UC: duplicate axis name \"ThermalStandard\"" IS.validate_document(
         m,
     )
     # The schema reserves the name before the duplicate rule sees it.
@@ -89,8 +89,8 @@ end
 end
 
 @testset "label axis name rules" begin
-    @test IS.validate_metadata(
-        IS.read_outputs_metadata(outputs_fixture("security_analysis")),
+    @test IS.validate_document(
+        IS.read_outputs_document(outputs_fixture("security_analysis")),
     ) ===
           nothing
     for (fixture, name, rx) in (
@@ -102,14 +102,14 @@ end
         ("security_analysis", "a/b", r"/name: pattern"),
         ("security_analysis", "", r"/name: pattern"),
     )
-        m = IS.read_outputs_metadata(outputs_fixture(fixture))
+        m = IS.read_outputs_document(outputs_fixture(fixture))
         push!(m.models[1].axes, InfrastructureOutputSchemas.Axis(_label_axis(name)))
         expect_schema_invalid(m, rx)
     end
 end
 
 @testset "every structural rule has a failing case" begin
-    base() = IS.read_outputs_metadata(outputs_fixture("simulation"))
+    base() = IS.read_outputs_document(outputs_fixture("simulation"))
     first_ds(m) = first(outputs_model(m, "UC").datasets)
     set_first_ds!(m, d) = (outputs_model(m, "UC").datasets[1] = d)
     layout(chunks) =
@@ -140,7 +140,7 @@ end
         m = base()
         mutate!(m)
         @testset "$label" begin
-            @test_throws ArgumentError IS.validate_metadata(m)
+            @test_throws ArgumentError IS.validate_document(m)
         end
     end
     # Cases that the outputs schema rejects.
@@ -216,14 +216,14 @@ end
         end
     end
 
-    m = IS.read_outputs_metadata(outputs_fixture("single"))
-    @test IS.validate_metadata(m) === nothing
+    m = IS.read_outputs_document(outputs_fixture("single"))
+    @test IS.validate_document(m) === nothing
     bad = _with(m; kind = "simulation")
     expect_schema_invalid(bad, r": required")
 end
 
 @testset "simulation parameters need kind simulation" begin
-    m = IS.read_outputs_metadata(outputs_fixture("simulation"))
+    m = IS.read_outputs_document(outputs_fixture("simulation"))
     bad = _with(m; kind = "single")
     expect_schema_invalid(bad, r"OutputsDocument\s+: not")
 end

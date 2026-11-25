@@ -26,7 +26,7 @@ end
     python = _outputs_python()
     script = joinpath(@__DIR__, "python", "read_outputs.py")
     for kind in ("single", "simulation", "power_flow", "security_analysis")
-        m = IS.read_outputs_metadata(outputs_fixture(kind))
+        m = IS.read_outputs_document(outputs_fixture(kind))
         if kind == "single"
             m = _single_meta()
         end

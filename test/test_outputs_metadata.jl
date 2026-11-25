@@ -1,4 +1,4 @@
-# Tests `src/outputs/iso_duration.jl` and `src/outputs/metadata.jl`
+# Tests `src/outputs/iso_duration.jl` and `src/outputs/document.jl`
 
 @testset "ISO durations round trip" begin
     @test IS.parse_iso_duration("PT1H") == Dates.Millisecond(3_600_000)
@@ -20,8 +20,8 @@
     @test_throws ArgumentError IS.iso_duration(Dates.Day(1_000_000_000))
 end
 
-@testset "outputs.json parses into typed metadata" begin
-    m = IS.read_outputs_metadata(outputs_fixture("simulation"))
+@testset "outputs.json parses into typed document" begin
+    m = IS.read_outputs_document(outputs_fixture("simulation"))
     @test IS.has_simulation(m)
     @test IS.get_simulation(m).execution_order == ["UC", "ED"]
     uc = outputs_model(m, "UC")
@@ -40,7 +40,7 @@ end
     em = outputs_model(m, "EM")
     @test typeof(outputs_axis(em, "time")) === InfrastructureOutputSchemas.TimeAxis
     @test IS.get_resolution(outputs_axis(em, "time")) == Dates.Millisecond(300_000)
-    single = IS.read_outputs_metadata(outputs_fixture("single"))
+    single = IS.read_outputs_document(outputs_fixture("single"))
     @test !IS.has_simulation(single)
     @test_throws ErrorException IS.get_simulation(single)
 end
@@ -54,15 +54,15 @@ end
     expect_schema_invalid(path, r"/extra: schema")
 end
 
-@testset "metadata writes and re-reads identically" begin
+@testset "document writes and re-reads identically" begin
     for kind in ("simulation", "single", "security_analysis")
-        m = IS.read_outputs_metadata(outputs_fixture(kind))
+        m = IS.read_outputs_document(outputs_fixture(kind))
         path = joinpath(mktempdir(), "outputs.json")
-        IS.write_outputs_metadata(path, m)
+        IS.write_outputs_document(path, m)
         text = read(path, String)
         @test !occursin("null", text)
         @test occursin("simulation", text) == (kind == "simulation")
-        m2 = IS.read_outputs_metadata(path)
+        m2 = IS.read_outputs_document(path)
         @test InfrastructureOutputSchemas.encode(m2) ==
               InfrastructureOutputSchemas.encode(m)
     end
@@ -83,7 +83,7 @@ end
         end
         fv =
             first(
-                outputs_model(IS.read_outputs_metadata(path), "model").datasets,
+                outputs_model(IS.read_outputs_document(path), "model").datasets,
             ).fill_value
         @test typeof(fv) === T
         @test fv == expected
@@ -92,7 +92,7 @@ end
         raw["models"][1]["datasets"][1]["dtype"] = "bool"
         raw["models"][1]["datasets"][1]["fill_value"] = false
     end
-    fv = first(outputs_model(IS.read_outputs_metadata(path), "model").datasets).fill_value
+    fv = first(outputs_model(IS.read_outputs_document(path), "model").datasets).fill_value
     @test fv === false
 end
 
@@ -107,15 +107,15 @@ end
     @test_throws ArgumentError IS.iso_duration(Dates.Hour(-1))
 end
 
-@testset "outputs metadata: valid corpus" begin
+@testset "outputs document: valid corpus" begin
     for kind in ("simulation", "single", "power_flow", "security_analysis")
-        m = IS.read_outputs_metadata(outputs_fixture(kind))
-        @test IS.validate_metadata(m) === nothing
+        m = IS.read_outputs_document(outputs_fixture(kind))
+        @test IS.validate_document(m) === nothing
     end
 end
 
-@testset "validate_metadata: value sets and table rules" begin
-    base = IS.read_outputs_metadata(outputs_fixture("power_flow"))
+@testset "validate_document: value sets and table rules" begin
+    base = IS.read_outputs_document(outputs_fixture("power_flow"))
     function with_model(f)
         m = deepcopy(base)
         i = outputs_model_index(m, "model")
@@ -192,7 +192,7 @@ end
         ),
         r"/units: const",
     )
-    @test IS.validate_metadata(
+    @test IS.validate_document(
         with_table_column(
             column(;
                 quantity_kind = "Dimensionless",
@@ -201,7 +201,7 @@ end
             ),
         ),
     ) === nothing
-    @test_throws r"table solver_stats has group \"/model/tables/other\"" IS.validate_metadata(
+    @test_throws r"table solver_stats has group \"/model/tables/other\"" IS.validate_document(
         with_model(
             e -> _with(e; tables = [_with(e.tables[1]; group = "/model/tables/other")]),
         ),
@@ -209,7 +209,7 @@ end
 end
 
 @testset "component-less datasets: name, path, and descriptor" begin
-    pf = IS.read_outputs_metadata(outputs_fixture("power_flow"))
+    pf = IS.read_outputs_document(outputs_fixture("power_flow"))
     d = outputs_model(pf, "model").datasets[2]
     @test IS.dataset_key(d)[2] == "" && IS.dataset_name(d) == "PowerFlowConverged"
     @test d.path == "/model/datasets/PowerFlowConverged"
