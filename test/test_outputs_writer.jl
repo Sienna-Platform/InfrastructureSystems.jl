@@ -24,49 +24,25 @@ function _fake_axis_data(ax::InfrastructureOutputSchemas.ComponentAxis)
     return IS.AxisData(ids, labels, DateTime[])
 end
 
-function _fake_axis_data(ax::InfrastructureOutputSchemas.ExecutionAxis)
-    ts = [
-        DateTime(ax.initial_timestamp) + (i - 1) * IS.get_interval(ax) for
-        i in 1:(ax.count)
-    ]
-    return IS.AxisData(ts)
-end
-
-function _fake_axis_data(ax::InfrastructureOutputSchemas.TimeAxis)
-    ts = [
-        DateTime(ax.initial_timestamp) + (i - 1) * IS.get_resolution(ax) for
-        i in 1:(ax.length)
-    ]
-    return IS.AxisData(ts)
-end
-
-function _add_fake_axis!(
-    d,
-    model,
-    key,
+function _fake_axis_data(
     ax::Union{
-        InfrastructureOutputSchemas.ComponentAxis,
         InfrastructureOutputSchemas.ExecutionAxis,
         InfrastructureOutputSchemas.TimeAxis,
     },
 )
-    d[(model, key)] = _fake_axis_data(ax)
-    return
-end
-
-function _add_fake_axis!(
-    d,
-    model,
-    key,
-    ::Union{InfrastructureOutputSchemas.HorizonAxis, InfrastructureOutputSchemas.LabelAxis},
-)
-    return
+    ts = [
+        DateTime(ax.initial_timestamp) + (i - 1) * IS._axis_step(ax) for
+        i in 1:IS.axis_length(ax)
+    ]
+    return IS.AxisData(ts)
 end
 
 function simulation_axis_data(m)
     d = Dict{Tuple{String, String}, IS.AxisData}()
-    for model in m.models, ax in model.axes
-        _add_fake_axis!(d, model.name, IS.axis_name(ax), ax.value)
+    for model in m.models, ax in IS._axes(model)
+        if IS._needs_axis_data(ax)
+            d[(model.name, IS.axis_name(ax))] = _fake_axis_data(ax)
+        end
     end
     return d
 end
@@ -88,7 +64,7 @@ function _all_values(m)
     vals = Dict()
     for entry in m.models, d in entry.datasets
         model = entry.name
-        dims = Tuple(reverse([IS.axis_length(outputs_axis(entry, a)) for a in d.axes]))
+        dims = Tuple(IS._dataset_dims(entry, d))
         vals[(model, IS.dataset_key(d)...)] =
             fill(_dtype_zero(Val(Symbol(string(d.dtype)))), dims)
     end
@@ -499,5 +475,4 @@ end
     @test IS.abort!(w) === nothing
     @test !isopen(w.file)
     @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) == "FAILED"
-    @test IS.OUTPUTS_SCHEMA_VERSION == "0.1.0"
 end

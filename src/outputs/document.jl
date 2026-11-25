@@ -54,17 +54,20 @@ function _find_axis(model::InfrastructureOutputSchemas.Model, name::AbstractStri
     return model.axes[i].value
 end
 
-function _find_dataset(
-    doc::InfrastructureOutputSchemas.OutputsDocument,
-    model_name::AbstractString,
-    key::Tuple,
-)
-    model = _find_model(doc, model_name)
+function _find_dataset(model::InfrastructureOutputSchemas.Model, key::Tuple)
     i = findfirst(dataset -> dataset_key(dataset) == key, model.datasets)
     if isnothing(i)
-        throw(ArgumentError("model $model_name: no dataset $key"))
+        throw(ArgumentError("model $(model.name): no dataset $key"))
     end
     return model.datasets[i]
+end
+
+# Size of the dataset in Julia order: the reverse of the document `axes`.
+function _dataset_dims(
+    model::InfrastructureOutputSchemas.Model,
+    dataset::InfrastructureOutputSchemas.Dataset,
+)
+    return reverse([axis_length(_find_axis(model, name)) for name in dataset.axes])
 end
 
 function _find_table(

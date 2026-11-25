@@ -1,5 +1,7 @@
-# One to nine digits per part keep every value inside `Int64` milliseconds.
-const _ISO_DURATION_REGEX = r"^P(?:(\d{1,9})D)?(?:T(?:(\d{1,9})H)?(?:(\d{1,9})M)?)?\z"
+# One to nine digits per part keep every value inside `Int64` milliseconds. The lookaheads
+# are those of the schema `Duration` pattern: `P` alone and a `T` with no part do not match.
+const _ISO_DURATION_REGEX =
+    r"^P(?!\z)(?:(\d{1,9})D)?(?:T(?=\d)(?:(\d{1,9})H)?(?:(\d{1,9})M)?)?\z"
 
 const _ISO_MAX_PART = 999_999_999
 
@@ -23,8 +25,7 @@ Return `true` when `s` has the `P[nD][T[nH][nM]]` form of the outputs schema, wi
 nine digits per part.
 """
 function is_iso_duration(s::AbstractString)
-    m = match(_ISO_DURATION_REGEX, s)
-    return !isnothing(m) && !all(isnothing, m.captures) && !endswith(s, "T")
+    return occursin(_ISO_DURATION_REGEX, s)
 end
 
 """
@@ -35,14 +36,14 @@ general ISO-8601 codec. The minute is the smallest unit: seconds are not accepte
 months, and weeks are not accepted, because a year and a month have no fixed length.
 """
 function parse_iso_duration(s::AbstractString)
-    if !is_iso_duration(s)
+    m = match(_ISO_DURATION_REGEX, s)
+    if isnothing(m)
         throw(
             ArgumentError(
                 "not an outputs duration: \"$s\". The format accepts days, hours, and minutes (P[nD][T[nH][nM]]), with at most nine digits each. It does not accept seconds, years, months, or weeks.",
             ),
         )
     end
-    m = match(_ISO_DURATION_REGEX, s)
     d, h, mi = _capture_value.(m.captures)
     return Dates.Millisecond(((d * 24 + h) * 60 + mi) * 60_000)
 end

@@ -4,7 +4,9 @@ Schema version string of `outputs.json`. Public: producers set it in the
 """
 const OUTPUTS_SCHEMA_VERSION = "0.1.0"
 
-const _ARTIFACT_FILE_NAMES = ("outputs.json", "outputs.h5")
+const _JSON_FILE_NAME = "outputs.json"
+const _H5_FILE_NAME = "outputs.h5"
+const _ARTIFACT_FILE_NAMES = (_JSON_FILE_NAME, _H5_FILE_NAME)
 
 """
 Return the axis name that a dataset uses to refer to the axis.
@@ -66,18 +68,10 @@ end
 function _check_axis_fields(
     model_name::String,
     name::String,
-    axis::InfrastructureOutputSchemas.TimeAxis,
-)
-    where_ = "model $model_name: axis \"$name\""
-    _check_timestamp(where_, "initial_timestamp", axis.initial_timestamp)
-    _check_axis_group(model_name, name, axis.group)
-    return
-end
-
-function _check_axis_fields(
-    model_name::String,
-    name::String,
-    axis::InfrastructureOutputSchemas.ExecutionAxis,
+    axis::Union{
+        InfrastructureOutputSchemas.TimeAxis,
+        InfrastructureOutputSchemas.ExecutionAxis,
+    },
 )
     where_ = "model $model_name: axis \"$name\""
     _check_timestamp(where_, "initial_timestamp", axis.initial_timestamp)

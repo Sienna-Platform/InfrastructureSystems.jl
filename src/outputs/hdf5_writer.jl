@@ -26,7 +26,7 @@ end
 # one entry per execution, or one entry when `exec_dim` is 0.
 struct DatasetRecord
     h5_dataset::HDF5.Dataset
-    dtype::String
+    storage_type::DataType
     exec_dim::Int
     expected::Vector{Int}
     written::BitVector
@@ -215,9 +215,8 @@ function _create_dataset!(
     model::InfrastructureOutputSchemas.Model,
 )
     key = dataset_key(dataset)
-    dtype = string(dataset.dtype)
-    T = _DTYPES[dtype][1]
-    dims = reverse([axis_length(_find_axis(model, name)) for name in dataset.axes])
+    T = _DTYPES[string(dataset.dtype)][1]
+    dims = _dataset_dims(model, dataset)
     pos = findfirst(==("execution"), dataset.axes)
     exec_dim = 0
     expected = dims
@@ -245,7 +244,7 @@ function _create_dataset!(
         filters,
     )
     return (model_name, key...) =>
-        DatasetRecord(h5_dataset, dtype, exec_dim, expected, written)
+        DatasetRecord(h5_dataset, T, exec_dim, expected, written)
 end
 
 # Create the file and close it again when populating fails.
@@ -312,10 +311,10 @@ function open_outputs_writer(
         end
     end
     mkpath(dir)
-    json_path = joinpath(dir, "outputs.json")
-    h5_path = joinpath(dir, "outputs.h5")
+    json_path = joinpath(dir, _JSON_FILE_NAME)
+    h5_path = joinpath(dir, _H5_FILE_NAME)
     try
-        running = with_status(doc, string(Simulation.RunStatus.RUNNING))
+        running = with_status(doc, _RUNNING_STATUS)
         write_outputs_document(json_path, running)
         f, records = _create_h5(h5_path, doc, axis_data)
         return OutputsWriter(String(dir), running, f, records, Set{Tuple{String, String}}())
@@ -326,8 +325,14 @@ function open_outputs_writer(
     end
 end
 
+const _RUNNING_STATUS = string(Simulation.RunStatus.RUNNING)
+
+function _is_running(doc::InfrastructureOutputSchemas.OutputsDocument)
+    return string(doc.status) == _RUNNING_STATUS
+end
+
 function _check_running(w::OutputsWriter)
-    if string(w.document.status) != string(Simulation.RunStatus.RUNNING) || !isopen(w.file)
+    if !_is_running(w.document) || !isopen(w.file)
         throw(ArgumentError("outputs writer for $(w.dir) is not running"))
     end
     return
@@ -369,7 +374,7 @@ function write_execution!(
     if iszero(record.exec_dim)
         throw(ArgumentError("model $model_name: dataset $key has no execution axis"))
     end
-    count = size(record.h5_dataset, record.exec_dim)
+    count = length(record.written)
     if !(1 <= execution_index <= count)
         throw(
             ArgumentError(
@@ -380,7 +385,7 @@ function write_execution!(
     _check_values_size(model_name, key, values, Tuple(record.expected))
     idx = Any[Colon() for _ in 1:ndims(record.h5_dataset)]
     idx[record.exec_dim] = execution_index
-    record.h5_dataset[idx...] = _convert_values(_DTYPES[record.dtype][1], values)
+    record.h5_dataset[idx...] = _convert_values(record.storage_type, values)
     record.written[execution_index] = true
     return
 end
@@ -400,8 +405,7 @@ function write_values!(
     _check_running(w)
     record = _record(w, model_name, key)
     _check_values_size(model_name, key, values, size(record.h5_dataset))
-    record.h5_dataset[axes(values)...] =
-        _convert_values(_DTYPES[record.dtype][1], values)
+    record.h5_dataset[axes(values)...] = _convert_values(record.storage_type, values)
     fill!(record.written, true)
     return
 end
@@ -492,7 +496,7 @@ then, and `finalize!` with `FAILED` stays possible.
 When the JSON write fails, the writer keeps status `RUNNING` and `finalize!` can run again.
 """
 function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
-    if string(w.document.status) != string(Simulation.RunStatus.RUNNING)
+    if !_is_running(w.document)
         throw(ArgumentError("outputs writer for $(w.dir) is finalized"))
     end
     if !(
@@ -531,7 +535,7 @@ function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
     end
     stamp = TimeZones.now(TimeZones.tz"UTC")
     doc = with_status(w.document, string(status); created_at = stamp)
-    write_outputs_document(joinpath(w.dir, "outputs.json"), doc)
+    write_outputs_document(joinpath(w.dir, _JSON_FILE_NAME), doc)
     w.document = doc
     return
 end
@@ -543,7 +547,7 @@ Mark the run `FAILED` when possible and always close the file. Never throws. Pub
 producers of outputs call it when a write fails.
 """
 function abort!(w::OutputsWriter)
-    if string(w.document.status) == string(Simulation.RunStatus.RUNNING)
+    if _is_running(w.document)
         try
             finalize!(w; status = Simulation.RunStatus.FAILED)
         catch

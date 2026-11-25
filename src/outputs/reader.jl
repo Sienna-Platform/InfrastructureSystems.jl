@@ -15,14 +15,14 @@ of every declared system exist. Warn when the status is `RUNNING`: the run is in
 ended without a final status, and datasets can be partly written.
 """
 function open_outputs_reader(dir::AbstractString)
-    json_path = joinpath(dir, "outputs.json")
+    json_path = joinpath(dir, _JSON_FILE_NAME)
     if !isfile(json_path)
-        throw(ArgumentError("artifact $dir has no outputs.json"))
+        throw(ArgumentError("artifact $dir has no $_JSON_FILE_NAME"))
     end
     doc = read_outputs_document(json_path)
     validate_document(doc)
-    if !isfile(joinpath(dir, "outputs.h5"))
-        throw(ArgumentError("artifact $dir has no outputs.h5"))
+    if !isfile(joinpath(dir, _H5_FILE_NAME))
+        throw(ArgumentError("artifact $dir has no $_H5_FILE_NAME"))
     end
     for (uuid, name) in _systems(doc)
         if !isdir(joinpath(dir, name))
@@ -33,7 +33,7 @@ function open_outputs_reader(dir::AbstractString)
             )
         end
     end
-    if string(doc.status) == string(Simulation.RunStatus.RUNNING)
+    if _is_running(doc)
         @warn "The artifact in $dir has status RUNNING: the run is not finished or ended without a final status. Datasets can be partly written."
     end
     return OutputsReader(String(dir), doc)
@@ -72,7 +72,7 @@ function get_axis(
     return _find_axis(model, name)
 end
 
-_h5_path(reader::OutputsReader) = joinpath(reader.dir, "outputs.h5")
+_h5_path(reader::OutputsReader) = joinpath(reader.dir, _H5_FILE_NAME)
 
 # Axes without stored data (horizon, label) give empty AxisData.
 function _read_axis_data(
@@ -205,8 +205,8 @@ function read_dataset(
     execution = Colon(),
 )
     key = (String(entry_type), String(component_type), String(meta))
-    dataset = _find_dataset(reader.document, model_name, key)
     model = _find_model(reader.document, model_name)
+    dataset = _find_dataset(model, key)
     names_julia = reverse(dataset.axes)
     idx = Any[Colon() for _ in names_julia]
     keep = trues(length(names_julia))
@@ -222,8 +222,7 @@ function read_dataset(
                 axis_length(_find_axis(model, "execution")),
             )
     end
-    expected =
-        Tuple(reverse([axis_length(_find_axis(model, name)) for name in dataset.axes]))
+    expected = Tuple(_dataset_dims(model, dataset))
     arr = HDF5.h5open(_h5_path(reader), "r") do f
         h5_dataset = f[dataset.path]
         _check_stored(model_name, key, dataset, h5_dataset, expected)
