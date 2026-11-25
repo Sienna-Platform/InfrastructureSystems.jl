@@ -103,10 +103,10 @@ end
     struct MockPower <: IS.Optimization.VariableType end
     IS.Optimization.output_unit_system(::Type{MockPower}) = IS.SU
     @test IS.Optimization.output_unit_system(MockPower) === IS.SU
-    @test IS.unit_system_pair(IS.Optimization.output_unit_system(MockPower)) ==
-          ("COMPONENT_BASE", "system")
-    @test IS.unit_system_pair(IS.CU) == ("COMPONENT_BASE", "component")
-    @test IS.unit_system_pair(IS.NU) == ("NATURAL_UNITS", "")
+    @test IS.unit_system_name(IS.Optimization.output_unit_system(MockPower)) ==
+          "SYSTEM_BASE"
+    @test IS.unit_system_name(IS.CU) == "COMPONENT_BASE"
+    @test IS.unit_system_name(IS.NU) == "NATURAL_UNITS"
     @test IS.output_units(IS.SU, MockPower) == "pu"
     @test IS.output_units(IS.CU, MockPower) == "pu"
     @test_throws ArgumentError IS.Optimization.output_unit_system(MockVariable2)

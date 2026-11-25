@@ -69,7 +69,7 @@ function _validate_axis(
     f::HDF5.File,
     model::AbstractString,
     key::AbstractString,
-    ax::PowerOutputSchemas.ComponentAxis,
+    ax::InfrastructureOutputSchemas.ComponentAxis,
     data::SystemData,
 )
     ad = _read_axis_data(f, model, key, ax)

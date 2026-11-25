@@ -35,7 +35,7 @@ end
 "Writer of an outputs directory. Use `open_outputs_writer` to create one."
 mutable struct OutputsWriter
     dir::String
-    metadata::PowerOutputSchemas.OutputsDocument
+    metadata::InfrastructureOutputSchemas.OutputsDocument
     file::HDF5.File
     datasets::Dict{Tuple{String, String, String, String}, DatasetRecord}
     tables_written::Set{Tuple{String, String}}
@@ -67,17 +67,19 @@ end
 # Only time, execution, and component axes carry datasets and need AxisData.
 function _needs_axis_data(
     ::Union{
-        PowerOutputSchemas.TimeAxis,
-        PowerOutputSchemas.ExecutionAxis,
-        PowerOutputSchemas.ComponentAxis,
+        InfrastructureOutputSchemas.TimeAxis,
+        InfrastructureOutputSchemas.ExecutionAxis,
+        InfrastructureOutputSchemas.ComponentAxis,
     },
 )
     return true
 end
-_needs_axis_data(::Union{PowerOutputSchemas.HorizonAxis, PowerOutputSchemas.LabelAxis}) =
+_needs_axis_data(
+    ::Union{InfrastructureOutputSchemas.HorizonAxis, InfrastructureOutputSchemas.LabelAxis},
+) =
     false
 
-function _check_axis_set(m::PowerOutputSchemas.OutputsDocument, axis_data)
+function _check_axis_set(m::InfrastructureOutputSchemas.OutputsDocument, axis_data)
     for (model, name) in keys(axis_data)
         i = findfirst(e -> e.name == model, m.models)
         if isnothing(i) || !_has_axis(m.models[i], name)
@@ -107,7 +109,7 @@ end
 function _check_axis_data(
     model::String,
     name::String,
-    ax::PowerOutputSchemas.ComponentAxis,
+    ax::InfrastructureOutputSchemas.ComponentAxis,
     d::AxisData,
 )
     n = axis_length(ax)
@@ -144,7 +146,10 @@ end
 function _check_axis_data(
     model::String,
     name::String,
-    ax::Union{PowerOutputSchemas.TimeAxis, PowerOutputSchemas.ExecutionAxis},
+    ax::Union{
+        InfrastructureOutputSchemas.TimeAxis,
+        InfrastructureOutputSchemas.ExecutionAxis,
+    },
     d::AxisData,
 )
     n = axis_length(ax)
@@ -170,18 +175,23 @@ function _check_axis_data(
     return
 end
 
-_axis_step(ax::PowerOutputSchemas.TimeAxis) = get_resolution(ax)
-_axis_step(ax::PowerOutputSchemas.ExecutionAxis) = get_interval(ax)
+_axis_step(ax::InfrastructureOutputSchemas.TimeAxis) = get_resolution(ax)
+_axis_step(ax::InfrastructureOutputSchemas.ExecutionAxis) = get_interval(ax)
 
 # Only time, execution, and component axes index `axis_data`.
-_write_axis!(::HDF5.Group, ::PowerOutputSchemas.HorizonAxis, _, _) = nothing
+_write_axis!(::HDF5.Group, ::InfrastructureOutputSchemas.HorizonAxis, _, _) = nothing
 
-function _write_axis!(g::HDF5.Group, ax::PowerOutputSchemas.LabelAxis, _, _)
+function _write_axis!(g::HDF5.Group, ax::InfrastructureOutputSchemas.LabelAxis, _, _)
     g["labels"] = ax.labels
     return
 end
 
-function _write_axis!(g::HDF5.Group, ax::PowerOutputSchemas.ComponentAxis, axis_data, key)
+function _write_axis!(
+    g::HDF5.Group,
+    ax::InfrastructureOutputSchemas.ComponentAxis,
+    axis_data,
+    key,
+)
     d = axis_data[key]
     if all(c -> c.has_ids, ax.columns)
         g["ids"] = d.ids
@@ -192,7 +202,10 @@ end
 
 function _write_axis!(
     g::HDF5.Group,
-    ::Union{PowerOutputSchemas.TimeAxis, PowerOutputSchemas.ExecutionAxis},
+    ::Union{
+        InfrastructureOutputSchemas.TimeAxis,
+        InfrastructureOutputSchemas.ExecutionAxis,
+    },
     axis_data,
     key,
 )
@@ -203,8 +216,8 @@ end
 function _create_dataset!(
     f::HDF5.File,
     model::String,
-    d::PowerOutputSchemas.Dataset,
-    m::PowerOutputSchemas.Model,
+    d::InfrastructureOutputSchemas.Dataset,
+    m::InfrastructureOutputSchemas.Model,
 )
     key = dataset_key(d)
     dtype = string(d.dtype)
@@ -228,7 +241,7 @@ function _create_dataset!(
     return (model, key...) => DatasetRecord(ds, dtype, exec_dim, expected, written)
 end
 
-function _create_table!(f::HDF5.File, t::PowerOutputSchemas.Table)
+function _create_table!(f::HDF5.File, t::InfrastructureOutputSchemas.Table)
     g = HDF5.create_group(f, t.group)
     for c in t.columns
         T = _column_storage_type(string(c.dtype))
@@ -237,7 +250,7 @@ function _create_table!(f::HDF5.File, t::PowerOutputSchemas.Table)
     return
 end
 
-function _populate!(f::HDF5.File, m::PowerOutputSchemas.OutputsDocument, axis_data)
+function _populate!(f::HDF5.File, m::InfrastructureOutputSchemas.OutputsDocument, axis_data)
     records = Dict{Tuple{String, String, String, String}, DatasetRecord}()
     for entry in m.models
         model = entry.name
@@ -257,7 +270,7 @@ function _populate!(f::HDF5.File, m::PowerOutputSchemas.OutputsDocument, axis_da
 end
 
 # Create the file and close it again when populating fails.
-function _create_h5(path::String, m::PowerOutputSchemas.OutputsDocument, axis_data)
+function _create_h5(path::String, m::InfrastructureOutputSchemas.OutputsDocument, axis_data)
     f = HDF5.h5open(path, "w")
     try
         return f, _populate!(f, m, axis_data)
@@ -290,7 +303,7 @@ Validate `m`, create `dir`, write `outputs.json` with status `RUNNING`, and crea
 """
 function open_outputs_writer(
     dir::AbstractString,
-    m::PowerOutputSchemas.OutputsDocument;
+    m::InfrastructureOutputSchemas.OutputsDocument;
     axis_data::Dict{Tuple{String, String}, AxisData},
 )
     validate_metadata(m)
@@ -530,7 +543,10 @@ function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
     return
 end
 
-function _check_systems(m::PowerOutputSchemas.OutputsDocument, systems::AbstractDict)
+function _check_systems(
+    m::InfrastructureOutputSchemas.OutputsDocument,
+    systems::AbstractDict,
+)
     for uuid in keys(systems)
         if !haskey(_systems(m), uuid)
             throw(ArgumentError("system $uuid is not in the metadata systems"))
@@ -570,7 +586,7 @@ implements `write_system_bundle(obj, dir)`.
 """
 function write_outputs(
     dir::AbstractString,
-    m::PowerOutputSchemas.OutputsDocument;
+    m::InfrastructureOutputSchemas.OutputsDocument;
     axis_data::Dict{Tuple{String, String}, AxisData},
     values::AbstractDict,
     tables::AbstractDict,

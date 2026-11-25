@@ -18,8 +18,7 @@
     )
     @test string(d.container) == "variables" &&
           IS.dataset_key(d) == ("DescPower", "TestComponent", "")
-    @test string(d.unit_system) == "COMPONENT_BASE" &&
-          string(d.base_reference) == "system" && d.units == "pu"
+    @test string(d.unit_system) == "SYSTEM_BASE" && d.units == "pu"
     @test d.layout.chunks == [1, 76, 48] && d.fill_value == "NaN"
     @test d.path == "/UC/datasets/DescPower__TestComponent"
     a = IS.dataset_descriptor(
@@ -32,7 +31,6 @@
     )
     @test string(a.container) == "aux_variables" &&
           string(a.unit_system) == "NATURAL_UNITS" && a.units == "rad"
-    @test !haskey(PowerOutputSchemas.encode(a), "base_reference")
     @test a.layout.chunks == [24, 73]
     i = IS.dataset_descriptor(
         DescPower,
@@ -67,6 +65,17 @@
     )
 end
 
+struct NoUnitsVariable <: IS.Optimization.VariableType end
+IS.Optimization.output_unit_system(::Type{NoUnitsVariable}) = IS.NU
+IS.Optimization.quantity_kind(::Type{NoUnitsVariable}) = "Dimensionless"
+
+@testset "a natural units key type without natural_units is an error" begin
+    @test_throws r"NoUnitsVariable" IS.dataset_descriptor(
+        NoUnitsVariable, "";
+        model = "model", axes = ["time"], axis_lengths = [2],
+    )
+end
+
 @testset "outputs descriptor: no component and zero-length axes" begin
     struct DescFlag <: IS.Optimization.AuxVariableType end
     IS.Optimization.output_unit_system(::Type{DescFlag}) = IS.NU
@@ -82,8 +91,8 @@ end
     )
     @test IS.dataset_key(d)[2] == "" && d.path == "/pf/datasets/DescFlag"
     @test IS.dataset_name(d) == "DescFlag"
-    j = PowerOutputSchemas.encode(d)
-    @test !haskey(j, "component_type") && !haskey(j, "base_reference")
+    j = InfrastructureOutputSchemas.encode(d)
+    @test !haskey(j, "component_type")
     m = IS.dataset_descriptor(
         DescFlag, "m"; model = "pf", axes = ["time"], axis_lengths = [24],
     )

@@ -5,14 +5,14 @@ _sim_meta() = IS.read_outputs_metadata(outputs_fixture("simulation"))
 _pf_meta() = IS.read_outputs_metadata(outputs_fixture("power_flow"))
 
 # A cross-reference rule of IS rejects `m`.
-function _expect_invalid(m::PowerOutputSchemas.OutputsDocument, rx::Regex)
+function _expect_invalid(m::InfrastructureOutputSchemas.OutputsDocument, rx::Regex)
     @test_throws ArgumentError IS.validate_metadata(m)
     @test_throws rx IS.validate_metadata(m)
     return
 end
 
 # The label describes the case at the call site.
-_expect_invalid(::String, m::PowerOutputSchemas.OutputsDocument, rx::Regex) =
+_expect_invalid(::String, m::InfrastructureOutputSchemas.OutputsDocument, rx::Regex) =
     _expect_invalid(m, rx)
 
 function _set_dataset!(m, model, i, d)
@@ -27,8 +27,8 @@ function _set_entry(m, model; kw...)
 end
 
 _layout(chunks, filters) =
-    PowerOutputSchemas.DatasetLayout(; chunks = chunks, filters = filters)
-_dtype(s) = PowerOutputSchemas.Dtype(s)
+    InfrastructureOutputSchemas.DatasetLayout(; chunks = chunks, filters = filters)
+_dtype(s) = InfrastructureOutputSchemas.Dtype(s)
 
 # The first dataset, axis, or table column of model UC in the raw simulation fixture.
 _raw_uc(raw) = raw["models"][1]
@@ -39,8 +39,11 @@ _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
 @testset "validate_metadata: dataset field rules" begin
     ds(m) = outputs_model(m, "UC").datasets[1]
     path =
-        outputs_fixture_with(raw -> (_raw_ds(raw)["quantity_kind"] = "Bogus"), "simulation")
-    expect_schema_invalid(path, r"/quantity_kind: enum")
+        outputs_fixture_with(
+            raw -> (_raw_ds(raw)["quantity_kind"] = "active power"),
+            "simulation",
+        )
+    expect_schema_invalid(path, r"/quantity_kind: pattern")
     for fill in ("Inf", "nan", "1.5")
         expect_schema_invalid(
             _set_dataset!(_sim_meta(), "UC", 1, _with(ds(_sim_meta()); fill_value = fill)),
@@ -105,18 +108,16 @@ _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
             _sim_meta(), "UC", 1,
             _with(
                 d;
-                unit_system = PowerOutputSchemas.UnitSystem("NATURAL_UNITS"),
-                base_reference = OpenAPI.Runtime.ABSENT,
+                unit_system = InfrastructureOutputSchemas.UnitSystem("NATURAL_UNITS"),
                 units = "",
             ),
         ),
         r"/units: minLength",
     )
-    path = outputs_fixture_with(
-        raw -> (_raw_ds(raw)["base_reference"] = "device"),
-        "simulation",
+    expect_schema_invalid(
+        _set_dataset!(_sim_meta(), "UC", 1, _with(d; units = "MW")),
+        r"/units: const",
     )
-    expect_schema_invalid(path, r"/base_reference: enum")
     expect_schema_invalid(
         _set_dataset!(
             _sim_meta(), "UC", 1,
@@ -217,7 +218,7 @@ end
             _sim_meta(), "ThermalStandard",
             _with(
                 thermal;
-                columns = PowerOutputSchemas.ComponentAxisColumnsItem[],
+                columns = InfrastructureOutputSchemas.ComponentAxisColumnsItem[],
                 subset = "s",
             ),
         ),
@@ -229,7 +230,7 @@ end
             _with(
                 thermal;
                 columns = [
-                    PowerOutputSchemas.ComponentAxisColumnsItem(;
+                    InfrastructureOutputSchemas.ComponentAxisColumnsItem(;
                         component_type = "bad name", has_ids = true,
                     ),
                 ],
@@ -287,7 +288,7 @@ end
         m,
         r"system_uuid \"00000000-0000-0000-0000-000000000000\" is not in systems",
     )
-    settings(s) = PowerOutputSchemas.ModelSettings(; additional_properties = s)
+    settings(s) = InfrastructureOutputSchemas.ModelSettings(; additional_properties = s)
     for v in ([1, 2], Dict("a" => 1), nothing)
         expect_schema_invalid(
             _set_entry(_sim_meta(), "UC"; settings = settings(Dict{String, Any}("x" => v))),
@@ -326,7 +327,7 @@ end
         _with(
             m;
             simulation = OpenAPI.Runtime.ABSENT,
-            kind = PowerOutputSchemas.Kind("single"),
+            kind = "single",
         ),
         r"/models: minItems",
     )
@@ -367,7 +368,7 @@ end
         r"/length: minimum",
     )
     expect_schema_invalid(
-        set_table!(_sim_meta(), _with(t; columns = PowerOutputSchemas.Column[])),
+        set_table!(_sim_meta(), _with(t; columns = InfrastructureOutputSchemas.Column[])),
         r"/columns: minItems",
     )
     cols = copy(t.columns)
@@ -379,8 +380,7 @@ end
     function unit_column!(raw; kw...)
         c = _raw_column(raw, 2)
         c["quantity_kind"] = "Dimensionless"
-        c["unit_system"] = "COMPONENT_BASE"
-        c["base_reference"] = "system"
+        c["unit_system"] = "SYSTEM_BASE"
         c["units"] = "pu"
         for (k, v) in kw
             c[string(k)] = v
@@ -388,15 +388,15 @@ end
         return
     end
     path = outputs_fixture_with(
-        raw -> unit_column!(raw; quantity_kind = "Bogus"),
+        raw -> unit_column!(raw; quantity_kind = "active power"),
         "simulation",
     )
-    expect_schema_invalid(path, r"/quantity_kind: enum")
+    expect_schema_invalid(path, r"/quantity_kind: pattern")
     path = outputs_fixture_with(
-        raw -> unit_column!(raw; base_reference = "device"),
+        raw -> unit_column!(raw; units = "MW"),
         "simulation",
     )
-    expect_schema_invalid(path, r"/base_reference: enum")
+    expect_schema_invalid(path, r"/units: const")
 end
 
 @testset "read_outputs_metadata: timestamps are naive" begin
@@ -475,8 +475,12 @@ end
         m = _sim_meta()
         push!(
             outputs_model(m, "UC").axes,
-            PowerOutputSchemas.Axis(
-                PowerOutputSchemas.LabelAxis(; kind = "label", name = bad, labels = ["x"]),
+            InfrastructureOutputSchemas.Axis(
+                InfrastructureOutputSchemas.LabelAxis(;
+                    kind = "label",
+                    name = bad,
+                    labels = ["x"],
+                ),
             ),
         )
         expect_schema_invalid(m, r"LabelAxis\s+/name: pattern")
@@ -539,7 +543,7 @@ end
     m = _sim_meta()
     push!(
         outputs_model(m, "UC").axes,
-        PowerOutputSchemas.Axis(
+        InfrastructureOutputSchemas.Axis(
             _with(outputs_axis(outputs_model(m, "EM"), "time"); group = "/UC/axes/time"),
         ),
     )
@@ -549,8 +553,12 @@ end
         m = _sim_meta()
         push!(
             outputs_model(m, model).axes,
-            PowerOutputSchemas.Axis(
-                PowerOutputSchemas.LabelAxis(; kind = "label", name = key, labels = ["x"]),
+            InfrastructureOutputSchemas.Axis(
+                InfrastructureOutputSchemas.LabelAxis(;
+                    kind = "label",
+                    name = key,
+                    labels = ["x"],
+                ),
             ),
         )
         expect_schema_invalid(m, r"LabelAxis\s+/name: not")
@@ -575,17 +583,6 @@ end
         edit_dataset(single(), "model", 1; units = "MW"),
         r"/units: const",
     )
-    expect_schema_invalid(
-        edit_dataset(single(), "model", 1; base_reference = OpenAPI.Runtime.ABSENT),
-        r"Dataset\s+: required",
-    )
-    expect_schema_invalid(
-        edit_dataset(
-            single(), "model", 2;
-            base_reference = PowerOutputSchemas.BaseReference("system"),
-        ),
-        r"Dataset\s+: not",
-    )
     expect_schema_invalid(edit_dataset(single(), "model", 1; meta = "a__b"), r"/meta: not")
     expect_schema_invalid(
         edit_dataset(single(), "model", 2; dtype = _dtype("i64"), fill_value = 1.5),
@@ -606,8 +603,8 @@ end
         layout = _layout([76, 48], d.layout.filters),
     )
     expect_schema_invalid(m, r"/axes: contains")
-    path = outputs_fixture_with(raw -> (raw["kind"] = "batch"), "single")
-    expect_schema_invalid(path, r"/kind: enum")
+    path = outputs_fixture_with(raw -> (raw["kind"] = "GasFlow"), "single")
+    expect_schema_invalid(path, r"/kind: pattern")
     expect_schema_invalid(
         _with(single(); schema_version = "0.2.0"),
         r"/schema_version: const",
@@ -640,7 +637,7 @@ end
     m = _sim_meta()
     t = outputs_model(m, "UC").tables[1]
     cols = copy(t.columns)
-    cols[2] = _with(cols[1]; dtype = PowerOutputSchemas.ColumnDtype("f64"))
+    cols[2] = _with(cols[1]; dtype = InfrastructureOutputSchemas.ColumnDtype("f64"))
     outputs_model(m, "UC").tables[1] = _with(t; columns = cols)
     _expect_invalid(
         m,
@@ -760,4 +757,13 @@ end
     m = _sim_meta()
     IS._systems(m)[uuid] = "outputs"
     @test IS.validate_metadata(m) === nothing
+end
+
+@testset "a document in the two-value form is rejected" begin
+    path = outputs_fixture_with("single") do raw
+        dataset = _raw_ds(raw)
+        dataset["unit_system"] = "COMPONENT_BASE"
+        dataset["base_reference"] = "system"
+    end
+    expect_schema_invalid(path, r"base_reference")
 end

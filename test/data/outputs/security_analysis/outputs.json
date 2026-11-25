@@ -57,7 +57,6 @@
           "quantity_kind": "Voltage",
           "units": "pu",
           "unit_system": "COMPONENT_BASE",
-          "base_reference": "component",
           "axes": [
             "time",
             "ACBus"

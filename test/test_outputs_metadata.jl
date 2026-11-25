@@ -25,9 +25,11 @@ end
     @test IS.has_simulation(m)
     @test IS.get_simulation(m).execution_order == ["UC", "ED"]
     uc = outputs_model(m, "UC")
-    @test typeof(outputs_axis(uc, "execution")) === PowerOutputSchemas.ExecutionAxis
-    @test typeof(outputs_axis(uc, "horizon")) === PowerOutputSchemas.HorizonAxis
-    @test typeof(outputs_axis(uc, "ThermalStandard")) === PowerOutputSchemas.ComponentAxis
+    @test typeof(outputs_axis(uc, "execution")) ===
+          InfrastructureOutputSchemas.ExecutionAxis
+    @test typeof(outputs_axis(uc, "horizon")) === InfrastructureOutputSchemas.HorizonAxis
+    @test typeof(outputs_axis(uc, "ThermalStandard")) ===
+          InfrastructureOutputSchemas.ComponentAxis
     @test IS.get_interval(outputs_axis(uc, "execution")) == Dates.Millisecond(86_400_000)
     @test IS.get_horizon(outputs_axis(uc, "horizon")) == Dates.Millisecond(48 * 3_600_000)
     ds = first(uc.datasets)
@@ -36,7 +38,7 @@ end
     @test IS.dataset_name(uc.datasets[3]) ==
           "ActivePowerReserveVariable__VariableReserve__Reserve_Up"
     em = outputs_model(m, "EM")
-    @test typeof(outputs_axis(em, "time")) === PowerOutputSchemas.TimeAxis
+    @test typeof(outputs_axis(em, "time")) === InfrastructureOutputSchemas.TimeAxis
     @test IS.get_resolution(outputs_axis(em, "time")) == Dates.Millisecond(300_000)
     single = IS.read_outputs_metadata(outputs_fixture("single"))
     @test !IS.has_simulation(single)
@@ -61,7 +63,8 @@ end
         @test !occursin("null", text)
         @test occursin("simulation", text) == (kind == "simulation")
         m2 = IS.read_outputs_metadata(path)
-        @test PowerOutputSchemas.encode(m2) == PowerOutputSchemas.encode(m)
+        @test InfrastructureOutputSchemas.encode(m2) ==
+              InfrastructureOutputSchemas.encode(m)
     end
 end
 
@@ -129,12 +132,18 @@ end
             end,
         )
     end
-    column(; kw...) = PowerOutputSchemas.Column(;
-        name = "residual", dtype = PowerOutputSchemas.ColumnDtype("f64"), kw...,
+    column(; kw...) = InfrastructureOutputSchemas.Column(;
+        name = "residual", dtype = InfrastructureOutputSchemas.ColumnDtype("f64"), kw...,
     )
     # Enum values: the reader rejects them, and the Julia constructors cannot build them.
+    rule = Dict(
+        "model_type" => "pattern",
+        "status" => "enum",
+        "dtype" => "enum",
+        "unit_system" => "enum",
+    )
     for (field, value, at_dataset) in (
-        ("model_type", "bogus", false),
+        ("model_type", "Bogus", false),
         ("status", "DONE", false),
         ("dtype", "f16", true),
         ("unit_system", "PU", true),
@@ -148,7 +157,7 @@ end
             end
             target[field] = value
         end
-        expect_schema_invalid(path, Regex("/$field: enum"))
+        expect_schema_invalid(path, Regex("/$field: $(rule[field])"))
     end
     for (field, value) in (("dtype", "f16"), ("unit_system", "PU"))
         path = outputs_fixture_with("power_flow") do raw
@@ -167,7 +176,7 @@ end
     expect_schema_invalid(
         with_table_column(
             column(;
-                quantity_kind = PowerOutputSchemas.QuantityKind("Dimensionless"),
+                quantity_kind = "Dimensionless",
                 units = "1",
             ),
         ),
@@ -176,19 +185,18 @@ end
     expect_schema_invalid(
         with_table_column(
             column(;
-                quantity_kind = PowerOutputSchemas.QuantityKind("Dimensionless"),
-                unit_system = PowerOutputSchemas.UnitSystem("COMPONENT_BASE"),
-                units = "pu",
+                quantity_kind = "Dimensionless",
+                unit_system = InfrastructureOutputSchemas.UnitSystem("SYSTEM_BASE"),
+                units = "MW",
             ),
         ),
-        r": required",
+        r"/units: const",
     )
     @test IS.validate_metadata(
         with_table_column(
             column(;
-                quantity_kind = PowerOutputSchemas.QuantityKind("Dimensionless"),
-                unit_system = PowerOutputSchemas.UnitSystem("COMPONENT_BASE"),
-                base_reference = PowerOutputSchemas.BaseReference("system"),
+                quantity_kind = "Dimensionless",
+                unit_system = InfrastructureOutputSchemas.UnitSystem("COMPONENT_BASE"),
                 units = "pu",
             ),
         ),

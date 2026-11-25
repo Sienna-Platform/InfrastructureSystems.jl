@@ -72,8 +72,7 @@
           "meta": "",
           "quantity_kind": "ActivePower",
           "units": "pu",
-          "unit_system": "COMPONENT_BASE",
-          "base_reference": "system",
+          "unit_system": "SYSTEM_BASE",
           "axes": [
             "execution",
             "ThermalStandard",
@@ -129,8 +128,7 @@
           "meta": "Reserve_Up",
           "quantity_kind": "ActivePower",
           "units": "pu",
-          "unit_system": "COMPONENT_BASE",
-          "base_reference": "system",
+          "unit_system": "SYSTEM_BASE",
           "axes": [
             "execution",
             "VariableReserve__ThermalStandard",

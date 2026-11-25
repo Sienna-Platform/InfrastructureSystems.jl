@@ -1,11 +1,14 @@
 # Tests `src/outputs/axes.jl`
 
 _column(t) =
-    PowerOutputSchemas.ComponentAxisColumnsItem(; component_type = t, has_ids = true)
+    InfrastructureOutputSchemas.ComponentAxisColumnsItem(;
+        component_type = t,
+        has_ids = true,
+    )
 
 @testset "axis keys derive from content" begin
     @test IS.axis_key(
-        PowerOutputSchemas.ComponentAxis(;
+        InfrastructureOutputSchemas.ComponentAxis(;
             kind = "component",
             columns = [_column("ThermalStandard")],
             length = 76,
@@ -13,7 +16,7 @@ _column(t) =
         ),
     ) == "ThermalStandard"
     @test IS.axis_key(
-        PowerOutputSchemas.ComponentAxis(;
+        InfrastructureOutputSchemas.ComponentAxis(;
             kind = "component",
             columns = [_column("VariableReserve"), _column("ThermalStandard")],
             length = 152,
@@ -21,7 +24,7 @@ _column(t) =
         ),
     ) == "VariableReserve__ThermalStandard"
     @test IS.axis_key(
-        PowerOutputSchemas.ComponentAxis(;
+        InfrastructureOutputSchemas.ComponentAxis(;
             kind = "component",
             columns = [_column("ACBranch")],
             length = 10,
@@ -29,23 +32,23 @@ _column(t) =
             subset = "monitored",
         ),
     ) == "ACBranch__monitored"
-    horizon = PowerOutputSchemas.HorizonAxis(;
+    horizon = InfrastructureOutputSchemas.HorizonAxis(;
         kind = "horizon", resolution = "PT1H", horizon_count = 48,
     )
     @test IS.axis_length(horizon) == 48
-    @test IS.axis_length(PowerOutputSchemas.Axis(horizon)) == 48
-    label = PowerOutputSchemas.LabelAxis(;
+    @test IS.axis_length(InfrastructureOutputSchemas.Axis(horizon)) == 48
+    label = InfrastructureOutputSchemas.LabelAxis(;
         kind = "label",
         name = "winding",
         labels = ["a", "b"],
     )
     @test IS.axis_length(label) == 2
     @test IS.axis_key(label) == "winding"
-    @test IS.axis_key(PowerOutputSchemas.Axis(label)) == "winding"
+    @test IS.axis_key(InfrastructureOutputSchemas.Axis(label)) == "winding"
 end
 
 _label_axis(name) =
-    PowerOutputSchemas.LabelAxis(; kind = "label", name = name, labels = ["a"])
+    InfrastructureOutputSchemas.LabelAxis(; kind = "label", name = name, labels = ["a"])
 
 @testset "the outputs fixtures validate" begin
     for name in ("simulation", "single")
@@ -71,14 +74,17 @@ end
     @test_throws r"duplicate model name \"UC\"" IS.validate_metadata(m)
     m = base()
     uc = outputs_model(m, "UC")
-    push!(uc.axes, PowerOutputSchemas.Axis(outputs_axis(uc, "ThermalStandard")))
+    push!(uc.axes, InfrastructureOutputSchemas.Axis(outputs_axis(uc, "ThermalStandard")))
     @test_throws ArgumentError IS.validate_metadata(m)
     @test_throws r"model UC: duplicate axis name \"ThermalStandard\"" IS.validate_metadata(
         m,
     )
     # The schema reserves the name before the duplicate rule sees it.
     m = base()
-    push!(outputs_model(m, "UC").axes, PowerOutputSchemas.Axis(_label_axis("execution")))
+    push!(
+        outputs_model(m, "UC").axes,
+        InfrastructureOutputSchemas.Axis(_label_axis("execution")),
+    )
     expect_schema_invalid(m, r"LabelAxis\s+/name: not")
 end
 
@@ -97,7 +103,7 @@ end
         ("security_analysis", "", r"/name: pattern"),
     )
         m = IS.read_outputs_metadata(outputs_fixture(fixture))
-        push!(m.models[1].axes, PowerOutputSchemas.Axis(_label_axis(name)))
+        push!(m.models[1].axes, InfrastructureOutputSchemas.Axis(_label_axis(name)))
         expect_schema_invalid(m, rx)
     end
 end
@@ -106,7 +112,8 @@ end
     base() = IS.read_outputs_metadata(outputs_fixture("simulation"))
     first_ds(m) = first(outputs_model(m, "UC").datasets)
     set_first_ds!(m, d) = (outputs_model(m, "UC").datasets[1] = d)
-    layout(chunks) = PowerOutputSchemas.DatasetLayout(; chunks = chunks, filters = String[])
+    layout(chunks) =
+        InfrastructureOutputSchemas.DatasetLayout(; chunks = chunks, filters = String[])
     # Cases that the cross-reference rules of IS reject.
     is_cases = [
         ("axis ref", m -> push!(first_ds(m).axes, "Nope")),
@@ -158,25 +165,6 @@ end
             r"/axes: contains",
         ),
         (
-            "base unit without reference",
-            m -> set_first_ds!(
-                m,
-                _with(first_ds(m); base_reference = OpenAPI.Runtime.ABSENT),
-            ),
-            r"Dataset\s+: required",
-        ),
-        (
-            "natural units with reference",
-            m -> set_first_ds!(
-                m,
-                _with(
-                    first_ds(m);
-                    unit_system = PowerOutputSchemas.UnitSystem("NATURAL_UNITS"),
-                ),
-            ),
-            r"Dataset\s+: not",
-        ),
-        (
             "meta with double underscore",
             m -> set_first_ds!(m, _with(first_ds(m); meta = "a__b")),
             r"/meta: not",
@@ -191,7 +179,7 @@ end
             m -> set_outputs_axis!(
                 outputs_model(m, "UC"),
                 "horizon",
-                PowerOutputSchemas.HorizonAxis(;
+                InfrastructureOutputSchemas.HorizonAxis(;
                     kind = "time", resolution = "PT1H", horizon_count = 48,
                 ),
             ),
@@ -206,7 +194,7 @@ end
             "label name",
             m -> push!(
                 outputs_model(m, "UC").axes,
-                PowerOutputSchemas.Axis(_label_axis("Bad Key")),
+                InfrastructureOutputSchemas.Axis(_label_axis("Bad Key")),
             ),
             r"/name: pattern",
         ),
@@ -230,12 +218,12 @@ end
 
     m = IS.read_outputs_metadata(outputs_fixture("single"))
     @test IS.validate_metadata(m) === nothing
-    bad = _with(m; kind = PowerOutputSchemas.Kind("simulation"))
+    bad = _with(m; kind = "simulation")
     expect_schema_invalid(bad, r": required")
 end
 
 @testset "simulation parameters need kind simulation" begin
     m = IS.read_outputs_metadata(outputs_fixture("simulation"))
-    bad = _with(m; kind = PowerOutputSchemas.Kind("single"))
+    bad = _with(m; kind = "single")
     expect_schema_invalid(bad, r"OutputsDocument\s+: not")
 end

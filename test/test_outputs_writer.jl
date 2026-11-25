@@ -16,7 +16,7 @@ function _single_meta()
     return m
 end
 
-function _fake_axis_data(ax::PowerOutputSchemas.ComponentAxis)
+function _fake_axis_data(ax::InfrastructureOutputSchemas.ComponentAxis)
     n = IS.axis_length(ax)
     nc = length(ax.columns)
     ids = repeat(collect(Int64, 1:n)', nc, 1)
@@ -24,7 +24,7 @@ function _fake_axis_data(ax::PowerOutputSchemas.ComponentAxis)
     return IS.AxisData(ids, labels, DateTime[])
 end
 
-function _fake_axis_data(ax::PowerOutputSchemas.ExecutionAxis)
+function _fake_axis_data(ax::InfrastructureOutputSchemas.ExecutionAxis)
     ts = [
         DateTime(ax.initial_timestamp) + (i - 1) * IS.get_interval(ax) for
         i in 1:(ax.count)
@@ -32,7 +32,7 @@ function _fake_axis_data(ax::PowerOutputSchemas.ExecutionAxis)
     return IS.AxisData(ts)
 end
 
-function _fake_axis_data(ax::PowerOutputSchemas.TimeAxis)
+function _fake_axis_data(ax::InfrastructureOutputSchemas.TimeAxis)
     ts = [
         DateTime(ax.initial_timestamp) + (i - 1) * IS.get_resolution(ax) for
         i in 1:(ax.length)
@@ -45,9 +45,9 @@ function _add_fake_axis!(
     model,
     key,
     ax::Union{
-        PowerOutputSchemas.ComponentAxis,
-        PowerOutputSchemas.ExecutionAxis,
-        PowerOutputSchemas.TimeAxis,
+        InfrastructureOutputSchemas.ComponentAxis,
+        InfrastructureOutputSchemas.ExecutionAxis,
+        InfrastructureOutputSchemas.TimeAxis,
     },
 )
     d[(model, key)] = _fake_axis_data(ax)
@@ -58,7 +58,7 @@ function _add_fake_axis!(
     d,
     model,
     key,
-    ::Union{PowerOutputSchemas.HorizonAxis, PowerOutputSchemas.LabelAxis},
+    ::Union{InfrastructureOutputSchemas.HorizonAxis, InfrastructureOutputSchemas.LabelAxis},
 )
     return
 end
@@ -95,7 +95,7 @@ function _all_values(m)
     return vals
 end
 
-_column_fill(c::PowerOutputSchemas.Column, n) =
+_column_fill(c::InfrastructureOutputSchemas.Column, n) =
     _column_fill(Val(Symbol(string(c.dtype))), n)
 _column_fill(::Val{:str}, n) = fill("x", n)
 _column_fill(::Val{:f64}, n) = zeros(n)
@@ -228,25 +228,26 @@ end
                 d;
                 dtype = dtype,
                 fill_value = fill_value,
-                layout = PowerOutputSchemas.DatasetLayout(;
+                layout = InfrastructureOutputSchemas.DatasetLayout(;
                     chunks = d.layout.chunks, filters = filters,
                 ),
             ),
         )
     for bad in (
-        mk(; fill_value = 1.5, dtype = PowerOutputSchemas.Dtype("i64")),
+        mk(; fill_value = 1.5, dtype = InfrastructureOutputSchemas.Dtype("i64")),
         mk(; filters = ["lz4"]),
         mk(; filters = ["deflate:0"]),
         mk(; filters = ["deflate:10"]),
         mk(; filters = ["deflate:x"]),
     )
         dir = joinpath(mktempdir(), "out")
-        @test_throws PowerOutputSchemas.SchemaValidationError IS.open_outputs_writer(
+        @test_throws InfrastructureOutputSchemas.SchemaValidationError IS.open_outputs_writer(
             dir, bad; axis_data = ad)
         @test !ispath(dir)
     end
     @test_throws r"/fill_value: type" IS.open_outputs_writer(
-        mktempdir(), mk(; fill_value = 1.5, dtype = PowerOutputSchemas.Dtype("i64"));
+        mktempdir(),
+        mk(; fill_value = 1.5, dtype = InfrastructureOutputSchemas.Dtype("i64"));
         axis_data = ad)
 end
 
@@ -323,7 +324,7 @@ end
         m2 = deepcopy(m)
         IS._systems(m2)[uuid] = bad
         dir = joinpath(mktempdir(), "out")
-        @test_throws PowerOutputSchemas.SchemaValidationError IS.write_outputs(
+        @test_throws InfrastructureOutputSchemas.SchemaValidationError IS.write_outputs(
             dir, m2; axis_data = ad,
             values = vals, tables = tbls, systems = Dict(uuid => _MockSystem()))
         @test !ispath(dir)

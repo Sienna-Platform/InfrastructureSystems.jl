@@ -3,12 +3,12 @@ CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 DocumenterInterLinks = "d12716ef-a0f6-4df4-a9f1-a5a34e75c656"
+InfrastructureOutputSchemas = "4c5cfe00-742f-4387-a1ed-0db451bc13e6"
 InfrastructureSystems = "2cd47ed4-ca9b-11e9-27f2-ab636a7671f1"
 Literate = "98b081ad-f1c9-55d3-8b20-4c87d4299306"
-PowerOutputSchemas = "7500e09f-30c4-43c4-8caa-f20255187fa3"
 
 [sources]
-PowerOutputSchemas = {url = "https://github.com/Sienna-Platform/PowerAnalytics.jl", rev = "jd/outputs", subdir = "PowerOutputSchemas.jl"}
+InfrastructureOutputSchemas = {url = "https://github.com/Sienna-Platform/PowerAnalytics.jl", rev = "jd/outputs", subdir = "InfrastructureOutputSchemas.jl"}
 
 [compat]
 InfrastructureSystems = "3"

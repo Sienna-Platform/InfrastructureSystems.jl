@@ -4,7 +4,7 @@ Use `open_outputs` to create one.
 """
 struct OutputArtifact
     dir::String
-    metadata::PowerOutputSchemas.OutputsDocument
+    metadata::InfrastructureOutputSchemas.OutputsDocument
 end
 
 """
@@ -39,7 +39,7 @@ function open_outputs(dir::AbstractString)
     return OutputArtifact(String(dir), m)
 end
 
-"Return the `PowerOutputSchemas.OutputsDocument` of the artifact."
+"Return the `InfrastructureOutputSchemas.OutputsDocument` of the artifact."
 get_metadata(a::OutputArtifact) = a.metadata
 
 "Return the sorted model names of the artifact."
@@ -70,7 +70,7 @@ function _read_axis_data(
     ::HDF5.File,
     ::AbstractString,
     ::AbstractString,
-    ::Union{PowerOutputSchemas.HorizonAxis, PowerOutputSchemas.LabelAxis},
+    ::Union{InfrastructureOutputSchemas.HorizonAxis, InfrastructureOutputSchemas.LabelAxis},
 )
     return AxisData()
 end
@@ -79,7 +79,7 @@ function _read_axis_data(
     f::HDF5.File,
     model::AbstractString,
     key::AbstractString,
-    ax::PowerOutputSchemas.ComponentAxis,
+    ax::InfrastructureOutputSchemas.ComponentAxis,
 )
     g = f[ax.group]
     ids = zeros(Int64, 0, 0)
@@ -95,7 +95,10 @@ function _read_axis_data(
     f::HDF5.File,
     ::AbstractString,
     ::AbstractString,
-    ax::Union{PowerOutputSchemas.TimeAxis, PowerOutputSchemas.ExecutionAxis},
+    ax::Union{
+        InfrastructureOutputSchemas.TimeAxis,
+        InfrastructureOutputSchemas.ExecutionAxis,
+    },
 )
     ts = [
         Dates.DateTime(1970) + Dates.Millisecond(ms) for
@@ -144,7 +147,7 @@ end
 function _check_stored(
     model,
     key,
-    d::PowerOutputSchemas.Dataset,
+    d::InfrastructureOutputSchemas.Dataset,
     ds::HDF5.Dataset,
     expected::Tuple,
 )

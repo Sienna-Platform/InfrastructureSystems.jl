@@ -46,7 +46,7 @@ import GeoJSON
 import OpenAPI
 import InfrastructureCoreOpenAPIModels
 import InfrastructureTimeSeriesOpenAPIModels
-import PowerOutputSchemas
+import InfrastructureOutputSchemas
 import Logging
 import Random
 import Pkg

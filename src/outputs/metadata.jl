@@ -20,16 +20,17 @@ end
 _optional_string(s::String) = s
 _optional_string(::Union{OpenAPI.Runtime.Absent, Nothing}) = ""
 
-_model_tables(entry::PowerOutputSchemas.Model) = _model_tables(entry.tables)
-_model_tables(tables::Vector{PowerOutputSchemas.Table}) = tables
-_model_tables(::Union{OpenAPI.Runtime.Absent, Nothing}) = PowerOutputSchemas.Table[]
+_model_tables(entry::InfrastructureOutputSchemas.Model) = _model_tables(entry.tables)
+_model_tables(tables::Vector{InfrastructureOutputSchemas.Table}) = tables
+_model_tables(::Union{OpenAPI.Runtime.Absent, Nothing}) =
+    InfrastructureOutputSchemas.Table[]
 
-_systems(m::PowerOutputSchemas.OutputsDocument) = m.systems.additional_properties
+_systems(m::InfrastructureOutputSchemas.OutputsDocument) = m.systems.additional_properties
 
-# The concrete axis of each `PowerOutputSchemas.Axis` of the model.
-_axes(entry::PowerOutputSchemas.Model) = (a.value for a in entry.axes)
+# The concrete axis of each `InfrastructureOutputSchemas.Axis` of the model.
+_axes(entry::InfrastructureOutputSchemas.Model) = (a.value for a in entry.axes)
 
-function _model_entry(m::PowerOutputSchemas.OutputsDocument, model::AbstractString)
+function _model_entry(m::InfrastructureOutputSchemas.OutputsDocument, model::AbstractString)
     i = findfirst(e -> e.name == model, m.models)
     if isnothing(i)
         throw(ArgumentError("unknown model $model"))
@@ -37,11 +38,11 @@ function _model_entry(m::PowerOutputSchemas.OutputsDocument, model::AbstractStri
     return m.models[i]
 end
 
-function _has_axis(entry::PowerOutputSchemas.Model, name::AbstractString)
+function _has_axis(entry::InfrastructureOutputSchemas.Model, name::AbstractString)
     return any(a -> axis_key(a) == name, entry.axes)
 end
 
-function _find_axis(entry::PowerOutputSchemas.Model, name::AbstractString)
+function _find_axis(entry::InfrastructureOutputSchemas.Model, name::AbstractString)
     i = findfirst(a -> axis_key(a) == name, entry.axes)
     if isnothing(i)
         throw(ArgumentError("model $(entry.name): unknown axis $name"))
@@ -50,7 +51,7 @@ function _find_axis(entry::PowerOutputSchemas.Model, name::AbstractString)
 end
 
 function _find_dataset(
-    m::PowerOutputSchemas.OutputsDocument,
+    m::InfrastructureOutputSchemas.OutputsDocument,
     model::AbstractString,
     key::Tuple,
 )
@@ -63,7 +64,7 @@ function _find_dataset(
 end
 
 function _find_table(
-    m::PowerOutputSchemas.OutputsDocument,
+    m::InfrastructureOutputSchemas.OutputsDocument,
     model::AbstractString,
     name::AbstractString,
 )
@@ -94,21 +95,21 @@ end
 """
 Return `true` when the document has simulation parameters.
 """
-function has_simulation(m::PowerOutputSchemas.OutputsDocument)
+function has_simulation(m::InfrastructureOutputSchemas.OutputsDocument)
     return _has_simulation(m.simulation)
 end
 
-_has_simulation(::PowerOutputSchemas.SimulationParams) = true
+_has_simulation(::InfrastructureOutputSchemas.SimulationParams) = true
 _has_simulation(::Union{OpenAPI.Runtime.Absent, Nothing}) = false
 
 """
-Return the `PowerOutputSchemas.SimulationParams` of the document. Throw an error when absent.
+Return the `InfrastructureOutputSchemas.SimulationParams` of the document. Throw an error when absent.
 """
-function get_simulation(m::PowerOutputSchemas.OutputsDocument)
+function get_simulation(m::InfrastructureOutputSchemas.OutputsDocument)
     return _get_simulation(m.simulation, string(m.kind))
 end
 
-_get_simulation(s::PowerOutputSchemas.SimulationParams, ::String) = s
+_get_simulation(s::InfrastructureOutputSchemas.SimulationParams, ::String) = s
 
 function _get_simulation(::Union{OpenAPI.Runtime.Absent, Nothing}, kind::String)
     error("outputs metadata of kind $kind has no simulation parameters")
@@ -118,7 +119,7 @@ end
 Return the resolution of the axis as `Dates.Millisecond`.
 """
 function get_resolution(
-    a::Union{PowerOutputSchemas.TimeAxis, PowerOutputSchemas.HorizonAxis},
+    a::Union{InfrastructureOutputSchemas.TimeAxis, InfrastructureOutputSchemas.HorizonAxis},
 )
     return parse_iso_duration(a.resolution)
 end
@@ -126,7 +127,7 @@ end
 """
 Return the interval of the execution axis as `Dates.Millisecond`.
 """
-function get_interval(a::PowerOutputSchemas.ExecutionAxis)
+function get_interval(a::InfrastructureOutputSchemas.ExecutionAxis)
     return parse_iso_duration(a.interval)
 end
 
@@ -134,7 +135,7 @@ end
 Return the full horizon of the axis as `Dates.Millisecond`. Throw `OverflowError` when the
 horizon is too long for `Int64` milliseconds.
 """
-function get_horizon(a::PowerOutputSchemas.HorizonAxis)
+function get_horizon(a::InfrastructureOutputSchemas.HorizonAxis)
     ms = Base.checked_mul(a.horizon_count, Dates.value(get_resolution(a)))
     return Dates.Millisecond(ms)
 end
@@ -143,7 +144,7 @@ end
 Return `(entry_type, component_type, meta)` of the dataset. The component type is `""` when
 the dataset has none.
 """
-function dataset_key(d::PowerOutputSchemas.Dataset)
+function dataset_key(d::InfrastructureOutputSchemas.Dataset)
     return (d.entry_type, _optional_string(d.component_type), d.meta)
 end
 
@@ -151,7 +152,7 @@ end
 Return the dataset name `EntryType__ComponentType[__meta]`. A dataset without a component
 type is named `EntryType[__meta]`.
 """
-function dataset_name(d::PowerOutputSchemas.Dataset)
+function dataset_name(d::InfrastructureOutputSchemas.Dataset)
     return dataset_name(dataset_key(d)...)
 end
 
@@ -171,12 +172,12 @@ function dataset_name(
 end
 
 """
-Read an `outputs.json` file into a `PowerOutputSchemas.OutputsDocument`. Throw
-`PowerOutputSchemas.SchemaValidationError` when the file does not satisfy the outputs schema.
+Read an `outputs.json` file into an `InfrastructureOutputSchemas.OutputsDocument`. Throw
+`InfrastructureOutputSchemas.SchemaValidationError` when the file does not satisfy the outputs schema.
 """
 function read_outputs_metadata(path::AbstractString)
-    return PowerOutputSchemas.decode(
-        PowerOutputSchemas.OutputsDocument,
+    return InfrastructureOutputSchemas.decode(
+        InfrastructureOutputSchemas.OutputsDocument,
         JSON.parse(read(path, String)),
     )
 end
@@ -185,8 +186,11 @@ end
 Write `m` to `path` as pretty-printed JSON. Write a temporary file in the same directory,
 then move it to `path`. When the write fails, `path` keeps its previous contents.
 """
-function write_outputs_metadata(path::AbstractString, m::PowerOutputSchemas.OutputsDocument)
-    doc = PowerOutputSchemas.encode(m)
+function write_outputs_metadata(
+    path::AbstractString,
+    m::InfrastructureOutputSchemas.OutputsDocument,
+)
+    doc = InfrastructureOutputSchemas.encode(m)
     tmp = string(path, ".tmp")
     try
         open(tmp, "w") do io
@@ -204,16 +208,16 @@ end
 Return the document `m` with `status` (and optionally `created_at`) replaced.
 """
 function with_status(
-    m::PowerOutputSchemas.OutputsDocument,
+    m::InfrastructureOutputSchemas.OutputsDocument,
     status::String;
     created_at::TimeZones.ZonedDateTime = m.created_at,
 )
-    return PowerOutputSchemas.OutputsDocument(;
+    return InfrastructureOutputSchemas.OutputsDocument(;
         schema_version = m.schema_version,
         kind = m.kind,
         producer = m.producer,
         created_at = created_at,
-        status = PowerOutputSchemas.RunStatus(status),
+        status = InfrastructureOutputSchemas.RunStatus(status),
         systems = m.systems,
         simulation = m.simulation,
         models = m.models,
@@ -221,12 +225,12 @@ function with_status(
 end
 
 """
-Return the `(unit_system, base_reference)` strings of the output schema for a unit system.
+Return the `unit_system` string of the output schema for a unit system.
 """
-function unit_system_pair end
-unit_system_pair(::SystemBaseUnit) = ("COMPONENT_BASE", "system")
-unit_system_pair(::ComponentBaseUnit) = ("COMPONENT_BASE", "component")
-unit_system_pair(::NaturalUnit) = ("NATURAL_UNITS", "")
+function unit_system_name end
+unit_system_name(::SystemBaseUnit) = "SYSTEM_BASE"
+unit_system_name(::ComponentBaseUnit) = "COMPONENT_BASE"
+unit_system_name(::NaturalUnit) = "NATURAL_UNITS"
 
 """
 Return the `units` string of the output schema for a unit system and a key type.

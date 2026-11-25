@@ -1,6 +1,6 @@
 """
 Schema version string of `outputs.json`. Public: producers set it in the
-`PowerOutputSchemas.OutputsDocument`.
+`InfrastructureOutputSchemas.OutputsDocument`.
 """
 const OUTPUTS_SCHEMA_VERSION = "0.1.0"
 
@@ -10,13 +10,13 @@ const _ARTIFACT_FILE_NAMES = ("outputs.json", "outputs.h5")
 Return the name that a dataset uses to refer to the axis.
 """
 function axis_key end
-axis_key(a::PowerOutputSchemas.Axis) = axis_key(a.value)
-axis_key(::PowerOutputSchemas.TimeAxis) = "time"
-axis_key(::PowerOutputSchemas.ExecutionAxis) = "execution"
-axis_key(::PowerOutputSchemas.HorizonAxis) = "horizon"
-axis_key(a::PowerOutputSchemas.LabelAxis) = a.name
+axis_key(a::InfrastructureOutputSchemas.Axis) = axis_key(a.value)
+axis_key(::InfrastructureOutputSchemas.TimeAxis) = "time"
+axis_key(::InfrastructureOutputSchemas.ExecutionAxis) = "execution"
+axis_key(::InfrastructureOutputSchemas.HorizonAxis) = "horizon"
+axis_key(a::InfrastructureOutputSchemas.LabelAxis) = a.name
 
-function axis_key(a::PowerOutputSchemas.ComponentAxis)
+function axis_key(a::InfrastructureOutputSchemas.ComponentAxis)
     key = join((c.component_type for c in a.columns), "__")
     subset = _optional_string(a.subset)
     if isempty(subset)
@@ -26,19 +26,19 @@ function axis_key(a::PowerOutputSchemas.ComponentAxis)
 end
 
 # Dispatch: only component axes carry columns.
-_component_columns(ax::PowerOutputSchemas.ComponentAxis) = ax.columns
-_component_columns(::Any) = PowerOutputSchemas.ComponentAxisColumnsItem[]
+_component_columns(ax::InfrastructureOutputSchemas.ComponentAxis) = ax.columns
+_component_columns(::Any) = InfrastructureOutputSchemas.ComponentAxisColumnsItem[]
 
 """
 Return the number of entries along the axis.
 """
 function axis_length end
-axis_length(a::PowerOutputSchemas.Axis) = axis_length(a.value)
-axis_length(a::PowerOutputSchemas.TimeAxis) = a.length
-axis_length(a::PowerOutputSchemas.ExecutionAxis) = a.count
-axis_length(a::PowerOutputSchemas.HorizonAxis) = a.horizon_count
-axis_length(a::PowerOutputSchemas.ComponentAxis) = a.length
-axis_length(a::PowerOutputSchemas.LabelAxis) = length(a.labels)
+axis_length(a::InfrastructureOutputSchemas.Axis) = axis_length(a.value)
+axis_length(a::InfrastructureOutputSchemas.TimeAxis) = a.length
+axis_length(a::InfrastructureOutputSchemas.ExecutionAxis) = a.count
+axis_length(a::InfrastructureOutputSchemas.HorizonAxis) = a.horizon_count
+axis_length(a::InfrastructureOutputSchemas.ComponentAxis) = a.length
+axis_length(a::InfrastructureOutputSchemas.LabelAxis) = length(a.labels)
 
 _parse_fill(::Type{T}, v::String) where {T <: AbstractFloat} = parse(T, v)
 _parse_fill(::Type{T}, v::Real) where {T <: Real} = T(v)
@@ -66,7 +66,11 @@ function _check_axis_group(model::String, name::String, group::String)
     return
 end
 
-function _check_axis_fields(model::String, name::String, a::PowerOutputSchemas.TimeAxis)
+function _check_axis_fields(
+    model::String,
+    name::String,
+    a::InfrastructureOutputSchemas.TimeAxis,
+)
     where_ = "model $model: axis \"$name\""
     _check_timestamp(where_, "initial_timestamp", a.initial_timestamp)
     _check_axis_group(model, name, a.group)
@@ -76,7 +80,7 @@ end
 function _check_axis_fields(
     model::String,
     name::String,
-    a::PowerOutputSchemas.ExecutionAxis,
+    a::InfrastructureOutputSchemas.ExecutionAxis,
 )
     where_ = "model $model: axis \"$name\""
     _check_timestamp(where_, "initial_timestamp", a.initial_timestamp)
@@ -84,23 +88,23 @@ function _check_axis_fields(
     return
 end
 
-_check_axis_fields(::String, ::String, ::PowerOutputSchemas.HorizonAxis) = nothing
+_check_axis_fields(::String, ::String, ::InfrastructureOutputSchemas.HorizonAxis) = nothing
 
 function _check_axis_fields(
     model::String,
     name::String,
-    a::PowerOutputSchemas.ComponentAxis,
+    a::InfrastructureOutputSchemas.ComponentAxis,
 )
     _check_axis_group(model, name, a.group)
     return
 end
 
-_check_axis_fields(::String, ::String, ::PowerOutputSchemas.LabelAxis) = nothing
+_check_axis_fields(::String, ::String, ::InfrastructureOutputSchemas.LabelAxis) = nothing
 
 function _check_component_type(
     where_::String,
-    m::PowerOutputSchemas.Model,
-    d::PowerOutputSchemas.Dataset,
+    m::InfrastructureOutputSchemas.Model,
+    d::InfrastructureOutputSchemas.Dataset,
 )
     columns = [_component_columns(_find_axis(m, name)) for name in d.axes]
     filter!(!isempty, columns)
@@ -124,8 +128,8 @@ end
 
 function _check_dataset(
     model::String,
-    m::PowerOutputSchemas.Model,
-    d::PowerOutputSchemas.Dataset,
+    m::InfrastructureOutputSchemas.Model,
+    d::InfrastructureOutputSchemas.Dataset,
 )
     key = dataset_key(d)
     where_ = "model $model: dataset $key"
@@ -164,7 +168,7 @@ function _check_dataset(
     return
 end
 
-function _check_table(model::String, t::PowerOutputSchemas.Table)
+function _check_table(model::String, t::InfrastructureOutputSchemas.Table)
     expected = "/$model/tables/$(t.name)"
     if t.group != expected
         throw(
@@ -189,8 +193,8 @@ end
 
 function _check_realized_intervals(
     model::String,
-    e::PowerOutputSchemas.ExecutionAxis,
-    h::PowerOutputSchemas.HorizonAxis,
+    e::InfrastructureOutputSchemas.ExecutionAxis,
+    h::InfrastructureOutputSchemas.HorizonAxis,
 )
     interval = Dates.value(get_interval(e))
     resolution = Dates.value(get_resolution(h))
@@ -212,7 +216,7 @@ function _check_realized_intervals(
 end
 
 # The schema requires the execution and horizon axes and forbids a time axis under the flag.
-function _check_realized_values(model::String, entry::PowerOutputSchemas.Model)
+function _check_realized_values(model::String, entry::InfrastructureOutputSchemas.Model)
     if !entry.supports_realized_values_post_calculation
         return
     end
@@ -223,8 +227,8 @@ function _check_realized_values(model::String, entry::PowerOutputSchemas.Model)
 end
 
 function _check_model_entry(
-    m::PowerOutputSchemas.OutputsDocument,
-    entry::PowerOutputSchemas.Model,
+    m::InfrastructureOutputSchemas.OutputsDocument,
+    entry::InfrastructureOutputSchemas.Model,
 )
     model = entry.name
     if !haskey(_systems(m), entry.system_uuid)
@@ -279,7 +283,7 @@ function _check_model_entry(
     return
 end
 
-function _check_simulation(m::PowerOutputSchemas.OutputsDocument)
+function _check_simulation(m::InfrastructureOutputSchemas.OutputsDocument)
     if !has_simulation(m)
         return
     end
@@ -293,7 +297,7 @@ function _check_simulation(m::PowerOutputSchemas.OutputsDocument)
     return
 end
 
-function _check_bundle_names(m::PowerOutputSchemas.OutputsDocument)
+function _check_bundle_names(m::InfrastructureOutputSchemas.OutputsDocument)
     owners = Dict{String, String}()
     for (uuid, name) in _systems(m)
         # On Windows, `joinpath(dir, "C:foo")` drops `dir`.
@@ -326,12 +330,12 @@ end
 
 """
 Check an outputs document. First validate it against the outputs JSON schema, which throws
-`PowerOutputSchemas.SchemaValidationError`. Then apply the cross-reference rules that the
+`InfrastructureOutputSchemas.SchemaValidationError`. Then apply the cross-reference rules that the
 schema cannot express, which throw an `ArgumentError` that names the model and the
 offending key or dataset. Return `nothing`.
 """
-function validate_metadata(m::PowerOutputSchemas.OutputsDocument)
-    PowerOutputSchemas.encode(m)
+function validate_metadata(m::InfrastructureOutputSchemas.OutputsDocument)
+    InfrastructureOutputSchemas.encode(m)
     _check_bundle_names(m)
     _check_simulation(m)
     seen_models = Set{String}()

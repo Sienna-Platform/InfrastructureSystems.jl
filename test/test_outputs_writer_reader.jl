@@ -45,7 +45,8 @@ end
     @test size(ad.ids) == (1, 76)
     ex = IS.read_axis_data(a, "model", "execution")
     @test ex.timestamps == simulation_axis_data(m)[("model", "execution")].timestamps
-    @test typeof(IS.get_axis(a, "model", "horizon")) === PowerOutputSchemas.HorizonAxis
+    @test typeof(IS.get_axis(a, "model", "horizon")) ===
+          InfrastructureOutputSchemas.HorizonAxis
     @test isempty(IS.read_axis_data(a, "model", "horizon").timestamps)
     tbl = IS.read_table(a, "model", "optimizer_stats")
     @test tbl.execution == 1:7
@@ -70,31 +71,31 @@ end
     @test_throws ArgumentError IS.open_outputs(mktempdir())
 end
 
-function _with_extras(m::PowerOutputSchemas.OutputsDocument)
+function _with_extras(m::InfrastructureOutputSchemas.OutputsDocument)
     e = outputs_model(m, "model")
-    ds = PowerOutputSchemas.Dataset(;
-        container = PowerOutputSchemas.Container("variables"),
+    ds = InfrastructureOutputSchemas.Dataset(;
+        container = InfrastructureOutputSchemas.Container("variables"),
         entry_type = "OnStatus",
         component_type = "ThermalStandard",
         meta = "",
         axes = ["execution", "ThermalStandard", "horizon"],
-        dtype = PowerOutputSchemas.Dtype("bool"),
+        dtype = InfrastructureOutputSchemas.Dtype("bool"),
         fill_value = false,
-        quantity_kind = PowerOutputSchemas.QuantityKind("Dimensionless"),
-        unit_system = PowerOutputSchemas.UnitSystem("NATURAL_UNITS"),
+        quantity_kind = "Dimensionless",
+        unit_system = InfrastructureOutputSchemas.UnitSystem("NATURAL_UNITS"),
         units = "1",
-        layout = PowerOutputSchemas.DatasetLayout(;
+        layout = InfrastructureOutputSchemas.DatasetLayout(;
             chunks = [1, 76, 48],
             filters = String[],
         ),
         path = "/model/datasets/OnStatus__ThermalStandard",
     )
     column(name, dtype) =
-        PowerOutputSchemas.Column(;
+        InfrastructureOutputSchemas.Column(;
             name = name,
-            dtype = PowerOutputSchemas.ColumnDtype(dtype),
+            dtype = InfrastructureOutputSchemas.ColumnDtype(dtype),
         )
-    tbl = PowerOutputSchemas.Table(;
+    tbl = InfrastructureOutputSchemas.Table(;
         name = "notes",
         group = "/model/tables/notes",
         length = 3,
