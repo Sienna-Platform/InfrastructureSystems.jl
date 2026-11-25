@@ -51,19 +51,6 @@ function timestamps_epoch_ms(ts::Vector{Dates.DateTime})
     return Int64[Dates.value(t - Dates.DateTime(1970)) for t in ts]
 end
 
-# The schema accepts only `shuffle` and `deflate:L` names.
-function _make_filters(names::Vector{String})
-    filters = HDF5.Filters.Filter[]
-    for f in names
-        if f == "shuffle"
-            push!(filters, HDF5.Filters.Shuffle())
-        else
-            push!(filters, HDF5.Filters.Deflate(_deflate_level(f)))
-        end
-    end
-    return filters
-end
-
 # Only time, execution, and component axes carry datasets and need AxisData.
 function _needs_axis_data(
     ::Union{
@@ -232,48 +219,55 @@ function _create_dataset!(
         expected = deleteat!(copy(dims), exec_dim)
         written = falses(dims[exec_dim])
     end
+    # The schema accepts only `shuffle` and `deflate:L` names.
+    filters = HDF5.Filters.Filter[]
+    for f_name in d.layout.filters
+        if f_name == "shuffle"
+            push!(filters, HDF5.Filters.Shuffle())
+        else
+            # The schema accepts `deflate:1` to `deflate:9`.
+            level = parse(Int, f_name[(length("deflate:") + 1):end])
+            push!(filters, HDF5.Filters.Deflate(level))
+        end
+    end
     ds = HDF5.create_dataset(
         f, d.path, HDF5.datatype(T), HDF5.dataspace(Tuple(dims));
         chunk = Tuple(reverse(d.layout.chunks)),
         fill_value = _parse_fill(T, d.fill_value),
-        filters = _make_filters(d.layout.filters),
+        filters,
     )
     return (model, key...) => DatasetRecord(ds, dtype, exec_dim, expected, written)
-end
-
-function _create_table!(f::HDF5.File, t::InfrastructureOutputSchemas.Table)
-    g = HDF5.create_group(f, t.group)
-    for c in t.columns
-        T = _column_storage_type(string(c.dtype))
-        HDF5.create_dataset(g, c.name, HDF5.datatype(T), HDF5.dataspace((t.length,)))
-    end
-    return
-end
-
-function _populate!(f::HDF5.File, m::InfrastructureOutputSchemas.OutputsDocument, axis_data)
-    records = Dict{Tuple{String, String, String, String}, DatasetRecord}()
-    for entry in m.models
-        model = entry.name
-        for ax in _axes(entry)
-            name = axis_key(ax)
-            g = HDF5.create_group(f, "/$model/axes/$name")
-            _write_axis!(g, ax, axis_data, (model, name))
-        end
-        for d in entry.datasets
-            push!(records, _create_dataset!(f, model, d, entry))
-        end
-        for t in _model_tables(entry)
-            _create_table!(f, t)
-        end
-    end
-    return records
 end
 
 # Create the file and close it again when populating fails.
 function _create_h5(path::String, m::InfrastructureOutputSchemas.OutputsDocument, axis_data)
     f = HDF5.h5open(path, "w")
     try
-        return f, _populate!(f, m, axis_data)
+        records = Dict{Tuple{String, String, String, String}, DatasetRecord}()
+        for entry in m.models
+            model = entry.name
+            for ax in _axes(entry)
+                name = axis_key(ax)
+                g = HDF5.create_group(f, "/$model/axes/$name")
+                _write_axis!(g, ax, axis_data, (model, name))
+            end
+            for d in entry.datasets
+                push!(records, _create_dataset!(f, model, d, entry))
+            end
+            for t in _model_tables(entry)
+                g = HDF5.create_group(f, t.group)
+                for c in t.columns
+                    T = _column_storage_type(string(c.dtype))
+                    HDF5.create_dataset(
+                        g,
+                        c.name,
+                        HDF5.datatype(T),
+                        HDF5.dataspace((t.length,)),
+                    )
+                end
+            end
+        end
+        return f, records
     catch
         try
             close(f)
@@ -281,16 +275,6 @@ function _create_h5(path::String, m::InfrastructureOutputSchemas.OutputsDocument
         end
         rethrow()
     end
-end
-
-function _check_fresh(dir::AbstractString)
-    for name in _ARTIFACT_FILE_NAMES
-        path = joinpath(dir, name)
-        if ispath(path)
-            throw(ArgumentError("outputs file $path already exists"))
-        end
-    end
-    return
 end
 
 """
@@ -308,7 +292,12 @@ function open_outputs_writer(
 )
     validate_metadata(m)
     _check_axis_set(m, axis_data)
-    _check_fresh(dir)
+    for name in _ARTIFACT_FILE_NAMES
+        path = joinpath(dir, name)
+        if ispath(path)
+            throw(ArgumentError("outputs file $path already exists"))
+        end
+    end
     mkpath(dir)
     json_path = joinpath(dir, "outputs.json")
     h5_path = joinpath(dir, "outputs.h5")
@@ -349,13 +338,6 @@ end
 
 _convert_values(::Type{T}, values::Array{T}) where {T} = values
 
-function _slice_index(i::Int, exec_dim::Int, execution_index::Int)
-    if i == exec_dim
-        return execution_index
-    end
-    return Colon()
-end
-
 """
     write_execution!(w, model, key, values, execution_index)
 
@@ -383,10 +365,8 @@ function write_execution!(
         )
     end
     _check_values_size(model, key, values, Tuple(r.expected))
-    idx = ntuple(
-        i -> _slice_index(i, r.exec_dim, execution_index),
-        ndims(r.dataset),
-    )
+    idx = Any[Colon() for _ in 1:ndims(r.dataset)]
+    idx[r.exec_dim] = execution_index
     r.dataset[idx...] = _convert_values(_DTYPES[r.dtype][1], values)
     r.written[execution_index] = true
     return
@@ -465,9 +445,14 @@ function _unwritten(w::OutputsWriter)
             push!(missing_, "model $model: dataset $name was never written")
         elseif !all(r.written)
             executions = findall(!, r.written)
+            if length(executions) <= 5
+                summary = string(executions)
+            else
+                summary = string(executions[1:5], " and ", length(executions) - 5, " more")
+            end
             push!(
                 missing_,
-                "model $model: dataset $name lacks executions $(_summarize(executions))",
+                "model $model: dataset $name lacks executions $summary",
             )
         end
     end
@@ -478,13 +463,6 @@ function _unwritten(w::OutputsWriter)
         end
     end
     return sort!(missing_)
-end
-
-function _summarize(xs::Vector{Int})
-    if length(xs) <= 5
-        return string(xs)
-    end
-    return string(xs[1:5], " and ", length(xs) - 5, " more")
 end
 
 """
@@ -543,18 +521,6 @@ function finalize!(w::OutputsWriter; status::Simulation.RunStatus.Value)
     return
 end
 
-function _check_systems(
-    m::InfrastructureOutputSchemas.OutputsDocument,
-    systems::AbstractDict,
-)
-    for uuid in keys(systems)
-        if !haskey(_systems(m), uuid)
-            throw(ArgumentError("system $uuid is not in the metadata systems"))
-        end
-    end
-    return
-end
-
 """
     abort!(w)
 
@@ -592,7 +558,11 @@ function write_outputs(
     tables::AbstractDict,
     systems::AbstractDict = Dict{String, Any}(),
 )
-    _check_systems(m, systems)
+    for uuid in keys(systems)
+        if !haskey(_systems(m), uuid)
+            throw(ArgumentError("system $uuid is not in the metadata systems"))
+        end
+    end
     w = open_outputs_writer(dir, m; axis_data = axis_data)
     try
         for ((model, entry_type, component_type, meta), v) in values

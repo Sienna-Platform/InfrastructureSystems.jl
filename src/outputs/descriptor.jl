@@ -1,31 +1,5 @@
-function _default_fill(dtype::String)
-    if !haskey(_DTYPES, dtype)
-        throw(ArgumentError("Unsupported dtype `$dtype`."))
-    end
-    return _DTYPES[dtype][2]
-end
-
 "Upper bound of the byte size of one dataset chunk."
 const MAX_CHUNK_BYTES = 1024 * 1024
-
-# Axes that shrink first when a chunk is too large: time and horizon, then the others.
-function _shrink_priority(name::String)
-    if name in ("time", "horizon")
-        return 0
-    end
-    return 1
-end
-
-# Product of the chunk lengths except `skip`, capped at MAX_CHUNK_BYTES so it cannot overflow.
-function _capped_others(chunks::Vector{Int}, skip::Int)
-    others = 1
-    for (j, len) in enumerate(chunks)
-        if j != skip
-            others = min(others * min(len, MAX_CHUNK_BYTES), MAX_CHUNK_BYTES)
-        end
-    end
-    return others
-end
 
 function _chunk_shape(axes::Vector{String}, axis_lengths::Vector{Int}, itemsize::Int)
     if length(axes) != length(axis_lengths)
@@ -42,9 +16,16 @@ function _chunk_shape(axes::Vector{String}, axis_lengths::Vector{Int}, itemsize:
         end
     end
     shrinkable = [i for (i, name) in enumerate(axes) if name != "execution"]
-    sort!(shrinkable; by = i -> (_shrink_priority(axes[i]), i))
+    # Time and horizon axes shrink first, then the others.
+    sort!(shrinkable; by = i -> (!(axes[i] in ("time", "horizon")), i))
     for i in shrinkable
-        others = _capped_others(chunks, i)
+        # Product of the other chunk lengths, capped at MAX_CHUNK_BYTES so it cannot overflow.
+        others = 1
+        for (j, len) in enumerate(chunks)
+            if j != i
+                others = min(others * min(len, MAX_CHUNK_BYTES), MAX_CHUNK_BYTES)
+            end
+        end
         chunks[i] = clamp(MAX_CHUNK_BYTES ÷ (itemsize * others), 1, chunks[i])
     end
     return chunks
@@ -110,7 +91,7 @@ function _dataset_descriptor(
         meta = String(meta),
         axes = axes,
         dtype = InfrastructureOutputSchemas.Dtype(dtype),
-        fill_value = _default_fill(dtype),
+        fill_value = _DTYPES[dtype][2],
         quantity_kind = Optimization.quantity_kind(T),
         unit_system = InfrastructureOutputSchemas.UnitSystem(unit_system_name(unit_system)),
         units = output_units(unit_system, T),

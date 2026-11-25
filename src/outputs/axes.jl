@@ -43,9 +43,6 @@ axis_length(a::InfrastructureOutputSchemas.LabelAxis) = length(a.labels)
 _parse_fill(::Type{T}, v::String) where {T <: AbstractFloat} = parse(T, v)
 _parse_fill(::Type{T}, v::Real) where {T <: Real} = T(v)
 
-# The deflate level of a filter name that the schema accepted (`deflate:1` to `deflate:9`).
-_deflate_level(f::AbstractString) = parse(Int, f[(length("deflate:") + 1):end])
-
 # The schema checks the form of a timestamp, not that the date exists.
 function _check_timestamp(where_::String, field::String, value::AbstractString)
     if isnothing(tryparse(Dates.DateTime, value))
@@ -101,31 +98,6 @@ end
 
 _check_axis_fields(::String, ::String, ::InfrastructureOutputSchemas.LabelAxis) = nothing
 
-function _check_component_type(
-    where_::String,
-    m::InfrastructureOutputSchemas.Model,
-    d::InfrastructureOutputSchemas.Dataset,
-)
-    columns = [_component_columns(_find_axis(m, name)) for name in d.axes]
-    filter!(!isempty, columns)
-    component_type = _optional_string(d.component_type)
-    if isempty(columns)
-        if !isempty(component_type)
-            throw(ArgumentError("$where_: component_type without a component axis"))
-        end
-        return
-    end
-    expected = first(first(columns)).component_type
-    if component_type != expected
-        throw(
-            ArgumentError(
-                "$where_: component_type \"$component_type\" differs from the component axis type \"$expected\"",
-            ),
-        )
-    end
-    return
-end
-
 function _check_dataset(
     model::String,
     m::InfrastructureOutputSchemas.Model,
@@ -160,7 +132,23 @@ function _check_dataset(
             )
         end
     end
-    _check_component_type(where_, m, d)
+    columns = [_component_columns(_find_axis(m, name)) for name in d.axes]
+    filter!(!isempty, columns)
+    component_type = _optional_string(d.component_type)
+    if isempty(columns)
+        if !isempty(component_type)
+            throw(ArgumentError("$where_: component_type without a component axis"))
+        end
+    else
+        expected_type = first(first(columns)).component_type
+        if component_type != expected_type
+            throw(
+                ArgumentError(
+                    "$where_: component_type \"$component_type\" differs from the component axis type \"$expected_type\"",
+                ),
+            )
+        end
+    end
     expected = "/$model/datasets/$(dataset_name(d))"
     if d.path != expected
         throw(ArgumentError("$where_ has path \"$(d.path)\", expected \"$expected\""))
@@ -191,11 +179,13 @@ function _check_table(model::String, t::InfrastructureOutputSchemas.Table)
     return
 end
 
-function _check_realized_intervals(
-    model::String,
-    e::InfrastructureOutputSchemas.ExecutionAxis,
-    h::InfrastructureOutputSchemas.HorizonAxis,
-)
+# The schema requires the execution and horizon axes and forbids a time axis under the flag.
+function _check_realized_values(model::String, entry::InfrastructureOutputSchemas.Model)
+    if !entry.supports_realized_values_post_calculation
+        return
+    end
+    e = _find_axis(entry, "execution")
+    h = _find_axis(entry, "horizon")
     interval = Dates.value(get_interval(e))
     resolution = Dates.value(get_resolution(h))
     if interval <= 0 || resolution <= 0 || !iszero(rem(interval, resolution))
@@ -212,17 +202,6 @@ function _check_realized_intervals(
             ),
         )
     end
-    return
-end
-
-# The schema requires the execution and horizon axes and forbids a time axis under the flag.
-function _check_realized_values(model::String, entry::InfrastructureOutputSchemas.Model)
-    if !entry.supports_realized_values_post_calculation
-        return
-    end
-    _check_realized_intervals(
-        model, _find_axis(entry, "execution"), _find_axis(entry, "horizon"),
-    )
     return
 end
 
@@ -283,21 +262,14 @@ function _check_model_entry(
     return
 end
 
-function _check_simulation(m::InfrastructureOutputSchemas.OutputsDocument)
-    if !has_simulation(m)
-        return
-    end
-    sim = get_simulation(m)
-    _check_timestamp("simulation", "initial_time", sim.initial_time)
-    for name in sim.execution_order
-        if !any(e -> e.name == name, m.models)
-            throw(ArgumentError("execution_order entry \"$name\" is not in the models"))
-        end
-    end
-    return
-end
-
-function _check_bundle_names(m::InfrastructureOutputSchemas.OutputsDocument)
+"""
+Check an outputs document. First validate it against the outputs JSON schema, which throws
+`InfrastructureOutputSchemas.SchemaValidationError`. Then apply the cross-reference rules that the
+schema cannot express, which throw an `ArgumentError` that names the model and the
+offending key or dataset. Return `nothing`.
+"""
+function validate_metadata(m::InfrastructureOutputSchemas.OutputsDocument)
+    InfrastructureOutputSchemas.encode(m)
     owners = Dict{String, String}()
     for (uuid, name) in _systems(m)
         # On Windows, `joinpath(dir, "C:foo")` drops `dir`.
@@ -325,19 +297,15 @@ function _check_bundle_names(m::InfrastructureOutputSchemas.OutputsDocument)
         end
         owners[name] = uuid
     end
-    return
-end
-
-"""
-Check an outputs document. First validate it against the outputs JSON schema, which throws
-`InfrastructureOutputSchemas.SchemaValidationError`. Then apply the cross-reference rules that the
-schema cannot express, which throw an `ArgumentError` that names the model and the
-offending key or dataset. Return `nothing`.
-"""
-function validate_metadata(m::InfrastructureOutputSchemas.OutputsDocument)
-    InfrastructureOutputSchemas.encode(m)
-    _check_bundle_names(m)
-    _check_simulation(m)
+    if has_simulation(m)
+        sim = get_simulation(m)
+        _check_timestamp("simulation", "initial_time", sim.initial_time)
+        for name in sim.execution_order
+            if !any(e -> e.name == name, m.models)
+                throw(ArgumentError("execution_order entry \"$name\" is not in the models"))
+            end
+        end
+    end
     seen_models = Set{String}()
     for entry in m.models
         if entry.name in seen_models

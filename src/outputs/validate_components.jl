@@ -14,15 +14,11 @@ function output_label(a::SupplementalAttribute)
     )
 end
 
-# Components and supplemental attributes share one id stream, so an id names one object.
-function _has_attribute_id(data::SystemData, id::Int)
-    return any(d -> haskey(d, id), values(data.supplemental_attribute_manager.data))
-end
-
 function _resolve_id(data::SystemData, id::Int, where_::String)
+    # Components and supplemental attributes share one id stream, so an id names one object.
     if haskey(data.component_ids, id)
         return get_component(data, id)
-    elseif _has_attribute_id(data, id)
+    elseif any(d -> haskey(d, id), values(data.supplemental_attribute_manager.data))
         return get_supplemental_attribute(data, id)
     end
     throw(
