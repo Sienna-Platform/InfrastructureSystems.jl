@@ -27,6 +27,7 @@ pages = OrderedDict(
             "dev_guide/retest_migration.md",
             "dev_guide/logging.md",
             "dev_guide/test_data_artifacts.md",
+            "dev_guide/outputs.md",
         ],
         "Style Guide" => "style.md",
         "Documentation Best Practices" => Any[
