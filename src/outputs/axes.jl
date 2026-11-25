@@ -7,6 +7,10 @@ const OUTPUTS_SCHEMA_VERSION = "0.1.0"
 const _JSON_FILE_NAME = "outputs.json"
 const _H5_FILE_NAME = "outputs.h5"
 const _ARTIFACT_FILE_NAMES = (_JSON_FILE_NAME, _H5_FILE_NAME)
+const _STAGING_SUFFIX = ".tmp"
+# `write_outputs_document` writes the staging file next to `outputs.json`.
+const _RESERVED_BUNDLE_NAMES =
+    (_ARTIFACT_FILE_NAMES..., string(_JSON_FILE_NAME, _STAGING_SUFFIX))
 
 """
 Return the axis name that a dataset uses to refer to the axis.
@@ -284,7 +288,7 @@ function validate_document(doc::InfrastructureOutputSchemas.OutputsDocument)
             )
         end
         # A file system that ignores case treats `OUTPUTS.JSON` as `outputs.json`.
-        if lowercase(name) in _ARTIFACT_FILE_NAMES
+        if lowercase(name) in _RESERVED_BUNDLE_NAMES
             throw(
                 ArgumentError(
                     "system $uuid: bundle directory \"$name\" is the name of an artifact file",

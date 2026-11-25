@@ -68,6 +68,17 @@ end
     end
 end
 
+@testset "write_outputs_document keeps the existing path when the replace fails" begin
+    m = IS.read_outputs_document(outputs_fixture("single"))
+    path = joinpath(mktempdir(), "outputs.json")
+    # A directory with content at `path` makes the rename of the temporary file fail.
+    mkpath(path)
+    write(joinpath(path, "keep.txt"), "previous")
+    @test_throws Union{Base.IOError, ArgumentError} IS.write_outputs_document(path, m)
+    @test read(joinpath(path, "keep.txt"), String) == "previous"
+    @test !ispath(string(path, ".tmp"))
+end
+
 # Each JSON literal of fill_value keeps its Julia type.
 @testset "fill_value parses to its JSON type" begin
     for (literal, T, expected) in (

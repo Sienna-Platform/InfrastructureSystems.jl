@@ -744,7 +744,7 @@ end
     m = _sim_meta()
     IS._systems(m)[uuid] = "ab:c"
     @test IS.validate_document(m) === nothing
-    for bad in ("outputs.json", "outputs.h5", "OUTPUTS.JSON")
+    for bad in ("outputs.json", "outputs.h5", "OUTPUTS.JSON", "outputs.json.tmp")
         m = _sim_meta()
         IS._systems(m)[uuid] = bad
         _expect_invalid(

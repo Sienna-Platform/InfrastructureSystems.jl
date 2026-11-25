@@ -194,19 +194,21 @@ end
 
 """
 Write `doc` to `path` as pretty-printed JSON. Write a temporary file in the same directory,
-then move it to `path`. When the write fails, `path` keeps its previous contents.
+then rename it to `path`. The rename replaces `path` in one operation. When the write or the
+rename fails, `path` keeps its previous contents.
 """
 function write_outputs_document(
     path::AbstractString,
     doc::InfrastructureOutputSchemas.OutputsDocument,
 )
     json = InfrastructureOutputSchemas.encode(doc)
-    tmp = string(path, ".tmp")
+    tmp = string(path, _STAGING_SUFFIX)
     try
         open(tmp, "w") do io
             JSON.json(io, json; pretty = 2)
         end
-        mv(tmp, path; force = true)
+        # `mv` with `force = true` can delete `path` before it renames `tmp`.
+        Base.Filesystem.rename(tmp, path)
     catch
         rm(tmp; force = true)
         rethrow()
