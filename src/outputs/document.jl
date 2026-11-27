@@ -15,26 +15,7 @@ function _column_storage_type(dtype::String)
     return _DTYPES[dtype][1]
 end
 
-# The generated types spell an absent optional field as `ABSENT` or `nothing`. The schema
-# rejects an explicit `nothing`, so only `validate_document` can tell the two apart.
-_optional_string(s::String) = s
-_optional_string(::Union{OpenAPI.Runtime.Absent, Nothing}) = ""
-
-_model_tables(model::InfrastructureOutputSchemas.Model) = _model_tables(model.tables)
-_model_tables(tables::Vector{InfrastructureOutputSchemas.Table}) = tables
-_model_tables(::Union{OpenAPI.Runtime.Absent, Nothing}) =
-    InfrastructureOutputSchemas.Table[]
-
-_systems(doc::InfrastructureOutputSchemas.OutputsDocument) =
-    doc.systems.additional_properties
-
-# The concrete axis of each `InfrastructureOutputSchemas.Axis` of the model.
-_axes(model::InfrastructureOutputSchemas.Model) = (axis.value for axis in model.axes)
-
-function _find_model(
-    doc::InfrastructureOutputSchemas.OutputsDocument,
-    model_name::AbstractString,
-)
+function _find_model(doc::OutputsDocument, model_name::AbstractString)
     i = findfirst(model -> model.name == model_name, doc.models)
     if isnothing(i)
         throw(ArgumentError("unknown model $model_name"))
@@ -42,19 +23,19 @@ function _find_model(
     return doc.models[i]
 end
 
-function _has_axis(model::InfrastructureOutputSchemas.Model, name::AbstractString)
+function _has_axis(model::OutputsModel, name::AbstractString)
     return any(axis -> axis_name(axis) == name, model.axes)
 end
 
-function _find_axis(model::InfrastructureOutputSchemas.Model, name::AbstractString)
+function _find_axis(model::OutputsModel, name::AbstractString)
     i = findfirst(axis -> axis_name(axis) == name, model.axes)
     if isnothing(i)
         throw(ArgumentError("model $(model.name): unknown axis $name"))
     end
-    return model.axes[i].value
+    return model.axes[i]
 end
 
-function _find_dataset(model::InfrastructureOutputSchemas.Model, key::Tuple)
+function _find_dataset(model::OutputsModel, key::Tuple)
     i = findfirst(dataset -> dataset_key(dataset) == key, model.datasets)
     if isnothing(i)
         throw(ArgumentError("model $(model.name): no dataset $key"))
@@ -62,20 +43,19 @@ function _find_dataset(model::InfrastructureOutputSchemas.Model, key::Tuple)
     return model.datasets[i]
 end
 
-# Size of the dataset in Julia order: the reverse of the document `axes`.
-function _dataset_dims(
-    model::InfrastructureOutputSchemas.Model,
-    dataset::InfrastructureOutputSchemas.Dataset,
-)
-    return reverse([axis_length(_find_axis(model, name)) for name in dataset.axes])
+# The axes of the dataset in storage order, as the document `axes` list them.
+function _dataset_axes(model::OutputsModel, dataset::OutputDataset)
+    return OutputAxis[_find_axis(model, name) for name in dataset.axes]
 end
 
-function _find_table(
-    doc::InfrastructureOutputSchemas.OutputsDocument,
-    model_name::AbstractString,
-    name::AbstractString,
-)
-    tables = _model_tables(_find_model(doc, model_name))
+# Size of the dataset in Julia order: the reverse of the document `axes`.
+_dataset_dims(axes::Vector{OutputAxis}) = reverse(Int[axis_length(axis) for axis in axes])
+
+_dataset_dims(model::OutputsModel, dataset::OutputDataset) =
+    _dataset_dims(_dataset_axes(model, dataset))
+
+function _find_table(doc::OutputsDocument, model_name::AbstractString, name::AbstractString)
+    tables = _find_model(doc, model_name).tables
     i = findfirst(table -> table.name == name, tables)
     if isnothing(i)
         throw(ArgumentError("model $model_name: no table $name"))
@@ -102,67 +82,27 @@ end
 """
 Return `true` when the document has simulation parameters.
 """
-function has_simulation(doc::InfrastructureOutputSchemas.OutputsDocument)
-    return _has_simulation(doc.simulation)
-end
+has_simulation(doc::OutputsDocument) = _has_simulation(doc.simulation)
 
-_has_simulation(::InfrastructureOutputSchemas.SimulationParams) = true
-_has_simulation(::Union{OpenAPI.Runtime.Absent, Nothing}) = false
+_has_simulation(::Simulation.SimulationParams) = true
+_has_simulation(::Simulation.NoSimulation) = false
 
 """
-Return the `InfrastructureOutputSchemas.SimulationParams` of the document. Throw an error when absent.
+Return the `Simulation.SimulationParams` of the document. Throw an error when absent.
 """
-function get_simulation(doc::InfrastructureOutputSchemas.OutputsDocument)
-    return _get_simulation(doc.simulation, string(doc.kind))
-end
+get_simulation(doc::OutputsDocument) = _get_simulation(doc.simulation, doc.kind)
 
-_get_simulation(s::InfrastructureOutputSchemas.SimulationParams, ::String) = s
+_get_simulation(simulation::Simulation.SimulationParams, ::String) = simulation
 
-function _get_simulation(::Union{OpenAPI.Runtime.Absent, Nothing}, kind::String)
+function _get_simulation(::Simulation.NoSimulation, kind::String)
     error("outputs document of kind $kind has no simulation parameters")
-end
-
-"""
-Return the resolution of the axis as `Dates.Millisecond`.
-"""
-function get_resolution(
-    axis::Union{
-        InfrastructureOutputSchemas.TimeAxis,
-        InfrastructureOutputSchemas.HorizonAxis,
-    },
-)
-    return parse_iso_duration(axis.resolution)
-end
-
-"""
-Return the interval of the execution axis as `Dates.Millisecond`.
-"""
-function get_interval(axis::InfrastructureOutputSchemas.ExecutionAxis)
-    return parse_iso_duration(axis.interval)
-end
-
-"""
-Return the full horizon of the axis as `Dates.Millisecond`. Throw `OverflowError` when the
-horizon is too long for `Int64` milliseconds.
-"""
-function get_horizon(axis::InfrastructureOutputSchemas.HorizonAxis)
-    ms = Base.checked_mul(axis.horizon_count, Dates.value(get_resolution(axis)))
-    return Dates.Millisecond(ms)
-end
-
-"""
-Return the dataset key `(entry_type, component_type, meta)` of the dataset. The component type is `""` when
-the dataset has none.
-"""
-function dataset_key(dataset::InfrastructureOutputSchemas.Dataset)
-    return (dataset.entry_type, _optional_string(dataset.component_type), dataset.meta)
 end
 
 """
 Return the dataset name `EntryType__ComponentType[__meta]`. A dataset without a component
 type is named `EntryType[__meta]`.
 """
-function dataset_name(dataset::InfrastructureOutputSchemas.Dataset)
+function dataset_name(dataset::OutputDataset)
     return dataset_name(dataset_key(dataset)...)
 end
 
@@ -182,14 +122,13 @@ function dataset_name(
 end
 
 """
-Read an `outputs.json` file into an `InfrastructureOutputSchemas.OutputsDocument`. Throw
-`InfrastructureOutputSchemas.SchemaValidationError` when the file does not satisfy the outputs schema.
+Read an `outputs.json` file into an `OutputsDocument`. Throw
+a `SchemaValidationError` of the OpenAPI runtime when the file does not satisfy the outputs
+schema. Throw `ArgumentError` when a derived field (`group` or `path`) differs from the value
+that IS derives, or when a timestamp is not a valid date and time.
 """
 function read_outputs_document(path::AbstractString)
-    return InfrastructureOutputSchemas.decode(
-        InfrastructureOutputSchemas.OutputsDocument,
-        JSON.parse(read(path, String)),
-    )
+    return _decode_document(JSON.parse(read(path, String)))
 end
 
 """
@@ -197,11 +136,8 @@ Write `doc` to `path` as pretty-printed JSON. Write a temporary file in the same
 then rename it to `path`. The rename replaces `path` in one operation. When the write or the
 rename fails, `path` keeps its previous contents.
 """
-function write_outputs_document(
-    path::AbstractString,
-    doc::InfrastructureOutputSchemas.OutputsDocument,
-)
-    json = InfrastructureOutputSchemas.encode(doc)
+function write_outputs_document(path::AbstractString, doc::OutputsDocument)
+    json = _encode_document(doc)
     tmp = string(path, _STAGING_SUFFIX)
     try
         open(tmp, "w") do io
@@ -220,29 +156,21 @@ end
 Return the document `doc` with `status` (and optionally `created_at`) replaced.
 """
 function with_status(
-    doc::InfrastructureOutputSchemas.OutputsDocument,
-    status::String;
+    doc::OutputsDocument,
+    status::Simulation.RunStatus.Value;
     created_at::TimeZones.ZonedDateTime = doc.created_at,
 )
-    return InfrastructureOutputSchemas.OutputsDocument(;
-        schema_version = doc.schema_version,
-        kind = doc.kind,
-        producer = doc.producer,
-        created_at = created_at,
-        status = InfrastructureOutputSchemas.RunStatus(status),
-        systems = doc.systems,
-        simulation = doc.simulation,
-        models = doc.models,
+    return OutputsDocument(
+        doc.schema_version,
+        doc.kind,
+        doc.producer,
+        created_at,
+        status,
+        doc.systems,
+        doc.simulation,
+        doc.models,
     )
 end
-
-"""
-Return the `unit_system` string of the output schema for a unit system.
-"""
-function unit_system_name end
-unit_system_name(::SystemBaseUnit) = "SYSTEM_BASE"
-unit_system_name(::ComponentBaseUnit) = "COMPONENT_BASE"
-unit_system_name(::NaturalUnit) = "NATURAL_UNITS"
 
 """
 Return the `units` string of the output schema for a unit system and a key type.
@@ -251,3 +179,28 @@ function output_units end
 output_units(::SystemBaseUnit, ::Type) = "pu"
 output_units(::ComponentBaseUnit, ::Type) = "pu"
 output_units(::NaturalUnit, ::Type{T}) where {T} = Optimization.natural_units(T)
+
+"""
+Return the dataset key `(entry_type, component_type, meta)` of the dataset. The component type is `""` when
+the dataset has none.
+"""
+dataset_key(dataset::OutputDataset) =
+    (dataset.entry_type, dataset.component_type, dataset.meta)
+
+"""
+Return the HDF5 group of the axis: `/<model name>/axes/<axis name>`.
+"""
+axis_group(model_name::AbstractString, axis::OutputAxis) =
+    "/$model_name/axes/$(axis_name(axis))"
+
+"""
+Return the HDF5 path of the dataset: `/<model name>/datasets/<dataset name>`.
+"""
+dataset_path(model_name::AbstractString, dataset::OutputDataset) =
+    "/$model_name/datasets/$(dataset_name(dataset))"
+
+"""
+Return the HDF5 group of the table: `/<model name>/tables/<table name>`.
+"""
+table_group(model_name::AbstractString, table::OutputTable) =
+    "/$model_name/tables/$(table.name)"

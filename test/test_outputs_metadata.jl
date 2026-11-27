@@ -25,11 +25,9 @@ end
     @test IS.has_simulation(m)
     @test IS.get_simulation(m).execution_order == ["UC", "ED"]
     uc = outputs_model(m, "UC")
-    @test typeof(outputs_axis(uc, "execution")) ===
-          InfrastructureOutputSchemas.ExecutionAxis
-    @test typeof(outputs_axis(uc, "horizon")) === InfrastructureOutputSchemas.HorizonAxis
-    @test typeof(outputs_axis(uc, "ThermalStandard")) ===
-          InfrastructureOutputSchemas.ComponentAxis
+    @test typeof(outputs_axis(uc, "execution")) === IS.ExecutionAxis
+    @test typeof(outputs_axis(uc, "horizon")) === IS.HorizonAxis
+    @test typeof(outputs_axis(uc, "ThermalStandard")) === IS.ComponentAxis
     @test IS.get_interval(outputs_axis(uc, "execution")) == Dates.Millisecond(86_400_000)
     @test IS.get_horizon(outputs_axis(uc, "horizon")) == Dates.Millisecond(48 * 3_600_000)
     ds = first(uc.datasets)
@@ -38,7 +36,7 @@ end
     @test IS.dataset_name(uc.datasets[3]) ==
           "ActivePowerReserveVariable__VariableReserve__Reserve_Up"
     em = outputs_model(m, "EM")
-    @test typeof(outputs_axis(em, "time")) === InfrastructureOutputSchemas.TimeAxis
+    @test typeof(outputs_axis(em, "time")) === IS.TimeAxis
     @test IS.get_resolution(outputs_axis(em, "time")) == Dates.Millisecond(300_000)
     single = IS.read_outputs_document(outputs_fixture("single"))
     @test !IS.has_simulation(single)
@@ -63,8 +61,7 @@ end
         @test !occursin("null", text)
         @test occursin("simulation", text) == (kind == "simulation")
         m2 = IS.read_outputs_document(path)
-        @test InfrastructureOutputSchemas.encode(m2) ==
-              InfrastructureOutputSchemas.encode(m)
+        @test IS._encode_document(m2) == IS._encode_document(m)
     end
 end
 
@@ -143,10 +140,9 @@ end
             end,
         )
     end
-    column(; kw...) = InfrastructureOutputSchemas.Column(;
-        name = "residual", dtype = InfrastructureOutputSchemas.ColumnDtype("f64"), kw...,
-    )
-    # Enum values: the reader rejects them, and the Julia constructors cannot build them.
+    column(unit_system, units) =
+        IS.OutputColumn("residual", "f64", "Dimensionless", unit_system, units)
+    # Enum values: the reader rejects them.
     rule = Dict(
         "model_type" => "pattern",
         "status" => "enum",
@@ -176,46 +172,35 @@ end
         end
         expect_schema_invalid(path, Regex("/columns/1/$field: enum"))
     end
-    @test_throws "invalid RunStatus value \"DONE\"" IS.with_status(deepcopy(base), "DONE")
+    # An IS value with a dtype outside the schema enum fails when it converts.
+    bad_dtype = with_model(
+        e -> _with(
+            e;
+            datasets = [_with(e.datasets[1]; dtype = "f16"), e.datasets[2:end]...],
+        ),
+    )
+    @test_throws ArgumentError IS.validate_document(bad_dtype)
+    @test_throws r"invalid Dtype value \"f16\"" IS.validate_document(bad_dtype)
 
-    uuid = first(keys(IS._systems(base)))
+    uuid = first(keys(base.systems))
     for bad in ("../x", "/abs", "a/b", "a\\b", ".", "..", "")
         m2 = deepcopy(base)
-        IS._systems(m2)[uuid] = bad
+        m2.systems[uuid] = bad
         expect_schema_invalid(m2, Regex("/$uuid: pattern"))
     end
-    expect_schema_invalid(
-        with_table_column(
-            column(;
-                quantity_kind = "Dimensionless",
-                units = "1",
-            ),
-        ),
-        r": dependentRequired",
-    )
-    expect_schema_invalid(
-        with_table_column(
-            column(;
-                quantity_kind = "Dimensionless",
-                unit_system = InfrastructureOutputSchemas.UnitSystem("SYSTEM_BASE"),
-                units = "MW",
-            ),
-        ),
-        r"/units: const",
-    )
-    @test IS.validate_document(
-        with_table_column(
-            column(;
-                quantity_kind = "Dimensionless",
-                unit_system = InfrastructureOutputSchemas.UnitSystem("COMPONENT_BASE"),
-                units = "pu",
-            ),
-        ),
-    ) === nothing
-    @test_throws r"table solver_stats has group \"/model/tables/other\"" IS.validate_document(
-        with_model(
-            e -> _with(e; tables = [_with(e.tables[1]; group = "/model/tables/other")]),
-        ),
+    # An IS column has all three unit fields or none: a file with a partial set is the case.
+    path = outputs_fixture_with("power_flow") do raw
+        delete!(raw["models"][1]["tables"][1]["columns"][2], "unit_system")
+    end
+    expect_schema_invalid(path, r": dependentRequired")
+    expect_schema_invalid(with_table_column(column(IS.SU, "MW")), r"/units: const")
+    @test IS.validate_document(with_table_column(column(IS.CU, "pu"))) === nothing
+    # IS derives the table group: a file that gives another value does not read.
+    path = outputs_fixture_with("power_flow") do raw
+        raw["models"][1]["tables"][1]["group"] = "/model/tables/other"
+    end
+    @test_throws r"table solver_stats has group \"/model/tables/other\"" IS.read_outputs_document(
+        path,
     )
 end
 
@@ -223,5 +208,29 @@ end
     pf = IS.read_outputs_document(outputs_fixture("power_flow"))
     d = outputs_model(pf, "model").datasets[2]
     @test IS.dataset_key(d)[2] == "" && IS.dataset_name(d) == "PowerFlowConverged"
-    @test d.path == "/model/datasets/PowerFlowConverged"
+    @test IS.dataset_path("model", d) == "/model/datasets/PowerFlowConverged"
+end
+
+@testset "validate_document: a duration must be whole minutes" begin
+    doc = IS.read_outputs_document(outputs_fixture("simulation"))
+    model = outputs_model(doc, "UC")
+    execution = outputs_axis(model, "execution")
+    set_outputs_axis!(
+        model,
+        "execution",
+        _with(execution; interval = Dates.Millisecond(1500)),
+    )
+    @test_throws ArgumentError IS.validate_document(doc)
+    @test_throws r"model UC: axis \"execution\": interval: duration is not a whole number of minutes" IS.validate_document(
+        doc,
+    )
+end
+
+@testset "validate_document: the status of a document is RUNNING or a final status" begin
+    doc = IS.read_outputs_document(outputs_fixture("single"))
+    for status in (IS.Simulation.RunStatus.NOT_READY, IS.Simulation.RunStatus.INITIALIZED)
+        bad = IS.with_status(doc, status)
+        @test_throws ArgumentError IS.validate_document(bad)
+        @test_throws r"invalid RunStatus value" IS.validate_document(bad)
+    end
 end

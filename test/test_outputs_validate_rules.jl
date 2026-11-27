@@ -5,14 +5,14 @@ _sim_meta() = IS.read_outputs_document(outputs_fixture("simulation"))
 _pf_meta() = IS.read_outputs_document(outputs_fixture("power_flow"))
 
 # A cross-reference rule of IS rejects `m`.
-function _expect_invalid(m::InfrastructureOutputSchemas.OutputsDocument, rx::Regex)
+function _expect_invalid(m::IS.OutputsDocument, rx::Regex)
     @test_throws ArgumentError IS.validate_document(m)
     @test_throws rx IS.validate_document(m)
     return
 end
 
 # The label describes the case at the call site.
-_expect_invalid(::String, m::InfrastructureOutputSchemas.OutputsDocument, rx::Regex) =
+_expect_invalid(::String, m::IS.OutputsDocument, rx::Regex) =
     _expect_invalid(m, rx)
 
 function _set_dataset!(m, model, i, d)
@@ -26,14 +26,20 @@ function _set_entry(m, model; kw...)
     return m
 end
 
-_layout(chunks, filters) =
-    InfrastructureOutputSchemas.DatasetLayout(; chunks = chunks, filters = filters)
-_dtype(s) = InfrastructureOutputSchemas.Dtype(s)
+# Reading the JSON file at `path` throws an `ArgumentError` that `rx` matches.
+function _expect_read_invalid(path::AbstractString, rx::Regex)
+    @test_throws ArgumentError IS.read_outputs_document(path)
+    @test_throws rx IS.read_outputs_document(path)
+    return
+end
 
 # The first dataset, axis, or table column of model UC in the raw simulation fixture.
 _raw_uc(raw) = raw["models"][1]
 _raw_ds(raw) = _raw_uc(raw)["datasets"][1]
 _raw_axis(raw, kind) = first(a for a in _raw_uc(raw)["axes"] if a["kind"] == kind)
+_raw_model(raw, name) = first(m for m in raw["models"] if m["name"] == name)
+_raw_model_axis(raw, model, kind) =
+    first(a for a in _raw_model(raw, model)["axes"] if a["kind"] == kind)
 _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
 
 @testset "validate_document: dataset field rules" begin
@@ -53,7 +59,7 @@ _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
     expect_schema_invalid(
         _set_dataset!(
             _sim_meta(), "UC", 1,
-            _with(ds(_sim_meta()); dtype = _dtype("i32"), fill_value = 2^40),
+            _with(ds(_sim_meta()); dtype = "i32", fill_value = 2^40),
         ),
         r"/fill_value: maximum",
     )
@@ -64,7 +70,7 @@ _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
         expect_schema_invalid(
             _set_dataset!(
                 _sim_meta(), "UC", 1,
-                _with(ds(_sim_meta()); dtype = _dtype(dtype), fill_value = fill),
+                _with(ds(_sim_meta()); dtype = dtype, fill_value = fill),
             ),
             r"/fill_value: ",
         )
@@ -75,7 +81,7 @@ _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
     )
         m = _set_dataset!(
             _sim_meta(), "UC", 1,
-            _with(ds(_sim_meta()); dtype = _dtype(dtype), fill_value = fill),
+            _with(ds(_sim_meta()); dtype = dtype, fill_value = fill),
         )
         @test IS.validate_document(m) === nothing
     end
@@ -84,7 +90,7 @@ _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
         expect_schema_invalid(
             _set_dataset!(
                 _sim_meta(), "UC", 1,
-                _with(d; layout = _layout(chunks, d.layout.filters)),
+                _with(d; chunks = chunks),
             ),
             r"/chunks/\d: minimum",
         )
@@ -108,7 +114,7 @@ _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
             _sim_meta(), "UC", 1,
             _with(
                 d;
-                unit_system = InfrastructureOutputSchemas.UnitSystem("NATURAL_UNITS"),
+                unit_system = IS.NU,
                 units = "",
             ),
         ),
@@ -121,7 +127,7 @@ _raw_column(raw, i) = _raw_uc(raw)["tables"][1]["columns"][i]
     expect_schema_invalid(
         _set_dataset!(
             _sim_meta(), "UC", 1,
-            _with(d; layout = _layout(d.layout.chunks, ["deflate:10"])),
+            _with(d; filters = ["deflate:10"]),
         ),
         r"/filters/0: pattern",
     )
@@ -138,34 +144,24 @@ end
         set_outputs_axis!(em, "time", _with(outputs_axis(em, "time"); kw...))
         return m
     end
-    for bad in ("1h", "PT", "P1DT", "", "P-1D")
-        expect_schema_invalid(
-            set_axis!(
-                _sim_meta(), "execution",
-                _with(ax(_sim_meta(), "execution"); interval = bad),
-            ),
-            r"/interval: pattern",
+    # An IS value holds a duration, so a bad duration string needs the raw JSON.
+    for bad in ("1h", "PT", "P1DT", "", "P-1D", "PT9999999999M")
+        path = outputs_fixture_with(
+            raw -> (_raw_axis(raw, "execution")["interval"] = bad),
+            "simulation",
         )
+        expect_schema_invalid(path, r"/axes/\d: oneOf")
     end
-    expect_schema_invalid(
-        set_axis!(
-            _sim_meta(), "execution",
-            _with(ax(_sim_meta(), "execution"); interval = "PT9999999999M"),
-        ),
-        r"/interval: pattern",
+    path = outputs_fixture_with(
+        raw -> (_raw_axis(raw, "horizon")["resolution"] = "1h"),
+        "simulation",
     )
-    expect_schema_invalid(
-        set_axis!(
-            _sim_meta(),
-            "horizon",
-            _with(ax(_sim_meta(), "horizon"); resolution = "1h"),
-        ),
-        r"/resolution: pattern",
+    expect_schema_invalid(path, r"/axes/\d: oneOf")
+    path = outputs_fixture_with(
+        raw -> (_raw_model_axis(raw, "EM", "time")["resolution"] = "5min"),
+        "simulation",
     )
-    expect_schema_invalid(
-        set_em_time!(_sim_meta(); resolution = "5min"),
-        r"/resolution: pattern",
-    )
+    expect_schema_invalid(path, r"/axes/\d: oneOf")
     for n in (0, -2)
         expect_schema_invalid(
             set_axis!(
@@ -185,40 +181,39 @@ end
         r"/horizon_count: minimum",
     )
     expect_schema_invalid(set_em_time!(_sim_meta(); length = 0), r"/length: minimum")
-    _expect_invalid(
-        "wrong axis group",
-        set_axis!(
-            _sim_meta(), "execution",
-            _with(ax(_sim_meta(), "execution"); group = "/UC/axes/other"),
-        ),
-        r"group \"/UC/axes/other\"",
+    # An IS value derives its group, so a wrong group needs the raw JSON.
+    path = outputs_fixture_with(
+        raw -> (_raw_axis(raw, "execution")["group"] = "/UC/axes/other"),
+        "simulation",
     )
-    _expect_invalid(
-        "time group of another model",
-        set_em_time!(_sim_meta(); group = "/UC/axes/time"),
-        r"expected \"/EM/axes/time\"",
+    _expect_read_invalid(path, r"group \"/UC/axes/other\"")
+    path = outputs_fixture_with(
+        raw -> (_raw_model_axis(raw, "EM", "time")["group"] = "/UC/axes/time"),
+        "simulation",
     )
+    _expect_read_invalid(path, r"expected \"/EM/axes/time\"")
     # The schema checks the form of a timestamp, IS checks that the date exists.
-    _expect_invalid(
-        "execution timestamp with month 13",
-        set_axis!(
-            _sim_meta(), "execution",
-            _with(ax(_sim_meta(), "execution"); initial_timestamp = "2024-13-01T00:00:00"),
-        ),
+    path = outputs_fixture_with(
+        raw ->
+            (_raw_axis(raw, "execution")["initial_timestamp"] = "2024-13-01T00:00:00"),
+        "simulation",
+    )
+    _expect_read_invalid(
+        path,
         r"initial_timestamp \"2024-13-01T00:00:00\" is not a valid date",
     )
     thermal = ax(_sim_meta(), "ThermalStandard")
-    _expect_invalid(
-        "component axis group",
-        set_axis!(_sim_meta(), "ThermalStandard", _with(thermal; group = "/UC/axes/x")),
-        r"group",
+    path = outputs_fixture_with(
+        raw -> (_raw_axis(raw, "component")["group"] = "/UC/axes/x"),
+        "simulation",
     )
+    _expect_read_invalid(path, r"group")
     expect_schema_invalid(
         set_axis!(
             _sim_meta(), "ThermalStandard",
             _with(
                 thermal;
-                columns = InfrastructureOutputSchemas.ComponentAxisColumnsItem[],
+                columns = IS.ComponentAxisColumn[],
                 subset = "s",
             ),
         ),
@@ -230,9 +225,7 @@ end
             _with(
                 thermal;
                 columns = [
-                    InfrastructureOutputSchemas.ComponentAxisColumnsItem(;
-                        component_type = "bad name", has_ids = true,
-                    ),
+                    IS.ComponentAxisColumn("bad name", true),
                 ],
             ),
         ),
@@ -273,30 +266,29 @@ end
         r"base_power",
     )
     m = _sim_meta()
-    IS._systems(m)["not-a-uuid"] = "bundle"
+    m.systems["not-a-uuid"] = "bundle"
     expect_schema_invalid(m, r"/not-a-uuid: pattern")
     m = _sim_meta()
     upper = uppercase(entry(m).system_uuid)
-    IS._systems(m)[upper] = "bundle"
+    m.systems[upper] = "bundle"
     expect_schema_invalid(_set_entry(m, "UC"; system_uuid = upper), r": pattern")
     m = _sim_meta()
-    IS._systems(m)["abc"] = "bundle"
+    m.systems["abc"] = "bundle"
     expect_schema_invalid(_set_entry(m, "UC"; system_uuid = "abc"), r": pattern")
     m = _set_entry(_sim_meta(), "UC"; system_uuid = "00000000-0000-0000-0000-000000000000")
-    @test !isempty(IS._systems(m))
+    @test !isempty(m.systems)
     _expect_invalid(
         m,
         r"system_uuid \"00000000-0000-0000-0000-000000000000\" is not in systems",
     )
-    settings(s) = InfrastructureOutputSchemas.ModelSettings(; additional_properties = s)
     for v in ([1, 2], Dict("a" => 1), nothing)
         expect_schema_invalid(
-            _set_entry(_sim_meta(), "UC"; settings = settings(Dict{String, Any}("x" => v))),
+            _set_entry(_sim_meta(), "UC"; settings = Dict{String, Any}("x" => v)),
             r"/x: not",
         )
     end
     for ok in ("a", 1, 2.5, true)
-        s = settings(Dict{String, Any}("x" => ok))
+        s = Dict{String, Any}("x" => ok)
         @test IS.validate_document(_set_entry(_sim_meta(), "UC"; settings = s)) === nothing
     end
     for bad in (
@@ -315,18 +307,18 @@ end
         @test IS.validate_document(IS.read_outputs_document(path)) === nothing
     end
     m = _sim_meta()
-    uuid = first(keys(IS._systems(m)))
-    IS._systems(m)[uuid] = ""
+    uuid = first(keys(m.systems))
+    m.systems[uuid] = ""
     expect_schema_invalid(m, Regex("/$uuid: pattern"))
     m = _sim_meta()
-    empty!(IS._systems(m))
+    empty!(m.systems)
     expect_schema_invalid(m, r": minProperties")
     m = _sim_meta()
     empty!(m.models)
     expect_schema_invalid(
         _with(
             m;
-            simulation = OpenAPI.Runtime.ABSENT,
+            simulation = IS.Simulation.NoSimulation(),
             kind = "single",
         ),
         r"/models: minItems",
@@ -336,7 +328,11 @@ end
 @testset "validate_document: simulation and table rules" begin
     sim(m) = IS.get_simulation(m)
     with_sim(; kw...) = _with(_sim_meta(); simulation = _with(sim(_sim_meta()); kw...))
-    expect_schema_invalid(with_sim(; step_resolution = "1d"), r"/step_resolution: pattern")
+    path = outputs_fixture_with(
+        raw -> (raw["simulation"]["step_resolution"] = "1d"),
+        "simulation",
+    )
+    expect_schema_invalid(path, r"/step_resolution: pattern")
     for n in (-1, 0)
         expect_schema_invalid(with_sim(; num_steps = n), r"/num_steps: minimum")
     end
@@ -344,15 +340,19 @@ end
         with_sim(; execution_order = String[]),
         r"/execution_order: minItems",
     )
-    _expect_invalid(
-        "simulation initial_time with day 32",
-        with_sim(; initial_time = "2024-01-32T00:00:00"),
+    path = outputs_fixture_with(
+        raw -> (raw["simulation"]["initial_time"] = "2024-01-32T00:00:00"),
+        "simulation",
+    )
+    _expect_read_invalid(
+        path,
         r"initial_time \"2024-01-32T00:00:00\" is not a valid date",
     )
-    expect_schema_invalid(
-        with_sim(; step_resolution = "PT9999999999M"),
-        r"/step_resolution: pattern",
+    path = outputs_fixture_with(
+        raw -> (raw["simulation"]["step_resolution"] = "PT9999999999M"),
+        "simulation",
     )
+    expect_schema_invalid(path, r"/step_resolution: pattern")
     # a single document that carries a simulation object, as the schema forbids
     sim_obj = JSON.parse(read(outputs_fixture("simulation"), String))["simulation"]
     path = outputs_fixture_with(raw -> (raw["simulation"] = sim_obj), "single")
@@ -368,7 +368,7 @@ end
         r"/length: minimum",
     )
     expect_schema_invalid(
-        set_table!(_sim_meta(), _with(t; columns = InfrastructureOutputSchemas.Column[])),
+        set_table!(_sim_meta(), _with(t; columns = IS.OutputColumn[])),
         r"/columns: minItems",
     )
     cols = copy(t.columns)
@@ -415,7 +415,7 @@ end
     end
     m = IS.read_outputs_document(path)
     @test IS.validate_document(m) === nothing
-    @test DateTime(outputs_axis(outputs_model(m, "UC"), "execution").initial_timestamp) ==
+    @test outputs_axis(outputs_model(m, "UC"), "execution").initial_timestamp ==
           DateTime(2024, 1, 1, 0, 0, 0, 250)
 end
 
@@ -437,31 +437,39 @@ end
 end
 
 @testset "validate_document: the schema rejects each duration that IS rejects" begin
-    function with_axis(model, key; kw...)
-        m = _sim_meta()
-        entry = outputs_model(m, model)
-        set_outputs_axis!(entry, key, _with(outputs_axis(entry, key); kw...))
-        return m
-    end
-    with_step(v) =
-        _with(
-            _sim_meta();
-            simulation = _with(IS.get_simulation(_sim_meta()); step_resolution = v),
-        )
+    # An IS value holds a duration, so each spelling goes into the raw JSON. The schema
+    # reports a bad axis duration at the axis `oneOf`.
     fields = (
-        ("interval", "P000000001D", v -> with_axis("UC", "execution"; interval = v)),
-        ("resolution", "PT000000001H", v -> with_axis("UC", "horizon"; resolution = v)),
-        ("resolution", "PT000000005M", v -> with_axis("EM", "time"; resolution = v)),
-        ("step_resolution", "P000000001D", with_step),
+        (
+            "/axes/\\d: oneOf",
+            "P000000001D",
+            (raw, v) -> (_raw_axis(raw, "execution")["interval"] = v),
+        ),
+        (
+            "/axes/\\d: oneOf",
+            "PT000000001H",
+            (raw, v) -> (_raw_axis(raw, "horizon")["resolution"] = v),
+        ),
+        (
+            "/axes/\\d: oneOf", "PT000000005M",
+            (raw, v) -> (_raw_model_axis(raw, "EM", "time")["resolution"] = v),
+        ),
+        (
+            "/step_resolution: pattern",
+            "P000000001D",
+            (raw, v) -> (raw["simulation"]["step_resolution"] = v),
+        ),
     )
-    for (field, ok, build) in fields
-        @test IS.validate_document(build(ok)) === nothing
+    for (pattern, ok, set!) in fields
+        path = outputs_fixture_with(raw -> set!(raw, ok), "simulation")
+        @test IS.validate_document(IS.read_outputs_document(path)) === nothing
         for bad in (
             "", "P", "PT", "P1DT", "1h", "P-1D", "PT1.5H", "P1W", "P1M", "P1Y",
             "PT9999999999M", "PT0000000001M", "PT30S", "PT1M30S", "P1DT\n", "PT1H\n",
         )
             @test !IS.is_iso_duration(bad)
-            expect_schema_invalid(build(bad), Regex("/$field: pattern"))
+            path = outputs_fixture_with(raw -> set!(raw, bad), "simulation")
+            expect_schema_invalid(path, Regex(pattern))
         end
     end
 end
@@ -470,35 +478,27 @@ end
     for bad in ("", "a/b")
         m = _sim_meta()
         i = outputs_model_index(m, "EM")
+        # The derived group of the EM time axis breaks the pattern first.
         m.models[i] = _with(m.models[i]; name = bad)
-        expect_schema_invalid(m, r"Model\s+/name: pattern")
+        expect_schema_invalid(m, r"(Model\s+/name|TimeAxis\s+/group): pattern")
         m = _sim_meta()
-        push!(
-            outputs_model(m, "UC").axes,
-            InfrastructureOutputSchemas.Axis(
-                InfrastructureOutputSchemas.LabelAxis(;
-                    kind = "label",
-                    name = bad,
-                    labels = ["x"],
-                ),
-            ),
-        )
+        push!(outputs_model(m, "UC").axes, IS.LabelAxis(bad, ["x"]))
         expect_schema_invalid(m, r"LabelAxis\s+/name: pattern")
         m = _sim_meta()
         t = outputs_model(m, "UC").tables[1]
-        outputs_model(m, "UC").tables[1] = _with(t; name = bad, group = "/UC/tables/$bad")
+        outputs_model(m, "UC").tables[1] = _with(t; name = bad)
         expect_schema_invalid(m, r"Table\s+/(name|group): pattern")
     end
     m = _sim_meta()
     d = outputs_model(m, "UC").datasets[1]
-    outputs_model(m, "UC").datasets[1] = _with(d; meta = "a/b", path = d.path * "__a/b")
+    outputs_model(m, "UC").datasets[1] = _with(d; meta = "a/b")
     expect_schema_invalid(m, r"/meta: not")
 end
 
 @testset "outputs document: simulation presence follows the document" begin
     m = _sim_meta()
     @test IS.has_simulation(m)
-    gone = _with(m; simulation = OpenAPI.Runtime.ABSENT)
+    gone = _with(m; simulation = IS.Simulation.NoSimulation())
     @test !IS.has_simulation(gone)
     expect_schema_invalid(gone, r": required")
     @test_throws ErrorException IS.get_simulation(gone)
@@ -521,7 +521,10 @@ end
     set_outputs_axis!(
         outputs_model(m, "UC"),
         "execution",
-        _with(outputs_axis(outputs_model(m, "UC"), "execution"); interval = "PT90M"),
+        _with(
+            outputs_axis(outputs_model(m, "UC"), "execution");
+            interval = Dates.Minute(90),
+        ),
     )
     _expect_invalid("interval not a multiple", m, r"model UC: .*whole multiple")
 
@@ -529,7 +532,7 @@ end
     set_outputs_axis!(
         outputs_model(m, "UC"),
         "execution",
-        _with(outputs_axis(outputs_model(m, "UC"), "execution"); interval = "P3D"),
+        _with(outputs_axis(outputs_model(m, "UC"), "execution"); interval = Dates.Day(3)),
     )
     _expect_invalid("interval above horizon", m, r"model UC: .*at most the horizon")
 
@@ -543,24 +546,13 @@ end
     m = _sim_meta()
     push!(
         outputs_model(m, "UC").axes,
-        InfrastructureOutputSchemas.Axis(
-            _with(outputs_axis(outputs_model(m, "EM"), "time"); group = "/UC/axes/time"),
-        ),
+        outputs_axis(outputs_model(m, "EM"), "time"),
     )
     expect_schema_invalid(m, r"/axes: not")
 
     for (model, key) in (("UC", "time"), ("EM", "execution"), ("EM", "horizon"))
         m = _sim_meta()
-        push!(
-            outputs_model(m, model).axes,
-            InfrastructureOutputSchemas.Axis(
-                InfrastructureOutputSchemas.LabelAxis(;
-                    kind = "label",
-                    name = key,
-                    labels = ["x"],
-                ),
-            ),
-        )
+        push!(outputs_model(m, model).axes, IS.LabelAxis(key, ["x"]))
         expect_schema_invalid(m, r"LabelAxis\s+/name: not")
     end
 end
@@ -585,22 +577,19 @@ end
     )
     expect_schema_invalid(edit_dataset(single(), "model", 1; meta = "a__b"), r"/meta: not")
     expect_schema_invalid(
-        edit_dataset(single(), "model", 2; dtype = _dtype("i64"), fill_value = 1.5),
+        edit_dataset(single(), "model", 2; dtype = "i64", fill_value = 1.5),
         r"/fill_value: type",
     )
-    m = single()
-    entry = outputs_model(m, "model")
-    t = entry.tables[1]
-    cols = copy(t.columns)
-    cols[2] = _with(cols[2]; quantity_kind = OpenAPI.Runtime.ABSENT)
-    entry.tables[1] = _with(t; columns = cols)
-    expect_schema_invalid(m, r": dependentRequired")
+    # A column value has all of its unit fields or none, so the raw JSON drops one.
+    path =
+        outputs_fixture_with(raw -> delete!(_raw_column(raw, 2), "quantity_kind"), "single")
+    expect_schema_invalid(path, r": dependentRequired")
     m = single()
     d = outputs_model(m, "model").datasets[1]
     entry = outputs_model(m, "model")
     entry.datasets[1] = _with(
         d; axes = ["ThermalStandard", "horizon"],
-        layout = _layout([76, 48], d.layout.filters),
+        chunks = [76, 48],
     )
     expect_schema_invalid(m, r"/axes: contains")
     path = outputs_fixture_with(raw -> (raw["kind"] = "GasFlow"), "single")
@@ -618,7 +607,7 @@ end
     single() = IS.read_outputs_document(outputs_fixture("single"))
     m = single()
     d = outputs_model(m, "model").datasets[1]
-    _set_dataset!(m, "model", 1, _with(d; layout = _layout([2, 76, 48], d.layout.filters)))
+    _set_dataset!(m, "model", 1, _with(d; chunks = [2, 76, 48]))
     _expect_invalid(
         m,
         r"model model: dataset .* chunk 2 on axis \"execution\".* axis length 1",
@@ -629,7 +618,7 @@ end
     set_outputs_axis!(
         entry, "ThermalStandard", _with(outputs_axis(entry, "ThermalStandard"); length = 0),
     )
-    @test outputs_model(m, "model").datasets[1].layout.chunks == [1, 76, 48]
+    @test outputs_model(m, "model").datasets[1].chunks == [1, 76, 48]
     @test IS.validate_document(m) === nothing
 end
 
@@ -637,7 +626,7 @@ end
     m = _sim_meta()
     t = outputs_model(m, "UC").tables[1]
     cols = copy(t.columns)
-    cols[2] = _with(cols[1]; dtype = InfrastructureOutputSchemas.ColumnDtype("f64"))
+    cols[2] = _with(cols[1]; dtype = "f64")
     outputs_model(m, "UC").tables[1] = _with(t; columns = cols)
     _expect_invalid(
         m,
@@ -660,10 +649,10 @@ end
     d = outputs_model(m, "model").datasets[1]
     other = _with(
         d;
-        component_type = OpenAPI.Runtime.ABSENT,
+        component_type = "",
         meta = "ThermalStandard",
         axes = ["execution", "horizon"],
-        layout = _layout([1, 48], d.layout.filters),
+        chunks = [1, 48],
     )
     @test IS.dataset_key(other) != IS.dataset_key(d)
     push!(outputs_model(m, "model").datasets, other)
@@ -674,7 +663,7 @@ end
     m = single()
     push!(
         outputs_model(m, "model").datasets,
-        _with(other; meta = "Other", path = "/model/datasets/ActivePowerVariable__Other"),
+        _with(other; meta = "Other"),
     )
     @test IS.validate_document(m) === nothing
 end
@@ -697,11 +686,11 @@ end
         return m
     end
     _expect_invalid(
-        with_uc!(_sim_meta(); interval = "P1D", resolution = "PT0M"),
+        with_uc!(_sim_meta(); interval = Dates.Day(1), resolution = Dates.Minute(0)),
         r"model UC: .*whole multiple",
     )
     m = with_uc!(
-        _sim_meta(); interval = "P999999999D", resolution = "P999999999D",
+        _sim_meta(); interval = Dates.Day(999999999), resolution = Dates.Day(999999999),
         horizon_count = 107,
     )
     @test IS.validate_document(m) === nothing
@@ -709,7 +698,7 @@ end
         outputs_axis(outputs_model(m, "UC"), "horizon"),
     )
     m = with_uc!(
-        _sim_meta(); interval = "P999999999D", resolution = "P999999999D",
+        _sim_meta(); interval = Dates.Day(999999999), resolution = Dates.Day(999999999),
         horizon_count = 1,
     )
     @test IS.get_horizon(outputs_axis(outputs_model(m, "UC"), "horizon")) ==
@@ -719,8 +708,8 @@ end
 @testset "validate_document: bundle directory names" begin
     second = "00000000-0000-0000-0000-000000000001"
     m = _sim_meta()
-    uuid, name = first(IS._systems(m))
-    IS._systems(m)[second] = name
+    uuid, name = first(m.systems)
+    m.systems[second] = name
     _expect_invalid(
         m,
         Regex(
@@ -728,25 +717,25 @@ end
         ),
     )
     m = _sim_meta()
-    IS._systems(m)[second] = "other-bundle"
+    m.systems[second] = "other-bundle"
     @test IS.validate_document(m) === nothing
     for bad in ("C:foo", "c:")
         m = _sim_meta()
-        IS._systems(m)[uuid] = bad
+        m.systems[uuid] = bad
         _expect_invalid(
             m,
             Regex("system $uuid: bundle directory \"$bad\" .*drive"),
         )
     end
     m = _sim_meta()
-    IS._systems(m)[uuid] = "C:\\foo"
+    m.systems[uuid] = "C:\\foo"
     expect_schema_invalid(m, Regex("/$uuid: pattern"))
     m = _sim_meta()
-    IS._systems(m)[uuid] = "ab:c"
+    m.systems[uuid] = "ab:c"
     @test IS.validate_document(m) === nothing
     for bad in ("outputs.json", "outputs.h5", "OUTPUTS.JSON", "outputs.json.tmp")
         m = _sim_meta()
-        IS._systems(m)[uuid] = bad
+        m.systems[uuid] = bad
         _expect_invalid(
             m,
             Regex(
@@ -755,7 +744,7 @@ end
         )
     end
     m = _sim_meta()
-    IS._systems(m)[uuid] = "outputs"
+    m.systems[uuid] = "outputs"
     @test IS.validate_document(m) === nothing
 end
 

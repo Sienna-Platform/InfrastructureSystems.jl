@@ -16,31 +16,18 @@ function _single_meta()
     return m
 end
 
-function _fake_axis_data(ax::InfrastructureOutputSchemas.ComponentAxis)
+function _fake_axis_data(ax::IS.ComponentAxis)
     n = IS.axis_length(ax)
     nc = length(ax.columns)
     ids = repeat(collect(Int64, 1:n)', nc, 1)
     labels = [string("name_", i) for _ in 1:nc, i in 1:n]
-    return IS.AxisData(ids, labels, DateTime[])
-end
-
-function _fake_axis_data(
-    ax::Union{
-        InfrastructureOutputSchemas.ExecutionAxis,
-        InfrastructureOutputSchemas.TimeAxis,
-    },
-)
-    ts = [
-        DateTime(ax.initial_timestamp) + (i - 1) * IS._axis_step(ax) for
-        i in 1:IS.axis_length(ax)
-    ]
-    return IS.AxisData(ts)
+    return IS.AxisData(ids, labels)
 end
 
 function simulation_axis_data(m)
     d = Dict{Tuple{String, String}, IS.AxisData}()
-    for model in m.models, ax in IS._axes(model)
-        if IS._needs_axis_data(ax)
+    for model in m.models, ax in model.axes
+        if IS.takes_axis_data(ax)
             d[(model.name, IS.axis_name(ax))] = _fake_axis_data(ax)
         end
     end
@@ -66,13 +53,12 @@ function _all_values(m)
         model = entry.name
         dims = Tuple(IS._dataset_dims(entry, d))
         vals[(model, IS.dataset_key(d)...)] =
-            fill(_dtype_zero(Val(Symbol(string(d.dtype)))), dims)
+            fill(_dtype_zero(Val(Symbol(d.dtype))), dims)
     end
     return vals
 end
 
-_column_fill(c::InfrastructureOutputSchemas.Column, n) =
-    _column_fill(Val(Symbol(string(c.dtype))), n)
+_column_fill(c::IS.OutputColumn, n) = _column_fill(Val(Symbol(c.dtype)), n)
 _column_fill(::Val{:str}, n) = fill("x", n)
 _column_fill(::Val{:f64}, n) = zeros(n)
 _column_fill(::Val{:i64}, n) = ones(Int64, n)
@@ -81,7 +67,7 @@ _column_fill(::Val{:bool}, n) = falses(n)
 # Placeholder columns for every table of `m`.
 function _all_tables(m)
     tables = Dict()
-    for entry in m.models, t in IS._model_tables(entry)
+    for entry in m.models, t in entry.tables
         tables[(entry.name, t.name)] = NamedTuple{Tuple(Symbol(c.name) for c in t.columns)}(
             Tuple(_column_fill(c, t.length) for c in t.columns),
         )
@@ -90,7 +76,7 @@ function _all_tables(m)
 end
 
 # A bundle writer object for every system of `m`.
-_bundle_systems(m) = Dict(uuid => _MockSystem() for uuid in keys(IS._systems(m)))
+_bundle_systems(m) = Dict(uuid => _MockSystem() for uuid in keys(m.systems))
 
 @testset "outputs writer: one-shot write then raw read with HDF5" begin
     m = _single_meta()
@@ -111,15 +97,15 @@ _bundle_systems(m) = Dict(uuid => _MockSystem() for uuid in keys(IS._systems(m))
         @test length(f["/model/axes/execution/timestamps"]) == 7
     end
     m2 = IS.read_outputs_document(joinpath(dir, "outputs.json"))
-    @test string(m2.status) == "SUCCESSFULLY_FINALIZED"
+    @test m2.status == IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED
 end
 
 @testset "outputs writer: incremental append, unwritten reads NaN" begin
     m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
-    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) ==
-          "RUNNING"
+    @test IS.read_outputs_document(joinpath(dir, "outputs.json")).status ==
+          IS.Simulation.RunStatus.RUNNING
     IS.write_execution!(w, "model", _KEY, fill(2.0, 48, 76), 3)
     IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r") do f
@@ -174,15 +160,13 @@ end
 @testset "outputs writer: axis data names are exact" begin
     m = _single_meta()
     ad = simulation_axis_data(m)
-    ad[("model", "horizon")] =
-        _fake_axis_data(outputs_axis(outputs_model(m, "model"), "execution"))
+    ad[("model", "horizon")] = IS.AxisData()
     @test_throws ArgumentError IS.open_outputs_writer(mktempdir(), m; axis_data = ad)
     ad = simulation_axis_data(m)
-    ad[("model", "nope")] =
-        _fake_axis_data(outputs_axis(outputs_model(m, "model"), "execution"))
+    ad[("model", "nope")] = IS.AxisData()
     @test_throws ArgumentError IS.open_outputs_writer(mktempdir(), m; axis_data = ad)
     ad = simulation_axis_data(m)
-    delete!(ad, ("model", "execution"))
+    delete!(ad, ("model", "ThermalStandard"))
     @test_throws ArgumentError IS.open_outputs_writer(mktempdir(), m; axis_data = ad)
 end
 
@@ -197,20 +181,13 @@ end
     m = _single_meta()
     ad = simulation_axis_data(m)
     d0 = outputs_model(m, "model").datasets[1]
-    mk(; dtype = d0.dtype, fill_value = d0.fill_value, filters = d0.layout.filters) =
+    mk(; dtype = d0.dtype, fill_value = d0.fill_value, filters = d0.filters) =
         _with_dataset(
             m,
-            d -> _with(
-                d;
-                dtype = dtype,
-                fill_value = fill_value,
-                layout = InfrastructureOutputSchemas.DatasetLayout(;
-                    chunks = d.layout.chunks, filters = filters,
-                ),
-            ),
+            d -> _with(d; dtype = dtype, fill_value = fill_value, filters = filters),
         )
     for bad in (
-        mk(; fill_value = 1.5, dtype = InfrastructureOutputSchemas.Dtype("i64")),
+        mk(; fill_value = 1.5, dtype = "i64"),
         mk(; filters = ["lz4"]),
         mk(; filters = ["deflate:0"]),
         mk(; filters = ["deflate:10"]),
@@ -223,31 +200,44 @@ end
     end
     @test_throws r"/fill_value: type" IS.open_outputs_writer(
         mktempdir(),
-        mk(; fill_value = 1.5, dtype = InfrastructureOutputSchemas.Dtype("i64"));
+        mk(; fill_value = 1.5, dtype = "i64");
         axis_data = ad)
 end
 
 @testset "outputs writer: axis timestamps follow the declared step" begin
     sim = IS.read_outputs_document(outputs_fixture("simulation"))
-    for (m, model, key, i, expected) in (
-        (_single_meta(), "model", "execution", 3, DateTime(2024, 1, 3)),
-        (sim, "EM", "time", 2, DateTime(2024, 1, 1, 0, 5)),
+    for (m, model, key) in (
+        (_single_meta(), "model", "execution"),
+        (sim, "EM", "time"),
+        (sim, "UC", "execution"),
     )
-        ad = simulation_axis_data(m)
-        ts = copy(ad[(model, key)].timestamps)
-        @test ts[i] == expected
-        ts[i] += Minute(1)
-        ad[(model, key)] = IS.AxisData(ts)
         dir = joinpath(mktempdir(), "out")
-        @test_throws ArgumentError IS.open_outputs_writer(dir, m; axis_data = ad)
-        @test_throws Regex(
-            "model $model: axis \"$key\" timestamp $i is $(ts[i]), expected $expected",
-        ) IS.open_outputs_writer(dir, m; axis_data = ad)
-        @test !ispath(dir)
         w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
+        for name in values(m.systems)
+            mkpath(joinpath(dir, name))
+        end
         IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-        @test isfile(joinpath(dir, "outputs.h5"))
+        a = IS.open_outputs_reader(dir)
+        axis = IS.get_axis(a, model, key)
+        @test IS.read_axis_data(a, model, key).timestamps == IS.axis_timestamps(axis)
+        @test !isempty(IS.axis_timestamps(axis))
+        if model == "EM"
+            @test IS.get_timestamps(IS.read_axis_data(a, model, key))[1:2] ==
+                  [DateTime(2024, 1, 1, 0, 0), DateTime(2024, 1, 1, 0, 5)]
+        end
     end
+end
+
+@testset "outputs writer: a time axis takes no axis data" begin
+    doc = _single_meta()
+    axis_data = simulation_axis_data(doc)
+    axis_data[("model", "execution")] = IS.AxisData([DateTime(2024, 1, 1)])
+    dir = mktempdir()
+    @test_throws r"axis \"execution\" takes no axis data" IS.open_outputs_writer(
+        dir, doc; axis_data = axis_data,
+    )
+    @test !isfile(joinpath(dir, "outputs.json"))
+    @test !isfile(joinpath(dir, "outputs.h5"))
 end
 
 @testset "outputs writer: a zero-length component axis keeps its ids" begin
@@ -272,7 +262,7 @@ end
 @testset "outputs writer: systems path" begin
     m = _single_meta()
     ad = simulation_axis_data(m)
-    uuid, name = first(IS._systems(m))
+    uuid, name = first(m.systems)
     vals = merge(_all_values(m), Dict(("model", _KEY...) => rand(48, 76, 7)))
     tbls = _all_tables(m)
     dir = mktempdir()
@@ -284,7 +274,8 @@ end
     dir = mktempdir()
     @test_throws "bundle boom" IS.write_outputs(dir, m; axis_data = ad, values = vals,
         tables = tbls, systems = Dict(uuid => _FailingSystem()))
-    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) == "FAILED"
+    @test IS.read_outputs_document(joinpath(dir, "outputs.json")).status ==
+          IS.Simulation.RunStatus.FAILED
     HDF5.h5open(joinpath(dir, "outputs.h5"), "r") do f
         @test haskey(f, "/model/datasets")
     end
@@ -298,7 +289,7 @@ end
     # bundle directory must be a plain relative name
     for bad in ("../x", "/abs", "a/b", "..", "")
         m2 = deepcopy(m)
-        IS._systems(m2)[uuid] = bad
+        m2.systems[uuid] = bad
         dir = joinpath(mktempdir(), "out")
         @test_throws InfrastructureOutputSchemas.SchemaValidationError IS.write_outputs(
             dir, m2; axis_data = ad,
@@ -334,19 +325,19 @@ end
     @test_throws ArgumentError IS.finalize!(w; status = IS.Simulation.RunStatus.RUNNING)
     @test_throws ArgumentError IS.finalize!(
         w; status = IS.Simulation.RunStatus.INITIALIZED)
-    @test string(w.document.status) == "RUNNING"
+    @test w.document.status == IS.Simulation.RunStatus.RUNNING
     for (k, v) in _all_values(m)
         IS.write_values!(w, k[1], k[2:end], v)
     end
     for ((model, name), cols) in _all_tables(m)
         IS.write_table!(w, model, name, cols)
     end
-    for name in values(IS._systems(m))
+    for name in values(m.systems)
         mkpath(joinpath(dir, name))
     end
     IS.finalize!(w; status = IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED)
-    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) ==
-          "SUCCESSFULLY_FINALIZED"
+    @test IS.read_outputs_document(joinpath(dir, "outputs.json")).status ==
+          IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED
 end
 
 @testset "outputs writer: refuses a directory that holds outputs files" begin
@@ -358,8 +349,8 @@ end
     @test_throws ArgumentError IS.open_outputs_writer(dir, m; axis_data = ad)
     @test_throws joinpath(dir, "outputs.json") IS.open_outputs_writer(
         dir, m; axis_data = ad)
-    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) ==
-          "SUCCESSFULLY_FINALIZED"
+    @test IS.read_outputs_document(joinpath(dir, "outputs.json")).status ==
+          IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED
     rm(joinpath(dir, "outputs.json"))
     @test_throws ArgumentError IS.open_outputs_writer(dir, m; axis_data = ad)
     @test_throws joinpath(dir, "outputs.h5") IS.open_outputs_writer(
@@ -378,7 +369,7 @@ end
     for ((model, name), cols) in _all_tables(m)
         IS.write_table!(w, model, name, cols)
     end
-    for name in values(IS._systems(m))
+    for name in values(m.systems)
         mkpath(joinpath(dir, name))
     end
     json = joinpath(dir, "outputs.json")
@@ -392,10 +383,10 @@ end
         chmod(dir, 0o755)
         @test read(json, String) == before
         @test sort!(readdir(dir)) == sort!(
-            ["outputs.h5", "outputs.json", collect(values(IS._systems(m)))...],
+            ["outputs.h5", "outputs.json", collect(values(m.systems))...],
         )
-        @test string(IS.read_outputs_document(json).status) == "RUNNING"
-        @test string(w.document.status) == "RUNNING"
+        @test IS.read_outputs_document(json).status == IS.Simulation.RunStatus.RUNNING
+        @test w.document.status == IS.Simulation.RunStatus.RUNNING
         @test_throws ArgumentError IS.write_execution!(
             w,
             "model",
@@ -404,14 +395,14 @@ end
             1,
         )
         IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-        @test string(IS.read_outputs_document(json).status) == "FAILED"
-        @test string(w.document.status) == "FAILED"
+        @test IS.read_outputs_document(json).status == IS.Simulation.RunStatus.FAILED
+        @test w.document.status == IS.Simulation.RunStatus.FAILED
         @test !isopen(w.file)
         # The manifest is replaced, not rewritten in place.
         @test stat(json).inode != inode
     else
         IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-        @test string(IS.read_outputs_document(json).status) == "FAILED"
+        @test IS.read_outputs_document(json).status == IS.Simulation.RunStatus.FAILED
     end
 end
 
@@ -425,7 +416,7 @@ end
     @test_throws "never written" IS.finalize!(w; status = success)
     @test_throws "table optimizer_stats was never written" IS.finalize!(
         w; status = success)
-    @test string(w.document.status) == "RUNNING" && isopen(w.file)
+    @test w.document.status == IS.Simulation.RunStatus.RUNNING && isopen(w.file)
     # a failed attempt leaves the writer usable
     for (k, v) in _all_values(m)
         if k[2:end] != _KEY
@@ -443,13 +434,13 @@ end
         w; status = success)
     IS.write_execution!(w, "model", _KEY, fill(1.0, 48, 76), 7)
     @test_throws "bundle directory" IS.finalize!(w; status = success)
-    @test string(w.document.status) == "RUNNING" && isopen(w.file)
-    for name in values(IS._systems(m))
+    @test w.document.status == IS.Simulation.RunStatus.RUNNING && isopen(w.file)
+    for name in values(m.systems)
         mkpath(joinpath(dir, name))
     end
     IS.finalize!(w; status = success)
-    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) ==
-          "SUCCESSFULLY_FINALIZED"
+    @test IS.read_outputs_document(joinpath(dir, "outputs.json")).status ==
+          IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED
 end
 
 @testset "outputs writer: FAILED is allowed at any point" begin
@@ -457,7 +448,8 @@ end
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     IS.finalize!(w; status = IS.Simulation.RunStatus.FAILED)
-    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) == "FAILED"
+    @test IS.read_outputs_document(joinpath(dir, "outputs.json")).status ==
+          IS.Simulation.RunStatus.FAILED
 end
 
 @testset "outputs writer: write_outputs with a missing dataset fails the run" begin
@@ -465,7 +457,8 @@ end
     dir = mktempdir()
     @test_throws "never written" IS.write_outputs(dir, m;
         axis_data = simulation_axis_data(m), values = Dict(), tables = Dict())
-    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) == "FAILED"
+    @test IS.read_outputs_document(joinpath(dir, "outputs.json")).status ==
+          IS.Simulation.RunStatus.FAILED
 end
 
 @testset "outputs writer: abort! marks FAILED and closes the file" begin
@@ -474,5 +467,6 @@ end
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
     @test IS.abort!(w) === nothing
     @test !isopen(w.file)
-    @test string(IS.read_outputs_document(joinpath(dir, "outputs.json")).status) == "FAILED"
+    @test IS.read_outputs_document(joinpath(dir, "outputs.json")).status ==
+          IS.Simulation.RunStatus.FAILED
 end

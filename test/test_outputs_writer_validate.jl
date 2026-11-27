@@ -28,7 +28,7 @@ function _validate_axis_data(m, data)
         comps = [IS.get_component(data, i) for i in 1:n]
         ids = Int64[IS.get_id(c) for _ in 1:nc, c in comps]
         labels = String[IS.get_name(c) for _ in 1:nc, c in comps]
-        ad[("model", key)] = IS.AxisData(ids, labels, ax.timestamps)
+        ad[("model", key)] = IS.AxisData(ids, labels)
     end
     return ad
 end
@@ -116,7 +116,7 @@ end
     t = ad[("model", "ThermalStandard")]
     ids = copy(t.ids)
     ids[1, 2] = IS.get_id(attr)
-    ad[("model", "ThermalStandard")] = IS.AxisData(ids, t.labels, t.timestamps)
+    ad[("model", "ThermalStandard")] = IS.AxisData(ids, t.labels)
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = ad, systems = _bundle_systems(m),
         values = _all_values(m), tables = _all_tables(m))
@@ -126,7 +126,7 @@ end
         a, "model", data)
     # an id of neither kind
     ids[1, 2] = 100_000
-    ad[("model", "ThermalStandard")] = IS.AxisData(ids, t.labels, t.timestamps)
+    ad[("model", "ThermalStandard")] = IS.AxisData(ids, t.labels)
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = ad, systems = _bundle_systems(m),
         values = _all_values(m), tables = _all_tables(m))
@@ -145,14 +145,14 @@ end
     labels = copy(t.labels)
     ids[1, 2] = IS.get_id(attr)
     labels[1, 2] = "outage_1"
-    ad[("model", "ThermalStandard")] = IS.AxisData(ids, labels, t.timestamps)
+    ad[("model", "ThermalStandard")] = IS.AxisData(ids, labels)
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = ad, systems = _bundle_systems(m),
         values = _all_values(m), tables = _all_tables(m))
     a = IS.open_outputs_reader(dir)
     @test IS.validate_components(a, "model", data) === nothing
     labels[1, 2] = "wrong"
-    ad[("model", "ThermalStandard")] = IS.AxisData(ids, labels, t.timestamps)
+    ad[("model", "ThermalStandard")] = IS.AxisData(ids, labels)
     dir = mktempdir()
     IS.write_outputs(dir, m; axis_data = ad, systems = _bundle_systems(m),
         values = _all_values(m), tables = _all_tables(m))

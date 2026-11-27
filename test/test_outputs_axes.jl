@@ -1,54 +1,23 @@
 # Tests `src/outputs/axes.jl`
 
-_column(t) =
-    InfrastructureOutputSchemas.ComponentAxisColumnsItem(;
-        component_type = t,
-        has_ids = true,
-    )
+_column(t) = IS.ComponentAxisColumn(t, true)
 
 @testset "axis names derive from content" begin
+    @test IS.axis_name(IS.ComponentAxis([_column("ThermalStandard")], 76)) ==
+          "ThermalStandard"
     @test IS.axis_name(
-        InfrastructureOutputSchemas.ComponentAxis(;
-            kind = "component",
-            columns = [_column("ThermalStandard")],
-            length = 76,
-            group = "/UC/axes/ThermalStandard",
-        ),
-    ) == "ThermalStandard"
-    @test IS.axis_name(
-        InfrastructureOutputSchemas.ComponentAxis(;
-            kind = "component",
-            columns = [_column("VariableReserve"), _column("ThermalStandard")],
-            length = 152,
-            group = "/UC/axes/VariableReserve__ThermalStandard",
-        ),
+        IS.ComponentAxis([_column("VariableReserve"), _column("ThermalStandard")], 152),
     ) == "VariableReserve__ThermalStandard"
-    @test IS.axis_name(
-        InfrastructureOutputSchemas.ComponentAxis(;
-            kind = "component",
-            columns = [_column("ACBranch")],
-            length = 10,
-            group = "/m/axes/ACBranch__monitored",
-            subset = "monitored",
-        ),
-    ) == "ACBranch__monitored"
-    horizon = InfrastructureOutputSchemas.HorizonAxis(;
-        kind = "horizon", resolution = "PT1H", horizon_count = 48,
-    )
+    @test IS.axis_name(IS.ComponentAxis([_column("ACBranch")], 10, "monitored")) ==
+          "ACBranch__monitored"
+    horizon = IS.HorizonAxis(Dates.Hour(1), 48)
     @test IS.axis_length(horizon) == 48
-    @test IS.axis_length(InfrastructureOutputSchemas.Axis(horizon)) == 48
-    label = InfrastructureOutputSchemas.LabelAxis(;
-        kind = "label",
-        name = "winding",
-        labels = ["a", "b"],
-    )
+    label = IS.LabelAxis("winding", ["a", "b"])
     @test IS.axis_length(label) == 2
     @test IS.axis_name(label) == "winding"
-    @test IS.axis_name(InfrastructureOutputSchemas.Axis(label)) == "winding"
 end
 
-_label_axis(name) =
-    InfrastructureOutputSchemas.LabelAxis(; kind = "label", name = name, labels = ["a"])
+_label_axis(name) = IS.LabelAxis(name, ["a"])
 
 @testset "the outputs fixtures validate" begin
     for name in ("simulation", "single")
@@ -74,17 +43,14 @@ end
     @test_throws r"duplicate model name \"UC\"" IS.validate_document(m)
     m = base()
     uc = outputs_model(m, "UC")
-    push!(uc.axes, InfrastructureOutputSchemas.Axis(outputs_axis(uc, "ThermalStandard")))
+    push!(uc.axes, outputs_axis(uc, "ThermalStandard"))
     @test_throws ArgumentError IS.validate_document(m)
     @test_throws r"model UC: duplicate axis name \"ThermalStandard\"" IS.validate_document(
         m,
     )
     # The schema reserves the name before the duplicate rule sees it.
     m = base()
-    push!(
-        outputs_model(m, "UC").axes,
-        InfrastructureOutputSchemas.Axis(_label_axis("execution")),
-    )
+    push!(outputs_model(m, "UC").axes, _label_axis("execution"))
     expect_schema_invalid(m, r"LabelAxis\s+/name: not")
 end
 
@@ -103,7 +69,7 @@ end
         ("security_analysis", "", r"/name: pattern"),
     )
         m = IS.read_outputs_document(outputs_fixture(fixture))
-        push!(m.models[1].axes, InfrastructureOutputSchemas.Axis(_label_axis(name)))
+        push!(m.models[1].axes, _label_axis(name))
         expect_schema_invalid(m, rx)
     end
 end
@@ -112,23 +78,17 @@ end
     base() = IS.read_outputs_document(outputs_fixture("simulation"))
     first_ds(m) = first(outputs_model(m, "UC").datasets)
     set_first_ds!(m, d) = (outputs_model(m, "UC").datasets[1] = d)
-    layout(chunks) =
-        InfrastructureOutputSchemas.DatasetLayout(; chunks = chunks, filters = String[])
     # Cases that the cross-reference rules of IS reject.
     is_cases = [
         ("axis ref", m -> push!(first_ds(m).axes, "Nope")),
-        ("chunk rank", m -> push!(first_ds(m).layout.chunks, 1)),
+        ("chunk rank", m -> push!(first_ds(m).chunks, 1)),
         ("duplicate tuple", m -> push!(outputs_model(m, "UC").datasets, first_ds(m))),
         ("execution_order", m -> push!(IS.get_simulation(m).execution_order, "XX")),
-        (
-            "path of another dataset",
-            m -> set_first_ds!(m, _with(first_ds(m); path = "/UC/datasets/Other")),
-        ),
         (
             "component_type without component axis",
             m -> set_first_ds!(
                 m,
-                _with(first_ds(m); axes = ["execution"], layout = layout([1])),
+                _with(first_ds(m); axes = ["execution"], chunks = [1]),
             ),
         ),
         (
@@ -146,21 +106,16 @@ end
     # Cases that the outputs schema rejects.
     schema_cases = [
         (
-            "bad path",
-            m -> set_first_ds!(m, _with(first_ds(m); path = "/UC/x")),
-            r"/path: pattern",
-        ),
-        (
             "two execution axes",
             m -> (
-                push!(first_ds(m).axes, "execution"); push!(first_ds(m).layout.chunks, 1)
+                push!(first_ds(m).axes, "execution"); push!(first_ds(m).chunks, 1)
             ),
             r"/axes: uniqueItems",
         ),
         (
             "horizon without execution",
             m -> (
-                filter!(!=("execution"), first_ds(m).axes); pop!(first_ds(m).layout.chunks)
+                filter!(!=("execution"), first_ds(m).axes); pop!(first_ds(m).chunks)
             ),
             r"/axes: contains",
         ),
@@ -175,27 +130,13 @@ end
             r"/entry_type: pattern",
         ),
         (
-            "axis kind differs from type",
-            m -> set_outputs_axis!(
-                outputs_model(m, "UC"),
-                "horizon",
-                InfrastructureOutputSchemas.HorizonAxis(;
-                    kind = "time", resolution = "PT1H", horizon_count = 48,
-                ),
-            ),
-            r"/kind: const",
-        ),
-        (
             "system uuid",
-            m -> empty!(IS._systems(m)),
+            m -> empty!(m.systems),
             r"/systems: minProperties|: minProperties",
         ),
         (
             "label name",
-            m -> push!(
-                outputs_model(m, "UC").axes,
-                InfrastructureOutputSchemas.Axis(_label_axis("Bad Key")),
-            ),
+            m -> push!(outputs_model(m, "UC").axes, _label_axis("Bad Key")),
             r"/name: pattern",
         ),
     ]
@@ -214,6 +155,26 @@ end
             end
             expect_schema_invalid(path, r"/container: enum")
         end
+    end
+
+    # IS derives `kind`, `group`, and `path`: a file that gives another value does not read.
+    @testset "path of another dataset" begin
+        path = outputs_fixture_with("simulation") do raw
+            raw["models"][1]["datasets"][1]["path"] = "/UC/datasets/Other"
+        end
+        @test_throws ArgumentError IS.read_outputs_document(path)
+    end
+    @testset "bad path" begin
+        path = outputs_fixture_with("simulation") do raw
+            raw["models"][1]["datasets"][1]["path"] = "/UC/x"
+        end
+        expect_schema_invalid(path, r"/path: pattern")
+    end
+    @testset "axis kind differs from type" begin
+        path = outputs_fixture_with("simulation") do raw
+            raw["models"][1]["axes"][2]["kind"] = "time"
+        end
+        expect_schema_invalid(path, r"/axes/1: oneOf")
     end
 
     m = IS.read_outputs_document(outputs_fixture("single"))

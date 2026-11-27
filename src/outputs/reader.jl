@@ -1,10 +1,10 @@
 """
-Handle of an artifact. The HDF5 file is opened for each read, never held.
-Use `open_outputs_reader` to create one.
+Handle of an artifact. It holds an `OutputsDocument`. The HDF5 file is opened for each read,
+never held. Use `open_outputs_reader` to create one.
 """
 struct OutputsReader
     dir::String
-    document::InfrastructureOutputSchemas.OutputsDocument
+    document::OutputsDocument
 end
 
 """
@@ -24,7 +24,7 @@ function open_outputs_reader(dir::AbstractString)
     if !isfile(joinpath(dir, _H5_FILE_NAME))
         throw(ArgumentError("artifact $dir has no $_H5_FILE_NAME"))
     end
-    for (uuid, name) in _systems(doc)
+    for (uuid, name) in doc.systems
         if !isdir(joinpath(dir, name))
             throw(
                 ArgumentError(
@@ -39,7 +39,7 @@ function open_outputs_reader(dir::AbstractString)
     return OutputsReader(String(dir), doc)
 end
 
-"Return the `InfrastructureOutputSchemas.OutputsDocument` of the artifact."
+"Return the `OutputsDocument` of the artifact."
 get_document(reader::OutputsReader) = reader.document
 
 "Return the sorted model names of the artifact."
@@ -58,11 +58,11 @@ end
 "Return the table names of the model `model_name`."
 function list_tables(reader::OutputsReader, model_name::AbstractString)
     return String[
-        table.name for table in _model_tables(_find_model(reader.document, model_name))
+        table.name for table in _find_model(reader.document, model_name).tables
     ]
 end
 
-"Return the axis with the axis name `name` of the model `model_name`."
+"Return the `OutputAxis` with the axis name `name` of the model `model_name`."
 function get_axis(
     reader::OutputsReader,
     model_name::AbstractString,
@@ -79,7 +79,7 @@ function _read_axis_data(
     ::HDF5.File,
     ::AbstractString,
     ::AbstractString,
-    ::Union{InfrastructureOutputSchemas.HorizonAxis, InfrastructureOutputSchemas.LabelAxis},
+    ::Union{HorizonAxis, LabelAxis},
 )
     return AxisData()
 end
@@ -88,9 +88,9 @@ function _read_axis_data(
     f::HDF5.File,
     model_name::AbstractString,
     name::AbstractString,
-    axis::InfrastructureOutputSchemas.ComponentAxis,
+    axis::ComponentAxis,
 )
-    g = f[axis.group]
+    g = f[axis_group(model_name, axis)]
     ids = zeros(Int64, 0, 0)
     if haskey(g, "ids")
         ids = read(g["ids"])
@@ -106,21 +106,22 @@ end
 
 function _read_axis_data(
     f::HDF5.File,
+    model_name::AbstractString,
     ::AbstractString,
-    ::AbstractString,
-    axis::Union{
-        InfrastructureOutputSchemas.TimeAxis,
-        InfrastructureOutputSchemas.ExecutionAxis,
-    },
+    axis::Union{TimeAxis, ExecutionAxis},
 )
     timestamps = [
         Dates.DateTime(1970) + Dates.Millisecond(ms) for
-        ms in read(f[axis.group]["timestamps"])
+        ms in read(f[axis_group(model_name, axis)]["timestamps"])
     ]
     return AxisData(timestamps)
 end
 
-"Return the `AxisData` stored for the axis `name` of the model `model_name`."
+"""
+Return the `AxisData` stored for the axis `name` of the model `model_name`. A time or
+execution axis gives its stored timestamps, a component axis gives its ids and labels, and a
+horizon or label axis gives an empty `AxisData`.
+"""
 function read_axis_data(
     reader::OutputsReader,
     model_name::AbstractString,
@@ -164,7 +165,7 @@ end
 function _check_stored(
     model_name,
     key,
-    dataset::InfrastructureOutputSchemas.Dataset,
+    dataset::OutputDataset,
     h5_dataset::HDF5.Dataset,
     expected::Tuple,
 )
@@ -175,7 +176,7 @@ function _check_stored(
             ),
         )
     end
-    dtype = string(dataset.dtype)
+    dtype = dataset.dtype
     storage = _DTYPES[dtype][1]
     if eltype(h5_dataset) != storage
         throw(
@@ -210,25 +211,24 @@ function read_dataset(
     names_julia = reverse(dataset.axes)
     idx = Any[Colon() for _ in names_julia]
     keep = trues(length(names_julia))
-    pos = findfirst(==("execution"), names_julia)
+    dataset_axes = _dataset_axes(model, dataset)
+    axes_julia = reverse(dataset_axes)
+    pos = findfirst(is_append_axis, axes_julia)
     if isnothing(pos)
         if execution != Colon()
             throw(ArgumentError("model $model_name: dataset $key has no execution axis"))
         end
     else
         idx[pos], keep[pos] =
-            _execution_selection(
-                execution,
-                axis_length(_find_axis(model, "execution")),
-            )
+            _execution_selection(execution, axis_length(axes_julia[pos]))
     end
-    expected = Tuple(_dataset_dims(model, dataset))
+    expected = Tuple(_dataset_dims(dataset_axes))
     arr = HDF5.h5open(_h5_path(reader), "r") do f
-        h5_dataset = f[dataset.path]
+        h5_dataset = f[dataset_path(model_name, dataset)]
         _check_stored(model_name, key, dataset, h5_dataset, expected)
         return h5_dataset[idx...]
     end
-    return _decode(string(dataset.dtype), arr), names_julia[keep]
+    return _decode(dataset.dtype, arr), names_julia[keep]
 end
 
 "Return the columns of the table `table_name` of the model `model_name` as a `NamedTuple` of vectors."
@@ -239,11 +239,14 @@ function read_table(
 )
     table = _find_table(reader.document, model_name, table_name)
     column_values = HDF5.h5open(_h5_path(reader), "r") do f
-        return [read(f[string(table.group, "/", column.name)]) for column in table.columns]
+        return [
+            read(f[string(table_group(model_name, table), "/", column.name)]) for
+            column in table.columns
+        ]
     end
     return NamedTuple{Tuple(Symbol(column.name) for column in table.columns)}(
         Tuple(
-            _decode(string(column.dtype), v) for
+            _decode(column.dtype, v) for
             (column, v) in zip(table.columns, column_values)
         ),
     )

@@ -23,7 +23,7 @@ end
     m = _single_meta()
     vals = rand(48, 76, 7)
     a = IS.open_outputs_reader(_written_single_dir(vals))
-    @test string(IS.get_document(a).status) == "SUCCESSFULLY_FINALIZED"
+    @test IS.get_document(a).status == IS.Simulation.RunStatus.SUCCESSFULLY_FINALIZED
     @test IS.list_models(a) == ["model"]
     @test _KEY in IS.list_datasets(a, "model")
     @test IS.list_tables(a, "model") == ["optimizer_stats"]
@@ -44,9 +44,8 @@ end
     @test size(ad.labels) == (1, 76)
     @test size(ad.ids) == (1, 76)
     ex = IS.read_axis_data(a, "model", "execution")
-    @test ex.timestamps == simulation_axis_data(m)[("model", "execution")].timestamps
-    @test typeof(IS.get_axis(a, "model", "horizon")) ===
-          InfrastructureOutputSchemas.HorizonAxis
+    @test ex.timestamps == IS.axis_timestamps(outputs_axis(m.models[1], "execution"))
+    @test typeof(IS.get_axis(a, "model", "horizon")) === IS.HorizonAxis
     @test isempty(IS.read_axis_data(a, "model", "horizon").timestamps)
     tbl = IS.read_table(a, "model", "optimizer_stats")
     @test tbl.execution == 1:7
@@ -71,35 +70,26 @@ end
     @test_throws ArgumentError IS.open_outputs_reader(mktempdir())
 end
 
-function _with_extras(m::InfrastructureOutputSchemas.OutputsDocument)
+function _with_extras(m::IS.OutputsDocument)
     e = outputs_model(m, "model")
-    ds = InfrastructureOutputSchemas.Dataset(;
-        container = InfrastructureOutputSchemas.Container("variables"),
-        entry_type = "OnStatus",
-        component_type = "ThermalStandard",
-        meta = "",
-        axes = ["execution", "ThermalStandard", "horizon"],
-        dtype = InfrastructureOutputSchemas.Dtype("bool"),
-        fill_value = false,
-        quantity_kind = "Dimensionless",
-        unit_system = InfrastructureOutputSchemas.UnitSystem("NATURAL_UNITS"),
-        units = "1",
-        layout = InfrastructureOutputSchemas.DatasetLayout(;
-            chunks = [1, 76, 48],
-            filters = String[],
-        ),
-        path = "/model/datasets/OnStatus__ThermalStandard",
+    ds = IS.OutputDataset(
+        "variables",
+        "OnStatus",
+        "ThermalStandard",
+        "",
+        ["execution", "ThermalStandard", "horizon"],
+        "bool",
+        false,
+        "Dimensionless",
+        IS.NaturalUnit(),
+        "1",
+        [1, 76, 48],
+        String[],
     )
-    column(name, dtype) =
-        InfrastructureOutputSchemas.Column(;
-            name = name,
-            dtype = InfrastructureOutputSchemas.ColumnDtype(dtype),
-        )
-    tbl = InfrastructureOutputSchemas.Table(;
-        name = "notes",
-        group = "/model/tables/notes",
-        length = 3,
-        columns = [column("execution", "i64"), column("note", "str")],
+    tbl = IS.OutputTable(
+        "notes",
+        3,
+        [IS.OutputColumn("execution", "i64"), IS.OutputColumn("note", "str")],
     )
     e2 = _with(e; datasets = vcat(e.datasets, ds), tables = vcat(e.tables, tbl))
     return _with(m; models = [e2])
@@ -135,7 +125,7 @@ end
     m = _single_meta()
     dir = mktempdir()
     w = IS.open_outputs_writer(dir, m; axis_data = simulation_axis_data(m))
-    for name in values(IS._systems(m))
+    for name in values(m.systems)
         mkpath(joinpath(dir, name))
     end
     flush(w)
@@ -146,7 +136,7 @@ end
 
 @testset "outputs reader: a missing system bundle directory is an error" begin
     dir = _written_single_dir()
-    uuid, name = first(IS._systems(IS.read_outputs_document(joinpath(dir, "outputs.json"))))
+    uuid, name = first(IS.read_outputs_document(joinpath(dir, "outputs.json")).systems)
     rm(joinpath(dir, name); recursive = true)
     @test_throws ArgumentError IS.open_outputs_reader(dir)
     @test_throws "bundle directory \"$name\"" IS.open_outputs_reader(dir)

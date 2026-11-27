@@ -167,21 +167,18 @@ function create_forecast_key_fixture(
     return sys, keys
 end
 
-function outputs_model_index(
-    doc::InfrastructureOutputSchemas.OutputsDocument,
-    name::AbstractString,
-)
+function outputs_model_index(doc::IS.OutputsDocument, name::AbstractString)
     return only(findall(model -> model.name == name, doc.models))
 end
 
-outputs_model(doc::InfrastructureOutputSchemas.OutputsDocument, name::AbstractString) =
+outputs_model(doc::IS.OutputsDocument, name::AbstractString) =
     IS._find_model(doc, name)
 
-function outputs_axis_index(model::InfrastructureOutputSchemas.Model, name::AbstractString)
+function outputs_axis_index(model::IS.OutputsModel, name::AbstractString)
     return only(findall(a -> IS.axis_name(a) == name, model.axes))
 end
 
-outputs_axis(model::InfrastructureOutputSchemas.Model, name::AbstractString) =
+outputs_axis(model::IS.OutputsModel, name::AbstractString) =
     IS._find_axis(model, name)
 
 function _with(x; kw...)
@@ -191,19 +188,12 @@ function _with(x; kw...)
     return T((vals[k] for k in fieldnames(T))...)
 end
 
-function set_outputs_axis!(
-    model::InfrastructureOutputSchemas.Model,
-    name::AbstractString,
-    axis,
-)
-    model.axes[outputs_axis_index(model, name)] = InfrastructureOutputSchemas.Axis(axis)
+function set_outputs_axis!(model::IS.OutputsModel, name::AbstractString, axis)
+    model.axes[outputs_axis_index(model, name)] = axis
     return model
 end
 
-function delete_outputs_axis!(
-    model::InfrastructureOutputSchemas.Model,
-    name::AbstractString,
-)
+function delete_outputs_axis!(model::IS.OutputsModel, name::AbstractString)
     deleteat!(model.axes, outputs_axis_index(model, name))
     return model
 end
@@ -220,7 +210,7 @@ function outputs_fixture_with(f!, kind::AbstractString)
 end
 
 # The schema rejects the document `doc`, at the rule that `rx` names.
-function expect_schema_invalid(doc::InfrastructureOutputSchemas.OutputsDocument, rx::Regex)
+function expect_schema_invalid(doc::IS.OutputsDocument, rx::Regex)
     @test_throws InfrastructureOutputSchemas.SchemaValidationError IS.validate_document(doc)
     @test_throws rx IS.validate_document(doc)
     return

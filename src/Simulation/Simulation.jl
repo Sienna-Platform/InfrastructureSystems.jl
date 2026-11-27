@@ -3,6 +3,7 @@
 """
 module Simulation
 
+import Dates
 import ..InfrastructureSystems as IS
 
 import ..InfrastructureSystems:
@@ -10,6 +11,7 @@ import ..InfrastructureSystems:
 
 include("enums.jl")
 include("simulation_info.jl")
+include("simulation_params.jl")
 
 using DocStringExtensions
 

@@ -55,7 +55,7 @@ function _validate_axis(
     ::HDF5.File,
     ::AbstractString,
     ::AbstractString,
-    ::Any,
+    ::OutputAxis,
     ::SystemData,
 )
     return
@@ -65,7 +65,7 @@ function _validate_axis(
     f::HDF5.File,
     model_name::AbstractString,
     name::AbstractString,
-    axis::InfrastructureOutputSchemas.ComponentAxis,
+    axis::ComponentAxis,
     data::SystemData,
 )
     axis_data = _read_axis_data(f, model_name, name, axis)
@@ -110,7 +110,7 @@ function validate_components(
 )
     model = _find_model(reader.document, model_name)
     HDF5.h5open(_h5_path(reader), "r") do f
-        for axis in sort!(collect(_axes(model)); by = axis_name)
+        for axis in sort!(copy(model.axes); by = axis_name)
             _validate_axis(f, model_name, axis_name(axis), axis, data)
         end
     end
